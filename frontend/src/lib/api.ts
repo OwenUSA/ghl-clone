@@ -28,6 +28,11 @@ let refreshing: Promise<boolean> | null = null
  * exists to prevent.
  */
 export async function refresh(): Promise<boolean> {
+  // No CSRF cookie means there is no session to renew: the browser is simply
+  // signed out. Calling /api/auth/refresh anyway just earns a 403 -- visible in
+  // the access log as a me->refresh 401/403 pair on every attempt while sitting
+  // on the login screen. Nothing to renew, so do not ask.
+  if (!cookie('ghl_csrf')) return false
   if (!refreshing) {
     refreshing = fetch(BASE + '/api/auth/refresh', {
       method: 'POST',
