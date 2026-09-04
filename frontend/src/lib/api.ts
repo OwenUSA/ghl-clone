@@ -22,8 +22,12 @@ let refreshing: Promise<boolean> | null = null
  * Single-flight: a page with several queries in flight will get several 401s at
  * once, and firing a refresh per query would rotate the refresh cookie
  * concurrently and log the user out.
+ *
+ * Exported so auth.ts's `me()` shares the SAME in-flight promise. It must not
+ * run a second, competing refresh -- that is the concurrent rotation this guard
+ * exists to prevent.
  */
-async function refresh(): Promise<boolean> {
+export async function refresh(): Promise<boolean> {
   if (!refreshing) {
     refreshing = fetch(BASE + '/api/auth/refresh', {
       method: 'POST',
