@@ -1,0 +1,40 @@
+# Build context hygiene. Everything here is either a secret, a local artefact,
+# or measurement data that has no business in a production image.
+
+.git
+.gitignore
+.gitattributes
+
+# Secrets and live sessions.
+.env
+.env.*
+!.env.example
+backend/.jwt_secret
+.capture-profile/
+captures/
+auth.json
+
+# Local environments and caches.
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# The measurement harness drives a real browser against the live GHL account.
+# It is never part of a deployed image, and it pulls in Playwright.
+capture/
+references/
+design-tokens.md
+NORMALIZATIONS.md
+AUDIT.md
+CHECKLIST-MIGRATION.md
+
+# Editor / tooling
+.claude/
+.vscode/
+.idea/

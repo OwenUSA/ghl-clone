@@ -1,0 +1,21 @@
+# Normalise to LF in the repository. This is not cosmetic: the repo is authored on
+# Windows and deployed to Linux containers, and a CRLF shebang line makes a shell
+# script fail with a bare "bad interpreter" that names the right file.
+* text=auto eol=lf
+
+# Anything executed on the server must be LF, no exceptions.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+Dockerfile*   text eol=lf
+*.conf text eol=lf
+
+# Binary: never touch.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.mp3  binary
+*.pdf  binary

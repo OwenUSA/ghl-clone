@@ -1,0 +1,77 @@
+name: CI
+
+# The gates that were declared in DECISIONS.md but never actually enforced:
+# nothing ran ruff or pytest automatically before this workflow existed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: ruff + pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        # --all-groups pulls the capture group too (Playwright as a package). We do
+        # NOT install its browsers: nothing under capture/ runs here. Those scripts
+        # need a live GoHighLevel login and a hand-started Chrome on port 9222, and
+        # diff.py needs references/, which is gitignored.
+        run: uv sync --all-groups
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Tests
+        # 158 tests, fully offline: conftest.py forces DATABASE_URL to a temp SQLite
+        # file before the app imports, and the CLI tests use a mock httpx transport.
+        # Note this means CI never exercises Alembic or the Postgres JSONB path.
+        run: uv run pytest -q
+
+  frontend:
+    name: tsc + vite build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npx oxlint
+
+      - name: Typecheck and build
+        # `npm run build` is `tsc -b && vite build`, so this is the typecheck too.
+        run: npm run build
+
+  images:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Proves the deploy artefacts still build. Nothing is pushed anywhere -- the
+      # server builds its own images from its checkout.
+      - name: Build API image
+        run: docker build -f Dockerfile.api -t ghl_clone/api:ci .
+      - name: Build web image
+        run: docker build -f frontend/Dockerfile -t ghl_clone/web:ci ./frontend
+      - name: Import path must not depend on the working directory
+        run: docker run --rm -w / ghl_clone/api:ci python -c "import app.main"

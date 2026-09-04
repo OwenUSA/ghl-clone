@@ -1,0 +1,62 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run ghl health:*)",
+      "Bash(uv run ghl exit-codes:*)",
+      "Bash(uv run ghl auth whoami:*)",
+      "Bash(uv run ghl contacts list:*)",
+      "Bash(uv run ghl contacts show:*)",
+      "Bash(uv run ghl contacts create:*)",
+      "Bash(uv run ghl contacts update:*)",
+      "Bash(uv run ghl contacts tags:*)",
+      "Bash(uv run ghl contacts tag:*)",
+      "Bash(uv run ghl convos:*)",
+      "Bash(uv run ghl calls:*)",
+      "Bash(uv run ghl msg list:*)",
+      "Bash(uv run ghl msg note:*)",
+      "Bash(uv run ghl opps list:*)",
+      "Bash(uv run ghl opps show:*)",
+      "Bash(uv run ghl opps stages:*)",
+      "Bash(uv run ghl opps pipelines:*)",
+      "Bash(uv run ghl opps create:*)",
+      "Bash(uv run ghl opps move:*)",
+      "Bash(uv run ghl opps update:*)",
+      "Bash(uv run ghl opps win:*)",
+      "Bash(uv run ghl opps lose:*)",
+      "Bash(uv run ghl appts list:*)",
+      "Bash(uv run ghl appts show:*)",
+      "Bash(uv run ghl appts create:*)",
+      "Bash(uv run ghl appts update:*)",
+      "Bash(uv run ghl appts calendars:*)",
+      "Bash(uv run ghl reports:*)",
+      "Bash(uv run ghl users list:*)",
+      "Bash(uv run ghl jobs list:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff check:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run alembic current:*)",
+      "Bash(uv run alembic history:*)",
+      "Bash(uv run alembic check:*)"
+    ],
+    "ask": [
+      "Bash(uv run ghl msg send:*)",
+      "Bash(uv run ghl contacts delete:*)",
+      "Bash(uv run ghl opps delete:*)",
+      "Bash(uv run ghl appts cancel:*)",
+      "Bash(uv run ghl auth token:*)",
+      "Bash(uv run ghl auth login:*)",
+      "Bash(uv run ghl auth logout:*)",
+      "Bash(uv run ghl users create:*)",
+      "Bash(uv run ghl users update:*)",
+      "Bash(uv run ghl jobs retry:*)",
+      "Bash(uv run alembic upgrade:*)",
+      "Bash(uv run alembic downgrade:*)"
+    ],
+    "deny": [
+      "Bash(uv run python -m app.seed:*)"
+    ]
+  },
+  "env": {
+    "GHL_API_URL": "http://127.0.0.1:8000"
+  }
+}

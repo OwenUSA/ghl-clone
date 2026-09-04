@@ -1,0 +1,121 @@
+# Production deploy behind the shared Traefik proxy on owen-main.
+#
+# The SPA is served at https://${APP_HOST}/ and the API at https://${APP_HOST}/api.
+# The frontend calls /api relatively, so one origin means no CORS and no API base
+# URL baked into the bundle -- and, more importantly, the SameSite=Lax session
+# cookie is actually attached to API requests.
+#
+# There is no `db` service. This stack uses the HOST PostgreSQL 18 that callmon
+# and craigslist already use, reached over the docker bridge. That is a
+# deliberate amendment to DECISIONS.md's "one database shared with the telephony
+# project": callmon's database has its own calls, messages, jobs, users and
+# alembic_version tables, so sharing the schema is not possible. We take our own
+# database on the same server, and telephony feeds us through POST /api/events.
+
+name: ghl_clone
+
+x-api-base: &api-base
+  build:
+    context: .
+    dockerfile: Dockerfile.api
+  image: ghl_clone/api:latest
+  env_file: [.env.prod]
+  extra_hosts:
+    # Reach the native Postgres on the host. ufw permits 5432 from 172.16.0.0/12
+    # and pg_hba.conf has a scram-sha-256 line for the ghl_clone role on that
+    # subnet -- the same pattern callmon and craigslist use.
+    - "host.docker.internal:host-gateway"
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  api:
+    <<: *api-base
+    container_name: ghl_clone_api
+    expose: ["8000"]
+    networks: [ghl-net, traefik-public]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      # PathPrefix must win over the bare-host web router. Priority is explicit so
+      # it never depends on Traefik's rule-length heuristic.
+      - "traefik.http.routers.ghl-api.rule=Host(`${APP_HOST}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.ghl-api.priority=100"
+      - "traefik.http.routers.ghl-api.entrypoints=websecure"
+      - "traefik.http.routers.ghl-api.tls=true"
+      - "traefik.http.routers.ghl-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ghl-api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.ghl-api.middlewares=ghl-api-ratelimit"
+      - "traefik.http.middlewares.ghl-api-ratelimit.ratelimit.average=120"
+      - "traefik.http.middlewares.ghl-api-ratelimit.ratelimit.burst=200"
+    deploy:
+      resources:
+        limits: { cpus: '1', memory: 768M }
+
+  worker:
+    <<: *api-base
+    container_name: ghl_clone_worker
+    command: ["python", "-m", "app.worker"]
+    # The image's HEALTHCHECK curls /api/health, which only the api serves. The
+    # worker is a bare polling loop with no HTTP listener, so that probe can only
+    # ever fail -- it would sit permanently "unhealthy" while draining jobs
+    # perfectly. Disable it rather than ship a container that lies about itself.
+    healthcheck:
+      disable: true
+    # No Traefik labels and NOT on traefik-public: the worker is never routed to.
+    networks: [ghl-net]
+    depends_on:
+      api: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: '0.5', memory: 384M }
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ghl_clone/web:latest
+    container_name: ghl_clone_web
+    expose: ["80"]
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [traefik-public]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.ghl-web.rule=Host(`${APP_HOST}`)"
+      - "traefik.http.routers.ghl-web.priority=1"
+      - "traefik.http.routers.ghl-web.entrypoints=websecure"
+      - "traefik.http.routers.ghl-web.tls=true"
+      - "traefik.http.routers.ghl-web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ghl-web.loadbalancer.server.port=80"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { cpus: '0.5', memory: 256M }
+
+networks:
+  ghl-net:
+    driver: bridge
+  traefik-public:
+    name: traefik-public
+    external: true

@@ -1,0 +1,53 @@
+# The API and the queue worker are the same image with different commands.
+# Keeping them identical means the worker can never drift from the code that
+# enqueued the job it is draining.
+FROM python:3.12-slim
+
+# uv is the locked Python tooling for this project (DECISIONS.md) -- pinned, not
+# :latest, so a rebuild six months from now resolves the same dependency tree
+# that uv.lock describes.
+COPY --from=ghcr.io/astral-sh/uv:0.9.18 /uv /usr/local/bin/uv
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    # backend/app is deliberately NOT an installed package: pyproject.toml packages
+    # only cli/ghl_cli, and `app` resolves in development purely because CLAUDE.md
+    # says to `cd backend` first. Nothing in a container guarantees the working
+    # directory, and uvicorn, the worker and alembic each run from different ones,
+    # so put it on the path explicitly rather than relying on CWD.
+    PYTHONPATH=/app/backend
+
+# curl is for the container healthcheck, nothing else.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies first, so a source edit does not re-resolve the whole tree.
+# cli/ has to come along: the project is its own package and hatch builds
+# cli/ghl_cli, so `uv sync` fails without it.
+COPY pyproject.toml uv.lock ./
+COPY cli ./cli
+# --no-dev drops pytest/ruff; the `capture` group (Playwright, a real browser,
+# the live-GHL harness) is not a default group and is never installed here.
+RUN uv sync --frozen --no-dev
+
+COPY backend ./backend
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+  CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
+
+# --proxy-headers so the scheme and client IP behind Traefik are logged correctly.
+# Migrations are NOT run here: `alembic upgrade head` is a release step in
+# deploy.sh, so a schema change is a decision rather than a side effect of a
+# restart. `python -m app.seed` must never appear here -- it calls drop_all().
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]

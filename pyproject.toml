@@ -1,0 +1,109 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ghl-clone"
+version = "0.1.0"
+description = "GoHighLevel replacement for Dream Team Roofing (Contacts, Conversations, Opportunities, Calendars)"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "pydantic>=2.10",
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0",
+    # Auth. PyJWT is pure Python — no build step, which matters on this host
+    # (see "The SSL interception" in DECISIONS.md). Password hashing uses stdlib
+    # hashlib.scrypt, so there is deliberately no bcrypt/argon2 dependency.
+    "pyjwt>=2.9",
+    # The `ghl` CLI. httpx was previously dev-only; the CLI is a first-class
+    # surface now, so a plain `uv sync` has to be enough to run it.
+    "typer>=0.15",
+    "httpx>=0.28",
+]
+
+[project.scripts]
+# Installed into .venv/Scripts on `uv sync`, so `uv run ghl ...` works.
+ghl = "ghl_cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+# Two source roots, neither of them a src/ layout, so hatchling cannot infer this.
+# Only the CLI is packaged: `backend/app` is deliberately NOT installed — it stays
+# importable via pytest's `pythonpath = ["backend"]` below, exactly as before.
+packages = ["cli/ghl_cli"]
+
+[dependency-groups]
+# Measurement harness: drives Chrome over CDP to capture GHL and our own app.
+capture = ["playwright>=1.49"]
+# ruff is PINNED, not floated. `ruff>=0.8` silently picked up 0.16.1, whose default
+# rule set is far larger than 0.8's -- 676 "new" errors appeared without a line of
+# code changing. A linter that redefines the standard on its own is not a gate.
+dev = ["pytest>=8.3", "httpx>=0.28", "ruff==0.16.1"]
+
+[tool.uv]
+# This machine MITMs TLS (self-signed cert in chain). native-tls makes uv use the
+# Windows certificate store, which already trusts the intercepting root — so
+# verification stays ON. Do NOT switch this to an --insecure/trusted-host style fix.
+native-tls = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Declared explicitly rather than inherited. Ruff's defaults changed between
+# versions and produced hundreds of findings overnight; what this project lints
+# for should be a decision recorded here, not whatever the tool shipped this month.
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # import sorting
+    "B",         # bugbear
+    "UP",        # pyupgrade
+    "SIM",       # simplify
+    "C4",        # comprehensions
+    "RUF",       # ruff-specific
+    "FURB",      # refurb
+    "BLE",       # blind except
+    "ISC",       # implicit string concat
+]
+ignore = [
+    # FastAPI's whole idiom is `x = Depends(...)` / `Query(...)` in a default
+    # argument. 51 hits, every one a false positive against the framework.
+    "B008",
+    # 429 hits: this codebase consistently uses %-formatting. That is a style
+    # choice, not a defect, and rewriting every call site to prove a point would
+    # produce a diff nobody can review for a behaviour change of zero.
+    "UP031",
+    # Role, EventType, Direction and DeliveryStatus are `(str, enum.Enum)` and are
+    # persisted as native Postgres enum types. Moving them to `enum.StrEnum` changes
+    # what `str(Role.ADMIN)` returns ("Role.ADMIN" -> "ADMIN"), which is a runtime
+    # behaviour change in every f-string and log line that touches one. Not worth it
+    # for a stylistic rule.
+    "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The capture harness drives a real browser against a live account.
+#   BLE001/S110 - a measurement that fails must degrade to "not measured" and carry
+#                 on, never abort a capture run half way through.
+#   E501        - these scripts embed long CSS selectors and JS snippets that are
+#                 worse when wrapped.
+#   RUF059      - extraction unpacks fixed-shape tuples and uses some of them.
+"capture/**" = ["BLE001", "S110", "E501", "RUF059", "SIM115"]
+
+# Alembic writes these. Reformatting generated migrations to satisfy a line-length
+# rule means hand-editing files whose whole value is that they are mechanical.
+"backend/migrations/versions/**" = ["E501"]
+
+# Tests unpack fixtures and assert on values that are deliberately unused.
+"**/tests/**" = ["RUF059"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests", "cli/tests"]
+# tests import `app.*`; backend/ is the package root
+pythonpath = ["backend"]

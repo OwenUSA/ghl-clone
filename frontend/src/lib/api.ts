@@ -1,0 +1,346 @@
+// Same-origin: Vite proxies /api to the backend in dev, Caddy does it in prod.
+// Must NOT be an absolute cross-origin URL — a SameSite=Lax session cookie would
+// never be sent with it. See the comment in vite.config.ts.
+const BASE = ''
+
+/** Read a non-httpOnly cookie. Used for the double-submit CSRF token. */
+function cookie(name: string): string | null {
+  const hit = document.cookie
+    .split('; ')
+    .find((c) => c.startsWith(name + '='))
+  return hit ? decodeURIComponent(hit.slice(name.length + 1)) : null
+}
+
+/** Raised on 401 so callers can distinguish "log in" from a real failure. */
+export class Unauthorized extends Error {}
+
+let refreshing: Promise<boolean> | null = null
+
+/**
+ * Try once to renew the 15-minute access token.
+ *
+ * Single-flight: a page with several queries in flight will get several 401s at
+ * once, and firing a refresh per query would rotate the refresh cookie
+ * concurrently and log the user out.
+ */
+async function refresh(): Promise<boolean> {
+  if (!refreshing) {
+    refreshing = fetch(BASE + '/api/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'X-CSRF-Token': cookie('ghl_csrf') ?? '' },
+    })
+      .then((r) => r.ok)
+      .catch(() => false)
+      .finally(() => {
+        // Let the next 401 start a fresh attempt.
+        setTimeout(() => (refreshing = null), 0)
+      })
+  }
+  return refreshing
+}
+
+export type Contact = {
+  id: number
+  tags: string[]
+  last_activity: string | null
+  name: string
+  first_name: string
+  last_name: string
+  email: string | null
+  phone: string | null
+  business_name: string | null
+  created_at: string
+}
+
+export type Page<T> = {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+async function get<T>(path: string, retry = true): Promise<T> {
+  const r = await fetch(BASE + path, { credentials: 'include' })
+  if (r.status === 401) {
+    // The access token lasts 15 minutes; renew it once and retry rather than
+    // bouncing the user to the login screen mid-session.
+    if (retry && (await refresh())) return get<T>(path, false)
+    window.dispatchEvent(new Event('ghl:unauthorized'))
+    throw new Unauthorized('not signed in')
+  }
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  return r.json() as Promise<T>
+}
+
+export function listContacts(params: {
+  page: number
+  page_size: number
+  q?: string
+  sort?: string
+  order?: 'asc' | 'desc'
+}) {
+  const sp = new URLSearchParams({
+    page: String(params.page),
+    page_size: String(params.page_size),
+  })
+  if (params.q) sp.set('q', params.q)
+  if (params.sort) sp.set('sort', params.sort)
+  if (params.order) sp.set('order', params.order)
+  return get<Page<Contact>>(`/api/contacts?${sp}`)
+}
+
+export type Stage = {
+  id: number
+  name: string
+  position: number
+  count: number
+  value_cents: number
+}
+export type Pipeline = { id: number; name: string; stages: Stage[] }
+
+export const listPipelines = () => get<Pipeline[]>('/api/pipelines')
+
+export type Opportunity = {
+  id: number
+  title: string
+  value_cents: number
+  stage_id: number
+  status: string
+  contact_name: string | null
+  business_name: string | null
+  source: string | null
+  updated_at: string
+}
+
+export const listOpportunities = (pipelineId: number, q = '', status = 'open') => {
+  const sp = new URLSearchParams({ pipeline_id: String(pipelineId), status })
+  if (q) sp.set('q', q)
+  return get<Opportunity[]>(`/api/opportunities?${sp}`)
+}
+
+export async function moveOpportunity(id: number, stageId: number, position = 0) {
+  const r = await fetch(`${BASE}/api/opportunities/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage_id: stageId, position }),
+  })
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+  return r.json()
+}
+
+export type ConversationSummary = {
+  id: number
+  contact_id: number
+  contact_name: string | null
+  contact_phone: string | null
+  last_event_at: string
+  unread_count: number
+  starred: boolean
+}
+
+export type ThreadEvent = {
+  id: number
+  type: string
+  direction: 'INBOUND' | 'OUTBOUND'
+  occurred_at: string
+  body: string | null
+  subject: string | null
+  duration_seconds: number | null
+  recording_url: string | null
+  delivery_status: string | null
+}
+
+export const listConversations = (tab: string, sort: string) =>
+  get<ConversationSummary[]>(
+    `/api/conversations?tab=${encodeURIComponent(tab)}&sort=${encodeURIComponent(sort)}`,
+  )
+
+export const listEvents = (convId: number, filter: string) =>
+  get<ThreadEvent[]>(
+    `/api/conversations/${convId}/events?filter=${encodeURIComponent(filter)}`,
+  )
+
+export const money = (cents: number) =>
+  (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+
+export type User = { id: number; name: string; email: string; role: string }
+export const listUsers = () => get<User[]>('/api/users')
+
+export type Appointment = {
+  id: number
+  title: string
+  starts_at: string
+  ends_at: string
+  status: string
+  assigned_user_id: number | null
+  contact_name: string | null
+}
+
+export function listAppointments(p: {
+  start: string
+  end: string
+  kind: string
+  user_ids: number[]
+  calendar_ids?: number[]
+  pipeline_ids?: number[]
+}) {
+  const sp = new URLSearchParams({ start: p.start, end: p.end, kind: p.kind })
+  if (p.user_ids.length) sp.set('user_ids', p.user_ids.join(','))
+  if (p.calendar_ids?.length) sp.set('calendar_ids', p.calendar_ids.join(','))
+  if (p.pipeline_ids?.length) sp.set('pipeline_ids', p.pipeline_ids.join(','))
+  return get<Appointment[]>(`/api/appointments?${sp}`)
+}
+
+export type ContactTag = { id: number; name: string; color: string }
+
+export type ContactDetail = {
+  id: number
+  name: string
+  first_name: string
+  last_name: string
+  email: string | null
+  phone: string | null
+  business_name: string | null
+  source: string | null
+  date_of_birth: string | null
+  contact_type: string | null
+  dnd: boolean
+  created_by: string | null
+  created_at: string
+  owner_id: number | null
+  owner_name: string | null
+  tags: ContactTag[]
+  custom_fields: Record<string, unknown>
+}
+
+export const getContact = (id: number) => get<ContactDetail>(`/api/contacts/${id}`)
+
+async function send<T>(path: string, method: string, body?: unknown,
+                       retry = true): Promise<T> {
+  const headers: Record<string, string> = {
+    // Cookie auth is ambient, so every write carries the double-submit token.
+    'X-CSRF-Token': cookie('ghl_csrf') ?? '',
+  }
+  if (body) headers['Content-Type'] = 'application/json'
+
+  const r = await fetch(BASE + path, {
+    method,
+    credentials: 'include',
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (r.status === 401) {
+    if (retry && (await refresh())) return send<T>(path, method, body, false)
+    window.dispatchEvent(new Event('ghl:unauthorized'))
+    throw new Unauthorized('not signed in')
+  }
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+  return r.json() as Promise<T>
+}
+
+export const patchContact = (id: number, body: Partial<ContactDetail>) =>
+  send<ContactDetail>(`/api/contacts/${id}`, 'PATCH', body)
+
+export const addContactTag = (id: number, name: string) =>
+  send<ContactDetail>(`/api/contacts/${id}/tags`, 'POST', { name })
+
+export const removeContactTag = (id: number, tagId: number) =>
+  send<ContactDetail>(`/api/contacts/${id}/tags/${tagId}`, 'DELETE')
+
+export type OpportunityDetail = {
+  id: number
+  title: string
+  pipeline_id: number
+  stage_id: number
+  status: string
+  value_cents: number
+  owner_id: number | null
+  owner_name: string | null
+  business_name: string | null
+  source: string | null
+  expected_close_date: string | null
+  created_by: string | null
+  created_at: string
+  custom_fields: Record<string, unknown>
+  contact_id: number | null
+  contact_name: string | null
+  contact_email: string | null
+  contact_phone: string | null
+}
+
+export const getOpportunity = (id: number) =>
+  get<OpportunityDetail>(`/api/opportunities/${id}`)
+
+export const patchOpportunity = (id: number, body: Partial<OpportunityDetail>) =>
+  send<OpportunityDetail>(`/api/opportunities/${id}/detail`, 'PATCH', body)
+
+export const createContact = (body: {
+  first_name?: string
+  last_name?: string
+  phone?: string
+  email?: string
+  business_name?: string
+  source?: string
+}) => send<ContactDetail>('/api/contacts', 'POST', body)
+
+// Measured GHL pane widths across 1440/1920/2560 (capture/capture_sizes.py):
+//   sidebar 224 fixed | icon rail 52 fixed
+//   inbox list 319 -> 379 -> 379   (grows, then caps)
+//   thread     480 -> 826 -> 1299  (fluid remainder)
+//   panel      299 -> 373 -> 540   (~21vw, capped)
+export const PANE = {
+  sidebar: 224,
+  rail: 52,
+  list: 'clamp(319px, 22vw, 379px)',
+  panel: 'clamp(299px, 21vw, 540px)',
+}
+
+export type CalendarRow = {
+  id: number
+  name: string
+  color: string
+  user_id: number | null
+  user_name: string | null
+  pipeline_id: number | null
+  pipeline_name: string | null
+}
+export const listCalendars = () => get<CalendarRow[]>('/api/calendars')
+
+export type DashboardStats = {
+  total: number
+  status: Record<string, number>
+  total_value_cents: number
+  won_value_cents: number
+  conversion_rate: number
+}
+export const getDashboard = (pipelineId?: number) =>
+  get<DashboardStats>(`/api/dashboard${pipelineId ? `?pipeline_id=${pipelineId}` : ''}`)
+
+export type CallReport = {
+  total_calls: number
+  by_status: Record<string, number>
+  first_time_by_status: Record<string, number>
+  avg_duration_seconds: number
+  total_duration_seconds: number
+  top_sources: { source: string; calls: number; won: number; avg_duration: number }[]
+}
+export const getCallReport = (p: { start: string; end: string; direction: string }) =>
+  get<CallReport>(`/api/reports/calls?start=${p.start}&end=${p.end}&direction=${p.direction}`)
+
+export type AppointmentReport = {
+  total: number
+  tiles: Record<string, number>
+  by_source: { source: string; count: number }[]
+  by_calendar: { calendar: string; count: number }[]
+  by_channel: { channel: string; count: number }[]
+  outcomes: Record<string, number>
+}
+export function getAppointmentReport(p: {
+  start: string; end: string; calendar_ids: number[]
+}) {
+  const sp = new URLSearchParams({ start: p.start, end: p.end })
+  if (p.calendar_ids.length) sp.set('calendar_ids', p.calendar_ids.join(','))
+  return get<AppointmentReport>(`/api/reports/appointments?${sp}`)
+}
