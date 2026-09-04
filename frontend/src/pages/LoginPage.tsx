@@ -85,11 +85,25 @@ export function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
             marginTop: 24,
             marginBottom: 6,
           }}
+          htmlFor="login-email"
         >
           Email
         </label>
+        {/*
+          name + autoComplete are load-bearing, not decoration. Without them the
+          browser cannot identify these fields, so Chrome autofills the DOM value
+          without firing a React-visible change event: `email`/`password` stay ''
+          and the next render wipes the boxes, which looks exactly like the form
+          clearing itself as you type.
+        */}
         <input
+          id="login-email"
+          name="email"
           type="email"
+          autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           autoFocus
           required
           value={email}
@@ -106,11 +120,15 @@ export function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
             marginTop: 16,
             marginBottom: 6,
           }}
+          htmlFor="login-password"
         >
           Password
         </label>
         <input
+          id="login-password"
+          name="password"
           type="password"
+          autoComplete="current-password"
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
