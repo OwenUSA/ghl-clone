@@ -27,6 +27,12 @@ param(
     # Env file holding the three production QA logins. Never in the repo. See PLAN.md.
     [string] $CredsFile,
 
+    # `fix` only: work just these finding ids (comma-separated, e.g. "F1-6,F2-5"), leaving
+    # everything already recorded in fix-log.md alone. This is how a `fix` run that was
+    # interrupted is resumed without redoing -- or worse, re-fixing -- what already landed.
+    # NOT named $Findings: that is already the findings directory in this script.
+    [string] $Only,
+
     # Re-run a single test slice (1..3) instead of all three.
     [ValidateRange(1, 3)]
     [int] $Slice = 0,
@@ -428,10 +434,23 @@ function Step-Fix {
     Write-Host '  baseline:'; Show-Gates $baseline
 
     $branch = "fix/prod-findings-$(Get-Date -Format 'yyyyMMdd')"
+
+    # A resumed run must not revisit what already landed: re-fixing a committed fix is how
+    # a good commit gets undone by a worker that cannot see it was already done.
+    $scope = if ($Only) {
+        $ids = ($Only -split '[,\s]+' | Where-Object { $_ }) -join ', '
+        "**This is a RESUMED run.** An earlier worker was interrupted. Work ONLY these " +
+        "findings, in this order: $ids. Every other finding is already recorded in the fix " +
+        "log with a final status -- read the log for context, but do not revisit, re-fix or " +
+        "revert any of them. The branch already exists and already carries their commits: " +
+        "switch to it and continue on it rather than creating it."
+    } else { '' }
+
     $prompt = Resolve-Prompt 'step3-fix.md' @{
         MERGED = 'orchestrate/findings/merged.md'
         LOG    = 'orchestrate/findings/fix-log.md'
         BRANCH = $branch
+        SCOPE  = $scope
     }
     Invoke-Worker -Prompt $prompt -Label 'fix' | Out-Null
 

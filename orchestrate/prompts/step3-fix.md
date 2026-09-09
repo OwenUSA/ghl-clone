@@ -1,5 +1,7 @@
 Fix the triaged findings in `{{MERGED}}`, one at a time. Record what you did in `{{LOG}}`.
 
+{{SCOPE}}
+
 A human has already triaged that file. Work **only** entries with `classification: bug`.
 Ignore `environment` entries entirely. For `uncertain` entries, investigate but do not
 change code unless you can state concretely what is broken.
