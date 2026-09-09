@@ -14,6 +14,26 @@ function cookie(name: string): string | null {
 /** Raised on 401 so callers can distinguish "log in" from a real failure. */
 export class Unauthorized extends Error {}
 
+/**
+ * A non-2xx response, carrying the status.
+ *
+ * The status is what lets a caller tell a refusal from a blip. A 403 is a
+ * decision the server has already made and will make again; retrying it just
+ * hides the failure behind seconds of backoff while the page shows zeros.
+ */
+export class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function failed(r: Response): Promise<ApiError> {
+  return new ApiError(r.status, `${r.status} ${(await r.text()) || r.statusText}`)
+}
+
 let refreshing: Promise<boolean> | null = null
 
 /**
@@ -79,7 +99,7 @@ async function get<T>(path: string, retry = true): Promise<T> {
     window.dispatchEvent(new Event('ghl:unauthorized'))
     throw new Unauthorized('not signed in')
   }
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  if (!r.ok) throw await failed(r)
   return r.json() as Promise<T>
 }
 
@@ -246,7 +266,7 @@ async function send<T>(path: string, method: string, body?: unknown,
     window.dispatchEvent(new Event('ghl:unauthorized'))
     throw new Unauthorized('not signed in')
   }
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+  if (!r.ok) throw await failed(r)
   return r.json() as Promise<T>
 }
 

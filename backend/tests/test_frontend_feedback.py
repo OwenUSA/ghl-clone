@@ -49,3 +49,34 @@ def test_the_telephony_join_key_is_not_an_editable_input():
     custom = source.split("{custom.map(", 1)[1].split("owen_* fields are", 1)[0]
     assert "owen_call_id" in custom, "the custom-field inputs no longer single it out"
     assert "readOnly=" in custom, "the join key is still a freely editable input"
+
+
+def test_dashboard_cards_show_a_refusal_instead_of_zeros():
+    """`/api/dashboard` is STAFF-only. A TECH got a fully drawn dashboard of zeros."""
+    source = _read("pages", "DashboardPage.tsx")
+    assert 'role="alert"' in source, "no card can report a failed query"
+    for card, query in (("Opportunity status", "status"), ("Opportunity value", "value"),
+                        ("Conversion rate", "conv")):
+        block = source.split(f'<Card title="{card}"', 1)[1].split(">", 1)[0]
+        assert f"error={{{query}.error}}" in block, (
+            f"the {card} card never reads {query}.error, so a 403 renders as 0")
+
+
+def test_reporting_says_the_report_failed_rather_than_showing_an_empty_one():
+    source = _read("pages", "ReportingPage.tsx")
+    assert 'role="alert"' in source, "Reporting has no error surface"
+    assert "calls.error" in source and "appts.error" in source, (
+        "a refused report is indistinguishable from a genuinely quiet period")
+
+
+def test_a_refused_request_is_not_retried():
+    """A 4xx is a decision, not a blip.
+
+    Retrying one replays a request that cannot succeed and buries the failure
+    behind seconds of backoff -- which is why the 403 looked like it was never
+    surfaced at all rather than surfaced seven seconds late.
+    """
+    main = _read("main.tsx")
+    retry = main.split("retry:", 1)[1].split("count < 3", 1)[0]
+    assert "ApiError" in retry and "status < 500" in retry, (
+        "the retry predicate still retries requests the server has refused")

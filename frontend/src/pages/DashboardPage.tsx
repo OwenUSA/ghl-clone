@@ -33,8 +33,15 @@ const C = {
   abandoned: 'rgb(152,162,179)',
 } as const
 
-function Card({ title, right, children }: {
-  title: string; right?: React.ReactNode; children: React.ReactNode
+/** A card whose query failed must say so, not draw zeros.
+ *
+ *  `/api/dashboard` is STAFF-only, so a TECH gets a 403 for it while the page
+ *  renders perfectly happily -- a donut centred on 0, `Total revenue $0.00`,
+ *  `Conversion rate 0.00%`. That is indistinguishable from an empty database.
+ */
+function Card({ title, right, error, children }: {
+  title: string; right?: React.ReactNode; error?: Error | null
+  children: React.ReactNode
 }) {
   return (
     <div className="bg-white" style={{
@@ -54,7 +61,13 @@ function Card({ title, right, children }: {
           </button>
         </div>
       </div>
-      <div className="p-4">{children}</div>
+      <div className="p-4">
+        {error
+          ? <div role="alert" style={{ fontSize: 13, color: 'rgb(180,35,24)' }}>
+              {error.message}
+            </div>
+          : children}
+      </div>
     </div>
   )
 }
@@ -161,7 +174,7 @@ export function DashboardPage() {
         <div className="grid gap-4" style={{
           gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
         }}>
-          <Card title="Opportunity status"
+          <Card title="Opportunity status" error={status.error}
             right={<PipelineSelect value={statusPipe} onChange={setStatusPipe}
               pipelines={pipelines.data ?? []} />}>
             <div className="flex items-center gap-6">
@@ -181,7 +194,7 @@ export function DashboardPage() {
             </div>
           </Card>
 
-          <Card title="Opportunity value"
+          <Card title="Opportunity value" error={value.error}
             right={<PipelineSelect value={valuePipe} onChange={setValuePipe}
               pipelines={pipelines.data ?? []} />}>
             <div className="flex">
@@ -226,7 +239,7 @@ export function DashboardPage() {
             </div>
           </Card>
 
-          <Card title="Conversion rate"
+          <Card title="Conversion rate" error={conv.error}
             right={<PipelineSelect value={convPipe} onChange={setConvPipe}
               pipelines={pipelines.data ?? []} />}>
             <div className="flex flex-col items-center">

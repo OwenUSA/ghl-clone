@@ -117,6 +117,27 @@ function NoData() {
   )
 }
 
+/** A report that failed to load must not read as a quiet period.
+ *
+ *  `/api/reports/*` is STAFF-only, so a TECH gets a 403 and the page below still
+ *  draws eight tiles of `0` and `No data found` on every card -- the same picture
+ *  a real empty range gives. This says which one it is.
+ */
+function LoadFailed({ error }: { error: Error }) {
+  return (
+    <div role="alert" className="mb-4"
+      style={{
+        fontSize: 14, color: 'rgb(180,35,24)',
+        backgroundColor: 'rgb(254,243,242)',
+        border: '1px solid rgb(253,162,155)',
+        borderRadius: 8, padding: '12px 16px',
+      }}>
+      This report could not be loaded, so the figures below are not your data.
+      <div style={{ fontSize: 13, marginTop: 4 }}>{error.message}</div>
+    </div>
+  )
+}
+
 function Legend({ items }: { items: { label: string; n: number; color: string }[] }) {
   return (
     <div>
@@ -256,6 +277,8 @@ export function ReportingPage() {
               </div>
             </div>
 
+            {calls.error && <LoadFailed error={calls.error} />}
+
             {/* Incoming / Outgoing — measured as underlined tabs */}
             <div className="mb-4 flex gap-6"
               style={{ borderBottom: '1px solid rgb(234,236,240)' }}>
@@ -371,6 +394,8 @@ export function ReportingPage() {
                 </IconBtn>
               </div>
             </div>
+
+            {appts.error && <LoadFailed error={appts.error} />}
 
             {/* 8 tiles in a row — measured label 16px/500, count 48px/500 */}
             <div className="grid gap-3"
