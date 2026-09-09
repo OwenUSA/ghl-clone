@@ -5,13 +5,14 @@ URL shapes deliberately mirror what was measured in GHL so routes map 1:1:
   ours /api/contacts?page=1&page_size=20
 """
 import os
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -221,6 +222,29 @@ def get_contact(contact_id: int, db: Session = Depends(get_db),
     return _contact_detail(c)
 
 
+# Deliberately loose: one @, something either side, a dot in the domain. Enough to
+# catch a typo or a pasted name; not an attempt to out-parse RFC 5322, which would
+# reject addresses that work.
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _blank_to_none(v: str | None) -> str | None:
+    """Whitespace is not a contact detail.
+
+    Without this, "   " satisfies the "needs a phone or an email" guard and stores a
+    contact with no reachable channel that renders as a blank row.
+    """
+    if v is None:
+        return None
+    return v.strip() or None
+
+
+def _check_email(v: str | None) -> str | None:
+    if v is not None and not EMAIL_RE.match(v):
+        raise ValueError("not a valid email address")
+    return v
+
+
 class ContactPatch(BaseModel):
     """All optional — the panel saves one field at a time as it is edited.
 
@@ -239,6 +263,10 @@ class ContactPatch(BaseModel):
     contact_type: str | None = Field(None, max_length=40)
     dnd: bool | None = None
     owner_id: int | None = None
+
+    _strip = field_validator("first_name", "last_name", "email", "phone",
+                             "business_name", "source", mode="after")(_blank_to_none)
+    _email = field_validator("email", mode="after")(_check_email)
 
 
 @app.patch("/api/contacts/{contact_id}")
@@ -386,6 +414,10 @@ class ContactCreate(BaseModel):
     phone: str | None = Field(None, max_length=40)
     business_name: str | None = Field(None, max_length=200)
     source: str | None = Field(None, max_length=120)
+
+    _strip = field_validator("first_name", "last_name", "email", "phone",
+                             "business_name", "source", mode="after")(_blank_to_none)
+    _email = field_validator("email", mode="after")(_check_email)
 
 
 @app.post("/api/contacts", status_code=201)

@@ -192,6 +192,42 @@ def test_contact_create_refuses_a_value_wider_than_its_column(client):
     assert len(at_limit.json()["first_name"]) == 120
 
 
+def test_whitespace_is_not_a_way_to_reach_a_contact(client):
+    """"   " satisfied the "needs a phone or an email" guard.
+
+    That stored a contact with no reachable channel at all, rendering as a blank
+    row in the list -- the guard was there precisely to make that impossible.
+    """
+    before = client.get("/api/contacts?page_size=100").json()["total"]
+    r = client.post("/api/contacts",
+                    json={"first_name": "  ", "email": "   ", "phone": "   "})
+    assert r.status_code == 400, "whitespace still counts as a contact detail"
+    after = client.get("/api/contacts?page_size=100").json()["total"]
+    assert after == before, "a refused create still wrote an unreachable contact"
+
+    # A real detail with incidental whitespace is fine, and is stored trimmed.
+    ok = client.post("/api/contacts", json={"first_name": " Nora ", "phone": " 9415550000 "})
+    assert ok.status_code == 201
+    assert ok.json()["first_name"] == "Nora" and ok.json()["phone"] == "9415550000"
+
+
+def test_an_email_field_has_to_hold_an_email(client):
+    before = client.get("/api/contacts?page_size=100").json()["total"]
+    r = client.post("/api/contacts", json={"email": "not-an-email"})
+    assert r.status_code == 422
+    assert client.get("/api/contacts?page_size=100").json()["total"] == before
+
+    cid = client.ids["contact"]
+    was = client.get("/api/contacts/%d" % cid).json()["email"]
+    assert client.patch("/api/contacts/%d" % cid,
+                        json={"email": "still-not-an-email"}).status_code == 422
+    still = client.get("/api/contacts/%d" % cid).json()["email"]
+    assert still == was, "a refused patch still wrote a junk email"
+
+    assert client.post("/api/contacts",
+                       json={"email": "nora@example.test"}).status_code == 201
+
+
 def test_contact_patch_refuses_a_value_wider_than_its_column(client):
     """The panel saves one field at a time, and hit the same 500 on save."""
     cid = client.ids["contact"]
