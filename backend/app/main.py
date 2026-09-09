@@ -560,9 +560,43 @@ def get_opportunity(opp_id: int, db: Session = Depends(get_db),
     return _opp_detail(o)
 
 
+# An opportunity name longer than this is refused before the database is touched,
+# the same way ContactCreate/ContactPatch cap their fields. The column holds 255,
+# so this is the tighter of the two limits and is what the UI is built against.
+OPPORTUNITY_TITLE_MAX = 120
+
+
+def _clean_opportunity_title(title: str | None) -> str:
+    """The one required field on an opportunity, per the measured GHL form.
+
+    Shared by create and the detail PATCH so the two cannot drift: a name you can
+    save through one path but not the other is a bug waiting to happen. Returns the
+    stripped name, so " Jane roof " is stored as "Jane roof" either way.
+    """
+    cleaned = (title or "").strip()
+    if not cleaned:
+        # "Opportunity name" is the only field GHL marks required (red *).
+        raise HTTPException(400, "opportunity name is required")
+    return cleaned
+
+
+def _check_opportunity_value(value_cents: int | None) -> None:
+    """Money is integer cents and never negative. Shared by create and PATCH."""
+    if value_cents is not None and value_cents < 0:
+        raise HTTPException(400, "value cannot be negative")
+
+
+def _check_opportunity_contact(db: Session, contact_id: int | None) -> None:
+    """A contact_id naming nobody would create an orphan opportunity - a card on
+    the board whose contact link no panel can ever open. Shared by create and PATCH.
+    """
+    if contact_id is not None and not db.get(Contact, contact_id):
+        raise HTTPException(400, "unknown contact_id")
+
+
 class OpportunityPatch(BaseModel):
     """Measured GHL statuses: Open / Won / Lost / Abandoned."""
-    title: str | None = None
+    title: str | None = Field(None, max_length=OPPORTUNITY_TITLE_MAX)
     stage_id: int | None = None
     status: Literal["open", "won", "lost", "abandoned"] | None = None
     value_cents: int | None = None
@@ -582,9 +616,10 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
         raise HTTPException(404, "opportunity not found")
 
     data = body.model_dump(exclude_unset=True)
-    if "title" in data and not (data["title"] or "").strip():
-        # "Opportunity name" is the only field GHL marks required (red *).
-        raise HTTPException(400, "opportunity name is required")
+    if "title" in data:
+        data["title"] = _clean_opportunity_title(data["title"])
+    if "contact_id" in data:
+        _check_opportunity_contact(db, data["contact_id"])
     if "stage_id" in data:
         stage = db.get(Stage, data["stage_id"])
         if not stage or stage.pipeline_id != o.pipeline_id:
@@ -592,9 +627,8 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     if ("owner_id" in data and data["owner_id"] is not None
             and not db.get(User, data["owner_id"])):
         raise HTTPException(400, "unknown owner_id")
-    if "value_cents" in data and data["value_cents"] is not None \
-            and data["value_cents"] < 0:
-        raise HTTPException(400, "value cannot be negative")
+    if "value_cents" in data:
+        _check_opportunity_value(data["value_cents"])
     if data.get("custom_fields") is not None:
         # `owen_call_id` is the join key to the telephony project (DECISIONS.md);
         # rewriting it breaks attribution history for calls this form knows nothing
@@ -619,7 +653,8 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
 
 
 class OpportunityCreate(BaseModel):
-    title: str
+    """Create and edit share their rules - see _clean_opportunity_title."""
+    title: str = Field(max_length=OPPORTUNITY_TITLE_MAX)
     pipeline_id: int
     stage_id: int
     contact_id: int | None = None
@@ -629,12 +664,15 @@ class OpportunityCreate(BaseModel):
 @app.post("/api/opportunities", status_code=201)
 def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
                        _: auth.Principal = auth.STAFF):
+    title = _clean_opportunity_title(body.title)
+    _check_opportunity_value(body.value_cents)
+    _check_opportunity_contact(db, body.contact_id)
     stage = db.get(Stage, body.stage_id)
     if not stage or stage.pipeline_id != body.pipeline_id:
         raise HTTPException(400, "stage is not in that pipeline")
     n = db.scalar(select(func.count(Opportunity.id))
                   .where(Opportunity.stage_id == body.stage_id)) or 0
-    o = Opportunity(title=body.title, pipeline_id=body.pipeline_id,
+    o = Opportunity(title=title, pipeline_id=body.pipeline_id,
                     stage_id=body.stage_id, contact_id=body.contact_id,
                     value_cents=body.value_cents, position=n)
     db.add(o)
