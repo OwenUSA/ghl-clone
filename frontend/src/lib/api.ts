@@ -244,6 +244,10 @@ export type Appointment = {
   ends_at: string
   status: string
   assigned_user_id: number | null
+  calendar_id: number | null
+  calendar_name: string | null
+  /** The owning calendar's colour, or the default blue. Sent by the API already. */
+  color: string
   contact_name: string | null
 }
 
@@ -261,6 +265,33 @@ export function listAppointments(p: {
   if (p.pipeline_ids?.length) sp.set('pipeline_ids', p.pipeline_ids.join(','))
   return get<Appointment[]>(`/api/appointments?${sp}`)
 }
+
+/**
+ * Create a booking. STAFF-only on the backend, so the callers gate on the role
+ * first -- a TECH must not be able to fill this form and learn on submit.
+ *
+ * The body mirrors `AppointmentCreate` in backend/app/main.py exactly. Note what
+ * is NOT there: `status`. The POST model does not accept it, so a booking always
+ * lands on the model default (`confirmed`); adding it here would be a field the
+ * server silently ignores.
+ */
+export type AppointmentCreated = {
+  id: number
+  title: string
+  starts_at: string
+  ends_at: string
+  automation: string
+}
+
+export const createAppointment = (body: {
+  title: string
+  starts_at: string
+  ends_at: string
+  contact_id?: number | null
+  assigned_user_id?: number | null
+  calendar_id?: number | null
+  notes?: string | null
+}) => send<AppointmentCreated>('/api/appointments', 'POST', body)
 
 export type ContactTag = { id: number; name: string; color: string }
 

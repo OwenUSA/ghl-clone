@@ -1,10 +1,17 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconChevronDown, IconPlus, IconSettings } from '../components/Icon'
+import { NewAppointmentDialog } from '../components/NewAppointmentDialog'
 import { useMemo, useState } from 'react'
 import {
   listAppointments, listCalendars, listUsers,
   type Appointment,
 } from '../lib/api'
+import type { Me } from '../lib/auth'
+import {
+  DEFAULT_SLOT_HOUR, MONTH_CELL_CHIPS, bucketByDay, defaultSlot, isSameDay,
+  queryWindow, rangeLabel, shiftAnchor, slotAt, visibleDays,
+  type CalendarView,
+} from '../lib/calendarGrid'
 
 /**
  * Measured from captures/diag_cal.png + captures/calendars/ (1440x900):
@@ -17,38 +24,34 @@ import {
  *             Show buffer time toggle, Filters + search, Users, Calendars
  *   week      starts SUNDAY (26 Sun ... 01 Sat)
  *
- * The "New" button is present but inert: creating a booking is out of v1 scope
- * and would be the first mutating control on this screen.
+ * Day view and Week view are the measured ones and are unchanged.
+ *
+ * MONTH VIEW IS OURS, NOT GHL'S. `captures/calendars/` holds the Week view only;
+ * GHL's Month view was never opened on the live account, so there is nothing to
+ * match it against. A conventional weeks-by-days grid of day cells was built at
+ * the owner's request — see the 2026-09-09 amendment in DECISIONS.md. Do not
+ * mistake it for measured parity, and re-measure if a live session is ever
+ * opened again.
+ *
+ * The old Month view was a bug, not a design: `days = 35` drove the label, the
+ * query window and the arrows while both grid renders did `slice(0, 7)`, so it
+ * was pixel-identical to Week view, fetched five times the data, and paged past
+ * 28 days that were fetched and never drawn.
  */
 const VIEWS = ['Day view', 'Week view', 'Month view'] as const
-type View = (typeof VIEWS)[number]
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
-const DAY_MS = 86_400_000
-
-function startOfWeek(d: Date) {
-  const x = new Date(d)
-  x.setHours(0, 0, 0, 0)
-  x.setDate(x.getDate() - x.getDay()) // Sunday, as measured
-  return x
-}
+/** One hour of the vertical grid, in px. The current-time line shares it. */
+const HOUR_PX = 48
 
 const fmtHour = (h: number) =>
   h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`
 
-const fmtRange = (start: Date, days: number) => {
-  const end = new Date(start.getTime() + (days - 1) * DAY_MS)
-  const m = (d: Date) => d.toLocaleDateString('en-US', { month: 'short' })
-  if (days === 1) {
-    return start.toLocaleDateString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric',
-    })
-  }
-  return `${m(start)} ${start.getDate()} – ${m(end)} ${end.getDate()}, ${end.getFullYear()}`
-}
+const fmtChipTime = (d: Date) =>
+  d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 
-export function CalendarsPage() {
-  const [view, setView] = useState<View>('Week view')
+export function CalendarsPage({ user }: { user: Me }) {
+  const [view, setView] = useState<CalendarView>('Week view')
   const [anchor, setAnchor] = useState(() => new Date())
   const [kind, setKind] = useState<'all' | 'appointments' | 'blocked'>('all')
   const [showPanel, setShowPanel] = useState(true)
@@ -56,44 +59,65 @@ export function CalendarsPage() {
   const [selectedUsers, setSelectedUsers] = useState<number[]>([])
   const [selectedCals, setSelectedCals] = useState<number[]>([])
   const [filterQ, setFilterQ] = useState('')
+  // The slot a double-click or the New button asked to book. Null = closed.
+  const [draft, setDraft] = useState<Date | null>(null)
+  const qc = useQueryClient()
 
-  const days = view === 'Day view' ? 1 : view === 'Week view' ? 7 : 35
-  const start = useMemo(
-    () => (view === 'Day view'
-      ? new Date(new Date(anchor).setHours(0, 0, 0, 0))
-      : startOfWeek(anchor)),
-    [anchor, view],
-  )
-  const end = new Date(start.getTime() + days * DAY_MS)
+  // `POST /api/appointments` is auth.STAFF, so a TECH's create is refused with
+  // `role TECH may not do this`. Mirror that here rather than let them fill the
+  // dialog and find out on submit — the same gate ContactsPage puts on Add
+  // Contact, derived from the role so the two cannot drift apart.
+  const canCreate = user.role !== 'TECH'
+
+  // ONE source for what is drawn, what is fetched and what the label says. They
+  // used to be derived separately, which is how Month view came to draw a week,
+  // fetch five, and page by 35 days.
+  const dayList = useMemo(() => visibleDays(view, anchor), [view, anchor])
+  const window_ = useMemo(() => queryWindow(view, anchor), [view, anchor])
 
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
   const calendars = useQuery({ queryKey: ['calendars'], queryFn: listCalendars })
   const appts = useQuery({
-    queryKey: ['appointments', start.toISOString(), days, kind,
-               selectedUsers, selectedCals],
+    queryKey: ['appointments', window_.start.toISOString(),
+               window_.end.toISOString(), kind, selectedUsers, selectedCals],
     queryFn: () =>
       listAppointments({
-        start: start.toISOString(),
-        end: end.toISOString(),
+        start: window_.start.toISOString(),
+        end: window_.end.toISOString(),
         kind,
         user_ids: selectedUsers,
         calendar_ids: selectedCals,
       }),
   })
 
-  const dayList = Array.from({ length: days }, (_, i) => new Date(start.getTime() + i * DAY_MS))
   const now = new Date()
-  const nowOffset = now.getHours() * 48 + (now.getMinutes() / 60) * 48
+  const nowOffset = now.getHours() * HOUR_PX + (now.getMinutes() / 60) * HOUR_PX
+  // One bucket per drawn cell, so nothing can be fetched and then not drawn.
+  const buckets = useMemo(
+    () => bucketByDay(dayList, appts.data ?? []),
+    [dayList, appts.data],
+  )
 
   function shift(dir: number) {
-    setAnchor((a) => new Date(a.getTime() + dir * days * DAY_MS))
+    setAnchor((a) => shiftAnchor(view, a, dir))
   }
 
-  const byDay = (d: Date) =>
-    (appts.data ?? []).filter((a) => {
-      const s = new Date(a.starts_at)
-      return s.toDateString() === d.toDateString()
-    })
+  /** Open the create dialog on a slot. A no-op for a role that cannot create. */
+  function book(at: Date) {
+    if (!canCreate) return
+    setDraft(at)
+  }
+
+  /**
+   * Double-click on an empty part of a day column in Day/Week view. The offset
+   * inside the column is read against the column's own box, not the hour cell
+   * under the pointer, so the prefilled time is the minute that was clicked
+   * (snapped to the half hour) rather than the top of the hour.
+   */
+  function bookFromColumn(d: Date, e: React.MouseEvent<HTMLDivElement>) {
+    const box = e.currentTarget.getBoundingClientRect()
+    book(slotAt(d, (e.clientY - box.top) / HOUR_PX))
+  }
 
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
@@ -140,13 +164,13 @@ export function CalendarsPage() {
         >
           <button onClick={() => shift(-1)} aria-label="Previous" style={{ padding: '0 10px', height: 36 }}>‹</button>
           <div style={{ minWidth: 200, textAlign: 'center', fontSize: 14, fontWeight: 600, color: 'rgb(52,64,84)' }}>
-            {fmtRange(start, days)}
+            {rangeLabel(view, anchor)}
           </div>
           <button onClick={() => shift(1)} aria-label="Next" style={{ padding: '0 10px', height: 36 }}>›</button>
         </div>
         <select
           value={view}
-          onChange={(e) => setView(e.target.value as View)}
+          onChange={(e) => setView(e.target.value as CalendarView)}
           style={{
             height: 36, borderRadius: 6, border: '1px solid rgb(234,236,240)',
             padding: '0 10px', fontSize: 14, fontWeight: 600,
@@ -180,13 +204,20 @@ export function CalendarsPage() {
             <IconSettings size={16} color="rgb(0,78,235)" />
             Manage view
           </button>
+          {/* Same dialog as a double-click on an empty slot, prefilled with a
+              day that is actually on screen. Disabled for a TECH, with a title
+              saying why — the precedent Add Contact set. */}
           <button
-            disabled
-            title="Creating a booking is out of v1 scope"
+            disabled={!canCreate}
+            onClick={() => book(defaultSlot(dayList, now))}
+            title={canCreate
+              ? 'Create an appointment'
+              : 'Creating an appointment is staff-only, and your role is TECH'}
             style={{
               height: 36, padding: '0 12px', borderRadius: 6, fontSize: 14,
               fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)',
-              opacity: 0.5, cursor: 'not-allowed',
+              opacity: canCreate ? 1 : 0.5,
+              cursor: canCreate ? 'pointer' : 'not-allowed',
               display: 'flex', alignItems: 'center', gap: 6,
             }}
           >
@@ -235,6 +266,15 @@ export function CalendarsPage() {
                 </tbody>
               </table>
             </div>
+          ) : view === 'Month view' ? (
+            <MonthGrid
+              cells={dayList}
+              buckets={buckets}
+              month={anchor.getMonth()}
+              today={now}
+              canCreate={canCreate}
+              onBook={book}
+            />
           ) : (
             <>
               {/* day header */}
@@ -242,8 +282,8 @@ export function CalendarsPage() {
                 <div style={{ width: 60, fontSize: 11, color: 'rgb(152,162,179)', padding: '8px 4px' }}>
                   GMT{-new Date().getTimezoneOffset() / 60}
                 </div>
-                {dayList.slice(0, view === 'Month view' ? 7 : days).map((d) => {
-                  const isToday = d.toDateString() === now.toDateString()
+                {dayList.map((d) => {
+                  const isToday = isSameDay(d, now)
                   return (
                     <div key={d.toISOString()} className="flex-1 text-center"
                       style={{
@@ -262,41 +302,48 @@ export function CalendarsPage() {
                 <div className="flex">
                   <div style={{ width: 60 }}>
                     {HOURS.map((h) => (
-                      <div key={h} style={{ height: 48, fontSize: 11, color: 'rgb(152,162,179)', padding: '2px 6px' }}>
+                      <div key={h} style={{ height: HOUR_PX, fontSize: 11, color: 'rgb(152,162,179)', padding: '2px 6px' }}>
                         {fmtHour(h)}
                       </div>
                     ))}
                   </div>
-                  {dayList.slice(0, view === 'Month view' ? 7 : days).map((d) => (
+                  {dayList.map((d, i) => (
                     <div key={d.toISOString()} className="relative flex-1"
-                      style={{ borderLeft: '1px solid rgb(242,244,247)' }}>
+                      // Double-click an EMPTY part of the column to book that slot.
+                      // The appointment blocks below stop the event, so a
+                      // double-click on a booking is not a create.
+                      onDoubleClick={(e) => bookFromColumn(d, e)}
+                      title={canCreate ? 'Double-click an empty slot to book it' : undefined}
+                      style={{
+                        borderLeft: '1px solid rgb(242,244,247)',
+                        cursor: canCreate ? 'copy' : 'default',
+                      }}>
                       {HOURS.map((h) => (
-                        <div key={h} style={{ height: 48, borderBottom: '1px solid rgb(242,244,247)' }} />
+                        <div key={h} style={{ height: HOUR_PX, borderBottom: '1px solid rgb(242,244,247)' }} />
                       ))}
-                      {d.toDateString() === now.toDateString() && (
+                      {isSameDay(d, now) && (
                         <div style={{
                           position: 'absolute', left: 0, right: 0, top: nowOffset,
                           borderTop: '2px solid rgb(217,45,32)',
                         }} />
                       )}
-                      {byDay(d).map((a) => {
+                      {buckets[i].map((a) => {
                         const s = new Date(a.starts_at)
                         const e = new Date(a.ends_at)
-                        const top = s.getHours() * 48 + (s.getMinutes() / 60) * 48
-                        const h = Math.max(24, ((e.getTime() - s.getTime()) / 3_600_000) * 48)
+                        const top = s.getHours() * HOUR_PX + (s.getMinutes() / 60) * HOUR_PX
+                        const h = Math.max(24, ((e.getTime() - s.getTime()) / 3_600_000) * HOUR_PX)
                         return (
                           <div key={a.id} title={a.title}
+                            onDoubleClick={(ev) => ev.stopPropagation()}
                             style={{
                               position: 'absolute', left: 2, right: 2, top, height: h,
                               backgroundColor: 'rgb(239,244,255)',
-                              borderLeft: '3px solid rgb(0,78,235)',
+                              borderLeft: `3px solid ${a.color}`,
                               borderRadius: 4, padding: '2px 6px', overflow: 'hidden',
                               fontSize: 12, color: 'rgb(52,64,84)',
                             }}>
                             <div className="truncate" style={{ fontWeight: 500 }}>{a.title}</div>
-                            <div className="truncate">
-                              {s.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                            </div>
+                            <div className="truncate">{fmtChipTime(s)}</div>
                           </div>
                         )
                       })}
@@ -376,6 +423,136 @@ export function CalendarsPage() {
 
           </div>
         )}
+      </div>
+
+      {draft && (
+        <NewAppointmentDialog
+          initialStart={draft}
+          initialEnd={new Date(draft.getTime() + 3_600_000)}
+          onClose={() => setDraft(null)}
+          onCreated={() => {
+            setDraft(null)
+            // The new booking has to appear without a manual refresh, and the
+            // range key changes with every view/anchor, so invalidate the whole
+            // 'appointments' family rather than this one key.
+            qc.invalidateQueries({ queryKey: ['appointments'] })
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * OUR OWN month grid — GHL's was never captured (DECISIONS.md, 2026-09-09).
+ *
+ * Whole Sunday-to-Saturday weeks of day cells, so every day of the month is on
+ * screen. The 24-hour vertical grid Day and Week view use cannot take a month:
+ * 35 columns of it is not a layout, which is why the old code capped at 7 and
+ * silently dropped four weeks.
+ *
+ * Cells outside the anchor month are drawn dimmed rather than blank — a blank
+ * cell reads as "nothing booked", and one of those days may well have a booking.
+ */
+function MonthGrid({
+  cells, buckets, month, today, canCreate, onBook,
+}: {
+  cells: Date[]
+  buckets: Appointment[][]
+  month: number
+  today: Date
+  canCreate: boolean
+  onBook: (at: Date) => void
+}) {
+  const weeks = cells.length / 7
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0" style={{ borderBottom: '1px solid rgb(234,236,240)' }}>
+        {cells.slice(0, 7).map((d) => (
+          <div key={d.toISOString()} className="flex-1 text-center"
+            style={{ padding: '8px 0', fontSize: 13, fontWeight: 600, color: 'rgb(102,112,133)' }}>
+            {d.toLocaleDateString('en-US', { weekday: 'short' })}
+          </div>
+        ))}
+      </div>
+
+      <div
+        className="grid min-h-0 flex-1 overflow-y-auto"
+        style={{
+          gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+          gridAutoRows: `minmax(${Math.max(96, Math.floor(560 / weeks))}px, auto)`,
+        }}
+      >
+        {cells.map((d, i) => {
+          const outside = d.getMonth() !== month
+          const isToday = isSameDay(d, today)
+          const list = buckets[i]
+          const shown = list.slice(0, MONTH_CELL_CHIPS)
+          const hidden = list.length - shown.length
+          return (
+            <div
+              key={d.toISOString()}
+              data-month-cell={d.toDateString()}
+              // Double-click a day cell to book it. A month cell has no hour
+              // under the pointer, so the slot falls back to the default hour.
+              onDoubleClick={() => onBook(new Date(d.getFullYear(), d.getMonth(), d.getDate(),
+                                                   DEFAULT_SLOT_HOUR, 0, 0, 0))}
+              title={canCreate ? 'Double-click to book this day' : undefined}
+              className="flex min-w-0 flex-col overflow-hidden"
+              style={{
+                borderTop: '1px solid rgb(242,244,247)',
+                borderLeft: '1px solid rgb(242,244,247)',
+                backgroundColor: outside ? 'rgb(252,252,253)' : '#fff',
+                padding: 6,
+                cursor: canCreate ? 'copy' : 'default',
+              }}
+            >
+              <div
+                className="shrink-0 self-end"
+                style={{
+                  fontSize: 12,
+                  fontWeight: isToday ? 700 : 500,
+                  minWidth: 22, textAlign: 'center', lineHeight: '18px',
+                  borderRadius: 9,
+                  color: isToday ? '#fff'
+                    : outside ? 'rgb(190,197,209)' : 'rgb(52,64,84)',
+                  backgroundColor: isToday ? 'rgb(0,78,235)' : 'transparent',
+                }}
+              >
+                {d.getDate()}
+              </div>
+
+              <div className="mt-1 flex min-h-0 flex-col gap-1 overflow-hidden">
+                {shown.map((a) => (
+                  <div
+                    key={a.id}
+                    data-appointment={a.id}
+                    title={`${a.title} — ${fmtChipTime(new Date(a.starts_at))}`}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    className="truncate"
+                    style={{
+                      fontSize: 11, lineHeight: '16px', borderRadius: 3,
+                      padding: '1px 4px', color: 'rgb(52,64,84)',
+                      backgroundColor: 'rgb(239,244,255)',
+                      borderLeft: `3px solid ${a.color}`,
+                    }}
+                  >
+                    {fmtChipTime(new Date(a.starts_at))} {a.title}
+                  </div>
+                ))}
+                {hidden > 0 && (
+                  <div
+                    title={list.slice(MONTH_CELL_CHIPS).map((a) => a.title).join('\n')}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    style={{ fontSize: 11, fontWeight: 600, color: 'rgb(0,78,235)' }}
+                  >
+                    +{hidden} more
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
