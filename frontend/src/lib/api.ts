@@ -393,6 +393,8 @@ export type CallReport = {
   first_time_by_status: Record<string, number>
   avg_duration_seconds: number
   total_duration_seconds: number
+  first_time_avg_duration_seconds: number
+  first_time_total_duration_seconds: number
   top_sources: { source: string; calls: number; won: number; avg_duration: number }[]
 }
 export const getCallReport = (p: { start: string; end: string; direction: string }) =>
