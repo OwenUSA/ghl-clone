@@ -90,3 +90,24 @@ def test_customize_card_cancel_is_not_a_second_apply():
     backdrop = modal.split("<div", 1)[1].split(">", 1)[0]
     assert "cancelFields" in backdrop, (
         "clicking the backdrop keeps the previewed layout, so it is a silent Apply")
+
+
+def test_the_opportunities_overflow_menu_can_be_dismissed():
+    """The `⋯` menu closed only by re-clicking `⋯`.
+
+    Escape did nothing, and with no backdrop an outside click fell through to
+    whatever was underneath — during QA a click meant to dismiss the menu landed on
+    an opportunity card and opened the detail dialog instead.
+    """
+    source = (FRONTEND / "pages" / "OpportunitiesPage.tsx").read_text(encoding="utf-8")
+    menu = source.split("{showOverflow && (", 1)[1].split("role=\"menu\"", 1)[0]
+    assert "fixed inset-0" in menu and "setShowOverflow(false)" in menu, (
+        "the menu has no backdrop, so an outside click falls through to the board")
+    assert "'Escape'" in source and "setShowOverflow(false)" in source, (
+        "Escape does not close the overflow menu")
+    # The backdrop must not swallow the trigger: re-clicking it is the documented
+    # way to close, and it has to keep running its own toggle.
+    trigger = source.split("aria-haspopup=\"menu\"", 1)[0].rsplit("<button", 1)[1]
+    assert "setShowOverflow((s) => !s)" in trigger, "retarget this — the trigger moved"
+    assert "z-20" in source.split("aria-haspopup=\"menu\"", 1)[1].split(">", 1)[0], (
+        "the trigger sits under the backdrop, so its toggle never fires")

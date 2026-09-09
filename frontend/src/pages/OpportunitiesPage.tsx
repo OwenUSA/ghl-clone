@@ -10,7 +10,7 @@ import { IconDownload, IconGrid, IconList, IconPlus } from '../components/Icon'
 import { useDraggable } from '@dnd-kit/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { OpportunityDetail } from '../components/OpportunityDetail'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
 import {
   listOpportunities,
@@ -193,6 +193,15 @@ export function OpportunitiesPage() {
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
   const pipeline = pipelines.data?.[0]
 
+  // A menu closes on Escape. Bound only while it is open, so the page is not
+  // listening for keystrokes it has no use for.
+  useEffect(() => {
+    if (!showOverflow) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowOverflow(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showOverflow])
+
   /** Close the Customize card modal, discarding the previewed layout. */
   const cancelFields = () => {
     setLayout(layoutOnOpen)
@@ -309,6 +318,9 @@ export function OpportunitiesPage() {
             <button
               onClick={() => setShowOverflow((s) => !s)}
               aria-haspopup="menu"
+              // above the backdrop below, so re-clicking to close still runs this
+              // toggle rather than being swallowed as an outside click
+              className="relative z-20"
               style={{
                 height: 34,
                 width: 34,
@@ -321,32 +333,42 @@ export function OpportunitiesPage() {
             </button>
             {/* measured y=121: Import (blue text) then Add opportunity (blue button) */}
             {showOverflow && (
-              <div
-                role="menu"
-                className="absolute right-0 z-20 mt-1 bg-white"
-                style={{
-                  minWidth: 220,
-                  borderRadius: 8,
-                  border: '1px solid rgb(234,236,240)',
-                  boxShadow: '0 12px 16px -4px rgba(16,24,40,0.08)',
-                  padding: 4,
-                }}
-              >
-                {OVERFLOW.map((t) => (
-                  <div
-                    key={t}
-                    title="Present in GHL; not implemented in v1"
-                    style={{
-                      padding: '8px 12px',
-                      fontSize: 14,
-                      color: 'rgb(152,162,179)',
-                      cursor: 'not-allowed',
-                    }}
-                  >
-                    {t}
-                  </div>
-                ))}
-              </div>
+              <>
+                {/* Without this, an outside click meant to dismiss the menu fell
+                    through to whatever was under it -- during QA a click at (800,700)
+                    landed on a card and opened the detail dialog. Same backdrop idiom
+                    as the Customize card modal, just transparent. */}
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setShowOverflow(false)}
+                />
+                <div
+                  role="menu"
+                  className="absolute right-0 z-20 mt-1 bg-white"
+                  style={{
+                    minWidth: 220,
+                    borderRadius: 8,
+                    border: '1px solid rgb(234,236,240)',
+                    boxShadow: '0 12px 16px -4px rgba(16,24,40,0.08)',
+                    padding: 4,
+                  }}
+                >
+                  {OVERFLOW.map((t) => (
+                    <div
+                      key={t}
+                      title="Present in GHL; not implemented in v1"
+                      style={{
+                        padding: '8px 12px',
+                        fontSize: 14,
+                        color: 'rgb(152,162,179)',
+                        cursor: 'not-allowed',
+                      }}
+                    >
+                      {t}
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
 
