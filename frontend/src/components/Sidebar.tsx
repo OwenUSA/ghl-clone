@@ -11,14 +11,12 @@
  *   68.8px gap between Payments and AI Agents -> section divider
  */
 import {
-  IconAward, IconCalendar, IconCard, IconChart, IconChat, IconGrid, IconImage,
-  IconMegaphone, IconPlay, IconRocket, IconSettings, IconSearch, IconSparkle,
-  IconStar, IconStore, IconUser, IconUsers, IconDoc,
+  IconCalendar, IconCard, IconChart, IconChat, IconGrid, IconImage,
+  IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
 } from './Icon'
 import { logout } from '../lib/auth'
 
 const PRIMARY = [
-  { key: 'launchpad', label: 'Launchpad', Icon: IconRocket },
   { key: 'dashboard', label: 'Dashboard', Icon: IconGrid },
   { key: 'conversations', label: 'Conversations', Icon: IconChat },
   { key: 'calendars', label: 'Calendars', Icon: IconCalendar },
@@ -30,17 +28,18 @@ const PRIMARY = [
 
 // Out of scope for this build (DECISIONS.md) but present in GHL's shell.
 // Rendered dimmed so the shell reads the same and the omission stays visible.
+//
+// Marketing, Sites, Memberships, Reputation and App Marketplace used to sit here
+// and Launchpad sat at the top of PRIMARY. All six were removed outright on
+// 2026-09-09 at the owner's request -- they are not merely out of scope for v1,
+// they are out of the product, so showing them dimmed advertised something that
+// is never coming. The four below stay dimmed on purpose (DECISIONS.md).
 type IconCmp = (p: { size?: number; color?: string }) => React.ReactElement
 
 const SECONDARY: { label: string; Icon: IconCmp }[] = [
   { label: 'AI Agents', Icon: IconSparkle },
-  { label: 'Marketing', Icon: IconMegaphone },
   { label: 'Automation', Icon: IconPlay },
-  { label: 'Sites', Icon: IconStore },
-  { label: 'Memberships', Icon: IconAward },
   { label: 'Media Storage', Icon: IconImage },
-  { label: 'Reputation', Icon: IconStar },
-  { label: 'App Marketplace', Icon: IconDoc },
 ]
 
 export function Sidebar({

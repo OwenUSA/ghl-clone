@@ -6,14 +6,12 @@ import { ConversationsPage } from './pages/ConversationsPage'
 import { OpportunitiesPage } from './pages/OpportunitiesPage'
 import { CalendarsPage } from './pages/CalendarsPage'
 import { DashboardPage } from './pages/DashboardPage'
-import { LaunchpadPage } from './pages/LaunchpadPage'
 import { ReportingPage } from './pages/ReportingPage'
 import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { me } from './lib/auth'
 
 const PLACEHOLDER: Record<string, string> = {
-  launchpad: 'Launchpad',
   dashboard: 'Dashboard',
   conversations: 'Conversations',
   calendars: 'Calendars',
@@ -66,8 +64,6 @@ export default function App() {
         <CalendarsPage />
       ) : active === 'dashboard' ? (
         <DashboardPage />
-      ) : active === 'launchpad' ? (
-        <LaunchpadPage onNavigate={setActive} />
       ) : active === 'reporting' ? (
         <ReportingPage />
       ) : active === 'settings' ? (
