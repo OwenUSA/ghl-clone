@@ -108,3 +108,17 @@ def test_api_errors_are_turned_into_sentences_not_wire_bodies():
         ("REFUSAL", "a body with nothing human in it needs a fallback sentence"),
     ):
         assert needed in body, f"{needed} missing: {why}"
+
+
+def test_add_contact_is_disabled_for_a_role_that_cannot_create():
+    """`POST /api/contacts` is STAFF, so a TECH's create is refused. The button was
+    fully enabled, so the only way to find out was to fill the dialog and submit.
+    `Import` in the same header is the precedent: disabled, with a title saying why."""
+    source = _read("pages", "ContactsPage.tsx")
+    assert "user.role !== 'TECH'" in source, (
+        "the page never asks whether this role can create a contact")
+    # The header button, from its click handler to its label. The dialog further
+    # down carries the same words as a heading.
+    button = source.split("onClick={() => setShowAdd(true)}", 1)[1].split("Add Contact", 1)[0]
+    assert "disabled=" in button, "Add Contact is offered to a role that cannot create"
+    assert "title=" in button, "nothing tells the user why the button is dead"

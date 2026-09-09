@@ -5,6 +5,7 @@ import {
 import { useState } from 'react'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
 import { createContact, listContacts } from '../lib/api'
+import type { Me } from '../lib/auth'
 import { IconChevronDown } from '../components/Icon'
 
 /**
@@ -61,7 +62,10 @@ function initials(name: string) {
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase()
 }
 
-export function ContactsPage() {
+export function ContactsPage({ user }: { user: Me }) {
+  // `POST /api/contacts` is auth.STAFF, so a TECH's create is refused. Mirror that
+  // here rather than let them fill six fields to find out on submit.
+  const canCreate = user.role !== 'TECH'
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [q, setQ] = useState('')
@@ -162,10 +166,13 @@ export function ContactsPage() {
           </button>
           <button
             onClick={() => setShowAdd(true)}
+            disabled={!canCreate}
+            title={canCreate ? undefined : 'Your role cannot create contacts'}
             style={{
               height: 36, padding: '0 12px', borderRadius: 6, fontSize: 13,
               fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)',
               display: 'flex', alignItems: 'center', gap: 6,
+              ...(canCreate ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
             }}
           >
             <IconPlus size={16} color="#fff" />

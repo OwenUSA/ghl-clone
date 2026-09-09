@@ -57,7 +57,7 @@ export default function App() {
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar active={active} onNavigate={setActive} user={user} />
       {active === 'contacts' ? (
-        <ContactsPage />
+        <ContactsPage user={user} />
       ) : active === 'conversations' ? (
         <ConversationsPage />
       ) : active === 'opportunities' ? (
