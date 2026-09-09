@@ -1,0 +1,13 @@
+# Whitelist: the harness is versioned, everything a run produces is not.
+#
+# Workers write their own throwaway probe scripts here (slice1/, scripts3/, s2_*.py, ...)
+# alongside findings, screenshots and session state. Roughly a hundred files per run, all
+# specific to one run against one dataset. Tracking them would bury the four files that
+# actually define the harness, so this ignores everything and re-includes only those.
+*
+
+!.gitignore
+!PLAN.md
+!run.ps1
+!prompts/
+!prompts/*.md

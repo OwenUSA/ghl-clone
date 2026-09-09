@@ -11,16 +11,27 @@ Credentials come from the environment:
 
     GHL_APP_EMAIL      required (the app account to sign in as)
     GHL_APP_PASSWORD   required
+    GHL_APP_URL        optional, defaults to the local dev server
+    GHL_APP_STATE      optional, path to the storage-state cache
 
 The session is cached as Playwright storage state in
 `.capture-profile/app_auth.json` (gitignored) so repeated runs do not re-login.
+
+`GHL_APP_URL` exists so the same login flow can drive the deployed app, not only
+localhost -- see `orchestrate/PLAN.md`. `GHL_APP_STATE` exists because concurrent
+workers signed in as *different* accounts must not share one cache file: the last
+writer would win and the others would silently run as the wrong user. Both default
+to the previous behaviour, so every existing capture script is unaffected.
 """
 import json
 import os
 from pathlib import Path
 
-APP = "http://localhost:5173/"
-STATE = Path(__file__).resolve().parent.parent / ".capture-profile" / "app_auth.json"
+APP = os.getenv("GHL_APP_URL") or "http://localhost:5173/"
+_PROFILE = Path(__file__).resolve().parent.parent / ".capture-profile"
+STATE = Path(os.getenv("GHL_APP_STATE") or (_PROFILE / "app_auth.json"))
+if not STATE.is_absolute():
+    STATE = Path(__file__).resolve().parent.parent / STATE
 
 EMAIL = os.getenv("GHL_APP_EMAIL")
 PASSWORD = os.getenv("GHL_APP_PASSWORD")

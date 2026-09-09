@@ -715,3 +715,40 @@ Verified against the deployed stack: 43 routes swept unauthenticated with **0 le
 deep links serve `index.html`; session cookies are `Secure`+`HttpOnly`; the
 `events:write` token is accepted on `/api/events` and **403s on everything else**;
 `ghl health` reports `LoggingTransport`, so nothing can transmit.
+
+## Triage decisions from the first production test run (2026-09-09)
+
+An orchestrated test run against the live deployment (`orchestrate/PLAN.md`) produced 23
+findings. Two were closed as intended behaviour rather than fixed, and one standing claim
+in this file turned out to be false. Recorded so the next test run does not re-file them.
+
+- **Per-stage and per-deal money is TECH-visible, by design.** The Dashboard Funnel shows
+  `value_cents` per stage to a TECH whose `GET /api/dashboard` returns 403, because the
+  card is fed by `GET /api/pipelines` (ANY_USER). A TECH can also read
+  `GET /api/opportunities?pipeline_id=1` and see per-deal values directly. The STAFF gate
+  on `/api/dashboard` therefore withholds only an aggregate of numbers that user can
+  already read. This is not a leak: a TECH sees the deals they are dispatched to. The gate
+  is inconsistent, and that inconsistency is now deliberate rather than accidental — do
+  not "fix" it by stripping `value_cents` from `/api/pipelines`.
+
+- **Desktop-only is the intended scope.** There is no responsive breakpoint: the 224px
+  sidebar never collapses, so at 390px width the content pane is 166px. Content reflows
+  rather than clips and nothing is unreachable, but reports are not legibly usable below
+  roughly tablet width. This is a desktop GoHighLevel clone and the sidebar width is
+  locked to GHL's (see "Responsive rules", which measures 1440/1920/2560 only — all
+  desktop). A responsive pass is a project of its own, not a bug fix.
+
+- **CORRECTION: production does NOT start empty any more.** The "Deployment" section above
+  and `CLAUDE.md` both say the production database is empty until a GoHighLevel export
+  lands. As of this run it holds 12 contacts, 10 opportunities, 6 calls, 8 appointments
+  and 1 pipeline. Anything that tests against production must assume real records exist
+  and must never touch a record it did not create itself.
+
+- **A QA run destroyed a live credential.** The `callmon` machine token (id 1,
+  `events:write`, owner `owen@telephony.local`) was permanently revoked by a test probe
+  that assumed the call would be refused; as ADMIN it was accepted. Revocation is
+  irreversible — only a sha256 is stored. A replacement was minted the same day. No ingest
+  was interrupted (`/api/events` has never been called in the retained logs, and the
+  telephony project holds no `ghl_pat_` value in its configuration), but the credential
+  itself was unrecoverable. An unattended worker holding ADMIN will reach endpoints no UI
+  route exposes: prefer the least role that can exercise a surface.
