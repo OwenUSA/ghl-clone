@@ -229,7 +229,14 @@ export function SettingsPage({ user }: { user: Me }) {
                 >
                   {status(t) === 'active' && (
                     <button
-                      onClick={() => revoke.mutate(t.id)}
+                      // Revocation is irreversible -- only a sha256 is stored, so a
+                      // mis-click destroys the credential for good. The CLI already
+                      // makes you pass --yes for this; the one-click button did not.
+                      onClick={() => {
+                        if (window.confirm(
+                          `Revoke "${t.name}"? It stops working immediately and `
+                          + 'cannot be restored.')) revoke.mutate(t.id)
+                      }}
                       style={{
                         border: 'none',
                         background: 'transparent',

@@ -80,3 +80,12 @@ def test_a_refused_request_is_not_retried():
     retry = main.split("retry:", 1)[1].split("count < 3", 1)[0]
     assert "ApiError" in retry and "status < 500" in retry, (
         "the retry predicate still retries requests the server has refused")
+
+
+def test_revoking_a_token_asks_first():
+    """Revocation is irreversible -- only a sha256 is stored, so a mis-click is
+    permanent. The CLI already requires --yes for it; the button fired on one click."""
+    source = _read("pages", "SettingsPage.tsx")
+    at = source.index("revoke.mutate(t.id)")
+    handler = source[source.rindex("<button", 0, at):at]
+    assert "confirm(" in handler, "the Revoke button destroys a credential with no prompt"

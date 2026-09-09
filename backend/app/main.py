@@ -1580,11 +1580,22 @@ def list_tokens(db: Session = Depends(get_db),
 
 @app.delete("/api/auth/tokens/{token_id}")
 def revoke_token(token_id: int, db: Session = Depends(get_db),
-                 principal: auth.Principal = auth.ANY_USER):
+                 principal: auth.Principal = auth.ANY_USER,
+                 user_id: int | None = None):
+    """Revoke a token: yours by id, someone else's only if you name the owner.
+
+    Revocation is irreversible — only a sha256 is stored — and `GET /api/auth/tokens`
+    lists only your own, so an ADMIN revoking by bare id is firing at a target they
+    cannot see. That is how the live telephony credential was destroyed
+    (DECISIONS.md). An ADMIN may still revoke another user's token, but has to say
+    whose, the same way `list_tokens` already makes them.
+    """
     token = db.get(ApiToken, token_id)
     # 404 rather than 403 for someone else's token — do not confirm it exists.
-    if token is None or (token.user_id != principal.user_id
-                         and principal.role is not Role.ADMIN):
+    if token is None:
+        raise HTTPException(404, "token not found")
+    if token.user_id != principal.user_id and not (
+            principal.role is Role.ADMIN and user_id == token.user_id):
         raise HTTPException(404, "token not found")
     if token.revoked_at is None:
         token.revoked_at = datetime.now(UTC)

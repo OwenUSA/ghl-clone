@@ -329,6 +329,44 @@ def test_a_user_cannot_revoke_someone_elses_token(env):
     assert admin.get("/api/contacts").status_code == 200
 
 
+def test_an_admin_cannot_revoke_a_token_by_guessing_its_id(env):
+    """Revoking someone else's token has to name whose it is.
+
+    Revocation is irreversible (only a sha256 is stored) and GET /api/auth/tokens
+    lists only your own, so an admin firing a bare id at this endpoint is aiming at
+    a target they cannot see. That is exactly how the live telephony credential was
+    destroyed. An admin may still do it deliberately, the way list_tokens already
+    makes them: by saying whose.
+    """
+    admin = client_for(env, "admin")
+    tech = client_for(env, "tech")
+    tech_token_id = tech.get("/api/auth/me").json()["token"]["id"]
+    tech_user_id = tech.get("/api/auth/me").json()["user"]["id"]
+
+    def revoked():
+        db = SessionLocal()
+        try:
+            return db.get(ApiToken, tech_token_id).revoked_at is not None
+        finally:
+            db.close()
+
+    # A bare id is refused, and — the part that matters — the token still works.
+    assert admin.delete("/api/auth/tokens/%d" % tech_token_id).status_code == 404
+    assert not revoked(), "a refused revoke still destroyed the token"
+    assert tech.get("/api/contacts").status_code == 200
+
+    # Naming the wrong owner is refused too.
+    assert admin.delete("/api/auth/tokens/%d?user_id=%d"
+                        % (tech_token_id, tech_user_id + 999)).status_code == 404
+    assert not revoked()
+
+    # Naming the right one still works: this is a capability, not a wall.
+    assert admin.delete("/api/auth/tokens/%d?user_id=%d"
+                        % (tech_token_id, tech_user_id)).status_code == 200
+    assert revoked()
+    assert tech.get("/api/contacts").status_code == 401
+
+
 # ---------------- roles ----------------
 
 def test_tech_cannot_create_a_contact_and_none_is_created(env):
