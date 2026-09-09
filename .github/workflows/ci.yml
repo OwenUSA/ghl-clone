@@ -22,6 +22,15 @@ jobs:
         with:
           enable-cache: true
 
+      # tests/test_calendar_grid.py runs frontend/src/lib/calendarGrid.ts under
+      # node (>= 22.6 strips the type annotations) so the Calendars month
+      # arithmetic is executed rather than pattern-matched. Without node here
+      # that whole file would skip and the regression it covers would be
+      # unguarded on CI. No npm install: the module imports nothing.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Install
         # --all-groups pulls the capture group too (Playwright as a package). We do
         # NOT install its browsers: nothing under capture/ runs here. Those scripts
@@ -33,7 +42,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Tests
-        # 158 tests, fully offline: conftest.py forces DATABASE_URL to a temp SQLite
+        # Fully offline: conftest.py forces DATABASE_URL to a temp SQLite
         # file before the app imports, and the CLI tests use a mock httpx transport.
         # Note this means CI never exercises Alembic or the Postgres JSONB path.
         run: uv run pytest -q
