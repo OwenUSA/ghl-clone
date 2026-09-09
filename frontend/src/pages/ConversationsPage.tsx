@@ -112,6 +112,11 @@ function Dropdown({
       role="menu"
       className="absolute z-30 mt-1 bg-white"
       style={{
+        // `top` must be set explicitly. Without it the menu falls back to its static
+        // position, and its `relative` parent is a flex row with `items-center`, so the
+        // menu is vertically CENTRED on the 24px icon row and overflows upward off the
+        // top of the window. 100% drops it below the row, where `mt-1` spaces it.
+        top: '100%',
         [right ? 'right' : 'left']: 0,
         minWidth: 224,
         borderRadius: 8,
