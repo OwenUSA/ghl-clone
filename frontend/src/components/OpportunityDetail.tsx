@@ -253,18 +253,31 @@ export function OpportunityDetail({
               <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(16,24,40)', marginBottom: 8 }}>
                 Custom fields
               </div>
-              {custom.map(([k, val]) => (
-                <div key={k} className="mb-3">
-                  <div style={{ fontSize: 14, color: 'rgb(16,24,40)' }}>{k}</div>
-                  <input
-                    value={String(val ?? '')}
-                    onChange={(e) =>
-                      set('custom_fields', { ...(v('custom_fields') ?? {}), [k]: e.target.value })
-                    }
-                    style={INPUT}
-                  />
-                </div>
-              ))}
+              {custom.map(([k, val]) => {
+                // owen_call_id is the live join key to the telephony project
+                // (DECISIONS.md) — editing it silently breaks call attribution for
+                // records this form knows nothing about. Same readOnly treatment as
+                // Pipeline, Followers and Tags above; the backend refuses a change too.
+                const joinKey = k === 'owen_call_id'
+                return (
+                  <div key={k} className="mb-3">
+                    <div style={{ fontSize: 14, color: 'rgb(16,24,40)' }}>{k}</div>
+                    <input
+                      value={String(val ?? '')}
+                      readOnly={joinKey}
+                      title={joinKey
+                        ? 'The join key to the telephony project — not editable here'
+                        : undefined}
+                      onChange={joinKey ? undefined : (e) =>
+                        set('custom_fields', { ...(v('custom_fields') ?? {}), [k]: e.target.value })
+                      }
+                      style={joinKey
+                        ? { ...INPUT, backgroundColor: 'rgb(249,250,251)' }
+                        : INPUT}
+                    />
+                  </div>
+                )
+              })}
               <div style={{ fontSize: 12, color: 'rgb(102,112,133)' }}>
                 owen_* fields are written by the telephony project; owen_call_id is the join key.
               </div>

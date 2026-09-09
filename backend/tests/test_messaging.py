@@ -438,6 +438,35 @@ def test_force_delete_detaches_opportunities_rather_than_destroying_them(client)
     db.close()
 
 
+def test_the_telephony_join_key_cannot_be_rewritten_through_the_detail_form(client):
+    """`owen_call_id` joins an opportunity to the telephony project's call record.
+
+    The detail dialog rendered it as a plain text input, and the API accepted the
+    change, so one careless edit silently orphans that call's attribution. Deletes
+    already go out of their way to preserve this key (see the force-delete test above);
+    an edit must not be the hole that the delete path is not.
+    """
+    oid = client.ids["opp"]
+    before = client.get("/api/opportunities/%d" % oid).json()["custom_fields"]
+    assert before["owen_call_id"] == "call-abc-123", "fixture changed — retarget this"
+
+    r = client.patch("/api/opportunities/%d/detail" % oid,
+                     json={"custom_fields": {"owen_call_id": "CLOBBERED"}})
+    assert r.status_code == 400
+    assert "owen_call_id" in r.json()["detail"]
+    after = client.get("/api/opportunities/%d" % oid).json()["custom_fields"]
+    assert after["owen_call_id"] == "call-abc-123", "a refused edit still clobbered the key"
+
+    # The form posts the whole custom_fields object back on every save, so echoing
+    # the key unchanged must keep working -- and must still save the other fields.
+    ok = client.patch("/api/opportunities/%d/detail" % oid, json={
+        "custom_fields": {"owen_call_id": "call-abc-123", "owen_campaign": "Spring"}})
+    assert ok.status_code == 200
+    saved = client.get("/api/opportunities/%d" % oid).json()["custom_fields"]
+    assert saved["owen_campaign"] == "Spring", "the guard blocked an unrelated field"
+    assert saved["owen_call_id"] == "call-abc-123"
+
+
 def test_deleting_an_opportunity(client):
     oid = client.ids["opp"]
     assert client.delete("/api/opportunities/%d" % oid).status_code == 200

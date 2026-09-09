@@ -549,6 +549,18 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     if "value_cents" in data and data["value_cents"] is not None \
             and data["value_cents"] < 0:
         raise HTTPException(400, "value cannot be negative")
+    if data.get("custom_fields") is not None:
+        # `owen_call_id` is the join key to the telephony project (DECISIONS.md);
+        # rewriting it breaks attribution history for calls this form knows nothing
+        # about. Nothing legitimate sets it here — telephony ingests through
+        # POST /api/events. The detail form posts the whole custom_fields object
+        # back on every save, so an unchanged echo is fine and only a real change
+        # is refused. Setting it where there was none is still allowed.
+        was = (o.custom_fields or {}).get("owen_call_id")
+        now = data["custom_fields"].get("owen_call_id")
+        if was is not None and now != was:
+            raise HTTPException(
+                400, "owen_call_id is the telephony join key and cannot be changed here")
 
     old_stage_id = o.stage_id
     for k, v in data.items():

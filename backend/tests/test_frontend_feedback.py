@@ -38,3 +38,14 @@ def test_contact_panel_clears_the_tag_input_only_once_the_add_lands():
         "the tag input is cleared on keystroke, so a refused add still reads as success")
     tag_add = source.split("const tagAdd = useMutation({", 1)[1].split("})", 1)[0]
     assert "setNewTag('')" in tag_add, "the input is never cleared on a successful add"
+
+
+def test_the_telephony_join_key_is_not_an_editable_input():
+    """`owen_call_id` sat in the detail form as a plain text input, directly above
+    the footnote warning that it is the join key. The form already has the readOnly
+    precedent -- Pipeline, Followers and Tags all use it."""
+    source = _read("components", "OpportunityDetail.tsx")
+    # The custom-field loop, up to the footnote that closes the section.
+    custom = source.split("{custom.map(", 1)[1].split("owen_* fields are", 1)[0]
+    assert "owen_call_id" in custom, "the custom-field inputs no longer single it out"
+    assert "readOnly=" in custom, "the join key is still a freely editable input"
