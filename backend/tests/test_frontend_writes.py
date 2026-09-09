@@ -11,8 +11,14 @@ exactly how the kanban drag was dead in production — `moveOpportunity` called
 that call fetch are get/send/refresh" is the same statement as "every write is
 CSRF-signed", and it catches the next write that forgets.
 """
+import json
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
+
+import pytest
 
 API_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "api.ts"
 
@@ -52,3 +58,79 @@ def test_move_opportunity_goes_through_send():
     source = API_TS.read_text(encoding="utf-8")
     body = source.split("moveOpportunity", 1)[1].split("export type", 1)[0]
     assert "send<" in body, "moveOpportunity must issue its PATCH via send()"
+
+
+def test_create_opportunity_goes_through_send():
+    """Add opportunity is a cookie-authenticated write like the drag above it."""
+    source = API_TS.read_text(encoding="utf-8")
+    body = source.split("createOpportunity", 1)[1].split("export const createContact", 1)[0]
+    assert "send<" in body, "createOpportunity must issue its POST via send()"
+
+
+# ---- money -------------------------------------------------------------------
+#
+# The money inputs send integer cents. `Math.round(Number(v) * 100)` looks like the
+# obvious conversion and quietly loses a cent: 9500.005 * 100 is 950000.49999999994
+# in IEEE-754, so the half rounds down. `centsFromDollars` does the arithmetic on
+# the decimal digits instead, and is executed here rather than only read.
+
+FRONTEND = API_TS.parents[1]
+
+CENTS_CASES = [
+    ("", 0),
+    ("9500", 950000),
+    ("9500.00", 950000),
+    ("9500.004", 950000),
+    ("9500.005", 950001),   # the float path returns 950000
+    ("9500.995", 950100),
+    ("0.1", 10),
+    (".5", 50),
+    ("12345678.99", 1234567899),
+    ("1e3", 100000),        # a number input can still hand back exponent notation
+]
+
+
+def _cents_from_dollars_js() -> str:
+    """The real helper out of api.ts, with its two type annotations stripped.
+
+    Reading the shipped source rather than a copy is the point: a copy would keep
+    passing after someone changed the helper back to the float conversion.
+    """
+    src = API_TS.read_text(encoding="utf-8")
+    start = src.index("export function centsFromDollars")
+    end = src.index("\n}\n", start) + 3
+    js = (src[start:end]
+          .replace("export function", "function")
+          .replace("(input: string): number", "(input)"))
+    assert ": string" not in js and ": number" not in js, (
+        "the helper's signature changed — retarget this test")
+    return js
+
+
+def test_the_money_input_does_not_lose_or_invent_a_cent():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed; the frontend build job in CI runs this")
+
+    typed = json.dumps([case for case, _ in CENTS_CASES])
+    script = "%s\nconsole.log(JSON.stringify(%s.map(centsFromDollars)))" % (
+        _cents_from_dollars_js(), typed)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "cents.mjs"
+        path.write_text(script, encoding="utf-8")
+        out = subprocess.run([node, str(path)], capture_output=True, text=True,
+                             check=True).stdout
+    got = json.loads(out)
+    assert got == [cents for _, cents in CENTS_CASES], dict(
+        zip([c for c, _ in CENTS_CASES], got, strict=True))
+
+
+def test_both_money_inputs_use_the_shared_conversion():
+    """Create and edit must convert the same way, or the same typed amount saves as
+    two different numbers depending on which form the user reached."""
+    for parts in (("pages", "OpportunitiesPage.tsx"),
+                  ("components", "OpportunityDetail.tsx")):
+        source = FRONTEND.joinpath(*parts).read_text(encoding="utf-8")
+        assert "centsFromDollars(" in source, f"{parts[-1]} converts money by hand"
+        assert "Number(e.target.value) * 100" not in source, (
+            f"{parts[-1]} is back on the float conversion")

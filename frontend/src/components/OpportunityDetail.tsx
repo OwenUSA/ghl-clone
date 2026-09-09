@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import {
+  centsFromDollars,
   getOpportunity,
   listUsers,
   patchOpportunity,
@@ -194,7 +195,7 @@ export function OpportunityDetail({
                   min={0}
                   step="0.01"
                   value={(v('value_cents') ?? 0) / 100}
-                  onChange={(e) => set('value_cents', Math.round(Number(e.target.value) * 100))}
+                  onChange={(e) => set('value_cents', centsFromDollars(e.target.value))}
                   placeholder="Please Input"
                   style={INPUT}
                 />

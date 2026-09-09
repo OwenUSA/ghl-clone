@@ -151,3 +151,71 @@ def test_reporting_says_so_when_the_date_range_is_backwards():
             f"the {query.split(' ')[0]} report still asks the server for an empty range")
     assert source.count("<InvertedRange start={startDate} end={endDate} />") == 2, (
         "both the call and the appointment tab share the range, so both must warn")
+
+
+def test_add_opportunity_is_disabled_for_a_role_that_cannot_create():
+    """`POST /api/opportunities` is STAFF. Same precedent as Add Contact: do not
+    offer a role a form it will only be refused at the end of."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    assert "user.role !== 'TECH'" in source, (
+        "the page never asks whether this role can create an opportunity")
+    button = source.split("onClick={() => setShowAdd(true)}", 1)[1].split(
+        "Add opportunity", 1)[0]
+    assert "disabled={!canCreate" in button, (
+        "Add opportunity is offered to a role that cannot create one")
+    assert "title=" in button, "nothing tells the user why the button is dead"
+
+
+def test_the_add_opportunity_dialog_survives_a_refused_create():
+    """A failed POST must leave the dialog open with a sentence in it, not close as
+    though it worked. `onDone` is what closes the dialog, so it must be reachable
+    only from onSuccess."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    # to the end of the useMutation call - its inner braces are indented deeper
+    mutation = source.split("const create = useMutation({", 1)[1].split(
+        "\n  })", 1)[0]
+    assert "onSuccess: () => onDone(" in mutation, "success never closes the dialog"
+    assert "onError: (e: Error) => setError(e.message)" in mutation, (
+        "the failure is dropped, so a refused create looks like nothing happened")
+    # e.message is the sentence ApiError was given by readable(); the raw body
+    # never reaches the dialog.
+    assert "setError(error" not in mutation and "JSON.stringify" not in mutation
+    dialog = source.split("function AddOpportunityDialog(", 1)[1]
+    assert "{error && (" in dialog, "the dialog has nowhere to show the message"
+
+
+def test_the_add_opportunity_dialog_cannot_be_submitted_twice():
+    """Nothing on the server dedupes a create, so two clicks are two roofs on the
+    board. The button has to be dead while the POST is in flight."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    submit = source.split("onClick={() => { setError(null); create.mutate() }}", 1)[1]
+    submit = submit.split("Create", 1)[0]
+    assert "disabled={!ready || create.isPending}" in submit, (
+        "a second click while the first POST is in flight creates a second opportunity")
+
+
+def test_a_new_opportunity_shows_up_on_the_board():
+    """The card has to appear without a refresh, and it has to be visible: it may
+    have been filed into another pipeline, and a board filtered to Won or Lost hides
+    a new (always Open) opportunity entirely."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    done = source.split("onDone={(createdInPipelineId) => {", 1)[1].split("}}", 1)[0]
+    assert "invalidateQueries({ queryKey: ['opportunities'] })" in done, (
+        "the board is never refetched, so the new card only appears on reload")
+    assert "invalidateQueries({ queryKey: ['pipelines'] })" in done, (
+        "the stage header count and total keep their old numbers")
+    assert "setPipelineId(createdInPipelineId)" in done, (
+        "an opportunity filed into another pipeline vanishes on create")
+    assert "setStatus('open')" in done, (
+        "a board filtered to Won or Lost never shows the new card")
+
+
+def test_the_stage_select_follows_the_pipeline():
+    """A stage from the previous pipeline is a pair the backend refuses, so leaving
+    it selected turns a pipeline change into a submit-time error."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    dialog = source.split("function AddOpportunityDialog(", 1)[1]
+    change = dialog.split("onChange={(e) => { setPipelineId(", 1)[1].split("}}", 1)[0]
+    assert "setStageId(null)" in change, "the stage keeps pointing at the old pipeline"
+    assert "const stage = stages.find((s) => s.id === stageId) ?? stages[0]" in dialog, (
+        "the stage does not default to the first stage of the chosen pipeline")
