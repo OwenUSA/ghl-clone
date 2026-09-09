@@ -66,6 +66,20 @@ if os.getenv("AUTO_CREATE_ALL",
     Base.metadata.create_all(bind=engine)
 
 
+# A search box is not a pattern language. `%` and `_` are LIKE wildcards, so typing
+# either into one matched every row instead of narrowing to nothing -- the term is
+# parameterised, but the wildcards inside it are still read as wildcards. Escape them
+# (and the escape character itself) so the user's characters mean themselves.
+LIKE_ESCAPE = "\\"
+
+
+def contains(q: str) -> str:
+    """A LIKE pattern matching `q` literally, anywhere. Use with `escape=LIKE_ESCAPE`."""
+    for ch in (LIKE_ESCAPE, "%", "_"):
+        q = q.replace(ch, LIKE_ESCAPE + ch)
+    return "%" + q + "%"
+
+
 # ---------- schemas ----------
 
 class ContactOut(BaseModel):
@@ -361,7 +375,7 @@ def list_opportunities(
     if status != "all":
         stmt = stmt.where(Opportunity.status == status)
     if q:
-        stmt = stmt.where(Opportunity.title.ilike("%%%s%%" % q))
+        stmt = stmt.where(Opportunity.title.ilike(contains(q), escape=LIKE_ESCAPE))
     rows = db.scalars(stmt.order_by(Opportunity.position)).all()
     return [{"id": o.id, "title": o.title, "value_cents": o.value_cents,
              "stage_id": o.stage_id, "status": o.status,

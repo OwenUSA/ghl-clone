@@ -419,3 +419,37 @@ def test_outbound_is_never_marked_delivered(client):
     ref = get_transport().send_sms(to="+19415550000", body="x", from_number="")
     assert ref.delivered is False
     assert client.get("/api/health").json()["transport"] == "LoggingTransport"
+
+
+def test_opportunity_search_treats_wildcards_as_characters(client):
+    """`%` and `_` are LIKE wildcards, so typing either matched every opportunity.
+
+    The term was always parameterised — this was never an injection — but the
+    wildcards inside it were still read as wildcards, so the box did the opposite of
+    narrowing. Asserted by what comes back, not by the status: the filter has to pick
+    out the row that literally contains the character and leave the other six.
+    """
+    pid = client.ids["pipeline"]
+    cid = client.ids["contact"]
+    sid = client.ids["stage1"]
+
+    def titles(q):
+        r = client.get("/api/opportunities", params={"pipeline_id": pid, "q": q,
+                                                     "status": "all"})
+        assert r.status_code == 200
+        return sorted(o["title"] for o in r.json())
+
+    for title in ("50% off new roof", "roof_inspection"):
+        assert client.post("/api/opportunities", json={
+            "title": title, "pipeline_id": pid, "stage_id": sid,
+            "contact_id": cid, "value_cents": 1000}).status_code == 201
+
+    assert len(titles("")) == 8, "fixture changed — retarget this test"
+    # Before the fix each of these returned all 8.
+    assert titles("%") == ["50% off new roof"]
+    assert titles("_") == ["roof_inspection"]
+    # A wildcard must not smuggle a match in either: `%roof` is not `roof`.
+    assert titles("%roof") == []
+    assert titles("zzzznope") == []
+    # ...and an ordinary term still matches both, so the escaping did not break search.
+    assert titles("roof") == ["50% off new roof", "roof_inspection"]
