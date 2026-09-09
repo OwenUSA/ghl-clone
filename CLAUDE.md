@@ -104,7 +104,7 @@ uv run ghl jobs list --status pending         # did the automation fire?
 ## It is deployed
 
 Live at **https://crm.dreamteamroofingfl.com** on the `owen-main` VPS, behind the shared
-Traefik. Origin is the private `github.com/santiago1397/ghl-clone`; the server pulls.
+Traefik. Origin is the private `github.com/OwenUSA/ghl-clone`; the server pulls.
 
 ```bash
 ssh owen-main
@@ -117,9 +117,12 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f api
 `deploy.sh` refuses a dirty tree or a non-fast-forward, and refuses to apply a migration
 unless you ask. Migrations do **not** run on container start, so restarting is safe.
 
-**Production has no seed data.** The 268 contacts you see locally are synthetic; the
-production database is empty until a real GoHighLevel export is imported. `app.seed`
-appears in no container command — it calls `drop_all()`.
+**Production is NOT empty any more** (corrected 2026-09-09; it previously said the database
+stays empty until an export lands). It holds 12 contacts, 10 opportunities, 6 calls, 8
+appointments and 1 pipeline. The 268 contacts you see locally are a different, synthetic
+set. Anything that touches production must assume real records exist and must never modify
+or delete a record it did not create itself — see the triage decisions at the end of
+`DECISIONS.md`. `app.seed` appears in no container command — it calls `drop_all()`.
 
 The host Postgres on that box is shared with the telephony project (`callmon`) and
 craigslist. We have our own `dtr_ghl_clone` database on it, not a shared schema — see the
@@ -143,7 +146,7 @@ against existing rows.
 ## Tests
 
 ```bash
-uv run pytest                        # backend + CLI, 158 tests
+uv run pytest                        # backend + CLI, 184 tests
 uv run ruff check .                  # must pass clean
 uv run python capture/diff.py        # 37/37 landmark properties must still match
 uv run python capture/diff_panel.py  # 35/35 for the contact panel
