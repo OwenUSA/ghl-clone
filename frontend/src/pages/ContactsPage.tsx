@@ -131,7 +131,7 @@ export function ContactsPage({ user }: { user: Me }) {
             padding: '4px 12px',
           }}
         >
-          {data ? `${data.total} Contacts` : ' '}
+          {data ? `${data.total} ${data.total === 1 ? 'Contact' : 'Contacts'}` : ' '}
         </div>
         <div className="ml-auto flex items-center gap-2">
           <input

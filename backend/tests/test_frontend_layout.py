@@ -56,3 +56,16 @@ def test_each_dashboard_card_is_filtered_by_its_own_select():
     assert "conversion_rate" in conversion, "retarget this test — the card moved"
     assert "status.data" not in conversion, (
         "Conversion rate renders the status query while its select drives another")
+
+
+def test_the_contacts_count_pill_pluralises():
+    """The pill read `1 Contacts` on any search that matched exactly one person.
+
+    Measured GHL only ever shows it at 268, so there is no captured reference for
+    the singular; this is our own copy and the deviation is only in English.
+    """
+    source = (FRONTEND / "pages" / "ContactsPage.tsx").read_text(encoding="utf-8")
+    pill = source.split("{data ?", 1)[1].split("}\n", 1)[0]
+    assert "data.total" in pill, "the count pill moved — retarget this test"
+    assert "'Contact'" in pill and "=== 1" in pill, (
+        "the pill appends a fixed `Contacts`, so one match reads `1 Contacts`")
