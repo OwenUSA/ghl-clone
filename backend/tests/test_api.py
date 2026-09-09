@@ -12,12 +12,14 @@ from app.auth import mint_api_token
 from app.db import Base, SessionLocal, engine
 from app.main import app
 from app.models import (
+    Appointment,
     Calendar,
     Contact,
     Conversation,
     ConversationEvent,
     Direction,
     EventType,
+    Job,
     Opportunity,
     Pipeline,
     Role,
@@ -25,6 +27,7 @@ from app.models import (
     User,
 )
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 
 def utcnow():
@@ -354,6 +357,102 @@ def test_appointment_rejects_backwards_range(client):
         "title": "Bad", "starts_at": start.isoformat(),
         "ends_at": (start - timedelta(hours=1)).isoformat()})
     assert r.status_code == 400
+
+
+def _appointment_rows():
+    """Read the table directly. A refusal that still wrote a row would pass any
+    assertion made against the response alone."""
+    db = SessionLocal()
+    try:
+        return db.scalars(select(Appointment).order_by(Appointment.id)).all()
+    finally:
+        db.close()
+
+
+def test_creating_an_appointment_writes_the_row_the_form_described(client):
+    """The create dialog's whole job: what was typed is what is stored, and it
+    then comes back from the range query the calendar draws itself from."""
+    cid, cal, uid = client.ids["contact"], client.ids["calendar"], client.ids["user"]
+    starts = utcnow().replace(microsecond=0) + timedelta(days=4)
+    ends = starts + timedelta(minutes=90)
+
+    r = client.post("/api/appointments", json={
+        "title": "  Roof inspection  ", "contact_id": cid, "calendar_id": cal,
+        "assigned_user_id": uid, "notes": "gate code 1174",
+        "starts_at": starts.isoformat(), "ends_at": ends.isoformat()})
+    assert r.status_code == 201
+
+    rows = _appointment_rows()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.title == "Roof inspection", "the title was stored with its whitespace"
+    assert (row.contact_id, row.calendar_id, row.assigned_user_id) == (cid, cal, uid)
+    assert row.notes == "gate code 1174"
+    assert row.starts_at.replace(tzinfo=UTC) == starts
+    assert row.ends_at.replace(tzinfo=UTC) == ends
+    # The POST model has no `status`, so a booking made from the UI takes the
+    # model default. If that ever changes, the dialog's disabled Status control
+    # is telling the user something untrue.
+    assert row.status == "confirmed"
+
+    # ...and the calendar can actually see it. The month grid asks for whole
+    # weeks around the anchor, so query the way the browser does.
+    window = client.get("/api/appointments", params={
+        "start": (starts - timedelta(days=14)).isoformat(),
+        "end": (starts + timedelta(days=14)).isoformat()}).json()
+    assert [a["id"] for a in window] == [row.id]
+    assert window[0]["title"] == "Roof inspection"
+    assert window[0]["contact_name"] == "First00 Last00"
+    assert window[0]["calendar_id"] == cal
+
+
+def test_a_tech_cannot_create_an_appointment_and_writes_no_row(client):
+    """Creating is STAFF. The browser disables the control for a TECH, but the
+    backend is the thing that enforces it — and a 403 that still wrote a row
+    would pass a status-only assertion."""
+    starts = utcnow() + timedelta(days=2)
+    before = len(_appointment_rows())
+
+    tech = TestClient(app)
+    tech.headers["Authorization"] = "Bearer " + client.tokens["tech"]
+    r = tech.post("/api/appointments", json={
+        "title": "Sneaky booking", "contact_id": client.ids["contact"],
+        "starts_at": starts.isoformat(),
+        "ends_at": (starts + timedelta(hours=1)).isoformat()})
+    assert r.status_code == 403
+
+    assert len(_appointment_rows()) == before, "a refused create still wrote a row"
+    # ...and nothing was queued for it either: a suppressed booking must not text
+    # the customer a reminder for an appointment that does not exist.
+    db = SessionLocal()
+    try:
+        assert not [j for j in db.scalars(select(Job)).all()
+                    if j.type == "appointment_reminder"]
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("why,body", [
+    ("end before start", {"title": "Backwards", "offset_hours": -1}),
+    ("end equal to start", {"title": "Zero length", "offset_hours": 0}),
+    ("missing title", {"title": "", "offset_hours": 1}),
+    ("whitespace title", {"title": "   ", "offset_hours": 1}),
+])
+def test_an_invalid_appointment_creates_nothing(client, why, body):
+    """`title: str` accepts "" and "   ", so an untitled booking was created
+    happily and rendered as an empty chip. Each of these must leave the table
+    exactly as it found it."""
+    starts = utcnow() + timedelta(days=5)
+    before = len(_appointment_rows())
+
+    r = client.post("/api/appointments", json={
+        "title": body["title"], "starts_at": starts.isoformat(),
+        "ends_at": (starts + timedelta(hours=body["offset_hours"])).isoformat()})
+    assert r.status_code == 400, why
+    # A sentence, not a schema dump: the dialog renders `detail` verbatim.
+    assert isinstance(r.json()["detail"], str) and r.json()["detail"]
+
+    assert len(_appointment_rows()) == before, "%s still created an appointment" % why
 
 
 def test_calendars_list_exposes_filter_groups(client):
