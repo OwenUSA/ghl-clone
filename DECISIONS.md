@@ -752,3 +752,44 @@ in this file turned out to be false. Recorded so the next test run does not re-f
   telephony project holds no `ghl_pat_` value in its configuration), but the credential
   itself was unrecoverable. An unattended worker holding ADMIN will reach endpoints no UI
   route exposes: prefer the least role that can exercise a surface.
+
+## Contact Details "Actions" tab — OUR design, not measured (2026-09-09)
+
+The Actions tab shipped as the sentence "Actions are not implemented in v1." It now
+contains exactly one action: **Delete contact**, driving the existing
+`DELETE /api/contacts/{id}`.
+
+**Its layout is ours, and nothing about it is parity.** GHL's own Actions tab was
+never opened on the live account — the only "Actions" anywhere in `captures/` is
+**Bulk Actions** from the Contacts list toolbar, which is a different control in a
+different place. The "Design system — LOCKED" and "Responsive behaviour — LOCKED"
+sections tie structural design to measured captures; this is a deliberate, disclosed
+exception, not an oversight. **Re-measure it if someone opens a live GHL session
+later**, and treat the current arrangement as provisional until then.
+
+Scope is one action on purpose. Inventing a full Actions menu (merge, export, add to
+workflow) would be guesswork dressed as measurement; one action backed by a real
+endpoint is not. Bulk delete is **deliberately deferred** — the list checkboxes stay
+wired to nothing, because this CRM is in real daily use and a bulk delete is the
+easiest way to lose real customer records.
+
+What the tab does, and why it is shaped that way:
+
+- **ADMIN only.** The route is `auth.ADMIN`, so the control renders disabled with an
+  explanatory title for DISPATCHER and TECH rather than letting them click through to
+  a 403 — the precedent set the same day by `d1f7c50` (Add Contact) and `b943f4b`.
+- **Two confirmations, not one.** The first confirm sends `force=false` on purpose.
+  A contact that still has opportunities is then refused with 409, and **that refusal
+  is rendered as the second confirmation**, naming the opportunities and saying they
+  will be kept and detached. Confirming again retries with `force=true`. Forcing on
+  the first click would detach opportunities without the user ever learning there
+  were any, which is exactly what the 409 exists to prevent.
+- **`GET /api/contacts/{id}` now also returns `opportunities: [{id, title}]`.** The
+  confirmation has to name them, and the alternative was scraping ids out of the
+  409's prose — which would tie the panel to the wording of an error message. The
+  409 remains the authority on whether the delete is allowed; the list is only how
+  the sentence is written.
+- The endpoint's semantics are unchanged: opportunities are **detached, never
+  deleted** (`custom_fields.owen_call_id` is the telephony join key), conversations
+  **are** deleted explicitly, and the response is
+  `{"deleted": id, "detached_opportunities": [...]}`.
