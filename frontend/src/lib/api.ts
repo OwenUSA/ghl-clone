@@ -129,15 +129,16 @@ export const listOpportunities = (pipelineId: number, q = '', status = 'open') =
   return get<Opportunity[]>(`/api/opportunities?${sp}`)
 }
 
-export async function moveOpportunity(id: number, stageId: number, position = 0) {
-  const r = await fetch(`${BASE}/api/opportunities/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stage_id: stageId, position }),
+export type OpportunityMove = { id: number; stage_id: number; position: number }
+
+// A kanban drag is a cookie-authenticated write like any other, so it goes through
+// send(). A bare fetch() omits the double-submit CSRF header and the backend rejects
+// every drag with 403 "csrf token missing or mismatched".
+export const moveOpportunity = (id: number, stageId: number, position = 0) =>
+  send<OpportunityMove>(`/api/opportunities/${id}`, 'PATCH', {
+    stage_id: stageId,
+    position,
   })
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
-  return r.json()
-}
 
 export type ConversationSummary = {
   id: number
