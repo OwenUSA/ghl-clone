@@ -11,7 +11,7 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -222,15 +222,21 @@ def get_contact(contact_id: int, db: Session = Depends(get_db),
 
 
 class ContactPatch(BaseModel):
-    """All optional — the panel saves one field at a time as it is edited."""
-    first_name: str | None = None
-    last_name: str | None = None
-    email: str | None = None
-    phone: str | None = None
-    business_name: str | None = None
-    source: str | None = None
-    date_of_birth: str | None = None
-    contact_type: str | None = None
+    """All optional — the panel saves one field at a time as it is edited.
+
+    The max_lengths mirror the columns in models.py. Without them an over-long value
+    reaches Postgres and comes back as StringDataRightTruncation, which FastAPI turns
+    into a bare `500 Internal Server Error` with nothing naming the field. Declared
+    here, the request is refused before the database is touched.
+    """
+    first_name: str | None = Field(None, max_length=120)
+    last_name: str | None = Field(None, max_length=120)
+    email: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=40)
+    business_name: str | None = Field(None, max_length=200)
+    source: str | None = Field(None, max_length=120)
+    date_of_birth: str | None = Field(None, max_length=40)
+    contact_type: str | None = Field(None, max_length=40)
     dnd: bool | None = None
     owner_id: int | None = None
 
@@ -373,12 +379,13 @@ def move_opportunity(opp_id: int, body: OpportunityMove,
 
 
 class ContactCreate(BaseModel):
-    first_name: str = ""
-    last_name: str = ""
-    email: str | None = None
-    phone: str | None = None
-    business_name: str | None = None
-    source: str | None = None
+    # max_lengths mirror the columns in models.py — see ContactPatch.
+    first_name: str = Field("", max_length=120)
+    last_name: str = Field("", max_length=120)
+    email: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=40)
+    business_name: str | None = Field(None, max_length=200)
+    source: str | None = Field(None, max_length=120)
 
 
 @app.post("/api/contacts", status_code=201)

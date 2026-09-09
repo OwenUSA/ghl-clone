@@ -167,6 +167,41 @@ def test_contact_create_requires_a_way_to_reach_them(client):
     assert ok.json()["automation"] == "queued", "new lead rule did not fire"
 
 
+def test_contact_create_refuses_a_value_wider_than_its_column(client):
+    """An over-long field must be refused, not handed to the database.
+
+    On Postgres an unbounded value reaches `character varying(120)` and comes back
+    as StringDataRightTruncation, which FastAPI serves as a bare 500 with nothing
+    naming the field. SQLite does not enforce the width at all and would happily
+    store it — which is exactly why the limit has to live in the request schema and
+    not be left to whichever database happens to be underneath.
+    """
+    before = client.get("/api/contacts?page_size=100").json()["total"]
+    r = client.post("/api/contacts",
+                    json={"first_name": "L" * 121, "email": "long@x.test"})
+    assert r.status_code == 422, "an over-long first_name must be refused"
+    assert "first_name" in r.text, "the refusal must name the offending field"
+    after = client.get("/api/contacts?page_size=100").json()["total"]
+    assert after == before, "a refused create still wrote a row"
+    assert client.get("/api/contacts", params={"q": "long@x.test"}).json()["items"] == []
+
+    # The boundary itself still works — the guard must not be off by one.
+    at_limit = client.post("/api/contacts",
+                           json={"first_name": "L" * 120, "email": "edge@x.test"})
+    assert at_limit.status_code == 201
+    assert len(at_limit.json()["first_name"]) == 120
+
+
+def test_contact_patch_refuses_a_value_wider_than_its_column(client):
+    """The panel saves one field at a time, and hit the same 500 on save."""
+    cid = client.ids["contact"]
+    before = client.get(f"/api/contacts/{cid}").json()
+    r = client.patch(f"/api/contacts/{cid}", json={"last_name": "L" * 121})
+    assert r.status_code == 422
+    after = client.get(f"/api/contacts/{cid}").json()
+    assert after["last_name"] == before["last_name"], "a refused patch still wrote"
+
+
 # ---------------- Conversations ----------------
 
 def test_conversation_tabs_filter(client):
