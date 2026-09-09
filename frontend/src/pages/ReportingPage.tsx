@@ -24,21 +24,22 @@ import { getAppointmentReport, getCallReport, listCalendars } from '../lib/api'
  *                     select and a "No data found" empty state), then
  *                     "Outcomes" and "Top 5 most booked calendars"
  *
- * NOT IMPLEMENTED, deliberately (shown disabled with the reason on hover):
- *   Google Ads / Meta Ads / Local Marketing Audit — third-party integrations.
- *   Attribution report — rendered empty on the live account.
- *   Custom reports — GHL shows an empty state; the builder is a separate product.
+ * TAB ROW — narrowed 2026-09-09 at the owner's request (see DECISIONS.md).
+ * Four measured tabs are GONE from the DOM, not disabled: Google Ads, Meta Ads
+ * (Facebook Ads) report and Local Marketing Audit are third-party marketing
+ * integrations, out of scope per CLAUDE.md; Attribution report rendered empty on
+ * the live account, so there was never anything to copy. Do not re-add them as
+ * disabled stubs — an unusable tab that can never light up is not a feature.
+ *
+ * Custom reports stays, still disabled with its reason on hover: GHL shows an
+ * empty state there and the report builder is a separate product.
  */
 type TabDef = { key: string; label: string; off?: string }
 
 const TABS: TabDef[] = [
   { key: 'custom', label: 'Custom reports', off: 'Report builder is a separate product; not in v1' },
-  { key: 'google', label: 'Google Ads', off: 'Third-party integration — excluded' },
-  { key: 'meta', label: 'Meta Ads (Facebook Ads) report', off: 'Third-party integration — excluded' },
-  { key: 'attribution', label: 'Attribution report', off: 'Rendered empty on the live account — nothing measured to copy' },
   { key: 'call', label: 'Call report' },
   { key: 'appointment', label: 'Appointment report' },
-  { key: 'audit', label: 'Local Marketing Audit', off: 'Third-party integration — excluded' },
 ]
 
 const PALETTE = ['rgb(83,155,245)', 'rgb(93,205,235)', 'rgb(140,141,222)',
