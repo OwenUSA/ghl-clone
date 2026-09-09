@@ -555,7 +555,9 @@ export function ContactsPage({ user }: { user: Me }) {
       {openContact != null && (
         <ContactDetailsPanel
           contactId={openContact}
+          user={user}
           onClose={() => setOpenContact(null)}
+          onDeleted={() => setOpenContact(null)}
         />
       )}
       </div>

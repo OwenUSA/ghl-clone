@@ -2,14 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { IconChevronDown, IconExternal } from './Icon'
 import {
+  ApiError,
   PANE,
   addContactTag,
+  deleteContact,
   getContact,
   listUsers,
   patchContact,
   removeContactTag,
   type ContactDetail,
 } from '../lib/api'
+import type { Me } from '../lib/auth'
 
 /**
  * Contact Details panel.
@@ -105,10 +108,15 @@ function Field({
 
 export function ContactDetailsPanel({
   contactId,
+  user,
   onClose,
+  onDeleted,
 }: {
   contactId: number
+  user: Me
   onClose?: () => void
+  /** The contact is gone: the host has to stop pointing at it. */
+  onDeleted?: () => void
 }) {
   const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('All fields')
@@ -145,7 +153,60 @@ export function ContactDetailsPanel({
   // used to fail in complete silence -- a TECH's 403 reverted the field with no
   // message at all. React Query already holds the error; the panel just has to
   // render it.
+  //
+  // The delete deliberately does NOT join them: its 409 is a step in the flow, not
+  // a failure, so it is handled in the Actions tab rather than shown as a banner.
   const writeError = patch.error ?? tagAdd.error ?? tagRemove.error
+
+  // Delete is ADMIN-only on the route (`auth.ADMIN`). Mirror it here so the other
+  // two roles are never offered a control that can only answer 403.
+  const canDelete = user.role === 'ADMIN'
+
+  // null = nothing asked yet | 'plain' = "are you sure" | 'detach' = the 409 came
+  // back and the opportunities have been named.
+  const [confirm, setConfirm] = useState<null | 'plain' | 'detach'>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  // The 409's own sentence, kept only as the fallback for naming the opportunities
+  // if the loaded contact somehow does not list them.
+  const [conflict, setConflict] = useState<string | null>(null)
+
+  // Switching to another contact in the same mounted panel must not carry a
+  // half-answered "are you sure" across to it.
+  useEffect(() => {
+    setConfirm(null)
+    setDeleteError(null)
+    setConflict(null)
+  }, [contactId])
+
+  const del = useMutation({
+    mutationFn: (force: boolean) => deleteContact(contactId, force),
+    onSuccess: () => {
+      // Tell the host first so it stops rendering this contact, then drop the
+      // cached record. Invalidating ['contact', id] instead would refetch a row
+      // that no longer exists and paint "That record no longer exists" over a
+      // panel that is on its way out.
+      onDeleted?.()
+      onClose?.()
+      qc.removeQueries({ queryKey: ['contact', contactId] })
+      qc.invalidateQueries({ queryKey: ['contacts'] })
+      // Its conversations were deleted with it, and its opportunities are still
+      // there but now show no customer.
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+      qc.invalidateQueries({ queryKey: ['opportunities'] })
+    },
+    onError: (e: Error) => {
+      // 409 is the backend refusing to detach opportunities behind the user's
+      // back. That is the confirmation step, not an error to hide.
+      if (e instanceof ApiError && e.status === 409) {
+        setConflict(e.message)
+        setConfirm('detach')
+        setDeleteError(null)
+        return
+      }
+      setConfirm(null)
+      setDeleteError(e.message)
+    },
+  })
 
   const fields = [
     { label: 'First name', key: 'first_name', value: c?.first_name ?? null },
@@ -436,8 +497,106 @@ export function ContactDetailsPanel({
           )}
 
           {tab === 'Actions' && (
-            <div style={{ marginTop: 16, fontSize: 14, color: 'rgb(152,162,179)' }}>
-              Actions are not implemented in v1.
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(16,24,40)' }}>
+                Delete contact
+              </div>
+              <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
+                Removes {c.name?.trim() || 'this contact'} and their whole message
+                history. Any opportunities are kept and detached, never deleted.
+              </div>
+
+              {deleteError && (
+                <div
+                  role="alert"
+                  style={{
+                    marginTop: 12, fontSize: 13, color: 'rgb(180,35,24)',
+                    backgroundColor: 'rgb(254,243,242)',
+                    border: '1px solid rgb(253,162,155)',
+                    borderRadius: 8, padding: '8px 12px',
+                  }}
+                >
+                  {deleteError}
+                </div>
+              )}
+
+              {confirm === null && (
+                <button
+                  onClick={() => { setDeleteError(null); setConfirm('plain') }}
+                  disabled={!canDelete}
+                  title={canDelete ? undefined : 'Only an admin can delete a contact'}
+                  className="w-full"
+                  style={{
+                    marginTop: 12, height: 32, borderRadius: 6, fontSize: 13,
+                    fontWeight: 500, color: 'rgb(180,35,24)',
+                    border: '1px solid rgb(253,162,155)',
+                    backgroundColor: '#fff',
+                    ...(canDelete ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
+                  }}
+                >
+                  Delete contact
+                </button>
+              )}
+
+              {confirm !== null && (
+                <div
+                  style={{
+                    marginTop: 12, borderRadius: 8, padding: 12,
+                    backgroundColor: 'rgb(254,243,242)',
+                    border: '1px solid rgb(253,162,155)',
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: 'rgb(180,35,24)' }}>
+                    {confirm === 'plain'
+                      ? 'Delete this contact and their message history? This cannot be undone.'
+                      : detachSentence(c, conflict)}
+                  </div>
+
+                  {confirm === 'detach' && c.opportunities.length > 0 && (
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12,
+                                 color: 'rgb(102,112,133)' }}>
+                      {c.opportunities.map((o) => (
+                        <li key={o.id}>#{o.id} {o.title}</li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      onClick={() => { setConfirm(null); setConflict(null) }}
+                      className="flex-1"
+                      style={{
+                        height: 30, borderRadius: 6, fontSize: 13, fontWeight: 500,
+                        color: 'rgb(52,64,84)', backgroundColor: '#fff',
+                        border: '1px solid rgb(234,236,240)',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      // 'plain' asks without force, so a contact that has
+                      // opportunities is refused and escalates to 'detach' rather
+                      // than being silently detached on the first confirm.
+                      onClick={() => del.mutate(confirm === 'detach')}
+                      disabled={del.isPending}
+                      className="flex-1"
+                      style={{
+                        height: 30, borderRadius: 6, fontSize: 13, fontWeight: 500,
+                        color: '#fff', backgroundColor: 'rgb(180,35,24)',
+                        opacity: del.isPending ? 0.6 : 1,
+                      }}
+                    >
+                      {confirm === 'detach' ? 'Detach and delete' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 16 }}>
+                Delete is the only action in v1. GHL's own Actions tab was never
+                captured, so nothing else here would be measured parity — see
+                DECISIONS.md.
+              </div>
             </div>
           )}
         </div>
@@ -475,4 +634,24 @@ function Row({ label, value }: { label: string; value: string | null }) {
       <div style={{ ...VALUE, marginTop: 4 }}>{value && value.trim() ? value : '--'}</div>
     </div>
   )
+}
+
+/**
+ * What the 409 means, in a sentence.
+ *
+ * The backend's own 409 detail names the ids too, but it ends in "pass force=true",
+ * which is written for a caller and not for the person reading this panel. The
+ * loaded contact carries the same list, so it is used when present; the 409's text
+ * is the fallback for the case where the two disagree (someone attached an
+ * opportunity since this panel loaded).
+ */
+function detachSentence(c: ContactDetail, conflict: string | null): string {
+  const opps = c.opportunities
+  if (!opps.length) return conflict ?? 'This contact still has opportunities.'
+  const ids = opps.map((o) => `#${o.id}`).join(', ')
+  return opps.length === 1
+    ? `This contact has 1 opportunity (${ids}). It will be kept, but detached `
+      + 'from this customer. Deleting cannot be undone.'
+    : `This contact has ${opps.length} opportunities (${ids}). They will be kept, `
+      + 'but detached from this customer. Deleting cannot be undone.'
 }

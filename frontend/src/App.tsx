@@ -59,7 +59,7 @@ export default function App() {
       {active === 'contacts' ? (
         <ContactsPage user={user} />
       ) : active === 'conversations' ? (
-        <ConversationsPage />
+        <ConversationsPage user={user} />
       ) : active === 'opportunities' ? (
         <OpportunitiesPage />
       ) : active === 'calendars' ? (
