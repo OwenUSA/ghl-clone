@@ -131,12 +131,21 @@ export function ContactDetailsPanel({
   })
   const tagAdd = useMutation({
     mutationFn: (name: string) => addContactTag(contactId, name),
-    onSuccess: invalidate,
+    // Clearing the input here, and not at the keystroke, is the point: a refused
+    // add used to empty the box while `Tags (0)` stayed put, which reads as
+    // "it worked, the list just hasn't caught up".
+    onSuccess: () => { setNewTag(''); invalidate() },
   })
   const tagRemove = useMutation({
     mutationFn: (tagId: number) => removeContactTag(contactId, tagId),
     onSuccess: invalidate,
   })
+
+  // Every write in this panel is one of the three mutations above, and all three
+  // used to fail in complete silence -- a TECH's 403 reverted the field with no
+  // message at all. React Query already holds the error; the panel just has to
+  // render it.
+  const writeError = patch.error ?? tagAdd.error ?? tagRemove.error
 
   const fields = [
     { label: 'First name', key: 'first_name', value: c?.first_name ?? null },
@@ -173,6 +182,23 @@ export function ContactDetailsPanel({
           <IconChevronDown size={16} color="rgb(71,84,103)" />
         </button>
       </div>
+
+      {writeError && (
+        <div
+          role="alert"
+          className="mx-4 mb-2 shrink-0"
+          style={{
+            fontSize: 13,
+            color: 'rgb(180,35,24)',
+            backgroundColor: 'rgb(254,243,242)',
+            border: '1px solid rgb(253,162,155)',
+            borderRadius: 8,
+            padding: '8px 12px',
+          }}
+        >
+          {writeError.message}
+        </div>
+      )}
 
       {isLoading || !c ? (
         <div className="px-4" style={{ fontSize: 14 }}>Loading…</div>
@@ -278,7 +304,6 @@ export function ContactDetailsPanel({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newTag.trim()) {
                     tagAdd.mutate(newTag.trim())
-                    setNewTag('')
                   }
                 }}
                 placeholder="Add tag"
