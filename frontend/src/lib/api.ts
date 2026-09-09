@@ -264,6 +264,9 @@ export function listAppointments(p: {
 
 export type ContactTag = { id: number; name: string; color: string }
 
+/** Enough to name an opportunity in the "these will be detached" confirmation. */
+export type ContactOpportunity = { id: number; title: string }
+
 export type ContactDetail = {
   id: number
   name: string
@@ -281,6 +284,7 @@ export type ContactDetail = {
   owner_id: number | null
   owner_name: string | null
   tags: ContactTag[]
+  opportunities: ContactOpportunity[]
   custom_fields: Record<string, unknown>
 }
 
@@ -317,6 +321,19 @@ export const addContactTag = (id: number, name: string) =>
 
 export const removeContactTag = (id: number, tagId: number) =>
   send<ContactDetail>(`/api/contacts/${id}/tags/${tagId}`, 'DELETE')
+
+export type ContactDeleted = { deleted: number; detached_opportunities: number[] }
+
+/**
+ * Delete a contact. ADMIN only, and 409 while it still has opportunities.
+ *
+ * `force` does NOT mean "delete the opportunities too" -- they are detached and
+ * kept, because `custom_fields.owen_call_id` is the telephony project's join key
+ * (DECISIONS.md). It means "yes, detach them". The conversations are deleted
+ * either way.
+ */
+export const deleteContact = (id: number, force = false) =>
+  send<ContactDeleted>(`/api/contacts/${id}${force ? '?force=true' : ''}`, 'DELETE')
 
 export type OpportunityDetail = {
   id: number
