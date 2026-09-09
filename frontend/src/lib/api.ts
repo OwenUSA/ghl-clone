@@ -116,7 +116,9 @@ export type Contact = {
   first_name: string
   last_name: string
   email: string | null
+  /** E.164, as stored. `phone_display` is what a person should read. */
   phone: string | null
+  phone_display: string | null
   business_name: string | null
   created_at: string
 }
@@ -333,6 +335,7 @@ export type ContactDetail = {
   last_name: string
   email: string | null
   phone: string | null
+  phone_display: string | null
   business_name: string | null
   source: string | null
   date_of_birth: string | null

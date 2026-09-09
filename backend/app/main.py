@@ -39,6 +39,7 @@ from .models import (
     Tag,
     User,
 )
+from .phones import format_phone, normalize_phone
 from .transport import get_transport
 
 # The gate is applied ONCE, app-wide, rather than decorating 25 routes. Any route
@@ -91,6 +92,9 @@ class ContactOut(BaseModel):
     last_name: str
     email: str | None
     phone: str | None
+    # E.164 is what we store; it is not what a person reads. The grid renders
+    # this, so formatting lives in one place instead of in every client.
+    phone_display: str | None
     business_name: str | None
     created_at: datetime
     tags: list[str] = []
@@ -188,7 +192,8 @@ def list_contacts(
     items = [
         ContactOut(
             id=r.id, name=r.name, first_name=r.first_name, last_name=r.last_name,
-            email=r.email, phone=r.phone, business_name=r.business_name,
+            email=r.email, phone=r.phone, phone_display=format_phone(r.phone),
+            business_name=r.business_name,
             created_at=r.created_at,
             tags=[ct.tag.name for ct in r.tags if ct.tag],
             last_activity=activity.get(r.id),
@@ -212,6 +217,7 @@ def _contact_detail(c: Contact) -> dict:
         "last_name": c.last_name,
         "email": c.email,
         "phone": c.phone,
+        "phone_display": format_phone(c.phone),
         "business_name": c.business_name,
         "source": c.source,
         "date_of_birth": c.date_of_birth,
@@ -264,6 +270,17 @@ def _check_email(v: str | None) -> str | None:
     return v
 
 
+def _check_phone(v: str | None) -> str | None:
+    """Store E.164. Applies to writes only — nothing rewrites an existing row.
+
+    `InvalidPhone` is a ValueError, so pydantic turns it into a 422 carrying the
+    sentence the helper wrote, exactly as `_check_email` already does. The number
+    is refused rather than mangled: silently storing a 7-digit string as a phone
+    number is how a contact ends up unreachable with no sign anything was wrong.
+    """
+    return normalize_phone(v)
+
+
 class ContactPatch(BaseModel):
     """All optional — the panel saves one field at a time as it is edited.
 
@@ -286,6 +303,7 @@ class ContactPatch(BaseModel):
     _strip = field_validator("first_name", "last_name", "email", "phone",
                              "business_name", "source", mode="after")(_blank_to_none)
     _email = field_validator("email", mode="after")(_check_email)
+    _phone = field_validator("phone", mode="after")(_check_phone)
 
 
 @app.patch("/api/contacts/{contact_id}")
@@ -437,6 +455,7 @@ class ContactCreate(BaseModel):
     _strip = field_validator("first_name", "last_name", "email", "phone",
                              "business_name", "source", mode="after")(_blank_to_none)
     _email = field_validator("email", mode="after")(_check_email)
+    _phone = field_validator("phone", mode="after")(_check_phone)
 
 
 @app.post("/api/contacts", status_code=201)

@@ -209,9 +209,12 @@ def test_whitespace_is_not_a_way_to_reach_a_contact(client):
     assert after == before, "a refused create still wrote an unreachable contact"
 
     # A real detail with incidental whitespace is fine, and is stored trimmed.
+    # The phone comes back E.164 rather than as typed — new contacts are
+    # normalised on write (see test_phones.py and the owner's decision in
+    # DECISIONS.md), so the stored value is +1 plus the ten national digits.
     ok = client.post("/api/contacts", json={"first_name": " Nora ", "phone": " 9415550000 "})
     assert ok.status_code == 201
-    assert ok.json()["first_name"] == "Nora" and ok.json()["phone"] == "9415550000"
+    assert ok.json()["first_name"] == "Nora" and ok.json()["phone"] == "+19415550000"
 
 
 def test_an_email_field_has_to_hold_an_email(client):

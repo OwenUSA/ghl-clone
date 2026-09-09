@@ -212,7 +212,10 @@ export function ContactDetailsPanel({
     { label: 'First name', key: 'first_name', value: c?.first_name ?? null },
     { label: 'Last name', key: 'last_name', value: c?.last_name ?? null },
     { label: 'Email', key: 'email', value: c?.email ?? null },
-    { label: 'Phone', key: 'phone', value: c?.phone ?? null },
+    // Shows the formatted number; editing it sends whatever is typed and the
+    // backend normalises that back to E.164. Leaving it untouched sends nothing,
+    // so simply opening the panel can never rewrite a stored number.
+    { label: 'Phone', key: 'phone', value: c?.phone_display ?? null },
     { label: 'Date of birth', key: 'date_of_birth', value: c?.date_of_birth ?? null },
     { label: 'Contact source', key: 'source', value: c?.source ?? null },
     { label: 'Contact type', key: 'contact_type', value: c?.contact_type ?? null },
