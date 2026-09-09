@@ -42,11 +42,20 @@ def calls(
             output.detail({
                 "total calls": x["total_calls"],
                 "avg duration": "%ds" % (x["avg_duration_seconds"] or 0),
-                "total duration": "%ds" % (x["total_duration_seconds"] or 0)}),
+                "total duration": "%ds" % (x["total_duration_seconds"] or 0),
+                # First-time callers have their own durations; printing the
+                # overall ones twice is what the web report used to do.
+                "first-time calls": sum((x["first_time_by_status"] or {}).values()),
+                "first-time avg duration":
+                    "%ds" % (x["first_time_avg_duration_seconds"] or 0)}),
             output.note("\nby status:"),
             output.table([{"status": k, "calls": v}
                           for k, v in (x["by_status"] or {}).items()],
                          [("status", "STATUS"), ("calls", "CALLS")]),
+            output.note("\ntop sources:"),
+            output.table(x["top_sources"] or [],
+                         [("source", "SOURCE"), ("calls", "TOTAL CALLS"),
+                          ("won", "WON DEALS"), ("avg_duration", "AVG DURATION")]),
         ))
     run(body)
 
