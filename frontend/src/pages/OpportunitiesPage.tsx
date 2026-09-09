@@ -183,11 +183,21 @@ export function OpportunitiesPage() {
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('open')
   const [showFields, setShowFields] = useState(false)
+  // The layout applies live while the modal is open, so the cards preview it. That
+  // leaves Cancel nothing to undo unless the layout in effect when it opened is
+  // remembered -- without this, Cancel and Apply were the same button twice.
+  const [layoutOnOpen, setLayoutOnOpen] = useState<Layout>('Default')
   const [showOverflow, setShowOverflow] = useState(false)
   const [openOpp, setOpenOpp] = useState<number | null>(null)
 
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
   const pipeline = pipelines.data?.[0]
+
+  /** Close the Customize card modal, discarding the previewed layout. */
+  const cancelFields = () => {
+    setLayout(layoutOnOpen)
+    setShowFields(false)
+  }
 
   const opps = useQuery({
     queryKey: ['opportunities', pipeline?.id, q, status],
@@ -420,7 +430,7 @@ export function OpportunitiesPage() {
         {/* Manage fields sits alone at the right of the FILTER row (measured y=219);
             Import / Add opportunity live in the pipeline row above (measured y=121). */}
         <button
-          onClick={() => setShowFields(true)}
+          onClick={() => { setLayoutOnOpen(layout); setShowFields(true) }}
           className="ml-auto flex items-center gap-2"
           style={{ fontSize: 14, fontWeight: 600, color: 'rgb(71,84,103)' }}
         >
@@ -507,7 +517,7 @@ export function OpportunitiesPage() {
         <div
           className="fixed inset-0 z-30 flex items-center justify-center"
           style={{ backgroundColor: 'rgba(16,24,40,0.4)' }}
-          onClick={() => setShowFields(false)}
+          onClick={cancelFields}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -548,7 +558,7 @@ export function OpportunitiesPage() {
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button
-                onClick={() => setShowFields(false)}
+                onClick={cancelFields}
                 style={{ height: 36, padding: '0 14px', borderRadius: 6, border: '1px solid rgb(234,236,240)', fontSize: 14 }}
               >
                 Cancel

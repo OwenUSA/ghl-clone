@@ -69,3 +69,24 @@ def test_the_contacts_count_pill_pluralises():
     assert "data.total" in pill, "the count pill moved — retarget this test"
     assert "'Contact'" in pill and "=== 1" in pill, (
         "the pill appends a fixed `Contacts`, so one match reads `1 Contacts`")
+
+
+def test_customize_card_cancel_is_not_a_second_apply():
+    """`Cancel` and `Apply` were both `onClick={() => setShowFields(false)}`.
+
+    The card layout applies live as you click it, so closing the modal any way at
+    all kept the previewed layout — Cancel, the backdrop and Apply were three names
+    for one behaviour. Cancel has to put back the layout that was in effect when
+    the modal opened.
+    """
+    source = (FRONTEND / "pages" / "OpportunitiesPage.tsx").read_text(encoding="utf-8")
+    assert "setLayout(layoutOnOpen)" in source, (
+        "nothing restores the previewed layout, so Cancel cannot discard anything")
+    modal = source.split("{showFields && (", 1)[1]
+    cancel = modal.split("Cancel", 1)[0].rsplit("<button", 1)[1]
+    apply_ = modal.split("Apply", 1)[0].rsplit("<button", 1)[1]
+    assert "cancelFields" in cancel, "Cancel does not discard the previewed layout"
+    assert "cancelFields" not in apply_, "Apply discards the layout it is meant to keep"
+    backdrop = modal.split("<div", 1)[1].split(">", 1)[0]
+    assert "cancelFields" in backdrop, (
+        "clicking the backdrop keeps the previewed layout, so it is a silent Apply")
