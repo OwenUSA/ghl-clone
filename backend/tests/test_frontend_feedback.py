@@ -89,3 +89,22 @@ def test_revoking_a_token_asks_first():
     at = source.index("revoke.mutate(t.id)")
     handler = source[source.rindex("<button", 0, at):at]
     assert "confirm(" in handler, "the Revoke button destroys a credential with no prompt"
+
+
+def test_api_errors_are_turned_into_sentences_not_wire_bodies():
+    """Every error surface in the app renders `error.message`, so this is the one
+    place that decides whether a user reads "a contact needs at least a phone or an
+    email" or `400 {"detail":"a contact needs at least a phone or an email"}`."""
+    source = _read("lib", "api.ts")
+    assert "function readable(" in source, "no error-message formatting at all"
+    failed = source.split("async function failed(", 1)[1].split("}", 1)[0]
+    assert "readable(" in failed, "the thrown error still carries the raw wire body"
+    assert "r.statusText" not in failed, "statusText tells the user nothing"
+
+    body = source.split("function readable(", 1)[1].split("async function", 1)[0]
+    for needed, why in (
+        (".detail", "our own HTTPException messages are already written for a person"),
+        ("Array.isArray", "422 validation bodies are a list and need assembling"),
+        ("REFUSAL", "a body with nothing human in it needs a fallback sentence"),
+    ):
+        assert needed in body, f"{needed} missing: {why}"

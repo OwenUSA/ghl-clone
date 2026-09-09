@@ -171,7 +171,7 @@ export function SettingsPage({ user }: { user: Me }) {
 
         {(mint.isError || revoke.isError || tokens.isError) && (
           <div style={{ marginTop: 12, fontSize: 13, color: 'rgb(180,35,24)' }}>
-            {String(mint.error ?? revoke.error ?? tokens.error)}
+            {(mint.error ?? revoke.error ?? tokens.error)?.message}
           </div>
         )}
 

@@ -30,8 +30,47 @@ export class ApiError extends Error {
   }
 }
 
+// Shown when the response carries nothing written for a person -- a bare
+// "Internal Server Error", a proxy's HTML error page, an empty body.
+const REFUSAL: Record<number, string> = {
+  401: 'Your session has expired. Sign in again.',
+  403: 'You do not have permission to do that.',
+  404: 'That record no longer exists.',
+  409: 'That conflicts with something already saved.',
+}
+
+/**
+ * Turn an error response into a sentence.
+ *
+ * Our own HTTPExceptions send `{"detail": "a contact needs at least a phone or an
+ * email"}` -- already written for a person, so it is used verbatim. Schema
+ * validation sends `{"detail": [{loc, msg}]}`, which has to be assembled. Anything
+ * else has nothing worth showing, and printing the wire body is how a user ended up
+ * reading `500 Internal Server Error` in a dialog.
+ */
+function readable(status: number, body: string): string {
+  let detail: unknown
+  try {
+    detail = (JSON.parse(body) as { detail?: unknown }).detail
+  } catch {
+    // Not a FastAPI error body -- fall through to the generic message.
+  }
+  if (typeof detail === 'string' && detail) return detail
+  if (Array.isArray(detail) && detail.length) {
+    return detail
+      .map((d) => {
+        const { loc, msg } = d as { loc?: unknown[]; msg?: string }
+        const field = (loc ?? []).filter((p) => p !== 'body').join('.')
+        const text = (msg ?? '').replace(/^Value error, /, '')
+        return field ? `${field}: ${text}` : text
+      })
+      .join('; ')
+  }
+  return REFUSAL[status] ?? `Something went wrong (${status}).`
+}
+
 async function failed(r: Response): Promise<ApiError> {
-  return new ApiError(r.status, `${r.status} ${(await r.text()) || r.statusText}`)
+  return new ApiError(r.status, readable(r.status, await r.text()))
 }
 
 let refreshing: Promise<boolean> | null = null
