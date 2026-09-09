@@ -134,3 +134,20 @@ def test_revoking_the_displayed_token_clears_the_mint_panel():
     handler = source.split("mutationFn: revokeToken,", 1)[1].split("})", 1)[0]
     assert "minted?.id === id" in handler and "setMinted(null)" in handler, (
         "revoking the displayed token leaves its plaintext on screen")
+
+
+def test_reporting_says_so_when_the_date_range_is_backwards():
+    """`start > end` is legal on the wire: the backend answers 200 with zeros and the
+    page draws the same eight tiles of `0` a genuinely quiet week gives. The report
+    must not be *requested* for a range that cannot match, and the user must be told
+    which of the two they are looking at."""
+    source = _read("pages", "ReportingPage.tsx")
+    assert "const inverted = startDate > endDate" in source, (
+        "nothing compares the two dates, so a backwards range is never noticed")
+    assert "function InvertedRange(" in source and 'role="alert"' in source, (
+        "there is no surface saying the range is backwards")
+    for query in ("'call' && !inverted", "'appointment' && !inverted"):
+        assert query in source, (
+            f"the {query.split(' ')[0]} report still asks the server for an empty range")
+    assert source.count("<InvertedRange start={startDate} end={endDate} />") == 2, (
+        "both the call and the appointment tab share the range, so both must warn")

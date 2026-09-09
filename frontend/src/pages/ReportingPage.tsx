@@ -173,6 +173,29 @@ function DurationStrip({ avg, total }: { avg: number; total: number }) {
   )
 }
 
+/** A backwards range must not read as a quiet period either.
+ *
+ *  `start > end` is legal on the wire and the backend answers 200 with zeros,
+ *  which draws exactly the picture LoadFailed describes. Nothing about a typo
+ *  in the date inputs should be reported as "you had no calls".
+ */
+function InvertedRange({ start, end }: { start: string; end: string }) {
+  return (
+    <div role="alert" className="mb-4"
+      style={{
+        fontSize: 14, color: 'rgb(180,35,24)',
+        backgroundColor: 'rgb(254,243,242)',
+        border: '1px solid rgb(253,162,155)',
+        borderRadius: 8, padding: '12px 16px',
+      }}>
+      The start date is after the end date, so this range contains nothing at all.
+      <div style={{ fontSize: 13, marginTop: 4 }}>
+        {start} → {end}. Swap the two dates to run the report.
+      </div>
+    </div>
+  )
+}
+
 const IconBtn = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <button title={title} disabled
     style={{
@@ -191,11 +214,14 @@ export function ReportingPage() {
   const [endDate, setEndDate] = useState(() => iso(new Date(Date.now() + 30 * 86_400_000)))
   const [calendarId, setCalendarId] = useState<number | ''>('')
 
+  // ISO `YYYY-MM-DD` sorts the same way it reads, so this is a date comparison.
+  const inverted = startDate > endDate
+
   const calendars = useQuery({ queryKey: ['calendars'], queryFn: listCalendars })
   const calls = useQuery({
     queryKey: ['report-calls', startDate, endDate, direction],
     queryFn: () => getCallReport({ start: startDate, end: endDate, direction }),
-    enabled: tab === 'call',
+    enabled: tab === 'call' && !inverted,
   })
   const appts = useQuery({
     queryKey: ['report-appts', startDate, endDate, calendarId],
@@ -203,7 +229,7 @@ export function ReportingPage() {
       start: startDate, end: endDate,
       calendar_ids: calendarId ? [Number(calendarId)] : [],
     }),
-    enabled: tab === 'appointment',
+    enabled: tab === 'appointment' && !inverted,
   })
 
   const segs = (m: Record<string, number>) =>
@@ -277,6 +303,7 @@ export function ReportingPage() {
               </div>
             </div>
 
+            {inverted && <InvertedRange start={startDate} end={endDate} />}
             {calls.error && <LoadFailed error={calls.error} />}
 
             {/* Incoming / Outgoing — measured as underlined tabs */}
@@ -395,6 +422,7 @@ export function ReportingPage() {
               </div>
             </div>
 
+            {inverted && <InvertedRange start={startDate} end={endDate} />}
             {appts.error && <LoadFailed error={appts.error} />}
 
             {/* 8 tiles in a row — measured label 16px/500, count 48px/500 */}
