@@ -83,6 +83,10 @@ export function DashboardPage() {
   const [range, setRange] = useState('Last 30 days')
   const [statusPipe, setStatusPipe] = useState<number | undefined>()
   const [valuePipe, setValuePipe] = useState<number | undefined>()
+  // Conversion rate needs its own, or its select re-filters the Opportunity value
+  // card and leaves its own number alone. Funnel and Stage distribution DO share
+  // one deliberately -- they are two renderings of a single pipeline.
+  const [convPipe, setConvPipe] = useState<number | undefined>()
   const [funnelPipe, setFunnelPipe] = useState<number | undefined>()
 
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
@@ -91,6 +95,11 @@ export function DashboardPage() {
   })
   const value = useQuery({
     queryKey: ['dashboard', valuePipe], queryFn: () => getDashboard(valuePipe),
+  })
+  // Same key shape as the other two, so two cards on the same pipeline still share
+  // one cached request rather than issuing a second.
+  const conv = useQuery({
+    queryKey: ['dashboard', convPipe], queryFn: () => getDashboard(convPipe),
   })
 
   const s = status.data?.status ?? {}
@@ -218,20 +227,20 @@ export function DashboardPage() {
           </Card>
 
           <Card title="Conversion rate"
-            right={<PipelineSelect value={valuePipe} onChange={setValuePipe}
+            right={<PipelineSelect value={convPipe} onChange={setConvPipe}
               pipelines={pipelines.data ?? []} />}>
             <div className="flex flex-col items-center">
               <Donut
                 segments={[
-                  { key: 'won', n: status.data?.conversion_rate ?? 0, color: C.won },
-                  { key: 'rest', n: 100 - (status.data?.conversion_rate ?? 0), color: 'rgb(234,236,240)' },
+                  { key: 'won', n: conv.data?.conversion_rate ?? 0, color: C.won },
+                  { key: 'rest', n: 100 - (conv.data?.conversion_rate ?? 0), color: 'rgb(234,236,240)' },
                 ]}
-                center={`${(status.data?.conversion_rate ?? 0).toFixed(2)}%`}
+                center={`${(conv.data?.conversion_rate ?? 0).toFixed(2)}%`}
               />
               <div className="mt-3 text-center">
                 <div style={{ fontSize: 12, color: 'rgb(102,112,133)' }}>Won revenue</div>
                 <div style={{ fontSize: 20, fontWeight: 500, color: 'rgb(16,24,40)' }}>
-                  {money(wonRev)}
+                  {money(conv.data?.won_value_cents ?? 0)}
                 </div>
               </div>
             </div>

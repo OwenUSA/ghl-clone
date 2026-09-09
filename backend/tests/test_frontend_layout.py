@@ -27,3 +27,32 @@ def test_conversations_dropdown_anchors_itself_vertically():
     assert re.search(r"\btop\s*:", style) or re.search(r"\bbottom\s*:", style), (
         "the Conversations dropdown sets neither top nor bottom, so it renders at its "
         "static position — vertically centred on its trigger and clipped off-screen")
+
+
+def test_each_dashboard_card_is_filtered_by_its_own_select():
+    """A card's pipeline select must drive the query that card renders.
+
+    Conversion rate's select was wired to `valuePipe`, so choosing a pipeline on it
+    re-filtered the *Opportunity value* card next door and left the conversion figure
+    on whatever the untouched status query said. Funnel and Stage distribution do
+    share one select on purpose — two renderings of a single pipeline — so this only
+    covers the three cards in row 1.
+    """
+    source = (FRONTEND / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+    cards = source.split('<Card title="')
+    owners = {}
+    for card in cards[1:]:
+        title = card.split('"', 1)[0]
+        select = card.split("<PipelineSelect", 1)[1].split("/>", 1)[0]
+        owners[title] = select.split("value={", 1)[1].split("}", 1)[0]
+
+    row1 = ["Opportunity status", "Opportunity value", "Conversion rate"]
+    picked = [owners[t] for t in row1]
+    assert len(set(picked)) == 3, (
+        f"row-1 cards share pipeline state {picked} — one card's select filters another")
+
+    # ...and the card must read the query its own select keys.
+    conversion = source.split('<Card title="Conversion rate"', 1)[1].split("</Card>", 1)[0]
+    assert "conversion_rate" in conversion, "retarget this test — the card moved"
+    assert "status.data" not in conversion, (
+        "Conversion rate renders the status query while its select drives another")
