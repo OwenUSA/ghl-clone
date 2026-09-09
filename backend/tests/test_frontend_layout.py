@@ -111,3 +111,22 @@ def test_the_opportunities_overflow_menu_can_be_dismissed():
     assert "setShowOverflow((s) => !s)" in trigger, "retarget this — the trigger moved"
     assert "z-20" in source.split("aria-haspopup=\"menu\"", 1)[1].split(">", 1)[0], (
         "the trigger sits under the backdrop, so its toggle never fires")
+
+
+def test_the_pipeline_select_actually_selects_a_pipeline():
+    """The board was hard-wired to `pipelines.data?.[0]`.
+
+    The `<select>` had no `value` and no `onChange`, and its options carried no
+    `value` either, so choosing a different pipeline changed the option text and
+    nothing else. Invisible on production, which has one pipeline; DECISIONS.md
+    records four on the live GHL account, so a real export makes it reachable.
+    """
+    source = (FRONTEND / "pages" / "OpportunitiesPage.tsx").read_text(encoding="utf-8")
+    chosen = source.split("const pipeline =", 1)[1].splitlines()[0]
+    assert "p.id === pipelineId" in chosen, (
+        "the board still takes the first pipeline unconditionally")
+    select = source.split("{/* pipeline row */}", 1)[1].split("</select>", 1)[0]
+    assert "onChange=" in select, "the pipeline select ignores the choice"
+    assert "value={pipeline?.id" in select, "the select does not show the chosen pipeline"
+    assert "<option key={p.id} value={p.id}>" in select, (
+        "the options carry no value, so onChange has nothing to read")

@@ -191,7 +191,10 @@ export function OpportunitiesPage() {
   const [openOpp, setOpenOpp] = useState<number | null>(null)
 
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
-  const pipeline = pipelines.data?.[0]
+  // Falling back to the first pipeline covers both "nothing picked yet" and "the
+  // picked one is gone", without an effect that would fight the user's choice.
+  const [pipelineId, setPipelineId] = useState<number | null>(null)
+  const pipeline = pipelines.data?.find((p) => p.id === pipelineId) ?? pipelines.data?.[0]
 
   // A menu closes on Escape. Bound only while it is open, so the page is not
   // listening for keystrokes it has no use for.
@@ -264,6 +267,8 @@ export function OpportunitiesPage() {
       {/* pipeline row */}
       <div className="flex shrink-0 items-center gap-3 px-4" style={{ height: 60 }}>
         <select
+          value={pipeline?.id ?? ''}
+          onChange={(e) => setPipelineId(Number(e.target.value))}
           style={{
             height: 36,
             borderRadius: 6,
@@ -277,7 +282,7 @@ export function OpportunitiesPage() {
           }}
         >
           {pipelines.data?.map((p) => (
-            <option key={p.id}>{p.name}</option>
+            <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
         <div
