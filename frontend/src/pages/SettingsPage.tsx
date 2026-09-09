@@ -33,7 +33,9 @@ function status(t: ApiToken) {
 export function SettingsPage({ user }: { user: Me }) {
   const qc = useQueryClient()
   const [name, setName] = useState('')
-  const [minted, setMinted] = useState<string | null>(null)
+  // The plaintext is kept with its id so revoking that token can clear the
+  // panel -- the secret on screen is dead the moment the row says `revoked`.
+  const [minted, setMinted] = useState<{ id: number; token: string } | null>(null)
   const [copied, setCopied] = useState(false)
 
   const tokens = useQuery({ queryKey: ['tokens'], queryFn: listTokens })
@@ -41,7 +43,7 @@ export function SettingsPage({ user }: { user: Me }) {
   const mint = useMutation({
     mutationFn: () => createToken(name.trim() || 'cli', 365),
     onSuccess: (t) => {
-      setMinted(t.token)
+      setMinted({ id: t.id, token: t.token })
       setName('')
       qc.invalidateQueries({ queryKey: ['tokens'] })
     },
@@ -49,7 +51,15 @@ export function SettingsPage({ user }: { user: Me }) {
 
   const revoke = useMutation({
     mutationFn: revokeToken,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tokens'] }),
+    onSuccess: (_result, id) => {
+      // Revoking the token the panel is displaying leaves a dead credential on
+      // screen above a row that reads `revoked`. Drop it.
+      if (minted?.id === id) {
+        setMinted(null)
+        setCopied(false)
+      }
+      qc.invalidateQueries({ queryKey: ['tokens'] })
+    },
   })
 
   return (
@@ -128,12 +138,12 @@ export function SettingsPage({ user }: { user: Me }) {
                 color: INK,
               }}
             >
-              {minted}
+              {minted.token}
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText(minted)
+                  navigator.clipboard.writeText(minted.token)
                   setCopied(true)
                 }}
                 style={{

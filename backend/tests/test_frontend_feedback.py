@@ -122,3 +122,15 @@ def test_add_contact_is_disabled_for_a_role_that_cannot_create():
     button = source.split("onClick={() => setShowAdd(true)}", 1)[1].split("Add Contact", 1)[0]
     assert "disabled=" in button, "Add Contact is offered to a role that cannot create"
     assert "title=" in button, "nothing tells the user why the button is dead"
+
+
+def test_revoking_the_displayed_token_clears_the_mint_panel():
+    """The mint panel shows a live secret. Revoking that token kills it, so leaving
+    the plaintext on screen above a row reading `revoked` only invites confusion --
+    someone copies a credential that can never authenticate again."""
+    source = _read("pages", "SettingsPage.tsx")
+    assert "useState<{ id: number; token: string } | null>(null)" in source, (
+        "the panel stores only the plaintext, so it cannot tell which token was revoked")
+    handler = source.split("mutationFn: revokeToken,", 1)[1].split("})", 1)[0]
+    assert "minted?.id === id" in handler and "setMinted(null)" in handler, (
+        "revoking the displayed token leaves its plaintext on screen")
