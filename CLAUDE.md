@@ -146,11 +146,21 @@ against existing rows.
 ## Tests
 
 ```bash
-uv run pytest                        # backend + CLI, 184 tests
+uv run pytest                        # backend + CLI, 262 tests
 uv run ruff check .                  # must pass clean
+uv run python capture/capture_ours.py contacts Contacts            # regenerate OUR side
+uv run python capture/capture_ours.py conversations Conversations
 uv run python capture/diff.py        # 37/37 landmark properties must still match
 uv run python capture/diff_panel.py  # 35/35 for the contact panel
 ```
+
+> **Regenerate `captures/ours/` before either diff, and pass the nav argument.**
+> `captures/ours/` is gitignored, so a fresh checkout has none and both diffs print
+> `missing capture(s)` — a stale tree is worse, because they compare old data and
+> report a pass. And since the app now lands on **Dashboard** rather than Contacts,
+> `capture_ours.py contacts` with no nav argument captures the Dashboard: every
+> landmark still *matches*, but four are NOT FOUND and the score silently reads
+> **24/37 with 0 differ**. Read the NOT FOUND block, not just the differ count.
 
 **CI runs `ruff check`, `pytest`, the frontend typecheck/build and both Docker builds**
 on every push to `main` and every PR (`.github/workflows/ci.yml`). Ruff is pinned exactly
