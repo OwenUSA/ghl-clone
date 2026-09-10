@@ -12,12 +12,14 @@ import { SettingsPage } from './pages/SettingsPage'
 import { me } from './lib/auth'
 
 // Paths that used to mean something and still turn up in bookmarks and pasted
-// links. Launchpad was removed from the product on 2026-09-09; the owner asked
-// that /launchpad land on Dashboard rather than dead-end, so the link keeps
-// working. There is no router yet (DECISIONS.md), so this is the whole of the
-// app's URL handling: read the path once at boot, then rewrite it away.
+// links. Launchpad was removed from the product on 2026-09-09 and Payments on
+// 2026-09-10; the owner asked that each land on Dashboard rather than dead-end,
+// so a link someone saved keeps working. There is no router yet (DECISIONS.md),
+// so this is the whole of the app's URL handling: read the path once at boot,
+// then rewrite it away.
 const RETIRED_PATHS: Record<string, string> = {
   '/launchpad': 'dashboard',
+  '/payments': 'dashboard',
 }
 
 // The view the app opens on. Was 'contacts'; the owner moved it to Dashboard

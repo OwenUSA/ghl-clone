@@ -168,6 +168,22 @@ def test_launchpad_redirects_to_dashboard_rather_than_dead_ending():
         "pushing the redirect makes Back bounce straight off it")
 
 
+def test_payments_redirects_to_dashboard_rather_than_dead_ending():
+    """Same treatment /launchpad got, for the same reason: saved links.
+
+    Payments was a sidebar row for the whole life of the app, so /payments is in
+    somebody's bookmarks. Without an entry here it would fall through to the
+    default view — the same screen, but with a path that means nothing left in
+    the address bar, and no record that the link was retired on purpose.
+    """
+    app = (FRONTEND / "App.tsx").read_text(encoding="utf-8")
+    retired = app.split("const RETIRED_PATHS", 1)[1].split("}", 1)[0]
+    assert re.search(r"'/payments':\s*'dashboard'", retired), (
+        "/payments no longer resolves to Dashboard")
+    # The resolver itself (path read, table consulted, replaceState) is pinned by
+    # the /launchpad test above; both paths go through the same three lines.
+
+
 def test_the_app_lands_on_dashboard():
     """Was Contacts — a 268-row table — and the owner moved it to Dashboard."""
     app = (FRONTEND / "App.tsx").read_text(encoding="utf-8")
