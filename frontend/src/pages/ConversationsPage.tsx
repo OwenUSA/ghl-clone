@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Me } from '../lib/auth'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
 import {
@@ -11,6 +11,7 @@ import {
   PANE, listConversations, listEvents,
   type ConversationSummary, type ThreadEvent,
 } from '../lib/api'
+import type { Focus } from '../lib/focus'
 
 /**
  * Rebuilt from capture/spec.py geometry (captures/conversations, 1440x900).
@@ -102,7 +103,7 @@ function IconBtn({
 function Dropdown({
   items, value, onPick, onClose, right = false,
 }: {
-  items: { key: string; label: string; unimplemented?: boolean }[]
+  items: { key: string; label: string; unimplemented?: boolean; blocked?: string }[]
   value: string
   onPick: (k: string) => void
   onClose: () => void
@@ -126,26 +127,34 @@ function Dropdown({
         padding: 4,
       } as React.CSSProperties}
     >
-      {items.map((it) => (
-        <button
-          key={it.key}
-          role="menuitem"
-          disabled={it.unimplemented}
-          title={it.unimplemented ? 'Present in GHL, not implemented in v1' : undefined}
-          onClick={() => { if (!it.unimplemented) { onPick(it.key); onClose() } }}
-          className="block w-full text-left"
-          style={{
-            padding: '8px 12px',
-            borderRadius: 6,
-            fontSize: 14,
-            color: it.unimplemented ? 'rgb(152,162,179)' : 'rgb(52,64,84)',
-            backgroundColor: value === it.key ? 'rgb(239,244,255)' : 'transparent',
-            cursor: it.unimplemented ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {it.label}
-        </button>
-      ))}
+      {items.map((it) => {
+        // Two reasons a row can be dead, and they say different things. Either
+        // way it renders disabled rather than absent -- the precedent set by Add
+        // Contact and the Actions tab (DECISIONS.md): a gap the user can see
+        // beats a menu that quietly gets shorter, and beats clicking into a 403.
+        const off = it.unimplemented || Boolean(it.blocked)
+        return (
+          <button
+            key={it.key}
+            role="menuitem"
+            disabled={off}
+            title={it.blocked
+              ?? (it.unimplemented ? 'Present in GHL, not implemented in v1' : undefined)}
+            onClick={() => { if (!off) { onPick(it.key); onClose() } }}
+            className="block w-full text-left"
+            style={{
+              padding: '8px 12px',
+              borderRadius: 6,
+              fontSize: 14,
+              color: off ? 'rgb(152,162,179)' : 'rgb(52,64,84)',
+              backgroundColor: value === it.key ? 'rgb(239,244,255)' : 'transparent',
+              cursor: off ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {it.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -222,7 +231,7 @@ function EventBubble({ e }: { e: ThreadEvent }) {
   )
 }
 
-export function ConversationsPage({ user }: { user: Me }) {
+export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | null }) {
   const [tab, setTab] = useState<string>('all')
   const [sort, setSort] = useState('latest')
   const [filter, setFilter] = useState('all')
@@ -232,6 +241,25 @@ export function ConversationsPage({ user }: { user: Me }) {
   const [showFilter, setShowFilter] = useState(false)
   const [rail, setRail] = useState(0)
   const [checked, setChecked] = useState<number[]>([])
+
+  // Internal notes are STAFF-only as of 2026-09-10 (DECISIONS.md), and the
+  // backend answers a TECH's ?filter=internal_comment with 403. Disable the row
+  // rather than let them pick it and read an error.
+  const filters =
+    user.role === 'TECH'
+      ? FILTERS.map((f) =>
+          f.key === 'internal_comment'
+            ? { ...f, blocked: 'Internal notes are staff-only' }
+            : f,
+        )
+      : FILTERS
+
+  // The ctrl+K palette asked for one record. Opening it here, rather than
+  // teaching the palette how each page's detail panel works, keeps a searched
+  // record and a clicked row on exactly the same path.
+  useEffect(() => {
+    if (focus) setSelected(focus.id)
+  }, [focus])
 
   const convs = useQuery({
     queryKey: ['conversations', tab, sort],
@@ -463,7 +491,7 @@ export function ConversationsPage({ user }: { user: Me }) {
                   <IconTrash size={24} color="rgb(71,84,103)" />
                 </IconBtn>
                 {showFilter && (
-                  <Dropdown items={FILTERS} value={filter} onPick={setFilter} right
+                  <Dropdown items={filters} value={filter} onPick={setFilter} right
                     onClose={() => setShowFilter(false)} />
                 )}
               </div>
@@ -473,7 +501,7 @@ export function ConversationsPage({ user }: { user: Me }) {
               {events.isLoading && <div style={{ fontSize: 14 }}>Loading…</div>}
               {events.data?.length === 0 && (
                 <div style={{ fontSize: 14, color: 'rgb(102,112,133)', padding: 16 }}>
-                  Nothing matches “{FILTERS.find((f) => f.key === filter)?.label}”.
+                  Nothing matches “{filters.find((f) => f.key === filter)?.label}”.
                 </div>
               )}
               {events.data && events.data.length > 0 && (

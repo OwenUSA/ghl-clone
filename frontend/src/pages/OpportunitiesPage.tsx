@@ -36,6 +36,7 @@ import {
   type Pipeline,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
+import type { Focus } from '../lib/focus'
 
 /**
  * Measured from captures/opportunities/ and menus.json:
@@ -245,7 +246,7 @@ function StageColumn({
   )
 }
 
-export function OpportunitiesPage({ user }: { user: Me }) {
+export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | null }) {
   const qc = useQueryClient()
   // `POST /api/opportunities` is auth.STAFF, so a TECH's create is refused.
   // Mirror that here rather than let them fill in the form to find out on submit
@@ -263,6 +264,13 @@ export function OpportunitiesPage({ user }: { user: Me }) {
   const [layoutOnOpen, setLayoutOnOpen] = useState<Layout>('Default')
   const [showOverflow, setShowOverflow] = useState(false)
   const [openOpp, setOpenOpp] = useState<number | null>(null)
+
+  // The ctrl+K palette asked for one record. Opening it here, rather than
+  // teaching the palette how each page's detail panel works, keeps a searched
+  // record and a clicked row on exactly the same path.
+  useEffect(() => {
+    if (focus) setOpenOpp(focus.id)
+  }, [focus])
 
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
   // Falling back to the first pipeline covers both "nothing picked yet" and "the

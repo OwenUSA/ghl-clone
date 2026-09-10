@@ -80,6 +80,35 @@ def contains(q: str) -> str:
     return "%" + q + "%"
 
 
+# NOTE and INTERNAL_COMMENT are the team talking to itself on a thread: recorded
+# for the crew, never transmitted to the customer (see automations.INTERNAL_TYPES,
+# which is why DND never suppresses them). As of 2026-09-10 they are STAFF-only on
+# every path, read and write -- DECISIONS.md carries the reasoning.
+#
+# The rule lives in ONE predicate, applied at every door: the thread view, the
+# cross-thread message search, the global palette search, and the composer. The
+# alternative considered was enforcing it only in the new /api/search, which was
+# rejected: a TECH would then fail to find a word in the palette and read that same
+# note two clicks later in Conversations, which is the inconsistent-gate failure
+# DECISIONS.md already complains about once.
+INTERNAL_TYPES = automations.INTERNAL_TYPES
+
+
+def _sees_internal(principal: auth.Principal) -> bool:
+    return principal.role in (Role.ADMIN, Role.DISPATCHER)
+
+
+def _refuse_internal(principal: auth.Principal, verb: str) -> None:
+    """403 for an explicit request for internal notes.
+
+    Explicit asks are refused rather than silently emptied, so `--type NOTE` from
+    the CLI says why it returned nothing. An unfiltered read is narrowed instead:
+    an inbox that 403s because one hidden row exists would be unusable.
+    """
+    raise HTTPException(403, "role %s may not %s internal notes" % (
+        principal.role.value, verb))
+
+
 # ---------- schemas ----------
 
 class ContactOut(BaseModel):
@@ -149,18 +178,22 @@ def list_contacts(
     _: auth.Principal = auth.ANY_USER):
     stmt = select(Contact)
     if q:
-        like = "%%%s%%" % q
-        stmt = stmt.where(or_(Contact.first_name.ilike(like),
-                              Contact.last_name.ilike(like),
+        # contains() + escape=, not a bare "%s" pattern: typing a % into the box
+        # used to match every row here while narrowing to nothing in the palette,
+        # because only one of the two escaped it. One matching convention.
+        like = contains(q)
+        esc = LIKE_ESCAPE
+        stmt = stmt.where(or_(Contact.first_name.ilike(like, escape=esc),
+                              Contact.last_name.ilike(like, escape=esc),
                               # Searching a full name is the obvious thing to type,
                               # and matching the columns separately never does it:
                               # "jane doe" is in neither first_name nor last_name.
                               # Renders as || on both Postgres and SQLite.
                               (Contact.first_name + " "
-                               + Contact.last_name).ilike(like),
-                              Contact.email.ilike(like),
-                              Contact.phone.ilike(like),
-                              Contact.business_name.ilike(like)))
+                               + Contact.last_name).ilike(like, escape=esc),
+                              Contact.email.ilike(like, escape=esc),
+                              Contact.phone.ilike(like, escape=esc),
+                              Contact.business_name.ilike(like, escape=esc)))
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
@@ -780,21 +813,35 @@ def conversation_events(
     conv_id: int,
     db: Session = Depends(get_db),
     filter: str = "all",
-    _: auth.Principal = auth.ANY_USER):
+    principal: auth.Principal = auth.ANY_USER):
     """`filter` mirrors GHL's measured "Filter messages" menu: all | conversations
-    | activities | or a specific EventType name."""
+    | activities | or a specific EventType name.
+
+    Internal notes are dropped for a TECH whatever the filter says. Note
+    CONVERSATION_TYPES contains INTERNAL_COMMENT, so the measured "Conversations"
+    filter is one of the places that has to narrow.
+    """
+    internal_ok = _sees_internal(principal)
     stmt = (select(ConversationEvent)
             .where(ConversationEvent.conversation_id == conv_id))
 
     if filter == "conversations":
-        stmt = stmt.where(ConversationEvent.type.in_(CONVERSATION_TYPES))
+        types = set(CONVERSATION_TYPES)
+        if not internal_ok:
+            types -= INTERNAL_TYPES
+        stmt = stmt.where(ConversationEvent.type.in_(types))
     elif filter == "activities":
         stmt = stmt.where(ConversationEvent.type.in_(ACTIVITY_TYPES))
     elif filter != "all":
         try:
-            stmt = stmt.where(ConversationEvent.type == EventType[filter.upper()])
+            wanted = EventType[filter.upper()]
         except KeyError:
             raise HTTPException(400, "unknown filter %r" % filter) from None
+        if wanted in INTERNAL_TYPES and not internal_ok:
+            _refuse_internal(principal, "read")
+        stmt = stmt.where(ConversationEvent.type == wanted)
+    elif not internal_ok:
+        stmt = stmt.where(ConversationEvent.type.not_in(INTERNAL_TYPES))
 
     rows = db.scalars(stmt.order_by(ConversationEvent.occurred_at)).all()
     return [EventOut(id=e.id, type=e.type.value, direction=e.direction.value,
@@ -1470,12 +1517,13 @@ def _search_events(db: Session, *, types: set[EventType],
     if contact_id:
         stmt = stmt.where(Contact.id == contact_id)
     if q:
-        like = "%%%s%%" % q
         # transcript as well as body: searching call transcripts is the whole
         # point of `ghl calls list --q`.
-        stmt = stmt.where(or_(ConversationEvent.body.ilike(like),
-                              ConversationEvent.transcript.ilike(like),
-                              ConversationEvent.subject.ilike(like)))
+        like = contains(q)
+        esc = LIKE_ESCAPE
+        stmt = stmt.where(or_(ConversationEvent.body.ilike(like, escape=esc),
+                              ConversationEvent.transcript.ilike(like, escape=esc),
+                              ConversationEvent.subject.ilike(like, escape=esc)))
     for clause in (extra or []):
         stmt = stmt.where(clause)
 
@@ -1562,9 +1610,13 @@ def list_messages(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     order: Literal["asc", "desc"] = "desc",
-    _: auth.Principal = auth.ANY_USER,
+    principal: auth.Principal = auth.ANY_USER,
 ):
-    """Search messages and notes across every conversation."""
+    """Search messages and notes across every conversation.
+
+    Internal notes are STAFF-only: `type=all` narrows for a TECH, and asking for
+    them by name is refused outright.
+    """
     if type == "all":
         types = set(MESSAGE_TYPES)
     else:
@@ -1575,6 +1627,11 @@ def list_messages(
                 type, sorted(t.value for t in MESSAGE_TYPES))) from None
         if types - MESSAGE_TYPES:
             raise HTTPException(400, "%r is not a message type" % type)
+
+    if not _sees_internal(principal):
+        if type != "all" and types & INTERNAL_TYPES:
+            _refuse_internal(principal, "read")
+        types -= INTERNAL_TYPES
 
     extra = []
     if delivery_status:
@@ -1595,6 +1652,164 @@ def list_messages(
     } for e, c in rows], total, page, page_size)
 
 
+# ---------- global search (the ctrl+K palette) ----------
+#
+# ONE endpoint, deliberately, rather than the palette fanning out to /api/contacts,
+# /api/opportunities and /api/messages on every debounced keystroke. Three requests
+# per keystroke for a result set the user reads as a single list is the wrong shape,
+# and it would put ranking, the per-group cap and the role rule in three different
+# files with three chances to disagree.
+#
+# Scope is contacts, opportunities and messages. Call TRANSCRIPTS are deliberately
+# out (owner's decision, DECISIONS.md 2026-09-10) even though `GET /api/calls?q=`
+# already searches them: a recorded call is minutes of speech, so short queries hit
+# nearly every one and bury the contact the user was actually reaching for.
+
+SEARCH_GROUP_CAP = 5
+
+# NOT EventType.CALL: see above. MESSAGE_TYPES minus nothing -- the internal ones
+# are removed per-request, by role.
+SEARCH_MESSAGE_TYPES = frozenset(MESSAGE_TYPES)
+
+
+def _snippet(body: str | None, q: str, width: int = 90) -> str:
+    """A window of `body` around the first case-insensitive hit on `q`.
+
+    A thread found by something said in it is only useful if the row shows the
+    thing that was said. Whitespace is collapsed first, because an email body
+    arrives with newlines that would eat most of the width.
+    """
+    text = " ".join((body or "").split())
+    if len(text) <= width:
+        return text
+    at = text.lower().find(q.lower())
+    if at < 0:                                  # matched somewhere we do not show
+        return text[:width].rstrip() + "…"
+    start = max(0, at - width // 3)
+    end = min(len(text), start + width)
+    return ("…" if start else "") + text[start:end].strip() + (
+        "…" if end < len(text) else "")
+
+
+def _search_contacts(db: Session, term: str, limit: int) -> tuple[list, int]:
+    """Name, email, phone -- the three things anyone types to find a person.
+
+    `first_name + " " + last_name` is matched as well as the columns separately,
+    because "jane doe" is in neither column on its own. Same reasoning, and the
+    same rendering (`||` on both Postgres and SQLite), as GET /api/contacts.
+    """
+    like = contains(term)
+    stmt = select(Contact).where(or_(
+        Contact.first_name.ilike(like, escape=LIKE_ESCAPE),
+        Contact.last_name.ilike(like, escape=LIKE_ESCAPE),
+        (Contact.first_name + " " + Contact.last_name).ilike(
+            like, escape=LIKE_ESCAPE),
+        Contact.email.ilike(like, escape=LIKE_ESCAPE),
+        Contact.phone.ilike(like, escape=LIKE_ESCAPE)))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(
+        stmt.order_by(Contact.first_name, Contact.last_name, Contact.id)
+        .limit(limit)).all()
+    return [{"id": c.id, "name": c.name, "email": c.email, "phone": c.phone}
+            for c in rows], total
+
+
+def _search_opportunities(db: Session, term: str, limit: int) -> tuple[list, int]:
+    """Title only, per the owner. Every status, not just open: a palette is how
+    you go back to a deal you already won or lost, so `status` rides along and the
+    row says which."""
+    stmt = (select(Opportunity)
+            .options(selectinload(Opportunity.stage),
+                     selectinload(Opportunity.contact))
+            .where(Opportunity.title.ilike(contains(term), escape=LIKE_ESCAPE)))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(
+        stmt.order_by(Opportunity.updated_at.desc(), Opportunity.id.desc())
+        .limit(limit)).all()
+    return [{"id": o.id, "title": o.title, "status": o.status,
+             "value_cents": o.value_cents,
+             "pipeline_id": o.pipeline_id, "stage_id": o.stage_id,
+             "stage_name": o.stage.name if o.stage else None,
+             "contact_name": o.contact.name if o.contact else None}
+            for o in rows], total
+
+
+def _search_messages(db: Session, term: str, limit: int,
+                     types: set[EventType]) -> tuple[list, int]:
+    """Message BODIES, so a thread can be found by something said in it.
+
+    The result identifies the thread it belongs to (`conversation_id` plus the
+    contact), because finding the sentence is only half of what the user wants --
+    the other half is being taken to the conversation it was said in.
+
+    Subject lines are NOT matched: the owner asked for bodies. Cheap to add later.
+    """
+    stmt = (select(ConversationEvent, Contact)
+            .join(Conversation,
+                  Conversation.id == ConversationEvent.conversation_id)
+            .join(Contact, Contact.id == Conversation.contact_id)
+            .where(ConversationEvent.type.in_(types),
+                   ConversationEvent.body.ilike(contains(term),
+                                                escape=LIKE_ESCAPE)))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.execute(
+        stmt.order_by(ConversationEvent.occurred_at.desc(),
+                      ConversationEvent.id.desc())
+        .limit(limit)).all()
+    return [{"id": e.id, "conversation_id": e.conversation_id,
+             "contact_id": c.id, "contact_name": c.name,
+             "type": e.type.value, "direction": e.direction.value,
+             "occurred_at": e.occurred_at,
+             "snippet": _snippet(e.body, term)} for e, c in rows], total
+
+
+@app.get("/api/search")
+def search(
+    db: Session = Depends(get_db),
+    q: str = "",
+    limit: int = Query(SEARCH_GROUP_CAP, ge=1, le=25),
+    principal: auth.Principal = auth.ANY_USER,
+):
+    """Grouped, capped search across contacts, opportunities and messages.
+
+    Every group is present in every response, empty ones included, so the palette
+    renders a stable shape and "no results" is a property of the groups rather
+    than of a missing key. `total` is the real number of matches and `truncated`
+    says the list was cut -- the cap is reported, never silent.
+
+    A blank `q` is not an error: the palette calls this as the box is being
+    cleared. It returns the same empty shape rather than 422.
+
+    Role: internal notes are STAFF-only (see INTERNAL_TYPES), so a TECH's message
+    group is narrower. Everything else here is already ANY_USER-readable through
+    the list endpoints, so search adds no reach.
+    """
+    term = q.strip()
+    types = set(SEARCH_MESSAGE_TYPES)
+    if not _sees_internal(principal):
+        types -= INTERNAL_TYPES
+
+    if term:
+        found = [("contacts", "Contacts", _search_contacts(db, term, limit)),
+                 ("opportunities", "Opportunities",
+                  _search_opportunities(db, term, limit)),
+                 ("messages", "Messages",
+                  _search_messages(db, term, limit, types))]
+    else:
+        found = [(k, label, ([], 0)) for k, label in
+                 (("contacts", "Contacts"), ("opportunities", "Opportunities"),
+                  ("messages", "Messages"))]
+
+    return {
+        "q": term,
+        "limit": limit,
+        "total": sum(total for _, _, (_, total) in found),
+        "groups": [{"type": key, "label": label, "items": items,
+                    "total": total, "truncated": total > len(items)}
+                   for key, label, (items, total) in found],
+    }
+
+
 # ---------- outbound messaging ----------
 
 class MessageSend(BaseModel):
@@ -1603,9 +1818,14 @@ class MessageSend(BaseModel):
     subject: str | None = None
 
 
-def _send_to_contact(db: Session, contact: Contact, body: MessageSend) -> dict:
+def _send_to_contact(db: Session, contact: Contact, body: MessageSend,
+                     principal: auth.Principal) -> dict:
     if not body.body.strip():
         raise HTTPException(400, "a message needs a body")
+    # Writing a note a TECH cannot then read would be a worse bug than refusing
+    # the write, so the read rule and the write rule are the same rule.
+    if EventType[body.type] in INTERNAL_TYPES and not _sees_internal(principal):
+        _refuse_internal(principal, "write")
     ev, reason = automations.send_outbound(
         db, contact, body.body, type_=EventType[body.type], subject=body.subject)
     db.commit()
@@ -1627,7 +1847,7 @@ def _send_to_contact(db: Session, contact: Contact, body: MessageSend) -> dict:
 @app.post("/api/contacts/{contact_id}/messages", status_code=201)
 def send_to_contact(contact_id: int, body: MessageSend,
                     db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ANY_USER):
+                    principal: auth.Principal = auth.ANY_USER):
     """Send to a contact, creating the thread if there isn't one.
 
     Contact-first because that is how the CLI addresses people. While
@@ -1637,13 +1857,13 @@ def send_to_contact(contact_id: int, body: MessageSend,
     contact = db.get(Contact, contact_id)
     if not contact:
         raise HTTPException(404, "contact not found")
-    return _send_to_contact(db, contact, body)
+    return _send_to_contact(db, contact, body, principal)
 
 
 @app.post("/api/conversations/{conv_id}/messages", status_code=201)
 def send_to_conversation(conv_id: int, body: MessageSend,
                          db: Session = Depends(get_db),
-                         _: auth.Principal = auth.ANY_USER):
+                         principal: auth.Principal = auth.ANY_USER):
     """Send on an open thread — the shape the Conversations composer uses."""
     conv = db.get(Conversation, conv_id)
     if not conv:
@@ -1651,7 +1871,7 @@ def send_to_conversation(conv_id: int, body: MessageSend,
     contact = db.get(Contact, conv.contact_id)
     if not contact:
         raise HTTPException(404, "conversation has no contact")
-    return _send_to_contact(db, contact, body)
+    return _send_to_contact(db, contact, body, principal)
 
 
 class ConversationPatch(BaseModel):
