@@ -444,3 +444,61 @@ def test_the_first_time_card_does_not_repeat_the_whole_windows_durations():
                            .split("</Card>", 1)[0]
     assert "first_time_" not in by_status_card, (
         "'Call by status' is every call, not just the first-time ones")
+
+
+def test_a_refused_card_move_snaps_the_card_back_and_says_why():
+    """The board moves a card the instant it is dropped. That is only safe if a
+    refusal puts it back — the failure being guarded against is 20cc838, where
+    every drag was rejected for a missing CSRF token while the board went on
+    showing the card in its new column until the next reload.
+
+    The behavioural half of this is backend/tests/test_board_order.py, which runs
+    the real prediction against the real endpoint. What is asserted here is the
+    part that only exists in the page: the rollback, and the sentence."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    move = source.split("const move = useMutation({", 1)[1].split("\n  })", 1)[0]
+
+    assert "onMutate" in move, "the card does not move until the server answers"
+    assert "cancelQueries" in move, (
+        "a refetch already in flight will land on top of the optimistic board")
+    assert "getQueryData" in move and "previous" in move, (
+        "nothing is snapshotted, so there is nothing to roll back to")
+    assert "onError" in move, "a refused move is dropped on the floor"
+    error = move.split("onError", 1)[1]
+    assert "setQueryData(boardKey, ctx.previous)" in error, (
+        "a refused move leaves the card sitting in the column it never reached")
+    assert "setMoveError(err.message)" in error, (
+        "the refusal is silent — the whole point is that it must not be")
+    # `err.message` is api.ts's `readable()` sentence. Rendering the response
+    # body is the regression 9d5e1d2 fixed everywhere else.
+    for raw in ("await r.text()", "JSON.stringify(err", "String(err)"):
+        assert raw not in error, "the wire body is being shown to the user"
+
+    assert 'role="alert"' in source, "the refusal has nowhere to render"
+    assert "{moveError}" in source, "the sentence is never drawn"
+
+
+def test_the_board_sends_the_position_a_card_was_dropped_at():
+    """Both halves of the original bug, pinned in the page itself.
+
+    `onDragEnd` returned early on a same-column drop, and its mutate() call
+    passed no position at all — so `moveOpportunity`'s default of 0 sent every
+    cross-column drop to the top of the target column."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    handler = source.split("function onDragEnd(", 1)[1].split("\n  }", 1)[0]
+    assert "moveForDrop(" in handler, (
+        "the drop is not resolved through lib/boardOrder.ts — retarget this test")
+    assert "o.stage_id === stageId" not in source, (
+        "a drop back into the card's own column is being discarded again")
+
+    # The column has to be a sortable list, or a drop has no index to report.
+    assert "SortableContext" in source and "useSortable(" in source, (
+        "the columns are drop targets only, so a reorder has no drop index")
+    assert "useDraggable(" not in source, (
+        "a card is still a bare draggable, which cannot report where it landed")
+
+    api = _read("lib", "api.ts")
+    signature = api.split("export const moveOpportunity =", 1)[1].split("\n", 1)[0]
+    assert "position = 0" not in signature, (
+        "moveOpportunity still defaults the position, so a caller that forgets "
+        "it silently files the card at the top of the column")

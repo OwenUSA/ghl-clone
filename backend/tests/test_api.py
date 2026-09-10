@@ -64,8 +64,11 @@ def client():
     db.add_all([s1, s2])
     db.flush()
     for i in range(6):
+        # `position` is explicit: the column default is 0, so leaving it off gives
+        # six cards that all claim the top of the stage and an order the ordering
+        # tests could not assert. The seed and POST /api/opportunities both fill it.
         db.add(Opportunity(title="OPP %d" % i, contact_id=contacts[i].id,
-                           pipeline_id=pipe.id, stage_id=s1.id,
+                           pipeline_id=pipe.id, stage_id=s1.id, position=i,
                            value_cents=10000 * (i + 1),
                            status="won" if i == 0 else "open"))
 
@@ -378,6 +381,168 @@ def test_cross_pipeline_move_is_rejected(client):
     r = client.patch(f"/api/opportunities/{opp['id']}",
                      json={"stage_id": 9999, "position": 0})
     assert r.status_code == 400
+
+
+# ---------------- Opportunities: board order ----------------
+#
+# `position` is what the kanban drag persists. The tests below assert the ORDER a
+# re-read of the board returns, and that both stages come back packed 0..n-1 with
+# no gap and no duplicate — a hole is invisible on screen but makes the browser's
+# optimistic prediction of the drop disagree with the server.
+
+
+def _stage_order(client, stage_id):
+    """Card ids in the order the board would draw them, for one stage."""
+    pid = client.ids["pipeline"]
+    rows = client.get(f"/api/opportunities?pipeline_id={pid}&status=all").json()
+    return [o["id"] for o in rows if o["stage_id"] == stage_id]
+
+
+def _stage_positions(client, stage_id):
+    pid = client.ids["pipeline"]
+    rows = client.get(f"/api/opportunities?pipeline_id={pid}&status=all").json()
+    return [o["position"] for o in rows if o["stage_id"] == stage_id]
+
+
+def _assert_packed(client, stage_id):
+    got = _stage_positions(client, stage_id)
+    assert got == list(range(len(got))), (
+        "stage %s came back as %s, not 0..n-1 — a gap or a duplicate"
+        % (stage_id, got))
+
+
+def _move(client, opp_id, stage_id, position):
+    return client.patch(f"/api/opportunities/{opp_id}",
+                        json={"stage_id": stage_id, "position": position})
+
+
+def test_dragging_a_card_down_its_own_stage_persists_the_new_order(client):
+    """The same-column reorder the board could not do at all: onDragEnd returned
+    early whenever the drop landed in the stage the card came from."""
+    s1 = client.ids["stage1"]
+    before = _stage_order(client, s1)
+    assert len(before) >= 5, "fixture changed — this needs a column to reorder in"
+
+    # Take the top card and drop it two below, between the 3rd and the 4th.
+    moved = before[0]
+    assert _move(client, moved, s1, 2).status_code == 200
+
+    expected = [before[1], before[2], moved, *before[3:]]
+    assert _stage_order(client, s1) == expected, "the new order did not survive a re-read"
+    _assert_packed(client, s1)
+
+
+def test_dragging_a_card_up_its_own_stage_persists_the_new_order(client):
+    s1 = client.ids["stage1"]
+    before = _stage_order(client, s1)
+    moved = before[4]
+    assert _move(client, moved, s1, 1).status_code == 200
+
+    expected = [before[0], moved, before[1], before[2], before[3], *before[5:]]
+    assert _stage_order(client, s1) == expected
+    _assert_packed(client, s1)
+
+
+def test_a_card_dropped_in_the_middle_of_another_stage_lands_at_that_index(client):
+    """Every cross-column drop used to land at the top: the drag handler sent no
+    position at all and `moveOpportunity`'s default is 0."""
+    s1, s2 = client.ids["stage1"], client.ids["stage2"]
+    source = _stage_order(client, s1)
+
+    # Fill the destination first, so "the middle" is a real place.
+    for card in source[:3]:
+        assert _move(client, card, s2, 99).status_code == 200  # 99 clamps to the end
+    dest = _stage_order(client, s2)
+    assert dest == source[:3], "the three cards did not arrive in the order they were sent"
+
+    left_behind = _stage_order(client, s1)
+    moved = left_behind[1]
+    assert _move(client, moved, s2, 1).status_code == 200
+
+    assert _stage_order(client, s2) == [dest[0], moved, dest[1], dest[2]]
+    assert _stage_order(client, s1) == [left_behind[0], *left_behind[2:]]
+    # Both ends of the drag, not just the one the card landed in.
+    _assert_packed(client, s2)
+    _assert_packed(client, s1)
+
+
+def _stage_change_jobs():
+    db = SessionLocal()
+    try:
+        return [j.dedupe_key for j in db.scalars(select(Job)).all()
+                if j.type == "stage_change_notify"]
+    finally:
+        db.close()
+
+
+def test_a_reorder_inside_one_stage_never_texts_the_customer(client):
+    """Rule 4 texts the customer on a stage change. Reordering is not a stage
+    change, and when a real SMS transport replaces LoggingTransport a drag that
+    texted every customer in the column would be an incident.
+
+    Asserted on the job queue, because the reorder returns 200 either way."""
+    s1 = client.ids["stage1"]
+    order = _stage_order(client, s1)
+    assert not _stage_change_jobs(), "the fixture is not starting from a clean queue"
+
+    for card, pos in ((order[0], 3), (order[4], 0), (order[2], 5)):
+        r = _move(client, card, s1, pos)
+        assert r.status_code == 200
+        assert r.json()["automation"] == "stage unchanged"
+
+    assert _stage_change_jobs() == [], "a same-stage reorder queued a customer text"
+
+
+def test_a_move_to_another_stage_still_texts_the_customer(client):
+    """The other half: guarding the reorder must not have muted the real thing."""
+    s1, s2 = client.ids["stage1"], client.ids["stage2"]
+    moved = _stage_order(client, s1)[1]
+    r = _move(client, moved, s2, 0)
+    assert r.status_code == 200 and r.json()["automation"] == "queued"
+    assert _stage_change_jobs() == ["stage_change:%d:%d" % (moved, s2)]
+
+
+@pytest.mark.parametrize("why,body", [
+    ("a stage in nobody's pipeline", {"stage_id": 999999, "position": 1}),
+    # -1 is not "the end" — it is Python's negative slicing, and it would file the
+    # card second from the bottom of the column.
+    ("a negative position", {"position": -1}),
+])
+def test_a_rejected_move_leaves_the_board_exactly_as_it_found_it(client, why, body):
+    s1 = client.ids["stage1"]
+    before = _stage_order(client, s1)
+    before_positions = _stage_positions(client, s1)
+    moved = before[2]
+
+    r = client.patch(f"/api/opportunities/{moved}",
+                     json={"stage_id": s1, **body})
+    assert r.status_code in (400, 422), why
+
+    assert _stage_order(client, s1) == before, "a refused move still reordered the column"
+    assert _stage_positions(client, s1) == before_positions
+    assert not _stage_change_jobs(), "a refused move queued a customer text"
+
+
+def test_a_tech_may_reorder_and_move_cards(client):
+    """Deliberate, per CLAUDE.md: a TECH cannot edit a record but can move an
+    opportunity between stages. Asserted as found — a reorder is the same route,
+    so this pins that the drag stays usable for the field crew rather than
+    widening anything."""
+    s1, s2 = client.ids["stage1"], client.ids["stage2"]
+    tech = TestClient(app)
+    tech.headers["Authorization"] = "Bearer " + client.tokens["tech"]
+    tech.ids = client.ids
+
+    order = _stage_order(client, s1)
+    moved = order[0]
+    assert _move(tech, moved, s1, 2).status_code == 200
+    assert _stage_order(client, s1) == [order[1], order[2], moved, *order[3:]]
+
+    assert _move(tech, moved, s2, 0).status_code == 200
+    assert _stage_order(client, s2) == [moved]
+    # ...and editing the same record is still refused, which is the line being held.
+    assert tech.patch(f"/api/opportunities/{moved}/detail",
+                      json={"title": "TECH EDIT"}).status_code == 403
 
 
 def test_opportunity_detail_validation(client):

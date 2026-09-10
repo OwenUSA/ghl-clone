@@ -381,9 +381,13 @@ def list_opportunities(
         stmt = stmt.where(Opportunity.status == status)
     if q:
         stmt = stmt.where(Opportunity.title.ilike(contains(q), escape=LIKE_ESCAPE))
-    rows = db.scalars(stmt.order_by(Opportunity.position)).all()
+    # `id` is the tiebreak, not decoration: `position` defaults to 0, so any rows
+    # written before a re-pack can share one, and without it the board's order
+    # changes between two identical refetches — which the optimistic drag would
+    # then read as the server disagreeing with it.
+    rows = db.scalars(stmt.order_by(Opportunity.position, Opportunity.id)).all()
     return [{"id": o.id, "title": o.title, "value_cents": o.value_cents,
-             "stage_id": o.stage_id, "status": o.status,
+             "stage_id": o.stage_id, "status": o.status, "position": o.position,
              "contact_name": o.contact.name if o.contact else None,
              "business_name": o.contact.business_name if o.contact else None,
              "source": o.contact.source if o.contact else None,
@@ -391,8 +395,11 @@ def list_opportunities(
 
 
 class OpportunityMove(BaseModel):
+    # A negative position is not "the end", it is Python's negative slicing: -1 would
+    # quietly file the card second-from-bottom. The board never sends one, so refuse
+    # it rather than reorder the column in a way nobody asked for.
     stage_id: int
-    position: int = 0
+    position: int = Field(0, ge=0)
 
 
 @app.patch("/api/opportunities/{opp_id}")
@@ -414,10 +421,28 @@ def move_opportunity(opp_id: int, body: OpportunityMove,
     siblings = db.scalars(
         select(Opportunity)
         .where(Opportunity.stage_id == body.stage_id, Opportunity.id != o.id)
-        .order_by(Opportunity.position)).all()
+        .order_by(Opportunity.position, Opportunity.id)).all()
     ordered = [*siblings[:body.position], o, *siblings[body.position:]]
     for i, s in enumerate(ordered):
         s.position = i
+    # ...and re-pack the stage it LEFT. Only the destination was packed before, so a
+    # card dragged out of the middle left a hole (0, 2, 3). Nothing rendered wrong —
+    # the board only reads the order — but the browser predicts the new positions
+    # locally to move the card the instant it is dropped, and it can only do that
+    # against a column it knows is contiguous.
+    #
+    # `id != o.id` is load-bearing, not tidiness: the session is autoflush=False, so
+    # the card being dragged is still filed under its OLD stage in the database at
+    # this point. Without it the query returns the card itself and the loop below
+    # resets the position that was just chosen for it — every drop landed at the top
+    # of the destination, which is the exact bug this change exists to fix.
+    if old_stage_id != body.stage_id:
+        left = db.scalars(
+            select(Opportunity)
+            .where(Opportunity.stage_id == old_stage_id, Opportunity.id != o.id)
+            .order_by(Opportunity.position, Opportunity.id)).all()
+        for i, left_over in enumerate(left):
+            left_over.position = i
     # Rule 4: stage move -> text the customer.
     outcome = automations.on_opportunity_stage_changed(db, o, old_stage_id)
     db.commit()
