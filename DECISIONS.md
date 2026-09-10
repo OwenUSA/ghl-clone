@@ -846,7 +846,12 @@ the product.
   Payments · AI Agents · Automation · Media Storage
 
 This is a decision, not an oversight — removing them is a separate call the owner has not
-made. `backend/tests/test_frontend_nav.py` pins both halves, because "we removed the dead
+made.
+
+> **AMENDED 2026-09-10:** the owner made that call for one of the four. **Payments is
+> now removed as well**, and `/payments` redirects to Dashboard — see "Payments removed
+> too" at the end of this section. AI Agents, Automation and Media Storage still stand
+> as written above: kept, dimmed, untouched. `backend/tests/test_frontend_nav.py` pins both halves, because "we removed the dead
 items" and "we removed every dimmed item" are indistinguishable in a diff.
 
 This narrows the GHL-parity claim: the sidebar is now **deliberately not** a 1:1 copy of
@@ -879,6 +884,54 @@ lands; `RETIRED_PATHS` is where the next retired link goes.
 `frontend/src/pages/LaunchpadPage.tsx` was deleted (nothing else imported it), along with
 the five icons the removal orphaned: `IconRocket`, `IconMegaphone`, `IconStore`,
 `IconAward`, `IconDoc`.
+
+### AMENDED 2026-09-10 — Payments removed too
+
+At the owner's request, **Payments is gone from the sidebar as well** — same treatment,
+same reasons, one day later. The owner will not handle payments in this system at all,
+which is what `CLAUDE.md` has said since the beginning ("Everything marketing-related,
+Payments, and the whole agency layer are deliberately out"); the nav row was the last
+place the product still claimed otherwise.
+
+Payments was the odd one among the four kept items: not a dimmed label but a **real,
+clickable row** that opened a card reading *"Payments — not built yet"*. That is a
+stronger promise than a dimmed row, not a weaker one — "not built **yet**" dates the
+feature rather than denying it.
+
+**`/payments` redirects to Dashboard**, exactly as `/launchpad` does and through the same
+`RETIRED_PATHS` table in `App.tsx`. Payments was a sidebar row for the app's whole life,
+so the path is in somebody's bookmarks and must land somewhere sensible.
+
+**The three remaining dimmed items — AI Agents, Automation, Media Storage — were left
+exactly as they are.** That is deliberate and stays a separate decision.
+
+What the removal orphaned, and went with it:
+
+- `IconCard`, which had no other caller.
+- The `PLACEHOLDER` map in `App.tsx` and the branch that rendered it. **There was no
+  `PaymentsPage.tsx`** — Payments never had a component of its own; it fell through the
+  ternary chain to `PLACEHOLDER[active]`, and it was the last key that did. Every
+  remaining sidebar key renders a real page, so the fallback branch now renders
+  `DashboardPage`: an unrecognised view lands where a retired path lands, not on an
+  empty pane.
+
+**No backend code was touched, because none is Payments-specific.** There is no payments
+endpoint, model, table, migration or CLI command. The only payment-shaped things in the
+backend are `EventType.PAYMENT` and `EventType.INVOICE` — two members of the timeline
+event enum, listed in `ACTIVITY_TYPES` and surfaced by the Conversations activity-type
+filter, which is measured GHL parity for a *conversation* feed and has nothing to do
+with the removed view. They are also baked into the `eventtype` Postgres enum by the
+baseline migration, so removing them would mean a migration against a live database for
+no product gain. Left alone, deliberately.
+
+`backend/tests/test_frontend_nav.py` pins all of it and gained one assertion the
+2026-09-09 trim did not have: it now rejects a nav row that was **commented out** rather
+than deleted. The file's comment-stripping — which exists so a prose record like this one
+does not read as a live entry — made such a row invisible to every other assertion in it.
+
+The GHL-parity note above extends to this row: the sidebar is one item further from GHL's
+shell on purpose. `capture/diff.py` (37/37) and `diff_panel.py` (35/35) measure the
+Contacts view and the contact panel, not the nav, so both are unaffected.
 
 ## Contact Details "Actions" tab — OUR design, not measured (2026-09-09)
 

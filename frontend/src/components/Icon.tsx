@@ -140,12 +140,6 @@ export const IconPlay = make(
     <path d="M10 8.5v7l5.5-3.5-5.5-3.5z" />
   </>,
 )
-export const IconCard = make(
-  <>
-    <rect x="2" y="5" width="20" height="14" rx="2" />
-    <path d="M2 10h20" />
-  </>,
-)
 export const IconImage = make(
   <>
     <rect x="3" y="3" width="18" height="18" rx="2" />

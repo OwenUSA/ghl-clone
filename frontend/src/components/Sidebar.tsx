@@ -8,10 +8,10 @@
  *   active row bg rgb(26,32,44)
  *   label      14px / weight 500 / line-height 20px / white
  *   location   12px / weight 500 (name) and 400 (city) / white
- *   68.8px gap between Payments and AI Agents -> section divider
+ *   68.8px gap after the last primary row -> section divider
  */
 import {
-  IconCalendar, IconCard, IconChart, IconChat, IconGrid, IconImage,
+  IconCalendar, IconChart, IconChat, IconGrid, IconImage,
   IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
 } from './Icon'
 import { logout } from '../lib/auth'
@@ -22,7 +22,6 @@ const PRIMARY = [
   { key: 'calendars', label: 'Calendars', Icon: IconCalendar },
   { key: 'contacts', label: 'Contacts', Icon: IconUser },
   { key: 'opportunities', label: 'Opportunities', Icon: IconUsers },
-  { key: 'payments', label: 'Payments', Icon: IconCard },
   { key: 'reporting', label: 'Reporting', Icon: IconChart },
 ]
 
@@ -33,7 +32,10 @@ const PRIMARY = [
 // and Launchpad sat at the top of PRIMARY. All six were removed outright on
 // 2026-09-09 at the owner's request -- they are not merely out of scope for v1,
 // they are out of the product, so showing them dimmed advertised something that
-// is never coming. The four below stay dimmed on purpose (DECISIONS.md).
+// is never coming. The Payments row went the same way on 2026-09-10; it sat in
+// PRIMARY as a real button onto a "not built yet" screen, which is a worse
+// promise than a dimmed row. The three below stay dimmed on purpose
+// (DECISIONS.md).
 type IconCmp = (p: { size?: number; color?: string }) => React.ReactElement
 
 const SECONDARY: { label: string; Icon: IconCmp }[] = [

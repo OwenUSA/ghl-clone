@@ -11,21 +11,15 @@ import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { me } from './lib/auth'
 
-const PLACEHOLDER: Record<string, string> = {
-  dashboard: 'Dashboard',
-  conversations: 'Conversations',
-  calendars: 'Calendars',
-  opportunities: 'Opportunities',
-  payments: 'Payments',
-}
-
 // Paths that used to mean something and still turn up in bookmarks and pasted
-// links. Launchpad was removed from the product on 2026-09-09; the owner asked
-// that /launchpad land on Dashboard rather than dead-end, so the link keeps
-// working. There is no router yet (DECISIONS.md), so this is the whole of the
-// app's URL handling: read the path once at boot, then rewrite it away.
+// links. Launchpad was removed from the product on 2026-09-09 and Payments on
+// 2026-09-10; the owner asked that each land on Dashboard rather than dead-end,
+// so a link someone saved keeps working. There is no router yet (DECISIONS.md),
+// so this is the whole of the app's URL handling: read the path once at boot,
+// then rewrite it away.
 const RETIRED_PATHS: Record<string, string> = {
   '/launchpad': 'dashboard',
+  '/payments': 'dashboard',
 }
 
 // The view the app opens on. Was 'contacts'; the owner moved it to Dashboard
@@ -95,9 +89,11 @@ export default function App() {
       ) : active === 'settings' ? (
         <SettingsPage user={user} />
       ) : (
-        <div className="flex flex-1 items-center justify-center" style={{ fontSize: 14 }}>
-          {PLACEHOLDER[active]} — not built yet
-        </div>
+        // Every sidebar key above renders a real page. Payments was the last
+        // key that fell through to a "not built yet" card, and it went with the
+        // nav row on 2026-09-10, so this branch is now only reachable by an
+        // unknown key -- send that to the landing view rather than a blank pane.
+        <DashboardPage />
       )}
     </div>
   )

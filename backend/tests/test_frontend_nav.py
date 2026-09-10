@@ -6,10 +6,10 @@ path handling out of App.tsx rather than grepping for strings, so a rename fails
 loudly and asks to be retargeted instead of passing on a coincidence.
 
 Six items were removed from the sidebar on 2026-09-09 (DECISIONS.md): Launchpad,
-Marketing, Sites, Memberships, Reputation, App Marketplace. Four out-of-scope
-items were deliberately KEPT and are still dimmed, so "we removed the dead ones"
-and "we removed every dimmed one" are different states and the difference is the
-whole point of this file.
+Marketing, Sites, Memberships, Reputation, App Marketplace. Payments followed on
+2026-09-10. Three out-of-scope items were deliberately KEPT and are still dimmed,
+so "we removed the dead ones" and "we removed every dimmed one" are different
+states and the difference is the whole point of this file.
 """
 import re
 from pathlib import Path
@@ -17,12 +17,12 @@ from pathlib import Path
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
 REMOVED = ["Launchpad", "Marketing", "Sites", "Memberships", "Reputation",
-           "App Marketplace"]
+           "App Marketplace", "Payments"]
 
 # Navigable, in rendered order. Settings is a separate button pinned to the
 # bottom, so it is not in this list.
 LIVE = ["Dashboard", "Conversations", "Calendars", "Contacts", "Opportunities",
-        "Payments", "Reporting"]
+        "Reporting"]
 
 # Out of scope, kept visible on purpose, rendered dimmed and unclickable.
 DIMMED = ["AI Agents", "Automation", "Media Storage"]
@@ -32,16 +32,25 @@ def _sidebar():
     return (FRONTEND / "components" / "Sidebar.tsx").read_text(encoding="utf-8")
 
 
+def _code(source):
+    """The source with whole-line `//` comments dropped.
+
+    A commented-out entry is not a rendered item, and the comments in these two
+    files are a deliberate record of what was removed and why — so a name that
+    survives only in prose must not read as a live nav row or a live view.
+    """
+    return "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("//"))
+
+
 def _labels(source, const):
     """The labels of one nav array, in the order the sidebar maps over them."""
     # Split on `= [` and then the closing `]` at column 0: SECONDARY's type
     # annotation carries its own `[]`, which a naive split would stop at.
     body = source.split(f"const {const}", 1)[1].split("= [", 1)[1].split("\n]", 1)[0]
-    # A commented-out entry is not a rendered item. Without this, deleting a row
-    # by prefixing it with `//` reads as still present and the test says nothing.
-    body = "\n".join(
-        line for line in body.splitlines() if not line.strip().startswith("//"))
-    return re.findall(r"label: '([^']+)'", body)
+    # Without _code, deleting a row by prefixing it with `//` reads as still
+    # present and the test says nothing.
+    return re.findall(r"label: '([^']+)'", _code(body))
 
 
 def test_the_sidebar_renders_exactly_the_expected_items():
@@ -57,7 +66,7 @@ def test_the_sidebar_renders_exactly_the_expected_items():
         "an array is no longer rendered, so the list above describes nothing")
 
 
-def test_the_six_removed_items_are_gone_from_the_source_entirely():
+def test_the_removed_items_are_gone_from_the_source_entirely():
     """Gone from the DOM, not hidden, not dimmed, and not commented out.
 
     Searching the whole file rather than the nav arrays is deliberate: a
@@ -67,10 +76,19 @@ def test_the_six_removed_items_are_gone_from_the_source_entirely():
     source = _sidebar()
     # The prose at the top of SECONDARY names them as removed; that is a record,
     # not a nav entry. Everything below it is code.
-    code = "\n".join(
-        line for line in source.splitlines() if not line.strip().startswith("//"))
+    code = _code(source)
     for label in REMOVED:
         assert label not in code, f"{label!r} is still in the sidebar"
+
+    # ...and _code is blind to a row that was commented out rather than deleted,
+    # by design, since the record above is itself a comment. A dead entry left
+    # in the file is the thing these removals were asked not to leave behind, so
+    # look for the shape of a nav row in the comments rather than for a name.
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            assert "label:" not in stripped, (
+                f"a nav entry is commented out rather than removed: {stripped}")
 
     app = (FRONTEND / "App.tsx").read_text(encoding="utf-8")
     assert "LaunchpadPage" not in app, "App.tsx still routes to the Launchpad page"
@@ -78,15 +96,38 @@ def test_the_six_removed_items_are_gone_from_the_source_entirely():
         "LaunchpadPage.tsx is back; nothing imports it")
 
 
-def test_the_four_kept_out_of_scope_items_are_still_present_and_dimmed():
-    """The owner kept these four. Removing them is a decision, not a tidy-up.
+def test_payments_has_no_view_left_behind_the_removed_nav_row():
+    """The row is only half of it: the view it opened has to go too.
 
-    Payments is the odd one: it sits in PRIMARY as a real button that lands on a
-    "not built yet" placeholder, so it is kept-but-unbuilt rather than dimmed.
-    The other three are dimmed rows with no click handler.
+    Payments never had a page component of its own — it fell through App.tsx's
+    ternary chain to a `PLACEHOLDER[active]` card reading "Payments — not built
+    yet", and it was the last key that did, so the whole PLACEHOLDER map went
+    with it. An unknown key now lands on Dashboard, the same place a retired
+    path does.
+    """
+    app = _code((FRONTEND / "App.tsx").read_text(encoding="utf-8"))
+    assert "PaymentsPage" not in app, "App.tsx routes to a Payments page again"
+    assert not (FRONTEND / "pages" / "PaymentsPage.tsx").exists(), (
+        "a Payments page component exists; the view was meant to be gone")
+    assert "active === 'payments'" not in app, "Payments is still a renderable view"
+    assert "PLACEHOLDER" not in app, (
+        "the not-built-yet placeholder is back; every nav key renders a real page")
+    assert "not built yet" not in app, "a nav key still opens a not-built-yet card"
+
+    # The fallback branch must render something real, not an empty pane.
+    tail = app.split("active === 'settings' ?", 1)[1]
+    assert "<DashboardPage />" in tail, (
+        "an unrecognised view no longer falls back to Dashboard")
+
+
+def test_the_three_kept_out_of_scope_items_are_still_present_and_dimmed():
+    """The owner kept these three. Removing them is a decision, not a tidy-up.
+
+    Payments used to be a fourth kept item — the odd one, a real button in
+    PRIMARY onto a "not built yet" screen. It was removed on 2026-09-10 at the
+    owner's request; these three were explicitly left alone in the same breath.
     """
     source = _sidebar()
-    assert "Payments" in _labels(source, "PRIMARY"), "Payments was removed"
     for label in DIMMED:
         assert label in _labels(source, "SECONDARY"), f"{label} was removed"
 
@@ -125,6 +166,22 @@ def test_launchpad_redirects_to_dashboard_rather_than_dead_ending():
         "the retired path stays in the address bar, so a refresh redirects again")
     assert "pushState" not in resolver, (
         "pushing the redirect makes Back bounce straight off it")
+
+
+def test_payments_redirects_to_dashboard_rather_than_dead_ending():
+    """Same treatment /launchpad got, for the same reason: saved links.
+
+    Payments was a sidebar row for the whole life of the app, so /payments is in
+    somebody's bookmarks. Without an entry here it would fall through to the
+    default view — the same screen, but with a path that means nothing left in
+    the address bar, and no record that the link was retired on purpose.
+    """
+    app = (FRONTEND / "App.tsx").read_text(encoding="utf-8")
+    retired = app.split("const RETIRED_PATHS", 1)[1].split("}", 1)[0]
+    assert re.search(r"'/payments':\s*'dashboard'", retired), (
+        "/payments no longer resolves to Dashboard")
+    # The resolver itself (path read, table consulted, replaceState) is pinned by
+    # the /launchpad test above; both paths go through the same three lines.
 
 
 def test_the_app_lands_on_dashboard():
