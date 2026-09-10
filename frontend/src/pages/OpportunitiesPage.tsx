@@ -9,6 +9,7 @@ import {
 import { IconDownload, IconGrid, IconList, IconPlus } from '../components/Icon'
 import { useDraggable } from '@dnd-kit/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useState } from 'react'
@@ -53,11 +54,19 @@ const OVERFLOW = ['Export', 'Restore opportunities', 'Manage smart lists', 'Dash
  * disabled-rather-than-omitted rule used for Import above and for the Reporting
  * tabs v1 does not implement. This set grows as each is built.
  */
-const LIVE_TABS = new Set(['Opportunities', 'Forecast'])
+const LIVE_TABS = new Set(['Opportunities', 'Forecast', 'Bulk Actions'])
 const LAYOUTS = ['Default', 'Compact', 'Unlabeled'] as const
 type Layout = (typeof LAYOUTS)[number]
 
-function Card({ o, layout, onOpen }: { o: Opportunity; layout: Layout; onOpen: (id: number) => void }) {
+function Card({ o, layout, onOpen, selectable = false, selected = false, onToggle }: {
+  o: Opportunity
+  layout: Layout
+  onOpen: (id: number) => void
+  /** Bulk Actions tab: the card picks rather than opens. */
+  selectable?: boolean
+  selected?: boolean
+  onToggle?: (id: number) => void
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: o.id,
   })
@@ -66,7 +75,7 @@ function Card({ o, layout, onOpen }: { o: Opportunity; layout: Layout; onOpen: (
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      onClick={() => onOpen(o.id)}
+      onClick={() => (selectable && onToggle ? onToggle(o.id) : onOpen(o.id))}
       style={{
         width: 230,
         borderRadius: 4,
@@ -76,16 +85,31 @@ function Card({ o, layout, onOpen }: { o: Opportunity; layout: Layout; onOpen: (
         marginBottom: 8,
         cursor: 'grab',
         opacity: isDragging ? 0.4 : 1,
+        outline: selected ? '2px solid rgb(0,78,235)' : undefined,
         transform: transform
           ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
           : undefined,
       }}
     >
-      <div
-        className="truncate"
-        style={{ fontSize: 14, fontWeight: 500, color: 'rgb(52,64,84)' }}
-      >
-        {o.title}
+      <div className="flex items-start gap-2">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            aria-label={'Select ' + o.title}
+            // The card's own onClick already toggles; without this the change and
+            // the click both fire and the selection lands back where it started.
+            onChange={() => {}}
+            onClick={(e) => { e.stopPropagation(); onToggle?.(o.id) }}
+            style={{ marginTop: 2 }}
+          />
+        )}
+        <div
+          className="min-w-0 flex-1 truncate"
+          style={{ fontSize: 14, fontWeight: 500, color: 'rgb(52,64,84)' }}
+        >
+          {o.title}
+        </div>
       </div>
       {/* Measured: "Value:" and the amount are TWO spans —
           label 12px/600 rgb(96,113,121), amount 12px/400 rgb(96,113,121).
@@ -127,11 +151,17 @@ function StageColumn({
   opps,
   layout,
   onOpen,
+  selectable = false,
+  selected,
+  onToggle,
 }: {
   stage: { id: number; name: string; count: number; value_cents: number }
   opps: Opportunity[]
   layout: Layout
   onOpen: (id: number) => void
+  selectable?: boolean
+  selected?: Set<number>
+  onToggle?: (id: number) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id })
   const total = opps.reduce((s, o) => s + o.value_cents, 0)
@@ -185,7 +215,9 @@ function StageColumn({
         }}
       >
         {opps.map((o) => (
-          <Card key={o.id} o={o} layout={layout} onOpen={onOpen} />
+          <Card key={o.id} o={o} layout={layout} onOpen={onOpen}
+            selectable={selectable} selected={selected?.has(o.id) ?? false}
+            onToggle={onToggle} />
         ))}
       </div>
     </div>
@@ -202,6 +234,7 @@ export function OpportunitiesPage({ user }: { user: Me }) {
   // repeats. Dim the tab rather than let a TECH open it onto a refusal.
   const canForecast = user.role !== 'TECH'
   const [tab, setTab] = useState('Opportunities')
+  const [selected, setSelected] = useState<Set<number>>(new Set())
   const [showAdd, setShowAdd] = useState(false)
   const [view, setView] = useState<'board' | 'list'>('board')
   const [layout, setLayout] = useState<Layout>('Default')
@@ -265,6 +298,23 @@ export function OpportunitiesPage({ user }: { user: Me }) {
   }
 
   const total = opps.data?.length ?? 0
+
+  // ---- Bulk Actions ----
+  // The tab IS the selection mode: the board stays exactly as it is and the cards
+  // start picking instead of opening.
+  const selecting = tab === 'Bulk Actions'
+  const visible = opps.data ?? []
+  // A selection is only ever applied to rows the board is currently showing.
+  // Otherwise changing the status filter, the search or the pipeline would leave
+  // ids selected that nobody can see, and "Move to stage" would move them. This
+  // is also what makes the CSV contain exactly the rows that are ticked.
+  const chosen = visible.filter((o) => selected.has(o.id))
+  const toggle = (id: number) =>
+    setSelected((s) => {
+      const next = new Set(s)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
 
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
@@ -452,7 +502,9 @@ export function OpportunitiesPage({ user }: { user: Me }) {
           above stays, because a forecast is still per-pipeline. */}
       {tab === 'Forecast' && <ForecastPanel pipeline={pipeline} />}
 
-      {tab === 'Opportunities' && (
+      {/* Bulk Actions keeps the board and the filters; only the bar is added, so
+          the selection is made against the set the user is already looking at. */}
+      {(tab === 'Opportunities' || selecting) && (
       <>
       {/* saved views — measured 14px/400 rgb(102,112,133) with 16x16 icons */}
       <div className="flex shrink-0 items-center gap-6 px-4" style={{ height: 42 }}>
@@ -514,6 +566,17 @@ export function OpportunitiesPage({ user }: { user: Me }) {
         </button>
       </div>
 
+      {selecting && (
+        <BulkActionsBar
+          user={user}
+          pipeline={pipeline}
+          chosen={chosen}
+          visibleCount={visible.length}
+          onSelectAll={() => setSelected(new Set(visible.map((o) => o.id)))}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
       {/* board / list */}
       {view === 'board' ? (
         <DndContext sensors={sensors} onDragEnd={onDragEnd}>
@@ -526,6 +589,9 @@ export function OpportunitiesPage({ user }: { user: Me }) {
                   opps={(opps.data ?? []).filter((o) => o.stage_id === s.id)}
                   layout={layout}
                   onOpen={setOpenOpp}
+                  selectable={selecting}
+                  selected={selected}
+                  onToggle={toggle}
                 />
               ))}
             </div>
@@ -537,6 +603,22 @@ export function OpportunitiesPage({ user }: { user: Me }) {
           <table className="w-full">
             <thead>
               <tr>
+                {selecting && (
+                  <th className="sticky top-0 bg-white"
+                    style={{
+                      width: 36, borderBottom: '1px solid rgb(234,236,240)',
+                    }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select every visible opportunity"
+                      checked={visible.length > 0 && chosen.length === visible.length}
+                      onChange={(e) =>
+                        setSelected(e.target.checked
+                          ? new Set(visible.map((o) => o.id))
+                          : new Set())}
+                    />
+                  </th>
+                )}
                 {['Opportunity name', 'Stage', 'Value', 'Business name', 'Source'].map((h) => (
                   <th
                     key={h}
@@ -557,7 +639,20 @@ export function OpportunitiesPage({ user }: { user: Me }) {
             </thead>
             <tbody>
               {opps.data?.map((o) => (
-                <tr key={o.id} onClick={() => setOpenOpp(o.id)} className="cursor-pointer hover:bg-[rgb(249,250,251)]">
+                <tr key={o.id}
+                  onClick={() => (selecting ? toggle(o.id) : setOpenOpp(o.id))}
+                  className="cursor-pointer hover:bg-[rgb(249,250,251)]">
+                  {selecting && (
+                    <td style={{ borderBottom: '1px solid rgb(242,244,247)', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        aria-label={'Select ' + o.title}
+                        checked={selected.has(o.id)}
+                        onChange={() => {}}
+                        onClick={(e) => { e.stopPropagation(); toggle(o.id) }}
+                      />
+                    </td>
+                  )}
                   <td style={{ height: 48, padding: '0 12px', fontSize: 14, borderBottom: '1px solid rgb(242,244,247)' }}>
                     {o.title}
                   </td>

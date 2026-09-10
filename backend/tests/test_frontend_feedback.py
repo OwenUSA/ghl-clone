@@ -516,3 +516,67 @@ def test_the_forecast_says_what_the_weighting_is():
         "the rate the money is weighted at is never shown")
     assert "Dashboard" in source, (
         "nothing tells the reader this is the Dashboard's own rate")
+
+
+# ---------------- Opportunities > Bulk Actions ----------------
+
+def test_the_bulk_bar_offers_no_delete_and_says_why():
+    """The absence is the decision. A control that is simply missing reads as an
+    oversight and gets "fixed" later by someone who does not know why."""
+    source = _read("components", "BulkActionsBar.tsx")
+    assert "No bulk delete" in source, (
+        "nothing on the bar tells the user bulk delete is deliberate")
+    # No import of a delete helper and no handler that could reach one. The API
+    # client has no bulk delete to import, which is the other half of this.
+    assert "deleteOpportunity" not in source and "bulkDelete" not in source, (
+        "the bar wires up a delete after all")
+    assert "bulkDelete" not in _read("lib", "api.ts")
+
+
+def test_bulk_assign_is_disabled_for_a_role_that_cannot_edit():
+    """`POST /api/opportunities/bulk/owner` is STAFF; the stage move is not.
+    A TECH may move deals and may not re-assign them."""
+    source = _read("components", "BulkActionsBar.tsx")
+    assert "const canAssign = user.role !== 'TECH'" in source
+    assign = source.split("assign.isPending ? 'Assigning", 1)[0].rsplit("<button", 1)[1]
+    assert "!canAssign" in assign, "Assign owner is offered to a role that cannot"
+    assert "Your role cannot change an opportunity owner" in assign, (
+        "nothing tells the user why the button is dead")
+    move = source.split("move.isPending ? 'Moving", 1)[0].rsplit("<button", 1)[1]
+    assert "canAssign" not in move, (
+        "the stage move borrowed the owner gate; a TECH can drag a card, so a "
+        "TECH can move a selection")
+
+
+def test_a_bulk_action_reports_what_it_actually_did():
+    """"3 moved" when one of the four was already there is how a bulk action loses
+    trust. The response distinguishes moved from unchanged; the bar has to say so,
+    including how many customers were texted."""
+    source = _read("components", "BulkActionsBar.tsx")
+    assert "r.unchanged.length" in source and "already there" in source
+    assert "notified" in source, "nothing says how many customers were messaged"
+    assert "role={error ? 'alert' : 'status'}" in source, (
+        "a refused bulk action has no error surface")
+    assert "onError: (e: Error) => setError(e.message)" in source, (
+        "a refused bulk action is dropped on the floor")
+
+
+def test_the_export_writes_the_selection_and_not_the_board():
+    """`chosen` is the selection narrowed to what the board is currently showing;
+    exporting anything else would silently include rows the user cannot see."""
+    page = _read("pages", "OpportunitiesPage.tsx")
+    assert "const chosen = visible.filter((o) => selected.has(o.id))" in page, (
+        "the selection is not narrowed to the visible rows")
+    bar = _read("components", "BulkActionsBar.tsx")
+    assert "opportunitiesCsv(chosen" in bar, "the export does not write the selection"
+
+
+def test_selection_mode_does_not_open_the_detail_dialog():
+    """A click that both ticks a card and opens its dialog is unusable."""
+    page = _read("pages", "OpportunitiesPage.tsx")
+    assert "selectable && onToggle ? onToggle(o.id) : onOpen(o.id)" in page, (
+        "a card in selection mode still opens the opportunity")
+    assert "selecting ? toggle(o.id) : setOpenOpp(o.id)" in page, (
+        "a list row in selection mode still opens the opportunity")
+    assert "e.stopPropagation(); onToggle?.(o.id)" in page, (
+        "the checkbox and the card both fire, so the tick lands back where it was")

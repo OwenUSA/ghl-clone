@@ -540,3 +540,33 @@ export type Forecast = {
  */
 export const getForecast = (pipelineId: number) =>
   get<Forecast>(`/api/forecast?pipeline_id=${pipelineId}`)
+
+export type BulkStageMoved = {
+  stage_id: number
+  moved: number[]
+  unchanged: number[]
+  /** Per opportunity that actually changed stage: what rule 4 did about it. */
+  automation: Record<string, string>
+}
+
+/**
+ * Move a selection into one stage. ANY_USER, exactly like a single drag -- a TECH
+ * may move a deal between stages, they just cannot edit it.
+ *
+ * There is deliberately no bulk delete to pair with these: see the comment above
+ * the endpoints in backend/app/main.py.
+ */
+export const bulkMoveStage = (ids: number[], stageId: number) =>
+  send<BulkStageMoved>('/api/opportunities/bulk/stage', 'POST', {
+    ids,
+    stage_id: stageId,
+  })
+
+export type BulkOwnerAssigned = { owner_id: number | null; updated: number[] }
+
+/** Assign a selection an owner, or `null` to unassign. STAFF, like the detail PATCH. */
+export const bulkAssignOwner = (ids: number[], ownerId: number | null) =>
+  send<BulkOwnerAssigned>('/api/opportunities/bulk/owner', 'POST', {
+    ids,
+    owner_id: ownerId,
+  })

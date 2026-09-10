@@ -1067,3 +1067,57 @@ inventing a third rule for a third screen.
 rather than switching to a blank pane. Same disabled-rather-than-omitted rule as
 Import, the Conversations filter types and the Reporting tabs v1 does not
 implement.
+
+### Bulk Actions — three actions, and the fourth is refused (OUR design)
+
+`POST /api/opportunities/bulk/stage`, `POST /api/opportunities/bulk/owner`, and a
+client-side CSV of the selection. The Bulk Actions **tab is the selection mode**:
+the board and its filters stay exactly as they are, the cards start picking
+instead of opening, and a bar appears above them.
+
+- **Bulk move stage — ANY_USER**, matching `PATCH /api/opportunities/{id}`. A TECH
+  may move a deal between stages (CLAUDE.md); ticking five cards must not need a
+  right that dragging one of them does not.
+- **Bulk assign owner — STAFF**, matching `PATCH /api/opportunities/{id}/detail`.
+  Changing an owner is editing the record. The control is disabled with a title
+  for a TECH rather than 403-ing on Apply.
+- **Bulk export — no request at all.** The rows are already on the client.
+
+**NO BULK DELETE.** Deliberate, and the same call already made for the Contacts
+list. `Opportunity.custom_fields.owen_call_id` is the telephony project's live
+join key; opportunities are never cascade-deleted from a contact for exactly that
+reason; and a checkbox column is the fastest way ever invented to lose real
+customer records in one click. `DELETE /api/opportunities/{id}` still exists, one
+at a time. The bar **says this out loud** rather than just omitting the button — a
+missing control reads as an oversight and gets "fixed" later by someone who does
+not know why. `test_there_is_no_bulk_delete` pins the route table so adding one
+has to be a decision somebody takes on purpose.
+
+**A bulk move is the single move, applied N times, and that is load-bearing.**
+Rule 4 (stage change → text the customer) fires once per opportunity that
+*actually changed stage*, and **not at all** for one already sitting in the
+destination — "your job is now at Inspection" arriving because a card happened to
+be inside a selection is a message the customer should never have received. The
+response separates `moved` from `unchanged` and reports the automation outcome per
+id, including suppressions (DND, no phone), and the bar repeats those numbers
+instead of claiming it moved everything it was given.
+
+**A partly valid selection is refused whole**, having written nothing: applying the
+half that resolved leaves the user unable to tell which half landed, and re-running
+it is then not safe. Duplicate ids in a selection collapse rather than applying
+twice.
+
+**Selection is narrowed to what the board is showing.** Changing the status filter,
+the search or the pipeline drops those rows out of the selection, so a bulk action
+can never touch a record the user cannot currently see — and it is what makes
+"the export contains exactly the ticked rows" true.
+
+**`frontend/src/lib/csv.ts` imports nothing**, like `calendarGrid.ts`, so
+`backend/tests/test_csv_export.py` runs the real module under node and asserts the
+file rather than the source that writes it. Money is written as a plain decimal
+(`9500.01`, not `$9,500.01`, which Excel imports as text) using integer arithmetic,
+for the same reason `centsFromDollars` avoids floats. Fields beginning `=`, `+`,
+`@` or a tab are prefixed with an apostrophe — a contact named `=cmd|...` is a
+name, not an instruction — while `-` is deliberately left alone, because a negative
+number is a legitimate value and far more common here than a leading minus sign in
+a title.

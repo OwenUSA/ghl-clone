@@ -710,6 +710,121 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
     return {"id": o.id, "title": o.title, "stage_id": o.stage_id}
 
 
+# ---------- bulk actions ----------
+#
+# Move a selection between stages, and assign a selection an owner. Both are the
+# single-record write applied to many records, deliberately: a bulk move that took
+# a shortcut past `on_opportunity_stage_changed` would silently stop texting
+# customers the moment anyone used it on more than one card.
+#
+# THERE IS NO BULK DELETE, and its absence is a decision, not an omission.
+# `Opportunity.custom_fields.owen_call_id` is the live join key to the telephony
+# project, opportunities are never cascade-deleted from a contact for that reason,
+# and a multi-select is the easiest way there is to lose real customer records in
+# one click. The same call was already made for Contacts (DECISIONS.md, "Contact
+# Details Actions tab"). `DELETE /api/opportunities/{id}` still exists, one at a
+# time, ADMIN.
+
+# An upper bound so one request cannot walk the whole table. The board shows one
+# pipeline; the largest measured pipeline held 40 opportunities.
+BULK_MAX = 500
+
+
+class BulkIds(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=BULK_MAX)
+
+
+class BulkStageMove(BulkIds):
+    stage_id: int
+
+
+class BulkOwnerAssign(BulkIds):
+    owner_id: int | None = None
+
+
+def _bulk_load(db: Session, ids: list[int]) -> list[Opportunity]:
+    """Resolve every id, or refuse the whole request having written nothing.
+
+    Partially applying a bulk action is the worst of the three outcomes: the user
+    cannot tell which half landed, and re-running it is not safe. Duplicates in
+    the selection collapse rather than being applied twice.
+    """
+    unique = list(dict.fromkeys(ids))
+    rows = db.scalars(select(Opportunity).where(Opportunity.id.in_(unique))).all()
+    found = {o.id: o for o in rows}
+    missing = [str(i) for i in unique if i not in found]
+    if missing:
+        raise HTTPException(404, "no opportunity with id " + ", ".join(missing))
+    return [found[i] for i in unique]
+
+
+@app.post("/api/opportunities/bulk/stage")
+def bulk_move_stage(body: BulkStageMove, db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ANY_USER):
+    """Move a selection into one stage.
+
+    ANY_USER, matching `PATCH /api/opportunities/{id}` — a TECH may move a deal
+    between stages, they simply cannot edit it (CLAUDE.md). Selecting five cards
+    must not need a role that dragging one does not.
+
+    An opportunity ALREADY in the destination is reported as unchanged and its
+    automation is not fired: rule 4 texts the customer, and "your job is now at
+    Inspection" arriving because someone included the card in a selection is a
+    message the customer should never have received.
+    """
+    stage = db.get(Stage, body.stage_id)
+    if not stage:
+        raise HTTPException(400, "unknown stage_id")
+
+    opps = _bulk_load(db, body.ids)
+    wrong = [str(o.id) for o in opps if o.pipeline_id != stage.pipeline_id]
+    if wrong:
+        raise HTTPException(
+            400, "stage is not in the pipeline of opportunity " + ", ".join(wrong))
+
+    changed = [o for o in opps if o.stage_id != stage.id]
+    unchanged = [o.id for o in opps if o.stage_id == stage.id]
+    was = {o.id: o.stage_id for o in changed}
+
+    # Read the destination's current occupants BEFORE moving anyone in, so the
+    # arrivals land after them in the order they were selected rather than
+    # interleaving on whatever position they held in their old stage.
+    settled = db.scalars(
+        select(Opportunity)
+        .where(Opportunity.stage_id == stage.id)
+        .order_by(Opportunity.position)).all()
+    for o in changed:
+        o.stage_id = stage.id
+    for i, o in enumerate([*settled, *changed]):
+        o.position = i
+    db.flush()
+
+    # Rule 4, once per opportunity that actually changed stage.
+    automation = {str(o.id): automations.on_opportunity_stage_changed(db, o, was[o.id])
+                  for o in changed}
+    db.commit()
+    return {"stage_id": stage.id, "moved": [o.id for o in changed],
+            "unchanged": unchanged, "automation": automation}
+
+
+@app.post("/api/opportunities/bulk/owner")
+def bulk_assign_owner(body: BulkOwnerAssign, db: Session = Depends(get_db),
+                      _: auth.Principal = auth.STAFF):
+    """Assign a selection an owner, or `owner_id: null` to unassign.
+
+    STAFF, matching `PATCH /api/opportunities/{id}/detail`, which is where a single
+    opportunity's owner is set. Changing an owner is editing the record, and a TECH
+    cannot edit records.
+    """
+    if body.owner_id is not None and not db.get(User, body.owner_id):
+        raise HTTPException(400, "unknown owner_id")
+    opps = _bulk_load(db, body.ids)
+    for o in opps:
+        o.owner_id = body.owner_id
+    db.commit()
+    return {"owner_id": body.owner_id, "updated": [o.id for o in opps]}
+
+
 # ---------- conversations ----------
 
 @app.get("/api/conversations")
