@@ -49,11 +49,14 @@ function Field({
   value,
   onSave,
   type = 'text',
+  hint = null,
 }: {
   label: string
   value: string | null
   onSave: (v: string) => void
   type?: string
+  /** Shown under the value, never in place of it. The value was saved either way. */
+  hint?: string | null
 }) {
   const [draft, setDraft] = useState(value ?? '')
   const [editing, setEditing] = useState(false)
@@ -100,6 +103,14 @@ function Field({
         >
           {/* GHL renders "--" for an empty field, not blank space. Measured. */}
           {value && value.trim() ? value : '--'}
+        </div>
+      )}
+      {hint && (
+        // Amber, not red, and below the value rather than a banner above the panel:
+        // nothing failed. The number is in the record; this only says we could not
+        // read it, so an automated text may not reach it.
+        <div style={{ fontSize: 11, color: 'rgb(181,71,8)', marginTop: 3 }}>
+          Saved as typed — {hint}
         </div>
       )}
     </div>
@@ -213,9 +224,16 @@ export function ContactDetailsPanel({
     { label: 'Last name', key: 'last_name', value: c?.last_name ?? null },
     { label: 'Email', key: 'email', value: c?.email ?? null },
     // Shows the formatted number; editing it sends whatever is typed and the
-    // backend normalises that back to E.164. Leaving it untouched sends nothing,
-    // so simply opening the panel can never rewrite a stored number.
-    { label: 'Phone', key: 'phone', value: c?.phone_display ?? null },
+    // backend normalises that back to E.164 when it can. A number it cannot read
+    // is still saved, and `phone_warning` is the only thing that says so. Leaving
+    // the field untouched sends nothing, so simply opening the panel can never
+    // rewrite a stored number.
+    {
+      label: 'Phone',
+      key: 'phone',
+      value: c?.phone_display ?? null,
+      hint: c?.phone_warning ?? null,
+    },
     { label: 'Date of birth', key: 'date_of_birth', value: c?.date_of_birth ?? null },
     { label: 'Contact source', key: 'source', value: c?.source ?? null },
     { label: 'Contact type', key: 'contact_type', value: c?.contact_type ?? null },
@@ -442,6 +460,7 @@ export function ContactDetailsPanel({
                   key={f.key}
                   label={f.label}
                   value={f.value}
+                  hint={'hint' in f ? f.hint : null}
                   onSave={(v) => patch.mutate({ [f.key]: v } as Partial<ContactDetail>)}
                 />
               ))}
