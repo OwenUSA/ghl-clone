@@ -996,3 +996,152 @@ stepping. That is a deliberate step up from this project's usual "assert against
 frontend idiom, which would have passed against the broken version. CI's backend job now
 installs node for it; if node is ever absent the file skips loudly rather than silently
 passing.
+
+## AMENDMENT (2026-09-10): the appointment detail panel is OURS, and editing is now IN
+
+This **supersedes the closing paragraph of the 2026-09-09 amendment above**, which
+said: *"Creating only. Editing and rescheduling are deliberately out, and this is not
+an oversight to be tidied up later."* That deferral was correct at the time and it
+named its own condition — *"wiring a UI to it needs its own task and its own tests"*.
+That task has now been done, so the deferral is lifted rather than contradicted.
+
+Clicking an appointment opens a detail panel. From it the booking can be read,
+edited, rescheduled and cancelled.
+
+### It is our design, not measured GHL
+
+**GHL's appointment detail modal was never captured.** `captures/calendars/` holds one
+1440×900 capture of the Week view and nothing else; the modal is on the "Still
+uncaptured everywhere else … modals, drawers" list under "Known measurement gaps",
+and it was never opened on the live account. The "Design system — LOCKED" and
+"Responsive behaviour — LOCKED" sections tie structural design to measured captures,
+so this is a **deliberate, disclosed exception** — the third one, after the Month
+view / booking dialog (2026-09-09) and the Contact Details Actions tab (2026-09-09).
+
+`AppointmentDetailDialog.tsx` is built from the same primitives as
+`NewAppointmentDialog` and `OpportunityDetail`, which is the in-repo idiom. **Nothing
+about it may be cited as parity.** If a live GHL session is ever opened again,
+capture the appointment detail modal and re-measure; where GHL differs, GHL wins for
+structure, exactly as everywhere else.
+
+**The Week and Day grids are untouched.** They remain the measured surfaces and still
+answer to `captures/calendars/`. What was added to them is an `onClick` on a booking
+and a struck-through treatment for a cancelled one — an interaction and a state, not
+a layout change. `capture/diff.py` (37/37) and `diff_panel.py` (35/35) measure
+Contacts and the contact panel and are unaffected.
+
+**Drag-to-move on the grid is out of scope, by the owner's choice.** Rescheduling is
+done through the panel's form. This is not a gap to be filled later without asking:
+the grid is the surface parity is judged on, and drag handlers on it are a change to
+that surface. `test_dragging_a_booking_on_the_grid_was_not_built` pins the absence,
+because "we chose not to" and "nobody got round to it" are indistinguishable in a
+diff.
+
+### The reminder trap, and the bug that was still in it
+
+CLAUDE.md records the rule: reminder jobs dedupe on `dedupe_key`, so anything that
+reschedules must cancel the old jobs and use a key that includes the new time. The
+existing `PATCH` did that and was covered. **It was still wrong in one move.**
+
+The key is `appt_reminder:<id>:<starts_at>:<offset>`, and `enqueue()` refuses a key
+that already exists **whatever its status**. The superseded jobs were retired by
+setting `status = "cancelled"` and left holding their keys. So moving a booking
+Tuesday → Friday → **back to Tuesday** hit the retired Tuesday key, `enqueue()`
+returned `None`, and the customer got **no reminder at all** — the same silent
+failure putting the start time in the key was meant to prevent, one move later. And
+"move it back" is the most ordinary correction a dispatcher makes.
+
+**A retired reminder job now releases its dedupe key** (`dedupe_key = None`, the old
+value kept in `payload.superseded_key` so the trail still says which reminder the row
+was). The key is an idempotency guard on live work, not a permanent record; it is
+handed back when the work stops being live. The row itself is still `cancelled`
+rather than deleted, so the history survives.
+
+Two more holes closed with it, both the same shape:
+
+- **`DELETE /api/appointments/{id}` left the reminders `pending`.** The old docstring
+  argued this was fine because `_h_appointment_reminder` re-checks the status at run
+  time, so nothing could actually send. That is true and it is not enough: "could
+  never send" and "is not queued" are different statements to whoever reads
+  `ghl jobs list --status pending`, and only the second one is now true. The endpoint
+  returns `reminders_cancelled` so the count is visible rather than assumed.
+- **Reaching `cancelled` through the Status field did nothing to the queue, and
+  reviving a cancelled booking scheduled nothing at all.** Both now go through one
+  retire-then-maybe-requeue path, so the state of the queue follows from the state of
+  the appointment however it got there.
+
+`NO_REMINDER_STATUSES` lives in `automations.py` and is read by both the run-time
+handler and the edit-time API, so they cannot drift on what "off" means.
+`on_appointment_booked` refuses a cancelled booking outright, because it is now
+re-entered on every reschedule.
+
+Asserted by counting rows in `jobs`, never by inspection: exactly one pending
+reminder per offset after a reschedule and at the new time, the same after two
+reschedules, a reminder still queued after a move back to the original time, zero
+after a cancel by either route, reminders again after a revive, an already-sent
+reminder left untouched, and a title edit that does not churn the queue.
+
+### Product decisions in the panel, overrulable
+
+- **`blocked` is not offered in the Status dropdown.** It is what the Manage view's
+  "Blocked slots" filter selects — a slot that is not an appointment — so offering it
+  beside the measured report statuses would let a customer's booking be moved out of
+  the Appointments view from a control that looks like a report tile. The other eight
+  measured statuses are all offered. A booking that already carries an unlisted
+  status keeps it as an option, so opening one cannot silently rewrite it.
+- **A cancelled booking is still drawn, dimmed and struck through.** Cancel is a
+  status change, not a delete (unchanged, and pinned by an existing test), and GHL's
+  own Appointment report has a Cancelled tile — so the row is a record. But a slot
+  that reads as still taken is worse than one that reads as cancelled. The API is
+  unchanged: `kind=appointments` still means "not a blocked slot", which is what GHL's
+  View-by-type measures, and no cancelled-exclusion was invented for it.
+- **Opening the panel is not gated on the role.** `GET` is `ANY_USER`; `PATCH` and
+  `DELETE` are `auth.STAFF` and were **not widened**. So a TECH can open a booking and
+  read the notes and the customer's name on the job they are driving to, and every
+  control is `disabled` with a title saying why — the precedent `d1f7c50` and
+  `b943f4b` set.
+- **The panel says what happened to the reminders.** `PATCH` returns `automation`, and
+  `frontend/src/lib/reminders.ts` turns it into a sentence. That file is import-free
+  like `calendarGrid.ts` so `backend/tests/test_reminder_sentence.py` runs it under
+  node — the usual "assert against source" idiom is too weak here, because the whole
+  point of the text is that a reminder which silently did **not** move must not be
+  reported as one that did. "Too soon for a reminder" and "suppressed: contact is on
+  DND" are said out loud, and an outcome the function has not been taught is shown
+  rather than collapsed into a bare "Saved."
+
+### A bug found by driving it in a browser, not by the tests
+
+The summary line and the cancel confirmation are written from the loaded record. A
+save re-seeded the form and left that record stale until the 30-second refetch, so
+**editing a booking and then cancelling it showed a confirmation naming the old title
+at the old time** — a destructive prompt describing a slot that no longer existed,
+which reads as being about a different appointment. The `PATCH` response is written
+into the query cache instead. None of the source-level assertions would have caught
+it; a Playwright pass over the real panel did. Pinned by
+`test_a_saved_edit_reaches_the_confirmation_that_names_the_appointment`.
+
+### Audit of the rest of the Calendars screen (asked for, deliberately not fixed)
+
+| Control | What it does today |
+|---|---|
+| "Meetings" event-type select | **Decorative.** A `<select>` with one `<option>`, no `value`, no `onChange`, wired to nothing. It is the measured GHL "Meetings ▾" control and there are no event types in the model to populate it. |
+| "Show buffer time" | **Inert, and honestly labelled** — `disabled` with `title="Buffer time is not modelled in v1"`. `Calendar` has columns `id, name, user_id, pipeline_id, color` and nothing else, so there is no buffer to show. |
+| "Blocked slots" (View by type) | **The filter is real** — it sets `kind`, and the backend filters `status == "blocked"`. But **nothing in the UI can create a blocked slot**: `AppointmentCreate` has no `status`, and the detail panel deliberately omits `blocked`. So the view works and is always empty unless a slot is set through `ghl appts update --status blocked`. Real plumbing, no way in. |
+| Appointment list view tab | **Real**, and now a way into the panel. It is the same range-and-filter query as the grid, rendered as a table; it has no sorting or pagination of its own. |
+| "Calendar settings" (header) | **Decorative.** A `<div>`, not a button — no handler, no target. Deliberately left alone: it is a separate queued task with its own migration. |
+
+Nothing in that table was changed beyond making a list row clickable.
+
+### Known gap, not caused by this work
+
+Under **SQLite** the API emits appointment timestamps with no UTC offset, because
+SQLite hands back naive datetimes even from a `timezone=True` column — the reason
+`_aware()` exists in `main.py`. JavaScript reads a bare ISO datetime as *local*, so a
+browser served by a SQLite backend draws every appointment shifted by the host's
+offset (observed: 2h on a Europe/Berlin host, during the smoke run). SQLite is only
+ever used for tests and bootstrap, and both dev and production run Postgres, where
+the column returns aware values — so this should have **no product impact**. It is
+recorded rather than fixed because it could not be verified here: the local Postgres
+would not accept the documented credentials, so the Postgres half of that claim is
+reasoned from the dialect behaviour this file already documents, not measured.
+**Worth one check by someone with those credentials.**

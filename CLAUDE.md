@@ -146,7 +146,7 @@ against existing rows.
 ## Tests
 
 ```bash
-uv run pytest                        # backend + CLI, 262 tests
+uv run pytest                        # backend + CLI, 312 tests
 uv run ruff check .                  # must pass clean
 uv run python capture/capture_ours.py contacts Contacts            # regenerate OUR side
 uv run python capture/capture_ours.py conversations Conversations
@@ -199,6 +199,12 @@ found while building this.
   date filter then silently fails. Always pass query params properly encoded.
 - Reminder jobs dedupe on `dedupe_key`. Anything that reschedules must cancel the old
   jobs and use a key that includes the new time, or the customer gets no reminder.
+  **Cancelling by status is not enough:** `enqueue()` refuses a key that exists
+  whatever its status, so a retired job must also *release* its key
+  (`dedupe_key = None`) — otherwise moving a booking away and back again hits the
+  first key and the customer silently gets nothing. See the 2026-09-10 amendment in
+  `DECISIONS.md`. `_drop_pending_reminders()` in `main.py` is the one place that does
+  this; use it rather than writing the loop again.
 - `Conversation` and `Opportunity` are **not** cascade-deleted from `Contact`, and
   `conversations.contact_id` is NOT NULL. Deleting a contact has to be explicit.
 - `Opportunity.custom_fields.owen_call_id` is a live join key to the telephony project.
