@@ -570,3 +570,40 @@ export const bulkAssignOwner = (ids: number[], ownerId: number | null) =>
     ids,
     owner_id: ownerId,
   })
+
+/**
+ * A named filter set for the Opportunities board -- GHL calls these smart lists.
+ *
+ * `pipeline_id` is nullable on purpose: a view that only says "Won, matching
+ * 'skylight'" applies to whichever pipeline is open, while one that names a
+ * pipeline switches the board to it.
+ *
+ * The board's built-in "Open opportunities" is NOT one of these. It is the
+ * board's default state, so there is no row to delete and nothing to seed.
+ */
+export type SavedView = {
+  id: number
+  name: string
+  pipeline_id: number | null
+  pipeline_name: string | null
+  status: string
+  q: string
+  position: number
+  created_by_id: number | null
+}
+
+export const listSavedViews = () => get<SavedView[]>('/api/saved-views')
+
+export const createSavedView = (body: {
+  name: string
+  pipeline_id?: number | null
+  status?: string
+  q?: string
+}) => send<SavedView>('/api/saved-views', 'POST', body)
+
+export const patchSavedView = (id: number, body: Partial<SavedView>) =>
+  send<SavedView>(`/api/saved-views/${id}`, 'PATCH', body)
+
+/** ADMIN, per this app's standing rule: everyone reads, staff write, admin deletes. */
+export const deleteSavedView = (id: number) =>
+  send<{ deleted: number }>(`/api/saved-views/${id}`, 'DELETE')

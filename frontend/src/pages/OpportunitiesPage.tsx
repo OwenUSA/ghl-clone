@@ -11,6 +11,7 @@ import { useDraggable } from '@dnd-kit/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
+import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
@@ -25,6 +26,8 @@ import {
   type Opportunity,
   type Pipeline,
 } from '../lib/api'
+import { csvFilename, opportunitiesCsv } from '../lib/csv'
+import { downloadCsv } from '../lib/download'
 import type { Me } from '../lib/auth'
 
 /**
@@ -224,7 +227,11 @@ function StageColumn({
   )
 }
 
-export function OpportunitiesPage({ user }: { user: Me }) {
+export function OpportunitiesPage({ user, onNavigate }: {
+  user: Me
+  /** The shell's view switcher. The ⋯ menu's "Dashboard insights" uses it. */
+  onNavigate: (view: string) => void
+}) {
   const qc = useQueryClient()
   // `POST /api/opportunities` is auth.STAFF, so a TECH's create is refused.
   // Mirror that here rather than let them fill in the form to find out on submit
@@ -246,6 +253,7 @@ export function OpportunitiesPage({ user }: { user: Me }) {
   // remembered -- without this, Cancel and Apply were the same button twice.
   const [layoutOnOpen, setLayoutOnOpen] = useState<Layout>('Default')
   const [showOverflow, setShowOverflow] = useState(false)
+  const [showLists, setShowLists] = useState(false)
   const [openOpp, setOpenOpp] = useState<number | null>(null)
 
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
@@ -315,6 +323,43 @@ export function OpportunitiesPage({ user }: { user: Me }) {
       if (!next.delete(id)) next.add(id)
       return next
     })
+
+  /** CSV of the board's CURRENT FILTERED SET — what the ⋯ menu's Export means. */
+  const exportFiltered = () => {
+    const names = new Map((pipeline?.stages ?? []).map((s) => [s.id, s.name]))
+    downloadCsv(
+      csvFilename(pipeline?.name ?? 'opportunities', new Date()),
+      opportunitiesCsv(visible, (id) => names.get(id) ?? ''),
+    )
+  }
+
+  /**
+   * What each ⋯ item does, or why it does nothing.
+   *
+   * "Restore opportunities" is the one that stays dead, and deliberately: it
+   * implies a trash, and this codebase HAS NO SOFT DELETE. Inventing one as a
+   * side quest is how a schema grows a `deleted_at` that half the queries forget
+   * to filter on. See DECISIONS.md for what building it would actually take.
+   */
+  const overflowAction = (item: string): { run?: () => void; title: string } => {
+    if (item === 'Export') {
+      return {
+        run: exportFiltered,
+        title: `Download the ${visible.length} opportunit${
+          visible.length === 1 ? 'y' : 'ies'} the board is showing as CSV`,
+      }
+    }
+    if (item === 'Manage smart lists') {
+      return { run: () => setShowLists(true), title: 'Rename or delete a saved list' }
+    }
+    if (item === 'Dashboard insights') {
+      return { run: () => onNavigate('dashboard'), title: 'Open the Dashboard' }
+    }
+    return {
+      title: 'Restoring needs a trash to restore from, and nothing in this app is '
+        + 'soft-deleted — a delete is a delete. See DECISIONS.md.',
+    }
+  }
 
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
@@ -446,20 +491,27 @@ export function OpportunitiesPage({ user }: { user: Me }) {
                     padding: 4,
                   }}
                 >
-                  {OVERFLOW.map((t) => (
-                    <div
-                      key={t}
-                      title="Present in GHL; not implemented in v1"
-                      style={{
-                        padding: '8px 12px',
-                        fontSize: 14,
-                        color: 'rgb(152,162,179)',
-                        cursor: 'not-allowed',
-                      }}
-                    >
-                      {t}
-                    </div>
-                  ))}
+                  {OVERFLOW.map((t) => {
+                    const item = overflowAction(t)
+                    return (
+                      <button
+                        key={t}
+                        role="menuitem"
+                        className="block w-full text-left"
+                        disabled={!item.run}
+                        title={item.title}
+                        onClick={() => { setShowOverflow(false); item.run?.() }}
+                        style={{
+                          padding: '8px 12px',
+                          fontSize: 14,
+                          color: item.run ? 'rgb(52,64,84)' : 'rgb(152,162,179)',
+                          cursor: item.run ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        {t}
+                      </button>
+                    )
+                  })}
                 </div>
               </>
             )}
@@ -507,20 +559,18 @@ export function OpportunitiesPage({ user }: { user: Me }) {
       {(tab === 'Opportunities' || selecting) && (
       <>
       {/* saved views — measured 14px/400 rgb(102,112,133) with 16x16 icons */}
-      <div className="flex shrink-0 items-center gap-6 px-4" style={{ height: 42 }}>
-        <div className="flex items-center gap-2">
-          <IconList size={16} color="rgb(102,112,133)" />
-          <span style={{ fontSize: 14, fontWeight: 400, color: 'rgb(102,112,133)' }}>
-            Open opportunities
-          </span>
-        </div>
-        <div className="flex items-center gap-2" title="Saved views are not implemented in v1">
-          <IconPlus size={16} color="rgb(102,112,133)" />
-          <span style={{ fontSize: 14, fontWeight: 400, color: 'rgb(102,112,133)' }}>
-            List
-          </span>
-        </div>
-      </div>
+      <SavedViewsRow
+        user={user}
+        now={{ pipelineId: pipeline?.id, status, q }}
+        onApply={(f) => {
+          // A saved view that named a pipeline puts the board back on it; one
+          // that did not leaves the pipeline alone and only re-filters.
+          if (f.pipelineId != null) setPipelineId(f.pipelineId)
+          setStatus(f.status)
+          setQ(f.q)
+        }}
+        onManage={() => setShowLists(true)}
+      />
 
       {/* toolbar */}
       <div className="flex shrink-0 items-center gap-2 px-4 pb-3">
@@ -694,6 +744,10 @@ export function OpportunitiesPage({ user }: { user: Me }) {
             qc.invalidateQueries({ queryKey: ['pipelines'] })
           }}
         />
+      )}
+
+      {showLists && (
+        <ManageSavedViews user={user} onClose={() => setShowLists(false)} />
       )}
 
       {openOpp != null && (

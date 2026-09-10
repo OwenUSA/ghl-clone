@@ -580,3 +580,81 @@ def test_selection_mode_does_not_open_the_detail_dialog():
         "a list row in selection mode still opens the opportunity")
     assert "e.stopPropagation(); onToggle?.(o.id)" in page, (
         "the checkbox and the card both fire, so the tick lands back where it was")
+
+
+# ---------------- Opportunities: the ⋯ menu and the saved-list row ----------------
+
+def test_the_overflow_items_that_work_are_no_longer_dimmed():
+    """All four were `<div>`s with `cursor: not-allowed` and one shared tooltip.
+    Three of them now do something, and the fourth still does not — which has to
+    be visible, or "not implemented" becomes indistinguishable from "broken"."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    menu = source.split("{OVERFLOW.map(", 1)[1].split("</div>", 1)[0]
+    assert "overflowAction(t)" in menu, "the menu items are still inert labels"
+    assert "disabled={!item.run}" in menu, "a dead item still looks clickable"
+    assert "item.run ? 'pointer' : 'not-allowed'" in menu
+
+    actions = source.split("const overflowAction =", 1)[1].split("\n  }\n", 1)[0]
+    for live in ("Export", "Manage smart lists", "Dashboard insights"):
+        assert "'%s'" % live in actions, "%s does nothing" % live
+
+
+def test_restore_opportunities_stays_dead_and_says_exactly_why():
+    """It implies a trash. This codebase has no soft delete, and inventing one as
+    a side quest is how a schema grows a `deleted_at` half the queries forget."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    actions = source.split("const overflowAction =", 1)[1].split("\n  }\n", 1)[0]
+    assert "soft-deleted" in actions, (
+        "nothing explains why Restore opportunities cannot work")
+    assert "'Restore opportunities'" not in actions.split("return {\n      title:")[0], (
+        "Restore opportunities was given a handler after all")
+    # ...and no soft-delete column was invented to make it work.
+    models = (Path(__file__).resolve().parents[1] / "app" / "models.py").read_text(
+        encoding="utf-8")
+    assert "deleted_at" not in models and "is_deleted" not in models
+
+
+def test_export_writes_the_filtered_set_and_not_the_whole_pipeline():
+    """The ⋯ Export means "what the board is showing", which is the point of it
+    sitting next to the filters."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    fn = source.split("const exportFiltered =", 1)[1].split("\n  }", 1)[0]
+    assert "opportunitiesCsv(visible" in fn, (
+        "Export writes something other than the rows the board is showing")
+
+
+def test_dashboard_insights_goes_to_the_dashboard():
+    source = _read("pages", "OpportunitiesPage.tsx")
+    assert "onNavigate('dashboard')" in source, (
+        "Dashboard insights does not open the Dashboard")
+    app_tsx = _read("App.tsx")
+    assert "<OpportunitiesPage user={user} onNavigate={setActive} />" in app_tsx, (
+        "the page is given no way to navigate, so the menu item cannot work")
+
+
+def test_saving_a_list_is_disabled_for_a_role_that_cannot_write_one():
+    """`POST /api/saved-views` is STAFF and a list is shared with everyone."""
+    source = _read("components", "SavedViews.tsx")
+    assert "const canSave = user.role !== 'TECH'" in source
+    add = source.split("<span style={CHIP_TEXT}>List</span>", 1)[0].rsplit("<button", 1)[1]
+    assert "disabled={!canSave}" in add and "Your role cannot save a shared list" in add
+
+
+def test_deleting_a_list_is_admin_only_and_asks_first():
+    """`DELETE /api/saved-views/{id}` is ADMIN. A shared list belongs to everyone,
+    so removing one is not a click that should land on the first press."""
+    source = _read("components", "SavedViews.tsx")
+    assert "const canDelete = user.role === 'ADMIN'" in source
+    assert "Only an admin can delete a shared list" in source
+    assert "Really delete" in source, "the delete lands on a single click"
+    assert "setConfirming(v.id)" in source
+
+
+def test_the_built_in_open_opportunities_list_is_not_deletable():
+    """It is the board's own default state, drawn as a chip, so it cannot be
+    renamed or removed and there is no seeded row to keep in step."""
+    source = _read("components", "SavedViews.tsx")
+    row = source.split("export function SavedViewsRow", 1)[1].split(
+        "views.data?.map", 1)[0]
+    assert "Open opportunities" in row
+    assert "deleteSavedView" not in row, "the built-in default offers a delete"

@@ -35,6 +35,7 @@ from .models import (
     Opportunity,
     Pipeline,
     Role,
+    SavedView,
     Stage,
     Tag,
     User,
@@ -823,6 +824,119 @@ def bulk_assign_owner(body: BulkOwnerAssign, db: Session = Depends(get_db),
         o.owner_id = body.owner_id
     db.commit()
     return {"owner_id": body.owner_id, "updated": [o.id for o in opps]}
+
+
+# ---------- saved views (GHL's "smart lists") ----------
+#
+# A named filter set for the Opportunities board. OUR design: `+ List` and
+# "Manage smart lists" were measured as labels and nothing behind them was ever
+# opened on the live account (DECISIONS.md).
+#
+# The board's built-in "Open opportunities" is deliberately NOT a row in this
+# table. It is the board's default state, so it is always there, cannot be
+# deleted, and there is no seeded row to keep in step with the code.
+
+def _saved_view_public(v: SavedView) -> dict:
+    return {"id": v.id, "name": v.name, "pipeline_id": v.pipeline_id,
+            "pipeline_name": v.pipeline.name if v.pipeline else None,
+            "status": v.status, "q": v.q, "position": v.position,
+            "created_by_id": v.created_by_id}
+
+
+def _clean_view_name(name: str | None) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(400, "a saved view needs a name")
+    return cleaned
+
+
+def _check_view_pipeline(db: Session, pipeline_id: int | None) -> None:
+    if pipeline_id is not None and not db.get(Pipeline, pipeline_id):
+        raise HTTPException(400, "unknown pipeline_id")
+
+
+class SavedViewCreate(BaseModel):
+    name: str = Field(max_length=80)
+    pipeline_id: int | None = None
+    status: Literal["open", "won", "lost", "abandoned", "all"] = "open"
+    q: str = Field("", max_length=200)
+
+
+class SavedViewPatch(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    pipeline_id: int | None = None
+    status: Literal["open", "won", "lost", "abandoned", "all"] | None = None
+    q: str | None = Field(None, max_length=200)
+    position: int | None = None
+
+
+@app.get("/api/saved-views")
+def list_saved_views(db: Session = Depends(get_db),
+                     _: auth.Principal = auth.ANY_USER):
+    """Shared, not per-user: four people in one company, and "the list Owen made"
+    is the useful thing. Everyone reads them."""
+    rows = db.scalars(
+        select(SavedView).options(selectinload(SavedView.pipeline))
+        .order_by(SavedView.position, SavedView.id)).all()
+    return [_saved_view_public(v) for v in rows]
+
+
+@app.post("/api/saved-views", status_code=201)
+def create_saved_view(body: SavedViewCreate, db: Session = Depends(get_db),
+                      principal: auth.Principal = auth.STAFF):
+    """STAFF: saving a view is a write, and it is shared with everyone.
+
+    Duplicate names are allowed, deliberately. The pipeline this app was measured
+    against holds two distinct stages both called "Call Back" and the whole
+    codebase resolves by id rather than deduplicating names; a uniqueness rule
+    here would be the only place that disagreed.
+    """
+    _check_view_pipeline(db, body.pipeline_id)
+    n = db.scalar(select(func.count(SavedView.id))) or 0
+    v = SavedView(name=_clean_view_name(body.name), pipeline_id=body.pipeline_id,
+                  status=body.status, q=body.q.strip(), position=n,
+                  created_by_id=principal.user_id)
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    return _saved_view_public(v)
+
+
+@app.patch("/api/saved-views/{view_id}")
+def update_saved_view(view_id: int, body: SavedViewPatch,
+                      db: Session = Depends(get_db),
+                      _: auth.Principal = auth.STAFF):
+    v = db.get(SavedView, view_id)
+    if not v:
+        raise HTTPException(404, "saved view not found")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data:
+        data["name"] = _clean_view_name(data["name"])
+    if "pipeline_id" in data:
+        _check_view_pipeline(db, data["pipeline_id"])
+    if "q" in data and data["q"] is not None:
+        data["q"] = data["q"].strip()
+    for k, value in data.items():
+        if value is not None or k == "pipeline_id":
+            setattr(v, k, value)
+    db.commit()
+    db.refresh(v)
+    return _saved_view_public(v)
+
+
+@app.delete("/api/saved-views/{view_id}")
+def delete_saved_view(view_id: int, db: Session = Depends(get_db),
+                      _: auth.Principal = auth.ADMIN):
+    """ADMIN, following this app's standing rule — everyone reads, staff write,
+    admin deletes (CLAUDE.md). A saved view is a shared object: one person
+    removing another's list is the kind of thing the rule exists for.
+    """
+    v = db.get(SavedView, view_id)
+    if not v:
+        raise HTTPException(404, "saved view not found")
+    db.delete(v)
+    db.commit()
+    return {"deleted": view_id}
 
 
 # ---------- conversations ----------

@@ -1121,3 +1121,58 @@ for the same reason `centsFromDollars` avoids floats. Fields beginning `=`, `+`,
 name, not an instruction — while `-` is deliberately left alone, because a negative
 number is a legitimate value and far more common here than a leading minus sign in
 a title.
+
+### The ⋯ menu and the saved-list row (OUR design)
+
+All four ⋯ items were `<div>`s with `cursor: not-allowed` and one shared tooltip,
+and the `+ List` / "Open opportunities" row was two static labels. Three of the
+four now do something; the fourth deliberately still does not.
+
+- **Export** — CSV of **the current filtered set**, which is what an Export sitting
+  next to the filters has to mean. Client-side, from rows already on the page;
+  shares `lib/csv.ts` with the Bulk Actions export so there is one CSV writer and
+  one set of escaping rules.
+- **Manage smart lists** — opens the saved-list manager.
+- **Dashboard insights** — opens the Dashboard. `OpportunitiesPage` now takes an
+  `onNavigate` prop from the shell. There is still no router (DECISIONS.md), so
+  this is a view switch and not a URL.
+- **Restore opportunities — LEFT DISABLED, with a title saying exactly why.**
+
+**Why Restore stays dead.** It implies a trash, and **this codebase has no soft
+delete**: `DELETE /api/contacts/{id}` and `DELETE /api/opportunities/{id}` remove
+rows, and a delete is a delete. Building it is not a menu item, it is a data-model
+change — a `deleted_at` on `opportunities`, every read path in the API, the CLI and
+the board taught to exclude it (miss one and deleted deals reappear on a report),
+`DELETE` rewritten to soft-delete with a separate hard delete behind it, a
+retention rule so the table does not grow forever, and a decision about what
+happens to the telephony join key `custom_fields.owen_call_id` while a deal is in
+the bin. That is its own task with its own tests, and inventing it as a side quest
+is how a schema grows a `deleted_at` that half the queries forget to filter on.
+`test_restore_opportunities_stays_dead_and_says_exactly_why` also asserts no
+soft-delete column was quietly added to `models.py`.
+
+**Saved views (smart lists).** New table `saved_views` (migration
+`79c22cf0590c`), holding exactly the filters the board has: a pipeline, the status
+filter and the search term. Nothing speculative — a saved filter for a control
+that does not exist would be a promise the board cannot keep.
+
+- **Shared, not per-user.** Four people, one company; "the list Owen made" is the
+  useful thing. `created_by_id` records who made it and is not an ownership check.
+- **`pipeline_id` is nullable.** A view that names a pipeline switches the board to
+  it; one that does not only re-filters, so "Won deals" is useful on whichever
+  board is open.
+- **"Open opportunities" is NOT a row.** It is the board's default state, drawn as
+  a built-in chip. So there is nothing to delete, and no seeded row that can drift
+  out of step with the code.
+- **Duplicate names are allowed**, consistent with the two stages both called
+  "Call Back": this codebase resolves by id everywhere, and a uniqueness rule here
+  would be the only place that disagreed.
+- **Roles: read ANY_USER, create/rename STAFF, delete ADMIN** — the standing rule
+  in CLAUDE.md (everyone reads, staff write, admin deletes), applied to a shared
+  object where deleting one takes another person's list away. Delete also asks
+  twice. **This is a judgement call the owner can overrule**: if a dispatcher
+  tidying their own lists should not need an admin, move the DELETE to STAFF.
+- `frontend/src/lib/savedViews.ts` imports nothing, so `test_saved_views.py` runs
+  the real `applyView`/`matchesView` under node. The failure that guards against is
+  a view that resolves back to the filters already in effect — nothing on screen
+  would look wrong.
