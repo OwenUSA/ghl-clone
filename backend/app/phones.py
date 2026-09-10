@@ -1,9 +1,23 @@
-"""Phone numbers: store E.164, display formatted.
+"""Phone numbers: store E.164 when we can, never block a save.
 
 Owner's decision (2026-09-09): store `+18135550102`, show `(813) 555-0102`, and
 apply it to NEW contacts and edits only. Existing rows are **not** backfilled —
 production holds real records whose numbers were entered by hand, and rewriting
 them is a separate decision the owner has not made yet. See DECISIONS.md.
+
+Owner's decision (2026-09-10), which overrides the refusal this module shipped
+with: **a phone number can never stop a contact being saved.** Staff use this CRM
+standing on a roof with a customer talking at them. A number in a shape we did not
+anticipate has to go into the record right then; refusing it means the number is
+lost, and a lost number is far worse than an oddly-formatted one. So a number we
+can parse is stored E.164, and a number we cannot is stored exactly as typed.
+
+That leaves two entry points with different jobs, and the difference matters:
+
+* `normalize_phone` is the parser. It still raises `InvalidPhone` with a sentence
+  naming the problem — that is what makes `phone_warning` able to say anything
+  useful, and it is exhaustively tested.
+* `store_phone` is what a write actually calls. It never raises.
 
 Why a hand-written helper rather than `phonenumbers`:
 
@@ -49,6 +63,9 @@ def normalize_phone(raw: str | None) -> str | None:
     Raises `InvalidPhone` with a sentence a person can act on. It never guesses:
     a number that already carries a `+` keeps its own country code, so the owner's
     Venezuelan `+58...` is not re-homed to the US.
+
+    This is the strict parser, not the write path. Callers that are storing a
+    number the user typed want `store_phone`, which cannot fail.
     """
     if raw is None:
         return None
@@ -125,3 +142,42 @@ def format_phone(stored: str | None) -> str | None:
         d = stored[2:]
         return "(%s) %s-%s" % (d[0:3], d[3:6], d[6:10])
     return stored
+
+
+def store_phone(raw: str | None) -> str | None:
+    """What a write stores. **Never raises**, by the owner's decision above.
+
+    Parses to E.164 when it can. When it cannot, it returns exactly what the user
+    typed (trimmed, like every other field on the form) rather than a guess or a
+    refusal — an unrecognised shape is far more likely to be a real number we do
+    not know how to read than a number that does not exist.
+
+    The signal that something looks wrong is `phone_warning`, which is shown
+    beside the saved value instead of standing in front of it.
+    """
+    if raw is None:
+        return None
+    try:
+        return normalize_phone(raw)
+    except InvalidPhone:
+        # Deliberately the user's own characters. Whatever we could not parse, a
+        # human can still read and dial it, and the owner can correct it later.
+        return raw.strip() or None
+
+
+def phone_warning(stored: str | None) -> str | None:
+    """A sentence to show beside a stored number, or None if it looks fine.
+
+    Non-blocking by construction: it is computed on read from whatever the row
+    holds, so it can never interfere with a save. A legacy row like
+    `(941) 555-0100` parses, so it warns about nothing — the warning marks numbers
+    we could not read at all, which are the ones a real SMS transport would not be
+    able to dial.
+    """
+    if not stored:
+        return None
+    try:
+        normalize_phone(stored)
+    except InvalidPhone as e:
+        return str(e)
+    return None

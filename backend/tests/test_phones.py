@@ -1,12 +1,15 @@
-"""Phone numbers: store E.164, display formatted, on writes only.
+"""Phone numbers: store E.164 when we can, never block a save.
 
-The owner's decision (2026-09-09) has three halves and each is load-bearing:
+The owner's decision has four halves and each is load-bearing:
 
 1. a bare 10-digit number is a US number, because the business is in Bradenton FL;
 2. a number that already carries a `+` keeps its own country code — the owner's
    own mobile is Venezuelan and must survive a save unchanged;
 3. **existing rows are not rewritten.** Production holds real contacts whose
    numbers were typed by hand. A backfill is a separate decision.
+4. (2026-09-10) **a number never stops a contact being saved.** One we cannot parse
+   is stored exactly as typed and the save succeeds. Staff enter numbers with a
+   customer in front of them; a refusal at that moment loses the number.
 
 These assert behaviour through the API, not the helper's return value alone: the
 question that matters is what is in the row afterwards.
@@ -16,7 +19,13 @@ from app.auth import mint_api_token
 from app.db import Base, SessionLocal, engine
 from app.main import app
 from app.models import Contact, Role, User
-from app.phones import InvalidPhone, format_phone, normalize_phone
+from app.phones import (
+    InvalidPhone,
+    format_phone,
+    normalize_phone,
+    phone_warning,
+    store_phone,
+)
 from fastapi.testclient import TestClient
 
 
@@ -63,11 +72,15 @@ def client():
 ])
 def test_a_us_number_however_it_is_typed_stores_as_one_string(typed, stored):
     assert normalize_phone(typed) == stored
+    # The write path agrees with the parser whenever the parser succeeds.
+    assert store_phone(typed) == stored
+    assert phone_warning(stored) is None
 
 
 def test_a_number_with_a_country_code_is_not_re_homed_to_the_us():
     """The owner's own number is Venezuelan. Defaulting it to +1 would break it."""
     assert normalize_phone("+58 412 123 4567") == "+584121234567"
+    assert store_phone("+58 412 123 4567") == "+584121234567"
     assert normalize_phone("+584121234567") == "+584121234567"
     # `00` is the same statement as `+` in most of the world.
     assert normalize_phone("00584121234567") == "+584121234567"
@@ -78,6 +91,8 @@ def test_a_number_with_a_country_code_is_not_re_homed_to_the_us():
 def test_blank_is_absent_rather_than_invalid():
     for blank in (None, "", "   "):
         assert normalize_phone(blank) is None
+        assert store_phone(blank) is None
+        assert phone_warning(blank) is None
 
 
 @pytest.mark.parametrize("junk", [
@@ -91,10 +106,19 @@ def test_blank_is_absent_rather_than_invalid():
     "(013) 555-0102",     # NANP area codes cannot start with 0
     "(813) 155-0102",     # ...nor can exchanges start with 1
 ])
-def test_an_invalid_number_is_refused_not_mangled(junk):
+def test_the_parser_says_no_to_what_it_cannot_read(junk):
+    """`normalize_phone` is the parser, not the write path — it is allowed to fail.
+
+    `store_phone` is what a write calls, and it turns each of these into a stored
+    value rather than a refusal (see below).
+    """
     with pytest.raises(InvalidPhone) as e:
         normalize_phone(junk)
     assert str(e.value), "the refusal must carry a message a person can read"
+
+    # ...and the same input, on the write path, is kept rather than lost.
+    assert store_phone(junk) == junk.strip()
+    assert phone_warning(store_phone(junk)), "a kept-as-typed number says nothing"
 
 
 def test_the_refusal_says_what_is_wrong():
@@ -138,22 +162,75 @@ def test_the_owners_venezuelan_number_survives_a_create(client):
     assert r.json()["phone"] == "+584121234567", "a +58 number was re-homed to the US"
 
 
-def test_an_invalid_number_creates_nothing(client):
+@pytest.mark.parametrize("typed", [
+    "5550102",                  # a US local number with no area code
+    "941 555 0100 ext 12",      # a real number with an extension on it
+    "0424-1234567",             # a Venezuelan number typed the way it is at home
+    "ask for Maria 9415550100",
+])
+def test_a_number_we_cannot_parse_still_saves_a_contact(client, typed):
+    """The behaviour change. A refusal here loses a real customer's number.
+
+    What matters is the row afterwards: the contact exists and holds the exact
+    characters that were typed.
+    """
     before = client.get("/api/contacts?page_size=100").json()["total"]
-    r = client.post("/api/contacts", json={"first_name": "Ghost", "phone": "5550102"})
-    assert r.status_code == 422
-    assert "10 digits" in r.text, "the refusal does not say what is wrong"
+    r = client.post("/api/contacts", json={"first_name": "Walkup", "phone": typed})
+    assert r.status_code == 201, "an unrecognised number blocked the save"
+    body = r.json()
+    assert body["phone"] == typed, "the number was mangled instead of kept"
+    assert body["phone_display"] == typed, "an unreadable number is shown as typed"
+
     after = client.get("/api/contacts?page_size=100").json()
-    assert after["total"] == before, "a refused create still wrote a row"
-    assert not [i for i in after["items"] if i["first_name"] == "Ghost"]
+    assert after["total"] == before + 1, "the contact was not actually created"
+    saved = client.get("/api/contacts/%d" % body["id"]).json()
+    assert saved["phone"] == typed
+    # Saved, and flagged — but flagged is a note beside it, not a wall in front.
+    assert saved["phone_warning"], "nothing told anyone the number looked odd"
 
 
-def test_an_invalid_number_does_not_overwrite_a_good_one(client):
+def test_a_number_we_cannot_parse_still_saves_on_an_edit(client):
+    """Same rule on PATCH: correcting a contact mid-job cannot be refused."""
     made = client.post("/api/contacts",
                        json={"first_name": "Jane", "phone": "8135550102"}).json()
-    r = client.patch("/api/contacts/%d" % made["id"], json={"phone": "nonsense"})
-    assert r.status_code == 422
-    assert client.get("/api/contacts/%d" % made["id"]).json()["phone"] == "+18135550102"
+    assert made["phone"] == "+18135550102"
+
+    r = client.patch("/api/contacts/%d" % made["id"],
+                     json={"phone": "941 555 0100 ext 12"})
+    assert r.status_code == 200, "an unrecognised number blocked an edit"
+    assert r.json()["phone"] == "941 555 0100 ext 12"
+
+    reread = client.get("/api/contacts/%d" % made["id"]).json()
+    assert reread["phone"] == "941 555 0100 ext 12", "the edit did not stick"
+    assert reread["phone_warning"]
+
+
+def test_a_good_number_carries_no_warning(client):
+    """The signal has to be quiet when nothing is wrong, or it means nothing."""
+    made = client.post("/api/contacts",
+                       json={"first_name": "Jane", "phone": "(813) 555-0102"}).json()
+    assert made["phone"] == "+18135550102"
+    assert made["phone_warning"] is None
+    # A legacy row parses too, so it is not nagged about either.
+    legacy = client.get("/api/contacts/%d" % client.ids["legacy"]).json()
+    assert legacy["phone"] == "(941) 555-0100"
+    assert legacy["phone_warning"] is None
+    # ...and a contact with no number at all is not "invalid", it is empty.
+    none = client.post("/api/contacts",
+                       json={"first_name": "Ed", "email": "e@x.test"}).json()
+    assert none["phone"] is None and none["phone_warning"] is None
+
+
+def test_the_grid_and_the_panel_agree_about_an_unparseable_number(client):
+    made = client.post("/api/contacts",
+                       json={"first_name": "Walkup", "phone": "ask for Maria"}).json()
+    row = next(i for i in client.get("/api/contacts?page_size=100").json()["items"]
+               if i["id"] == made["id"])
+    panel = client.get("/api/contacts/%d" % made["id"]).json()
+    assert row["phone"] == panel["phone"] == "ask for Maria"
+    assert row["phone_display"] == panel["phone_display"] == "ask for Maria"
+    assert row["phone_warning"] == panel["phone_warning"]
+    assert row["phone_warning"]
 
 
 def test_editing_a_contact_normalises_the_number(client):

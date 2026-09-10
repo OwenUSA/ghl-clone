@@ -39,7 +39,7 @@ from .models import (
     Tag,
     User,
 )
-from .phones import format_phone, normalize_phone
+from .phones import format_phone, phone_warning, store_phone
 from .transport import get_transport
 
 # The gate is applied ONCE, app-wide, rather than decorating 25 routes. Any route
@@ -95,6 +95,9 @@ class ContactOut(BaseModel):
     # E.164 is what we store; it is not what a person reads. The grid renders
     # this, so formatting lives in one place instead of in every client.
     phone_display: str | None
+    # Non-blocking: a number we could not parse was still saved as typed, and this
+    # is the only place anything says so. None means it looks fine.
+    phone_warning: str | None
     business_name: str | None
     created_at: datetime
     tags: list[str] = []
@@ -193,6 +196,7 @@ def list_contacts(
         ContactOut(
             id=r.id, name=r.name, first_name=r.first_name, last_name=r.last_name,
             email=r.email, phone=r.phone, phone_display=format_phone(r.phone),
+            phone_warning=phone_warning(r.phone),
             business_name=r.business_name,
             created_at=r.created_at,
             tags=[ct.tag.name for ct in r.tags if ct.tag],
@@ -218,6 +222,7 @@ def _contact_detail(c: Contact) -> dict:
         "email": c.email,
         "phone": c.phone,
         "phone_display": format_phone(c.phone),
+        "phone_warning": phone_warning(c.phone),
         "business_name": c.business_name,
         "source": c.source,
         "date_of_birth": c.date_of_birth,
@@ -271,14 +276,18 @@ def _check_email(v: str | None) -> str | None:
 
 
 def _check_phone(v: str | None) -> str | None:
-    """Store E.164. Applies to writes only — nothing rewrites an existing row.
+    """Store E.164 when the number parses, and what was typed when it does not.
 
-    `InvalidPhone` is a ValueError, so pydantic turns it into a 422 carrying the
-    sentence the helper wrote, exactly as `_check_email` already does. The number
-    is refused rather than mangled: silently storing a 7-digit string as a phone
-    number is how a contact ends up unreachable with no sign anything was wrong.
+    Deliberately *unlike* `_check_email`, which raises and so answers 422. The
+    owner's decision (2026-09-10): a phone number can never block a save. Staff
+    enter numbers with a customer in front of them, and refusing an unfamiliar
+    shape at that moment loses the number entirely. `store_phone` cannot raise, so
+    this validator cannot turn a save into a 422; `phone_warning` on the way back
+    out is what tells anyone the number looked odd.
+
+    Applies to writes only — nothing rewrites an existing row.
     """
-    return normalize_phone(v)
+    return store_phone(v)
 
 
 class ContactPatch(BaseModel):
