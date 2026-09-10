@@ -205,6 +205,16 @@ export function AppointmentDetailDialog({
       // Re-seed from what the server actually stored, so the panel shows the
       // saved record and not the draft that produced it.
       setDraft(formOf(updated))
+      // ...and put it in the cache, because `a` — not the draft — is what the
+      // summary line and the CANCEL CONFIRMATION are written from. Without this
+      // the loaded record stays stale until the 30s refetch, so editing a
+      // booking and then cancelling it showed a confirmation naming the OLD
+      // title at the OLD time: a destructive prompt describing a slot that no
+      // longer exists, which is exactly the prompt a user is entitled to trust.
+      // `setQueryData` rather than `invalidateQueries`: the PATCH response IS
+      // the fresh record, so refetching it would be a round-trip to learn what
+      // we were just told, with a window of staleness in the middle.
+      qc.setQueryData(['appointment', appointmentId], updated)
       setError(null)
       setSaved(reminderSentence(updated.automation))
       onChanged()

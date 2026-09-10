@@ -635,6 +635,37 @@ def test_cancelling_is_confirmed_by_a_prompt_that_names_the_appointment():
         "there is a second, unconfirmed path to cancelling")
 
 
+def test_a_saved_edit_reaches_the_confirmation_that_names_the_appointment():
+    """A real bug, found by driving the panel in a browser.
+
+    The summary line and the cancel confirmation are written from the LOADED
+    record (`a`), not from the draft. A save re-seeded the draft and left `a`
+    stale until the 30s refetch — so editing a booking and then cancelling it
+    showed "Cancel Roof inspection … on Sun, Sep 13, 2:00 PM?" for a booking that
+    had just been renamed and moved to Thursday. A destructive prompt describing
+    a slot that no longer exists is worse than no prompt: it is a prompt that
+    reads as being about a different appointment.
+
+    The PATCH response IS the fresh record, so it is written into the cache
+    rather than invalidated — invalidating would round-trip to learn what the
+    server just said, leaving the stale window open in the middle of it.
+    """
+    dialog = _detail_dialog()
+    ok = dialog.split("const save = useMutation({", 1)[1].split("onError:", 1)[0]
+    assert "qc.setQueryData(['appointment', appointmentId], updated)" in ok, (
+        "a saved edit never reaches the loaded record, so the cancel "
+        "confirmation and the summary line keep naming the old time")
+    assert "invalidateQueries({ queryKey: ['appointment'" not in ok, (
+        "the panel refetches what the PATCH response already told it, and stays "
+        "stale while it does")
+    # The confirmation must read from the loaded record, which is the thing that
+    # is now kept fresh — not from the draft, which is what the user typed and
+    # has not necessarily been accepted by the server.
+    prompt = dialog.split("{confirmingCancel ? (", 1)[1].split("Keep it", 1)[0]
+    assert "form.title" not in prompt, (
+        "the confirmation names what the user typed rather than what is stored")
+
+
 def test_an_already_cancelled_appointment_cannot_be_cancelled_again():
     """`DELETE` on a cancelled booking is a 200 that changes nothing and reports
     0 reminders withdrawn, which reads as a successful cancel of something that
