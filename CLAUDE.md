@@ -154,7 +154,7 @@ against existing rows.
 ## Tests
 
 ```bash
-uv run pytest                        # backend + CLI, PLACEHOLDER_COUNT tests
+uv run pytest                        # backend + CLI, 616 tests
 uv run ruff check .                  # must pass clean
 uv run python capture/capture_ours.py contacts Contacts            # regenerate OUR side
 uv run python capture/capture_ours.py conversations Conversations
