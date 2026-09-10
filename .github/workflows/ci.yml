@@ -22,11 +22,12 @@ jobs:
         with:
           enable-cache: true
 
-      # tests/test_calendar_grid.py runs frontend/src/lib/calendarGrid.ts under
-      # node (>= 22.6 strips the type annotations) so the Calendars month
-      # arithmetic is executed rather than pattern-matched. Without node here
-      # that whole file would skip and the regression it covers would be
-      # unguarded on CI. No npm install: the module imports nothing.
+      # tests/test_calendar_grid.py and tests/test_board_order.py run
+      # frontend/src/lib/{calendarGrid,boardOrder}.ts under node (>= 22.6 strips
+      # the type annotations), so the Calendars month arithmetic and the kanban
+      # drop arithmetic are executed rather than pattern-matched. Without node
+      # here both files would skip and the regressions they cover would be
+      # unguarded on CI. No npm install: neither module imports anything.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

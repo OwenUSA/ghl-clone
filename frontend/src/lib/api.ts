@@ -175,6 +175,10 @@ export type Opportunity = {
   title: string
   value_cents: number
   stage_id: number
+  // Rank within the stage, 0-based and packed. The board needs it to work out
+  // where a card dropped in a FILTERED column belongs among all of the stage's
+  // cards -- see lib/boardOrder.ts.
+  position: number
   status: string
   contact_name: string | null
   business_name: string | null
@@ -193,7 +197,12 @@ export type OpportunityMove = { id: number; stage_id: number; position: number }
 // A kanban drag is a cookie-authenticated write like any other, so it goes through
 // send(). A bare fetch() omits the double-submit CSRF header and the backend rejects
 // every drag with 403 "csrf token missing or mismatched".
-export const moveOpportunity = (id: number, stageId: number, position = 0) =>
+//
+// `position` has no default any more. It had one, of 0, and the drag handler never
+// passed anything, so every card dropped in another column landed at the top of it
+// rather than where it was released. A caller that does not know where the card
+// goes should not be able to leave it out.
+export const moveOpportunity = (id: number, stageId: number, position: number) =>
   send<OpportunityMove>(`/api/opportunities/${id}`, 'PATCH', {
     stage_id: stageId,
     position,

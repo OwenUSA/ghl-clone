@@ -1,17 +1,29 @@
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
+  closestCorners,
   useSensor,
   useSensors,
   useDroppable,
   type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { IconDownload, IconGrid, IconList, IconPlus } from '../components/Icon'
-import { useDraggable } from '@dnd-kit/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { OpportunityDetail } from '../components/OpportunityDetail'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
+import {
+  applyMove,
+  cardDragId,
+  cardIdFrom,
+  moveForDrop,
+  stageCards,
+  stageDropId,
+  type BoardMove,
+} from '../lib/boardOrder'
 import {
   centsFromDollars,
   createOpportunity,
@@ -46,30 +58,10 @@ const OVERFLOW = ['Export', 'Restore opportunities', 'Manage smart lists', 'Dash
 const LAYOUTS = ['Default', 'Compact', 'Unlabeled'] as const
 type Layout = (typeof LAYOUTS)[number]
 
-function Card({ o, layout, onOpen }: { o: Opportunity; layout: Layout; onOpen: (id: number) => void }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: o.id,
-  })
+/** The card's own markup, with no drag wiring — also what the drag preview draws. */
+function CardFace({ o, layout }: { o: Opportunity; layout: Layout }) {
   return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      onClick={() => onOpen(o.id)}
-      style={{
-        width: 230,
-        borderRadius: 4,
-        backgroundColor: '#fff',
-        boxShadow: 'rgba(16, 24, 40, 0.1) 0px 1px 3px 0px',
-        padding: 12,
-        marginBottom: 8,
-        cursor: 'grab',
-        opacity: isDragging ? 0.4 : 1,
-        transform: transform
-          ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
-          : undefined,
-      }}
-    >
+    <>
       <div
         className="truncate"
         style={{ fontSize: 14, fontWeight: 500, color: 'rgb(52,64,84)' }}
@@ -107,6 +99,68 @@ function Card({ o, layout, onOpen }: { o: Opportunity; layout: Layout; onOpen: (
           <span title="Appointments">📅</span>
         </div>
       )}
+    </>
+  )
+}
+
+const CARD_SURFACE = {
+  width: 230,
+  borderRadius: 4,
+  backgroundColor: '#fff',
+  boxShadow: 'rgba(16, 24, 40, 0.1) 0px 1px 3px 0px',
+  padding: 12,
+} as const
+
+/**
+ * A sortable card.
+ *
+ * `useSortable` rather than `useDraggable`: the cards inside a column need to be
+ * a sortable list, not just cargo for a drop target, or the column can only
+ * answer "a card was dropped on me somewhere" and a reorder has no index.
+ */
+function Card({
+  o, layout, onOpen, dragging,
+}: {
+  o: Opportunity
+  layout: Layout
+  onOpen: (id: number) => void
+  /** True from the start of a drag until the next press — see the page. */
+  dragging: React.RefObject<boolean>
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: cardDragId(o.id) })
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      // A drag ends with a click on the card it started from, which opened the
+      // opportunity dialog on top of the board every single time a card was
+      // moved. The drop is the gesture; the dialog is not part of it.
+      // Released on the next press rather than on a timer: a click is dispatched
+      // after the drop, and there is no delay that is reliably longer than the
+      // browser's own gap and reliably shorter than a deliberate second click.
+      onPointerDownCapture={() => { dragging.current = false }}
+      onClick={() => { if (!dragging.current) onOpen(o.id) }}
+      style={{
+        ...CARD_SURFACE,
+        marginBottom: 8,
+        cursor: 'grab',
+        // `touch-action: none` is what makes the pointer sensor work on a
+        // trackpad and a touchscreen — without it the browser claims the gesture
+        // as a scroll and the card never lifts.
+        touchAction: 'none',
+        // The card being dragged is drawn by the overlay instead. Leaving a hole
+        // rather than a ghost is what makes the gap the other cards open up read
+        // as "it will land here".
+        opacity: isDragging ? 0 : 1,
+        transform: transform
+          ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
+          : undefined,
+        transition,
+      }}
+    >
+      <CardFace o={o} layout={layout} />
     </div>
   )
 }
@@ -116,13 +170,18 @@ function StageColumn({
   opps,
   layout,
   onOpen,
+  dragging,
 }: {
   stage: { id: number; name: string; count: number; value_cents: number }
   opps: Opportunity[]
   layout: Layout
   onOpen: (id: number) => void
+  dragging: React.RefObject<boolean>
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: stage.id })
+  // The column is still a droppable in its own right, for the empty space below
+  // the last card — and for a column with no cards at all, which has nothing
+  // sortable in it to drop onto.
+  const { setNodeRef, isOver } = useDroppable({ id: stageDropId(stage.id) })
   const total = opps.reduce((s, o) => s + o.value_cents, 0)
   return (
     // 240px pitch measured from GHL's stage-collapse buttons.
@@ -163,20 +222,25 @@ function StageColumn({
           </span>
         </div>
       </div>
-      <div
-        ref={setNodeRef}
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
-        style={{
-          marginTop: 8,
-          borderRadius: 6,
-          backgroundColor: isOver ? 'rgb(239,244,255)' : 'transparent',
-          padding: 2,
-        }}
+      <SortableContext
+        items={opps.map((o) => cardDragId(o.id))}
+        strategy={verticalListSortingStrategy}
       >
-        {opps.map((o) => (
-          <Card key={o.id} o={o} layout={layout} onOpen={onOpen} />
-        ))}
-      </div>
+        <div
+          ref={setNodeRef}
+          className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+          style={{
+            marginTop: 8,
+            borderRadius: 6,
+            backgroundColor: isOver ? 'rgb(239,244,255)' : 'transparent',
+            padding: 2,
+          }}
+        >
+          {opps.map((o) => (
+            <Card key={o.id} o={o} layout={layout} onOpen={onOpen} dragging={dragging} />
+          ))}
+        </div>
+      </SortableContext>
     </div>
   )
 }
@@ -227,26 +291,69 @@ export function OpportunitiesPage({ user }: { user: Me }) {
     enabled: !!pipeline,
   })
 
+  // The exact cache entry the board is drawing. The optimistic update writes it
+  // and the rollback restores it, so both have to name the same key the query
+  // above uses -- a near-miss would leave the card looking moved for ever.
+  const boardKey = ['opportunities', pipeline?.id, q, status]
+
+  const [moveError, setMoveError] = useState<string | null>(null)
+  // The card under the cursor, drawn by the overlay so it can leave its column.
+  const [dragged, setDragged] = useState<Opportunity | null>(null)
+  // True from the moment a drag starts until the next press. A drop ends with a
+  // click on the card, which would otherwise open the opportunity dialog on top
+  // of the board after every move.
+  const dragging = useRef(false)
+
+  /**
+   * Move a card, on screen first.
+   *
+   * The card has to move the instant it is dropped -- but only for as long as
+   * the server agrees. Yesterday's CSRF bug (20cc838) made every one of these
+   * saves fail while the board went on showing the card in its new column, so a
+   * refused move must visibly snap back and say why, not quietly disagree with
+   * the database until the next reload.
+   */
   const move = useMutation({
-    mutationFn: (v: { id: number; stage_id: number }) =>
-      moveOpportunity(v.id, v.stage_id),
-    onSuccess: () => {
+    mutationFn: (v: BoardMove) => moveOpportunity(v.id, v.stage_id, v.position),
+    onMutate: async (v: BoardMove) => {
+      // A refetch already in flight would land on top of the optimistic board
+      // with the old order and undo it half a second after the drop.
+      await qc.cancelQueries({ queryKey: ['opportunities'] })
+      const previous = qc.getQueryData<Opportunity[]>(boardKey)
+      if (previous) qc.setQueryData(boardKey, applyMove(previous, v))
+      setMoveError(null)
+      return { previous }
+    },
+    onError: (err: Error, _v, ctx) => {
+      // Put it back exactly where it was picked up from...
+      if (ctx?.previous) qc.setQueryData(boardKey, ctx.previous)
+      // ...and say so. `err.message` is already a sentence written for a person
+      // (api.ts `readable`), never the wire body.
+      setMoveError(err.message)
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['opportunities'] })
       qc.invalidateQueries({ queryKey: ['pipelines'] })
     },
   })
 
   const sensors = useSensors(
+    // 5px before a press becomes a drag, so a card can still be clicked open.
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
 
+  function onDragStart(e: DragStartEvent) {
+    dragging.current = true
+    const id = cardIdFrom(e.active.id)
+    setDragged((opps.data ?? []).find((o) => o.id === id) ?? null)
+  }
+
   function onDragEnd(e: DragEndEvent) {
-    const stageId = Number(e.over?.id)
-    const oppId = Number(e.active.id)
-    if (!stageId || !oppId) return
-    const o = opps.data?.find((x) => x.id === oppId)
-    if (!o || o.stage_id === stageId) return
-    move.mutate({ id: oppId, stage_id: stageId })
+    setDragged(null)
+    // Dropped on nothing, or dropped back where it already was: no request at
+    // all. `moveForDrop` decides both -- see lib/boardOrder.ts.
+    const next = moveForDrop(opps.data ?? [], e.active.id, e.over?.id ?? null)
+    if (next) move.mutate(next)
   }
 
   const total = opps.data?.length ?? 0
@@ -480,22 +587,76 @@ export function OpportunitiesPage({ user }: { user: Me }) {
         </button>
       </div>
 
+      {/* A refused move -- a 403, a stage that is not in this pipeline, the backend
+          down -- has already snapped the card back by the time this renders. It
+          says which, in words, because the failure it is here to catch was one
+          that showed nothing at all. */}
+      {moveError && (
+        <div
+          role="alert"
+          className="mx-4 mb-2 flex shrink-0 items-start gap-3"
+          style={{
+            fontSize: 13,
+            color: 'rgb(180,35,24)',
+            backgroundColor: 'rgb(254,243,242)',
+            border: '1px solid rgb(253,162,155)',
+            borderRadius: 8,
+            padding: '8px 12px',
+          }}
+        >
+          <span className="flex-1">The card was put back. {moveError}</span>
+          <button
+            onClick={() => setMoveError(null)}
+            aria-label="Dismiss"
+            style={{ fontSize: 13, fontWeight: 600, color: 'rgb(180,35,24)' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* board / list */}
       {view === 'board' ? (
-        <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+        <DndContext
+          sensors={sensors}
+          // Corners, not the pointer: a card is 230px wide and the columns are
+          // 240px apart, so pointer-only collision made the gap between two
+          // columns a dead zone that dropped the card back where it came from.
+          collisionDetection={closestCorners}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onDragCancel={() => setDragged(null)}
+        >
           <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden px-4 pb-4">
             <div className="flex h-full">
               {pipeline?.stages.map((s) => (
                 <StageColumn
                   key={s.id}
                   stage={s}
-                  opps={(opps.data ?? []).filter((o) => o.stage_id === s.id)}
+                  opps={stageCards(opps.data ?? [], s.id)}
                   layout={layout}
                   onOpen={setOpenOpp}
+                  dragging={dragging}
                 />
               ))}
             </div>
           </div>
+          {/* Drawn under the cursor so a card can be carried between columns --
+              the board scrolls sideways, and a card that stayed inside its own
+              scrolling column could not be seen crossing to the next one. */}
+          <DragOverlay dropAnimation={null}>
+            {dragged && (
+              <div
+                style={{
+                  ...CARD_SURFACE,
+                  cursor: 'grabbing',
+                  boxShadow: 'rgba(16, 24, 40, 0.18) 0px 8px 16px 0px',
+                }}
+              >
+                <CardFace o={dragged} layout={layout} />
+              </div>
+            )}
+          </DragOverlay>
         </DndContext>
       ) : (
         <div className="mx-4 mb-4 min-h-0 flex-1 overflow-auto bg-white"
