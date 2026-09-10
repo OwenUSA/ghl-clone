@@ -353,3 +353,75 @@ def test_delete_is_offered_nowhere_but_the_actions_tab():
         "retarget this test -- the row checkbox moved")
     assert "checked=" not in checkbox and "onChange=" not in checkbox, (
         "the row checkboxes were wired up; bulk actions are out of scope")
+
+
+def test_new_appointment_is_disabled_for_a_role_that_cannot_create():
+    """`POST /api/appointments` is STAFF, so a TECH's create is refused and the
+    backend writes nothing. Offering the form anyway means filling seven fields
+    to find out. Same gate, and same `disabled` + `title` shape, as Add Contact."""
+    source = _read("pages", "CalendarsPage.tsx")
+    assert "user.role !== 'TECH'" in source, (
+        "the page never asks whether this role can create an appointment")
+    # The whole toolbar button: from its opening tag to its label.
+    at = source.index("            New\n")
+    button = source[source.rindex("<button", 0, at):at]
+    assert "book(defaultSlot(dayList, now))" in button, "retarget this — New moved"
+    assert "disabled={!canCreate}" in button, (
+        "New is offered to a role that cannot create")
+    assert "title={canCreate" in button, "nothing tells the user why the button is dead"
+    # ...and the double-click entry point has to be gated by the same flag, or a
+    # TECH reaches the identical dialog by a different door.
+    book = source.split("function book(at: Date) {", 1)[1].split("}", 1)[0]
+    assert "if (!canCreate) return" in book, (
+        "a TECH can still double-click a slot open, bypassing the disabled button")
+
+
+def test_the_appointment_dialog_shows_a_refused_create_and_stays_open():
+    """A 403 or a 400 has to land in the dialog as a sentence, with the typed
+    values still there. Closing on failure throws away the form; printing the
+    wire body is how someone read `500 Internal Server Error` in a dialog."""
+    source = _read("components", "NewAppointmentDialog.tsx")
+    assert 'role="alert"' in source, "the dialog has no error surface"
+    mutation = source.split("const create = useMutation({", 1)[1].split("\n  })", 1)[0]
+    assert "onError: (e: Error) => setError(e.message)" in mutation, (
+        "a refused create is dropped on the floor")
+    assert "onClose" not in mutation, (
+        "the dialog closes on failure, discarding what the user typed")
+    # `e.message` is a sentence only because api.ts made it one.
+    assert "readable(" in _read("lib", "api.ts"), "retarget this — the formatter moved"
+
+
+def test_the_appointment_dialog_offers_only_fields_the_backend_accepts():
+    """`AppointmentCreate` in backend/app/main.py is the contract. A control the
+    server ignores is worse than no control: `status` in particular would look
+    like a choice and always land on `confirmed`."""
+    api = _read("lib", "api.ts")
+    body = api.split("export const createAppointment = (body: {", 1)[1].split("}", 1)[0]
+    sent = {line.split(":")[0].strip("? ").strip() for line in body.splitlines()
+            if ":" in line}
+    accepted = {"title", "starts_at", "ends_at", "contact_id", "assigned_user_id",
+                "calendar_id", "notes"}
+    assert sent == accepted, (
+        f"createAppointment sends {sorted(sent)}; POST /api/appointments accepts "
+        f"{sorted(accepted)}")
+
+    dialog = _read("components", "NewAppointmentDialog.tsx")
+    status = dialog.split('<Field label="Status">', 1)[1].split("</Field>", 1)[0]
+    assert "disabled" in status and "title=" in status, (
+        "the Status control is either live (and ignored by the server) or hidden "
+        "(and the default it lands on is invisible); it must be shown disabled "
+        "with a title saying why")
+
+
+def test_the_appointment_dialog_picks_a_contact_by_searching_for_one():
+    """Asking for a contact id would ask the user to know a primary key, and a
+    <select> would render every contact in the account (268 locally)."""
+    dialog = _read("components", "NewAppointmentDialog.tsx")
+    assert "function ContactPicker(" in dialog, "there is no contact picker"
+    picker = dialog.split("function ContactPicker(", 1)[1].split("\nexport function", 1)[0]
+    assert "listContacts(" in picker, (
+        "the picker does not search — it is not backed by the contacts endpoint")
+    assert "enabled: q.trim().length > 0" in picker, (
+        "the picker queries on an empty box, listing contacts nobody asked for")
+    assert "onPick({ id: c.id, name: c.name })" in picker, (
+        "picking a result does not record which contact was chosen")

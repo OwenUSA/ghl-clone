@@ -881,3 +881,79 @@ What the tab does, and why it is shaped that way:
   deleted** (`custom_fields.owen_call_id` is the telephony join key), conversations
   **are** deleted explicitly, and the response is
   `{"deleted": id, "detached_opportunities": [...]}`.
+
+## AMENDMENT (2026-09-09): the Calendars Month view and the appointment dialog are OURS
+
+This section **overrides**, for these two surfaces only, the rule that structural design
+is locked to a measured capture ("Design system — LOCKED", "Responsive behaviour —
+LOCKED"). It is recorded so nobody later mistakes either for measured parity.
+
+**GHL's Month view was never measured.** `captures/calendars/` holds the **Week view
+only** — one 1440×900 capture of the 24-hour vertical grid. Nobody ever opened GHL's
+Month view on the live account, so there is no HTML, no screenshot and no computed style
+to compare against. The same is true of GHL's **appointment / booking modal**: it is on
+the "Still uncaptured everywhere else … modals, drawers" list under "Known measurement
+gaps", and it was never opened.
+
+**What was actually shipped, and why.** Month view was not merely unmeasured, it was
+broken. `days = 35` drove the range label, the API query window and the prev/next arrows,
+while *both* grid renders did `dayList.slice(0, view === 'Month view' ? 7 : days)`. So:
+
+- Month view was pixel-identical to Week view.
+- It fetched five times the data it drew; appointments between day 8 and day 35 arrived
+  and were discarded.
+- The arrows paged 35 days at a time, so ~80% of every range was unreachable.
+
+The `slice` was a deliberate cap, not a typo — 35 columns of a 24-hour vertical grid is
+not a layout. A month needs a different shape, so on the owner's instruction a
+**conventional weeks-by-days grid of day cells** was built: whole Sunday-to-Saturday weeks
+(28/35/42 cells) covering every day of the anchor month, neighbouring-month cells drawn
+dimmed rather than blank, appointments as compact chips with a `+N more` affordance past
+three. The arrows now step one calendar month and the label names the month drawn.
+
+Alongside it, the previously inert `+ New` button and a double-click on an empty slot both
+open **one** create-appointment dialog. Its layout is likewise ours.
+
+**Consequences, binding:**
+
+- Day view and Week view are unchanged and remain the measured surfaces. Anything that
+  touches them still has to answer to `captures/calendars/`.
+- **If a live GHL session is ever opened again, capture the Month view and the booking
+  modal and re-measure both.** Where GHL differs, GHL wins for structure, exactly as
+  everywhere else. Until then neither may be cited as evidence of parity.
+- The week still starts **Sunday**, which *is* measured, and the design tokens are the
+  measured ones. Only the arrangement is ours.
+- This closes the standing blocked finding about Month view. (Referred to elsewhere as
+  **F2-2**; no such record exists in this repository — `orchestrate/` carries no finding
+  by that id — so this amendment is the record.)
+
+**Creating only. Editing and rescheduling are deliberately out**, and this is not an
+oversight to be tidied up later: reminder jobs dedupe on a `dedupe_key` that includes the
+appointment's start time, so a move must cancel the old pending jobs or the customer
+silently receives **no** reminder. `PATCH /api/appointments/{id}` already does that
+correctly and is covered by `test_rescheduling_an_appointment_schedules_new_reminders`;
+wiring a UI to it needs its own task and its own tests. The dialog creates, and nothing
+else.
+
+**One deviation from the task's own field list, on the record.** The task named `status`
+among the dialog's fields. `AppointmentCreate` does not accept it — a booking always takes
+the model default `confirmed` — and inventing a control the server ignores is worse than
+having none. The dialog therefore shows Status **disabled**, with a title saying why, the
+same choice already recorded above for the Conversations filter types that v1 does not
+implement: *disabled rather than omitted, so the gap stays visible.* Adding `status` to
+the POST model would be a contract change and is a separate decision.
+
+**One backend change came with it.** `title: str` accepted `""` and `"   "`, so an
+untitled appointment was created happily and drawn as an empty chip — indistinguishable
+from a rendering bug. `POST /api/appointments` now rejects a blank title with
+400 `an appointment needs a title`, and stores the stripped value. Enforced at the API,
+not only in the browser, so the CLI and the telephony feed get the same answer.
+
+**Testing note.** `frontend/src/lib/calendarGrid.ts` holds all of the range arithmetic and
+imports nothing, so `backend/tests/test_calendar_grid.py` runs it under **node** and
+asserts real behaviour — cell counts per month, an appointment on the 20th reaching a
+drawn cell, the arrows stepping 31 Jan → February rather than 3 March, DST-safe day
+stepping. That is a deliberate step up from this project's usual "assert against source"
+frontend idiom, which would have passed against the broken version. CI's backend job now
+installs node for it; if node is ever absent the file skips loudly rather than silently
+passing.

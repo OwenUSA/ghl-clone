@@ -173,3 +173,84 @@ def test_reporting_shows_only_the_three_tabs_that_can_work():
     for gone in ("Google Ads", "Meta Ads (Facebook Ads) report",
                  "Attribution report", "Local Marketing Audit"):
         assert gone not in body, f"{gone} still renders on the Reporting page"
+
+
+def test_the_calendar_grid_is_not_capped_at_a_week():
+    """The Month view bug, at the site where it lived.
+
+    Both grid renders did `dayList.slice(0, view === 'Month view' ? 7 : days)`,
+    so Month view drew a week. The arithmetic is now tested by executing it
+    (test_calendar_grid.py); what is asserted here is that the page renders the
+    list that arithmetic produces, rather than re-deriving or truncating it.
+    """
+    source = (FRONTEND / "pages" / "CalendarsPage.tsx").read_text(encoding="utf-8")
+    body = source.split("export function CalendarsPage", 1)[1]
+    assert ".slice(0, view ===" not in body and "? 7 : days" not in body, (
+        "the grid still caps its day list, so Month view draws a week")
+    for call, why in (
+        ("visibleDays(view, anchor)", "the drawn days"),
+        ("queryWindow(view, anchor)", "the API range"),
+        ("rangeLabel(view, anchor)", "the toolbar label"),
+        ("shiftAnchor(view, a, dir)", "the prev/next arrows"),
+    ):
+        assert call in body, (
+            f"{why} is derived somewhere other than calendarGrid.ts, so it can "
+            "drift from what the grid draws — which is exactly the old bug")
+
+
+def test_the_month_view_has_its_own_shape():
+    """A month is day cells in weeks, not 35 columns of a 24-hour grid. The hour
+    grid must stay for Day and Week view, which are measured against GHL."""
+    source = (FRONTEND / "pages" / "CalendarsPage.tsx").read_text(encoding="utf-8")
+    assert "function MonthGrid(" in source, "there is no month grid"
+    month = source.split("function MonthGrid(", 1)[1]
+    assert "gridTemplateColumns: 'repeat(7, minmax(0, 1fr))'" in month, (
+        "the month grid is not seven columns wide")
+    assert "MONTH_CELL_CHIPS" in month and "more" in month, (
+        "a day with more appointments than fit has no overflow affordance")
+    # The measured views must still render the hour grid, and only they.
+    page = source.split("export function CalendarsPage", 1)[1]
+    assert "view === 'Month view' ? (\n            <MonthGrid" in page, (
+        "Month view does not render the month grid")
+    assert "HOURS.map" in page, "the measured Day/Week hour grid is gone"
+
+
+def test_double_clicking_an_empty_slot_books_it_and_a_booking_does_not():
+    """Both entry points open the same dialog, and a double-click that lands on
+    an existing appointment must not also fire the empty-slot handler beneath
+    it — that would open a create dialog on top of the booking you clicked."""
+    source = (FRONTEND / "pages" / "CalendarsPage.tsx").read_text(encoding="utf-8")
+    page = source.split("export function CalendarsPage", 1)[1].split("function MonthGrid(", 1)[0]
+    month = source.split("function MonthGrid(", 1)[1]
+
+    assert "onDoubleClick={(e) => bookFromColumn(d, e)}" in page, (
+        "an empty slot in Day/Week view cannot be double-clicked to book it")
+    assert "onDoubleClick={() => onBook(" in month, (
+        "a month day cell cannot be double-clicked to book it")
+
+    # The drawn appointment in each grid must swallow the double-click.
+    hour_grid = page.split("{/* hour grid", 1)[1]
+    for block, what in ((hour_grid, "the hour grid"), (month, "the month grid")):
+        appt = block.split("<div key={a.id}", 1)[1] if "<div key={a.id}" in block \
+            else block.split("data-appointment", 1)[1]
+        assert "stopPropagation" in appt.split("style={{", 1)[0], (
+            f"double-clicking an appointment in {what} falls through to the "
+            "empty-slot handler and opens a create dialog")
+
+    # One dialog, two entry points -- the New button and the double-clicks all
+    # set the same piece of state.
+    assert source.count("setDraft(") >= 1 and "book(defaultSlot(dayList, now))" in source, (
+        "the New button does not open the same dialog a double-click does")
+    assert "{draft && (\n        <NewAppointmentDialog" in source, (
+        "nothing renders the create dialog")
+
+
+def test_a_new_appointment_appears_without_a_manual_refresh():
+    """The range key changes with every view and every arrow press, so
+    invalidating the one key in hand would leave the booking invisible as soon
+    as the user paged anywhere."""
+    source = (FRONTEND / "pages" / "CalendarsPage.tsx").read_text(encoding="utf-8")
+    created = source.split("onCreated={() => {", 1)[1].split("}}", 1)[0]
+    assert "invalidateQueries({ queryKey: ['appointments'] })" in created, (
+        "the new appointment is not re-fetched, so it does not appear until "
+        "something else happens to refresh the query")

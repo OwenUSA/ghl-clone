@@ -519,9 +519,16 @@ class AppointmentCreate(BaseModel):
 @app.post("/api/appointments", status_code=201)
 def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
                        _: auth.Principal = auth.STAFF):
+    # `title: str` accepts "" and "   ", so an untitled booking used to be created
+    # happily and then rendered as an empty chip on the calendar — indistinguishable
+    # from a rendering bug. Rejected here rather than only in the browser, so the
+    # CLI and the telephony feed get the same answer.
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "an appointment needs a title")
     if body.ends_at <= body.starts_at:
         raise HTTPException(400, "ends_at must be after starts_at")
-    a = Appointment(**body.model_dump())
+    a = Appointment(**{**body.model_dump(), "title": title})
     db.add(a)
     db.flush()
     # Rule 3: booked -> reminders at T-24h and T-1h.
