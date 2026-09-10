@@ -80,6 +80,35 @@ def contains(q: str) -> str:
     return "%" + q + "%"
 
 
+# NOTE and INTERNAL_COMMENT are the team talking to itself on a thread: recorded
+# for the crew, never transmitted to the customer (see automations.INTERNAL_TYPES,
+# which is why DND never suppresses them). As of 2026-09-10 they are STAFF-only on
+# every path, read and write -- DECISIONS.md carries the reasoning.
+#
+# The rule lives in ONE predicate, applied at every door: the thread view, the
+# cross-thread message search, the global palette search, and the composer. The
+# alternative considered was enforcing it only in the new /api/search, which was
+# rejected: a TECH would then fail to find a word in the palette and read that same
+# note two clicks later in Conversations, which is the inconsistent-gate failure
+# DECISIONS.md already complains about once.
+INTERNAL_TYPES = automations.INTERNAL_TYPES
+
+
+def _sees_internal(principal: auth.Principal) -> bool:
+    return principal.role in (Role.ADMIN, Role.DISPATCHER)
+
+
+def _refuse_internal(principal: auth.Principal, verb: str) -> None:
+    """403 for an explicit request for internal notes.
+
+    Explicit asks are refused rather than silently emptied, so `--type NOTE` from
+    the CLI says why it returned nothing. An unfiltered read is narrowed instead:
+    an inbox that 403s because one hidden row exists would be unusable.
+    """
+    raise HTTPException(403, "role %s may not %s internal notes" % (
+        principal.role.value, verb))
+
+
 # ---------- schemas ----------
 
 class ContactOut(BaseModel):
@@ -749,21 +778,35 @@ def conversation_events(
     conv_id: int,
     db: Session = Depends(get_db),
     filter: str = "all",
-    _: auth.Principal = auth.ANY_USER):
+    principal: auth.Principal = auth.ANY_USER):
     """`filter` mirrors GHL's measured "Filter messages" menu: all | conversations
-    | activities | or a specific EventType name."""
+    | activities | or a specific EventType name.
+
+    Internal notes are dropped for a TECH whatever the filter says. Note
+    CONVERSATION_TYPES contains INTERNAL_COMMENT, so the measured "Conversations"
+    filter is one of the places that has to narrow.
+    """
+    internal_ok = _sees_internal(principal)
     stmt = (select(ConversationEvent)
             .where(ConversationEvent.conversation_id == conv_id))
 
     if filter == "conversations":
-        stmt = stmt.where(ConversationEvent.type.in_(CONVERSATION_TYPES))
+        types = set(CONVERSATION_TYPES)
+        if not internal_ok:
+            types -= INTERNAL_TYPES
+        stmt = stmt.where(ConversationEvent.type.in_(types))
     elif filter == "activities":
         stmt = stmt.where(ConversationEvent.type.in_(ACTIVITY_TYPES))
     elif filter != "all":
         try:
-            stmt = stmt.where(ConversationEvent.type == EventType[filter.upper()])
+            wanted = EventType[filter.upper()]
         except KeyError:
             raise HTTPException(400, "unknown filter %r" % filter) from None
+        if wanted in INTERNAL_TYPES and not internal_ok:
+            _refuse_internal(principal, "read")
+        stmt = stmt.where(ConversationEvent.type == wanted)
+    elif not internal_ok:
+        stmt = stmt.where(ConversationEvent.type.not_in(INTERNAL_TYPES))
 
     rows = db.scalars(stmt.order_by(ConversationEvent.occurred_at)).all()
     return [EventOut(id=e.id, type=e.type.value, direction=e.direction.value,
@@ -1242,9 +1285,9 @@ def _search_events(db: Session, *, types: set[EventType],
     if contact_id:
         stmt = stmt.where(Contact.id == contact_id)
     if q:
-        like = "%%%s%%" % q
         # transcript as well as body: searching call transcripts is the whole
         # point of `ghl calls list --q`.
+        like = "%%%s%%" % q
         stmt = stmt.where(or_(ConversationEvent.body.ilike(like),
                               ConversationEvent.transcript.ilike(like),
                               ConversationEvent.subject.ilike(like)))
@@ -1334,9 +1377,13 @@ def list_messages(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     order: Literal["asc", "desc"] = "desc",
-    _: auth.Principal = auth.ANY_USER,
+    principal: auth.Principal = auth.ANY_USER,
 ):
-    """Search messages and notes across every conversation."""
+    """Search messages and notes across every conversation.
+
+    Internal notes are STAFF-only: `type=all` narrows for a TECH, and asking for
+    them by name is refused outright.
+    """
     if type == "all":
         types = set(MESSAGE_TYPES)
     else:
@@ -1347,6 +1394,11 @@ def list_messages(
                 type, sorted(t.value for t in MESSAGE_TYPES))) from None
         if types - MESSAGE_TYPES:
             raise HTTPException(400, "%r is not a message type" % type)
+
+    if not _sees_internal(principal):
+        if type != "all" and types & INTERNAL_TYPES:
+            _refuse_internal(principal, "read")
+        types -= INTERNAL_TYPES
 
     extra = []
     if delivery_status:
@@ -1375,9 +1427,14 @@ class MessageSend(BaseModel):
     subject: str | None = None
 
 
-def _send_to_contact(db: Session, contact: Contact, body: MessageSend) -> dict:
+def _send_to_contact(db: Session, contact: Contact, body: MessageSend,
+                     principal: auth.Principal) -> dict:
     if not body.body.strip():
         raise HTTPException(400, "a message needs a body")
+    # Writing a note a TECH cannot then read would be a worse bug than refusing
+    # the write, so the read rule and the write rule are the same rule.
+    if EventType[body.type] in INTERNAL_TYPES and not _sees_internal(principal):
+        _refuse_internal(principal, "write")
     ev, reason = automations.send_outbound(
         db, contact, body.body, type_=EventType[body.type], subject=body.subject)
     db.commit()
@@ -1399,7 +1456,7 @@ def _send_to_contact(db: Session, contact: Contact, body: MessageSend) -> dict:
 @app.post("/api/contacts/{contact_id}/messages", status_code=201)
 def send_to_contact(contact_id: int, body: MessageSend,
                     db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ANY_USER):
+                    principal: auth.Principal = auth.ANY_USER):
     """Send to a contact, creating the thread if there isn't one.
 
     Contact-first because that is how the CLI addresses people. While
@@ -1409,13 +1466,13 @@ def send_to_contact(contact_id: int, body: MessageSend,
     contact = db.get(Contact, contact_id)
     if not contact:
         raise HTTPException(404, "contact not found")
-    return _send_to_contact(db, contact, body)
+    return _send_to_contact(db, contact, body, principal)
 
 
 @app.post("/api/conversations/{conv_id}/messages", status_code=201)
 def send_to_conversation(conv_id: int, body: MessageSend,
                          db: Session = Depends(get_db),
-                         _: auth.Principal = auth.ANY_USER):
+                         principal: auth.Principal = auth.ANY_USER):
     """Send on an open thread — the shape the Conversations composer uses."""
     conv = db.get(Conversation, conv_id)
     if not conv:
@@ -1423,7 +1480,7 @@ def send_to_conversation(conv_id: int, body: MessageSend,
     contact = db.get(Contact, conv.contact_id)
     if not contact:
         raise HTTPException(404, "conversation has no contact")
-    return _send_to_contact(db, contact, body)
+    return _send_to_contact(db, contact, body, principal)
 
 
 class ConversationPatch(BaseModel):
