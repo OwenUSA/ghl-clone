@@ -672,6 +672,260 @@ def test_conversion_rate_excludes_open(client):
     assert d["conversion_rate"] == expected
 
 
+# ---- the date range and the funnel, on data built by hand ----------------
+#
+# Four stages, every one a DIFFERENT occupancy, and the occupancies rise before
+# they fall (10 / 3 / 6 / 1) exactly as the production pipeline's do. That shape
+# is what put a "next step conversion" of 400% on screen: 6 sitting in stage 2
+# over 3 sitting in stage 1 is a ratio of two occupancies, not a conversion. A
+# wrong denominator cannot pass against these numbers.
+#
+# The old rows are all won and expensive, so if the range filter leaks even once
+# every figure on the endpoint moves at the same time.
+
+IN_RANGE_DAYS = 5
+OUT_OF_RANGE_DAYS = 200
+
+#                  stage, status, value_cents, how many
+IN_RANGE_ROWS = [(0, "open", 1000, 6), (0, "won", 5000, 2),
+                 (0, "lost", 3000, 1), (0, "abandoned", 2000, 1),
+                 (1, "open", 1000, 1), (1, "won", 5000, 1),
+                 (1, "lost", 3000, 1),
+                 (2, "open", 1000, 3), (2, "won", 5000, 1),
+                 (2, "lost", 3000, 1), (2, "abandoned", 2000, 1),
+                 (3, "open", 1000, 1)]
+OLD_ROWS = [(0, "won", 999_900, 5)]
+
+# Hand-computed from the two tables above, not read back off the endpoint.
+RECENT = {"total": 20, "won": 4, "open": 11, "lost": 3, "abandoned": 2,
+          "total_value": 44_000, "won_value": 20_000,
+          "value_by_status": {"won": 20_000, "open": 11_000,
+                              "lost": 9_000, "abandoned": 4_000},
+          "counts": [10, 3, 6, 1], "reached": [20, 10, 7, 1],
+          "cumulative": [100.0, 50.0, 35.0, 5.0],
+          "next_step": [50.0, 70.0, 14.29, None],
+          "stage_value": [21_000, 9_000, 13_000, 1_000]}
+ALL_TIME = {"total": 25, "won": 9, "open": 11, "lost": 3, "abandoned": 2,
+            "total_value": 5_043_500, "won_value": 5_019_500,
+            "counts": [15, 3, 6, 1], "reached": [25, 10, 7, 1],
+            "cumulative": [100.0, 40.0, 28.0, 4.0],
+            "next_step": [40.0, 70.0, 14.29, None]}
+
+
+@pytest.fixture()
+def dash():
+    """Its own database, because the shared `client` fixture's opportunities would
+    land in these totals and nothing here could then be asserted as a literal."""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+
+    users = [User(email="a@x.test", name="Owen", role=Role.ADMIN),
+             User(email="c@x.test", name="Tech", role=Role.TECH)]
+    db.add_all(users)
+    db.flush()
+
+    pipe = Pipeline(name="AHS")
+    db.add(pipe)
+    db.flush()
+    stages = [Stage(pipeline_id=pipe.id, name=n, position=i) for i, n in
+              enumerate(["New Lead", "Inspection", "Request the Approval",
+                         "Submit The Invoice"])]
+    db.add_all(stages)
+    db.flush()
+
+    n = 0
+    for rows, days in ((IN_RANGE_ROWS, IN_RANGE_DAYS), (OLD_ROWS, OUT_OF_RANGE_DAYS)):
+        for stage_i, status, cents, how_many in rows:
+            for _ in range(how_many):
+                n += 1
+                db.add(Opportunity(
+                    title="OPP %d" % n, pipeline_id=pipe.id,
+                    stage_id=stages[stage_i].id, value_cents=cents, status=status,
+                    created_at=utcnow() - timedelta(days=days)))
+    db.commit()
+
+    tokens = {}
+    for key, user in (("admin", users[0]), ("tech", users[1])):
+        plain, token = mint_api_token(user, name="test-%s" % key)
+        db.add(token)
+        tokens[key] = plain
+    db.commit()
+    # Read the ids out before the session closes — the ORM objects detach with it.
+    pipeline_id = pipe.id
+    stage_ids = [s.id for s in stages]
+    db.close()
+
+    with TestClient(app) as c:
+        c.headers["Authorization"] = "Bearer " + tokens["admin"]
+        c.tokens = tokens
+        c.pipeline_id = pipeline_id
+        c.stage_ids = stage_ids
+        yield c
+
+
+def _last(days: int) -> dict:
+    return {"start": (utcnow() - timedelta(days=days)).isoformat()}
+
+
+def test_the_date_range_narrows_every_card(dash):
+    """The control offered ranges and `/api/dashboard` took no date parameter at
+    all, so "Last 30 days" and "All time" returned the same numbers."""
+    wide = dash.get("/api/dashboard").json()
+    assert wide["total"] == ALL_TIME["total"]
+    assert wide["total_value_cents"] == ALL_TIME["total_value"]
+
+    narrow = dash.get("/api/dashboard", params=_last(30)).json()
+    assert narrow["total"] == RECENT["total"] < wide["total"], (
+        "the range does not exclude the five opportunities created 200 days ago")
+    assert narrow["status"] == {"won": RECENT["won"], "open": RECENT["open"],
+                                "lost": RECENT["lost"],
+                                "abandoned": RECENT["abandoned"]}
+    assert narrow["total_value_cents"] == RECENT["total_value"]
+    assert narrow["won_value_cents"] == RECENT["won_value"]
+    # ...and the excluded rows were the expensive ones, so this is not a coincidence.
+    assert narrow["won_value_cents"] < wide["won_value_cents"]
+
+
+def test_an_opportunity_created_inside_the_range_is_counted(dash):
+    """The other half: a window that contains only the OLD rows must show only
+    those. A filter that narrows to nothing would pass the test above."""
+    only_old = dash.get("/api/dashboard", params={
+        "start": (utcnow() - timedelta(days=OUT_OF_RANGE_DAYS + 1)).isoformat(),
+        "end": (utcnow() - timedelta(days=OUT_OF_RANGE_DAYS - 1)).isoformat()}).json()
+    assert only_old["total"] == 5
+    assert only_old["status"]["won"] == 5
+    assert only_old["won_value_cents"] == 5 * 999_900
+
+
+def test_all_time_stays_the_default_when_no_range_is_given(dash):
+    """The owner's decision: no range means every opportunity ever created.
+
+    A 30-day default would have emptied this screen the moment the filter started
+    working — production's opportunities were created in one week of August.
+    """
+    bare = dash.get("/api/dashboard").json()
+    assert bare["total"] == ALL_TIME["total"]
+    assert bare["total"] != RECENT["total"], "no range is being read as 30 days"
+    assert bare["range"] == {"start": None, "end": None}
+    # Same answer as an explicitly enormous window.
+    wide = dash.get("/api/dashboard", params=_last(3650)).json()
+    assert wide["total"] == bare["total"]
+    assert wide["total_value_cents"] == bare["total_value_cents"]
+
+
+def test_counts_and_revenue_match_hand_computed_values(dash):
+    """Per-status money used to be invented in the browser: Lost was hard-coded to
+    $0 and Open was drawn as `total - won`, which is only right when nothing has
+    been lost or abandoned. Here all four buckets are non-empty and different."""
+    d = dash.get("/api/dashboard", params=_last(30)).json()
+    assert d["value_by_status"] == RECENT["value_by_status"]
+    assert sum(d["value_by_status"].values()) == d["total_value_cents"]
+    assert d["value_by_status"]["lost"] == 9_000 != 0
+    assert d["value_by_status"]["open"] != d["total_value_cents"] - d["won_value_cents"]
+
+
+def test_conversion_rates_cannot_exceed_one_hundred_percent(dash):
+    d = dash.get("/api/dashboard", params=_last(30)).json()
+    # 4 won of 7 decided; 4 won of 20 opportunities.
+    assert d["conversion_rate"] == 57.14
+    assert d["conversion_rate_all"] == 20.0
+    assert 0 <= d["conversion_rate"] <= 100
+    assert 0 <= d["conversion_rate_all"] <= 100
+
+
+def test_the_funnel_obeys_the_date_range(dash):
+    """The Funnel and Stage distribution cards read `/api/pipelines`, which counts
+    every opportunity ever created — so those two cards ignored the range even
+    once the other three obeyed it."""
+    wide = dash.get("/api/dashboard/funnel").json()
+    assert [s["count"] for s in wide["stages"]] == ALL_TIME["counts"]
+
+    narrow = dash.get("/api/dashboard/funnel", params=_last(30)).json()
+    assert [s["count"] for s in narrow["stages"]] == RECENT["counts"]
+    assert [s["value_cents"] for s in narrow["stages"]] == RECENT["stage_value"]
+    assert narrow["total"] == RECENT["total"] < wide["total"]
+    assert sum(s["count"] for s in narrow["stages"]) == narrow["total"]
+
+
+def test_next_step_conversion_is_a_share_of_the_deals_that_got_there(dash):
+    """`count[i+1] / count[i]` is how 400% reached the screen: stage 2 holds more
+    deals than stage 1, and a ratio of two occupancies is not a conversion rate.
+
+    Of the deals that REACHED a stage, the share that went on to the next one is
+    `reached[i+1] / reached[i]`, which cannot exceed 1 because `reached` only falls.
+    """
+    for params, expected in ((_last(30), RECENT), ({}, ALL_TIME)):
+        stages = dash.get("/api/dashboard/funnel", params=params).json()["stages"]
+        assert [s["reached"] for s in stages] == expected["reached"]
+        assert [s["next_step_pct"] for s in stages] == expected["next_step"]
+        for s in stages:
+            assert s["next_step_pct"] is None or 0 <= s["next_step_pct"] <= 100, (
+                "%s converts at %s%%" % (s["name"], s["next_step_pct"]))
+        # The last stage has nothing to convert into.
+        assert stages[-1]["next_step_pct"] is None
+
+    # The naive formula really would have been over 100% on this data.
+    stages = dash.get("/api/dashboard/funnel", params=_last(30)).json()["stages"]
+    naive = stages[2]["count"] / stages[1]["count"] * 100
+    assert naive > 100 and stages[1]["next_step_pct"] < 100
+
+
+def test_the_cumulative_column_falls_monotonically(dash):
+    """It read New Lead 30%, Inspection 10%, Request Approval 40% — a distribution
+    (`count / total`) printed under a heading that promises a cumulative."""
+    for params, expected in ((_last(30), RECENT), ({}, ALL_TIME)):
+        stages = dash.get("/api/dashboard/funnel", params=params).json()["stages"]
+        cumulative = [s["cumulative_pct"] for s in stages]
+        assert cumulative == expected["cumulative"]
+        assert cumulative[0] == 100.0, "the first stage is not everybody"
+        assert cumulative == sorted(cumulative, reverse=True), (
+            "the cumulative column goes back up at some stage: %s" % cumulative)
+        # ...and it is consistent with the next-step column beside it.
+        for i, s in enumerate(stages[:-1]):
+            assert round(cumulative[i] * s["next_step_pct"] / 100, 2) == cumulative[i + 1]
+
+
+def test_an_empty_range_leaves_the_funnel_without_percentages(dash):
+    """Nothing reached any stage, so there is no denominator. `0%` everywhere would
+    claim the pipeline converts at zero, which is a different statement."""
+    empty = dash.get("/api/dashboard/funnel", params={
+        "start": (utcnow() - timedelta(days=1)).isoformat()}).json()
+    assert empty["total"] == 0
+    assert [s["count"] for s in empty["stages"]] == [0, 0, 0, 0]
+    assert all(s["cumulative_pct"] is None for s in empty["stages"])
+    assert all(s["next_step_pct"] is None for s in empty["stages"])
+
+
+def test_the_dashboard_is_staff_only_and_leaks_nothing_to_a_tech(dash):
+    tech = dash.get("/api/dashboard",
+                    headers={"Authorization": "Bearer " + dash.tokens["tech"]})
+    assert tech.status_code == 403
+    body = tech.text
+    for leaked in ("total", "conversion", "value_cents", str(ALL_TIME["total_value"])):
+        assert leaked not in body, "the refusal carries %r" % leaked
+
+
+def test_the_funnel_stays_readable_by_a_tech(dash):
+    """Deliberate, and recorded in DECISIONS.md (2026-09-09): per-stage counts and
+    money are already TECH-visible through `/api/pipelines` and `/api/opportunities`,
+    so putting the funnel behind the STAFF gate would have removed a card from a
+    dispatched tech's screen without withholding anything they cannot already read.
+    """
+    r = dash.get("/api/dashboard/funnel",
+                 headers={"Authorization": "Bearer " + dash.tokens["tech"]})
+    assert r.status_code == 200
+    assert [s["count"] for s in r.json()["stages"]] == ALL_TIME["counts"]
+
+
+def test_an_unknown_pipeline_is_a_404_rather_than_an_empty_funnel(dash):
+    """An empty funnel for a pipeline that does not exist reads as "no deals yet"."""
+    assert dash.get("/api/dashboard/funnel",
+                    params={"pipeline_id": 99_999}).status_code == 404
+    ok = dash.get("/api/dashboard/funnel", params={"pipeline_id": dash.pipeline_id})
+    assert ok.status_code == 200 and ok.json()["pipeline_id"] == dash.pipeline_id
+
+
 # ---------------- Reporting ----------------
 
 def test_call_report_counts_and_durations(client):

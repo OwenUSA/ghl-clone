@@ -810,33 +810,170 @@ def list_calendars(db: Session = Depends(get_db),
             for c in rows]
 
 
-@app.get("/api/dashboard")
-def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
-              _: auth.Principal = auth.STAFF):
-    """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
-    Opportunity value (Total vs Won revenue), Conversion rate."""
+def _range_utc(dt: datetime | None) -> datetime | None:
+    """Read one end of a dashboard range as UTC.
+
+    A naive timestamp is taken as UTC rather than as the server's local time. The
+    browser sends UTC and the CLI's `--since 30d` is UTC, so a naive value reaching
+    here is always a caller that dropped the offset, never one meaning local noon.
+    Left as local time it would move the window by the server's offset, which is the
+    kind of drift nobody notices until a deal falls off the edge of "Last 7 days".
+    """
+    if dt is None:
+        return None
+    return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _opportunities_in_range(db: Session, pipeline_id: int | None,
+                            start: datetime | None, end: datetime | None):
+    """Every opportunity the dashboard is allowed to count.
+
+    The range filters on **creation date** — the owner's decision (2026-09-10).
+    Not the stage-change date and not the won date: `updated_at` moves every time
+    anyone touches a record, and there is no `won_at` column at all (see the Call
+    report amendment in DECISIONS.md, which hit the same gap).
+
+    No range means ALL TIME, deliberately. Defaulting to 30 days would empty this
+    screen for a company whose deals were created in one August week, and a fix
+    that reads as a regression is worse than the bug it fixes.
+    """
     stmt = select(Opportunity)
     if pipeline_id:
         stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
-    opps = db.scalars(stmt).all()
+    if start is not None:
+        stmt = stmt.where(Opportunity.created_at >= _range_utc(start))
+    if end is not None:
+        stmt = stmt.where(Opportunity.created_at <= _range_utc(end))
+    return db.scalars(stmt).all()
+
+
+@app.get("/api/dashboard")
+def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
+              start: datetime | None = None, end: datetime | None = None,
+              _: auth.Principal = auth.STAFF):
+    """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
+    Opportunity value (Total vs Won revenue), Conversion rate.
+
+    `start`/`end` bound the opportunity's **creation** date; omitting both means
+    all time. Every figure below obeys the same window — nothing on this endpoint
+    is exempt from it.
+
+    Two keys exist because the cards used to invent them in the browser:
+
+    * `value_by_status` — the Opportunity value card draws one bar per status. It
+      had no per-status money to draw, so it hard-coded Lost at $0 and rendered
+      Open as `total - won`, which is only true when nothing has been lost or
+      abandoned. The bars were arithmetic, not data.
+    * `conversion_rate_all` — `conversion_rate` is Won / (Won + Lost), i.e. of the
+      deals that have been *decided*. Won / every opportunity is the other
+      reasonable reading, so the card offers both rather than the API picking for
+      the owner. Neither can exceed 100%.
+    """
+    opps = _opportunities_in_range(db, pipeline_id, start, end)
 
     by_status = {"won": 0, "open": 0, "lost": 0, "abandoned": 0}
+    value_by_status = {"won": 0, "open": 0, "lost": 0, "abandoned": 0}
     total_value = won_value = 0
     for o in opps:
         by_status[o.status] = by_status.get(o.status, 0) + 1
+        value_by_status[o.status] = value_by_status.get(o.status, 0) + o.value_cents
         total_value += o.value_cents
         if o.status == "won":
             won_value += o.value_cents
 
     decided = by_status["won"] + by_status["lost"]
     conversion = (by_status["won"] / decided * 100) if decided else 0.0
+    conversion_all = (by_status["won"] / len(opps) * 100) if opps else 0.0
     return {
         "total": len(opps),
         "status": by_status,
         "total_value_cents": total_value,
         "won_value_cents": won_value,
+        "value_by_status": value_by_status,
         "conversion_rate": round(conversion, 2),
+        "conversion_rate_all": round(conversion_all, 2),
+        # Echoed so the browser and the CLI can show which window produced these
+        # numbers rather than trusting the control that was last clicked.
+        "range": {"start": _range_utc(start), "end": _range_utc(end)},
     }
+
+
+@app.get("/api/dashboard/funnel")
+def dashboard_funnel(db: Session = Depends(get_db), pipeline_id: int | None = None,
+                     start: datetime | None = None, end: datetime | None = None,
+                     _: auth.Principal = auth.ANY_USER):
+    """The Funnel and Stage distribution cards: one pipeline, stage by stage.
+
+    Both cards used to be fed by `GET /api/pipelines`, which counts every
+    opportunity ever created and so ignored the date range entirely. They are fed
+    from here instead, and this route keeps that endpoint's **ANY_USER** gate on
+    purpose: per-stage counts and money are already TECH-visible through
+    `/api/pipelines` and `/api/opportunities`, and DECISIONS.md (2026-09-09) records
+    that as deliberate. Moving the funnel behind the STAFF gate on `/api/dashboard`
+    would have quietly taken a card off a dispatched tech's screen.
+
+    Three numbers per stage, and only the first is a plain count:
+
+    * `count`    — opportunities sitting in this stage now. Matches the kanban.
+    * `reached`  — how many got this far: `count` of this stage and every stage
+      after it. This is INFERRED from where deals sit today, because the schema
+      keeps no stage history — a deal in stage 4 is assumed to have passed through
+      stages 0-3, and one lost at stage 2 still counts as having reached stage 2.
+      That is the only reading the data supports; it is not a record of movement.
+    * `cumulative_pct` — `reached / reached[0]`: the share of the pipeline's deals
+      that got this far or further. It starts at 100% and can only fall, which is
+      what makes it a funnel. It used to be `count / total`, which is a
+      distribution, not a cumulative — it rose and fell down the column.
+    * `next_step_pct` — `reached[i+1] / reached[i]`: of the deals that reached this
+      stage, the share that went on to the next one. It cannot exceed 100%. It used
+      to be `count[i+1] / count[i]`, comparing two occupancies rather than two
+      populations, which is how a "conversion rate" of 400% got on screen.
+
+    `null` where a figure has no meaning: the last stage has no next step, and a
+    stage nothing reached has no denominator. The card renders those as `--`,
+    matching the measured empty-field dash used elsewhere.
+    """
+    stmt = select(Pipeline).options(selectinload(Pipeline.stages))
+    if pipeline_id:
+        stmt = stmt.where(Pipeline.id == pipeline_id)
+    pipeline = db.scalars(stmt.order_by(Pipeline.position, Pipeline.id)).first()
+    if pipeline is None:
+        # An unknown pipeline_id is a 404; an empty database simply has no funnel.
+        if pipeline_id:
+            raise HTTPException(404, "no pipeline %d" % pipeline_id)
+        return {"pipeline_id": None, "pipeline_name": None, "total": 0, "stages": []}
+
+    opps = _opportunities_in_range(db, pipeline.id, start, end)
+    counts: dict[int, int] = {}
+    values: dict[int, int] = {}
+    for o in opps:
+        counts[o.stage_id] = counts.get(o.stage_id, 0) + 1
+        values[o.stage_id] = values.get(o.stage_id, 0) + o.value_cents
+
+    ordered = sorted(pipeline.stages, key=lambda s: (s.position, s.id))
+    tail = [counts.get(s.id, 0) for s in ordered]
+    # reached[i] = everyone at stage i or beyond, walked backwards so it is one pass.
+    reached = [0] * len(ordered)
+    running = 0
+    for i in range(len(ordered) - 1, -1, -1):
+        running += tail[i]
+        reached[i] = running
+
+    total = reached[0] if reached else 0
+    stages = []
+    for i, s in enumerate(ordered):
+        nxt = reached[i + 1] if i + 1 < len(reached) else None
+        stages.append({
+            "id": s.id, "name": s.name, "position": s.position,
+            "count": tail[i], "value_cents": values.get(s.id, 0),
+            "reached": reached[i],
+            "cumulative_pct": round(reached[i] / total * 100, 2) if total else None,
+            "next_step_pct": (round(nxt / reached[i] * 100, 2)
+                              if nxt is not None and reached[i] else None),
+        })
+    return {"pipeline_id": pipeline.id, "pipeline_name": pipeline.name,
+            "total": total, "stages": stages,
+            "range": {"start": _range_utc(start), "end": _range_utc(end)}}
 
 
 @app.get("/api/appointments")
