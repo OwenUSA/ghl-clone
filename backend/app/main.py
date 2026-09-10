@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations
+from . import auth, automations, phone_match
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
@@ -150,17 +150,25 @@ def list_contacts(
     stmt = select(Contact)
     if q:
         like = "%%%s%%" % q
-        stmt = stmt.where(or_(Contact.first_name.ilike(like),
-                              Contact.last_name.ilike(like),
-                              # Searching a full name is the obvious thing to type,
-                              # and matching the columns separately never does it:
-                              # "jane doe" is in neither first_name nor last_name.
-                              # Renders as || on both Postgres and SQLite.
-                              (Contact.first_name + " "
-                               + Contact.last_name).ilike(like),
-                              Contact.email.ilike(like),
-                              Contact.phone.ilike(like),
-                              Contact.business_name.ilike(like)))
+        terms = [Contact.first_name.ilike(like),
+                 Contact.last_name.ilike(like),
+                 # Searching a full name is the obvious thing to type,
+                 # and matching the columns separately never does it:
+                 # "jane doe" is in neither first_name nor last_name.
+                 # Renders as || on both Postgres and SQLite.
+                 (Contact.first_name + " "
+                  + Contact.last_name).ilike(like),
+                 Contact.email.ilike(like),
+                 Contact.phone.ilike(like),
+                 Contact.business_name.ilike(like)]
+        # A number typed the way a phone shows it must find the row whatever
+        # shape that row is stored in — see app/phone_match.py. Added to the
+        # ILIKE terms rather than replacing them: a business named "24/7
+        # Roofing" is phone-shaped once the slash goes, and it must still be
+        # findable by its own name.
+        if phone_match.looks_like_phone(q):
+            terms.append(phone_match.phone_clause(Contact.phone, q))
+        stmt = stmt.where(or_(*terms))
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
