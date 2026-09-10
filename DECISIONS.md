@@ -996,3 +996,153 @@ stepping. That is a deliberate step up from this project's usual "assert against
 frontend idiom, which would have passed against the broken version. CI's backend job now
 installs node for it; if node is ever absent the file skips loudly rather than silently
 passing.
+
+## AMENDMENT (2026-09-10): the Dashboard works, and most of it is OURS
+
+The owner read the Dashboard as decorative. **Most of it was not** — the three
+measured cards had been computed from real `Opportunity` rows all along, and on
+production `Conversion rate 0.00%` / `Won revenue $0.00` were the literal truth,
+because all 10 opportunities are still `status = open`. Nothing has been won, so
+nothing can be reported as won. That is recorded here because it is the second
+time a correct zero has been mistaken for a placeholder on this project (the Call
+report amendment of 2026-09-09 is the first), and it will happen again.
+
+Four things genuinely were wrong and are now fixed. Everything else on the screen
+was swept; the full control-by-control inventory is in
+`.qa/state/dashboard-done`.
+
+### 1. The date range now filters, on CREATION date, defaulting to ALL TIME
+
+`GET /api/dashboard` accepted only `pipeline_id`. The control offered
+"Last 7/30/90 days" and changed nothing, so every card showed all time under
+whichever label had last been clicked. It takes `start`/`end` now.
+
+Two decisions of the owner's, both binding:
+
+- **The window filters on `Opportunity.created_at`.** Not the stage-change date:
+  `updated_at` moves whenever anyone touches a record. Not the won date: there is
+  no `won_at` column at all — the same gap the Call report amendment ran into,
+  and the reason "Won deals" there selects callers rather than wins.
+- **No range means all time**, and "All time" is the first option in the control.
+  Production's opportunities were created between 8 and 16 August; a 30-day
+  default would have emptied this screen the moment the filter started working,
+  and a fix that reads as a regression is worse than the bug it fixes.
+
+Nothing on the screen is exempt from the range. The windows are rolling (the last
+7×24 hours, not the last seven calendar days) and open at the top end.
+
+### 2 and 3. Both funnel percentage columns were comparing the wrong things
+
+One cause, two symptoms. Both columns compared stage **occupancies** — how many
+deals are sitting in a stage right now — when a funnel is about **populations**:
+how many got that far.
+
+- "Next step conversion" was `count[i+1] / count[i]`, which reads **400%**
+  wherever a later stage holds more deals than an earlier one. Production's
+  pipeline does exactly that. A conversion rate above 100% is not a rounding
+  problem, it is the wrong quantity.
+- "Cumulative" was `count / total` — a distribution, printed under a heading that
+  promises a cumulative, so it rose and fell down the column (30% / 10% / 40%).
+
+**The definition now in force, and open to being overruled:**
+
+- `reached[i]` = the deals in stage *i* **or any later stage**.
+- `cumulative_pct[i]` = `reached[i] / reached[0]` — the share of the pipeline's
+  deals that got this far or further. It starts at 100% and can only fall.
+- `next_step_pct[i]` = `reached[i+1] / reached[i]` — of the deals that reached a
+  stage, the share that went on to the next one. It cannot exceed 100%.
+- `null`, rendered `--`, where a figure has no denominator: the last stage has no
+  next step, and a stage nothing reached has no population.
+
+**`reached` is INFERRED, and that is the load-bearing caveat.** The schema keeps
+no stage history. A deal in stage 4 is assumed to have passed through stages 0-3,
+and a deal lost at stage 2 still counts as having reached stage 2. This is the
+only reading the data supports; it is not a record of movement. A real answer
+needs a stage-transition table, which is a schema change and a separate decision.
+
+Lost and abandoned deals stay in the funnel, so its counts reconcile against the
+kanban columns — which is what anyone cross-checking will do first.
+
+### `GET /api/dashboard/funnel` is new, and is deliberately ANY_USER
+
+The Funnel and Stage distribution cards were fed by `GET /api/pipelines`, which
+counts every opportunity ever created and therefore could not obey a date range.
+They are fed by a new route instead.
+
+That route keeps `/api/pipelines`' **ANY_USER** gate on purpose. The triage note
+of 2026-09-09 above records per-stage counts and money as deliberately
+TECH-visible — a TECH can already read them from `/api/pipelines` and
+`/api/opportunities` — so folding the funnel into the STAFF-only
+`/api/dashboard` would have quietly removed a card from a dispatched tech's
+screen while withholding nothing they cannot already read. `/api/dashboard`
+itself is unchanged: still STAFF, still 403 for a TECH, and the cards it feeds
+still render the refusal rather than a dashboard of zeros.
+
+### 4. Controls that looked clickable and did nothing
+
+Per CLAUDE.md's standing rule, and the precedent set by the Reporting tabs and
+the Contact Details Actions tab: a control either works or is disabled with the
+reason on hover.
+
+- **Per-card gears** were `disabled` with "not implemented in v1". They open a
+  settings popover now, carrying only options that genuinely change that card —
+  follow the range or pin the card to all time; the conversion denominator
+  (won/decided or won/all); whether the funnel draws stages holding nothing; the
+  distribution's sort order. Persisted in `localStorage`.
+- **The "Dashboard" selector** was a `<button>` with no handler. It opens a menu
+  of the dashboards that exist. There is one, so it lists one.
+- **`⋮`** was a `<span>` — not focusable, not a button. It is a menu: Refresh
+  figures, Download as CSV.
+- **"+ New" stays DISABLED**, with a fuller reason on hover. See below.
+
+### Custom dashboards are NOT built, and this is what they would take
+
+"+ New" and the dashboard selector both imply user-defined dashboards. That is a
+build of its own — a widget registry, a persisted per-dashboard layout, a layout
+editor, and a card-configuration model that every card must then honour — and
+this CRM is in daily use by four people. A half-working dashboard builder on it
+is worse than an honest "not built". Rough shape if it is ever wanted:
+
+- a `dashboards` table plus a `dashboard_cards` table (dashboard, card type,
+  position, size, per-card settings as JSONB), and CRUD behind the STAFF gate;
+- a card registry keyed by type, so a saved card can be resolved to a component;
+- drag-and-resize editing (`dnd-kit` is already a dependency for the kanban);
+- the five existing cards refactored to take their settings as data rather than
+  as page state.
+
+Two to three days, most of it in the editor rather than the data model.
+
+### What on this screen is measured, and what is ours
+
+The **three top cards keep their measured structure and typography** — titles at
+16px/600, the donut with its centred total, the horizontal value bars with the
+"Total revenue" footer, the conversion ring. Only their behaviour changed. The
+Funnel and Stage distribution cards likewise keep their measured shape.
+
+**Everything the captures never covered is our own design and may not be cited as
+parity**, exactly as with the Calendars Month view and the Contact Details
+Actions tab:
+
+- the contents of the date-range menu (GHL's own menu was never opened);
+- the per-card settings popovers, in full;
+- the "Dashboard" selector menu and the `⋮` menu;
+- the `--` shown where a percentage has no denominator (it reuses the measured
+  empty-field dash, but this use of it was not measured);
+- the caption naming a card's window when it differs from the header control's.
+
+Re-measure all of these if a live GHL session is ever opened again; where GHL
+differs, GHL wins for structure, as everywhere else.
+
+### One test-infrastructure hazard, found and NOT fixed
+
+`backend/tests/conftest.py` puts the throwaway SQLite database at a fixed path,
+`<tempdir>/ghl_clone_test.db`. Every worktree on this machine therefore shares one
+file, and two agents running `pytest` at the same time drop and recreate it under
+each other — 14 failures and 18 errors across every module, in tests neither
+agent touched. Verified: the same commit passes 285/285 with a private `TMPDIR`.
+
+Left alone deliberately. The fix is a line in shared test infrastructure that
+several branches would each have to edit, and merging four different versions of
+it is worse than the hazard. Until someone owns it: run
+`TMPDIR=<private dir> uv run pytest`, and treat a broad cross-module failure as a
+collision to be re-run before it is investigated.
