@@ -247,6 +247,11 @@ will need the user to run that export themselves, or an explicit one-time lift.
 
   Two distinct stages are both named **"Call Back"** — preserved as measured, not deduplicated.
 
+  > **Superseded as a description of OUR schema (2026-09-10).** Stages are now
+  > user-editable, so this table is a historical measurement of GHL and not a
+  > guarantee about our own stage list. See "Pipelines and stages are now
+  > USER-EDITABLE" at the end of this file.
+
   Two traps hit while fixing this, both now handled in the tooling:
   1. The collector matched a stage's header container *and* its inner line, double-counting
      to 78. Only `"<name> | <n> opportunities | $<value>"` shaped entries are real headers.
@@ -1176,3 +1181,99 @@ that does not exist would be a promise the board cannot keep.
   the real `applyView`/`matchesView` under node. The failure that guards against is
   a view that resolves back to the filters already in effect — nothing on screen
   would look wrong.
+
+### Pipelines and stages are now USER-EDITABLE (2026-09-10) — read this one
+
+**This supersedes the implicit assumption everywhere above that the pipeline
+structure is fixed.** Until today there were **no write endpoints for pipelines or
+stages at all** — no POST, no PATCH, no DELETE. The structure came from the seed
+and could only be changed by editing the database. On the owner's instruction it
+is now editable from the Opportunities > Pipelines tab:
+
+    POST   /api/pipelines                          create a pipeline
+    PATCH  /api/pipelines/{id}                     rename it
+    DELETE /api/pipelines/{id}                     only when EMPTY
+    POST   /api/pipelines/{id}/stages              add a stage (appended)
+    PATCH  /api/stages/{id}                        rename a stage
+    DELETE /api/stages/{id}                        only when EMPTY
+    POST   /api/pipelines/{id}/stages/reorder      reorder the columns
+
+**Consequence, binding: the stage list is no longer guaranteed to match the
+measured GHL capture.** The table under "Known measurement gaps" — 10 stages, the
+`Approved- Repair Schedule` typo, the two "Call Back" stages — records what GHL
+held on 2026-08-13. From today it is a **historical measurement, not a description
+of our schema**: anyone may add, rename, reorder or remove a stage, and a
+divergence between our board and that table is now expected rather than a defect.
+Nothing should assert against those stage names. (`capture/build/verify.py`
+already asserts pipelines *exist* rather than pinning a stage count — that choice
+now covers this too.)
+
+**The delete rule, which is the whole safety story:**
+
+- **A stage can only be deleted while it holds ZERO opportunities.** A populated
+  stage is refused **409**, and the message names the count so the admin knows
+  what to move. **There is no `force`, at any role, by any query parameter.**
+- **A pipeline can only be deleted while it has ZERO stages and ZERO
+  opportunities.** `Pipeline.stages` cascades delete-orphan, so a pipeline delete
+  that ran with stages present would take the columns and every deal in them.
+  Empty means empty: the columns are somebody's configuration too.
+- **Nothing here ever deletes a deal.** CLAUDE.md warns specifically never to
+  delete opportunities as a side effect of tidying something else, because
+  `custom_fields.owen_call_id` is the telephony project's live join key. A
+  cascading delete on this screen would break attribution history in a separate
+  production system.
+- A saved view or a calendar pointing at a deleted (empty) pipeline is **detached**
+  rather than blocking it — both columns are nullable and carry no data of their
+  own — and the response names what it detached, so it is not a silent side effect.
+
+**Reordering moves columns, never deals.** `POST .../stages/reorder` writes
+`Stage.position` and nothing else; no opportunity's `stage_id` is touched. It
+takes the **whole stage list as a permutation** — every stage of that pipeline
+exactly once — so a board that changed underneath the user is refused outright
+instead of half-applied, and a stage from another pipeline cannot be smuggled in.
+`test_reordering_stages_moves_no_opportunity_between_stages` compares the entire
+`opportunity -> stage` map before and after, not a sample.
+
+**Renaming does NOT make names unique, and that is deliberate.** The measured
+pipeline holds **two distinct stages both called "Call Back"**, `resolve.pick` in
+the CLI exits **5 (ambiguous)** rather than guessing between them, and this
+codebase resolves by id everywhere. Renaming one stage to match another is
+allowed, and `test_renaming_does_not_make_stage_names_unique` asserts it stays
+allowed — a uniqueness rule added here would silently retire the CLI's exit 5.
+**Making names unique is a product decision for the owner, not a cleanup**; if it
+is ever wanted, it changes the CLI's contract and needs its own note here.
+
+**`PATCH /api/stages/{id}` renames and nothing else.** There is no `pipeline_id`
+in the body on purpose: moving a stage to another pipeline would carry every deal
+in it across, which `PATCH /api/opportunities/{id}` already refuses as a
+cross-pipeline move.
+
+**Role: ADMIN for all seven endpoints.** Renaming a stage changes a label four
+people navigate by and that the `ghl` CLI resolves against; deleting one removes a
+column of the board. The Pipelines **tab stays open to every role** and the panel
+disables the controls a non-admin cannot use, each with a title saying why —
+hiding the structure from the people who work it daily would be worse, and a form
+that 403s on submit is the thing `d1f7c50` / `b943f4b` ruled out. A dispatcher can
+still move a card; the gate is on the structure, not on the deals.
+
+**Not done, on the record:** the `ghl` CLI has **no** pipeline-management commands.
+Every endpoint above is reachable with a PAT, but there is no `ghl pipelines
+create` / `stages rename` / `stages reorder`. If pipeline structure should be
+scriptable, that is a separate task.
+
+### Which of these screens are OURS, in one list
+
+Measured (do not restyle): the **Opportunities board** — column pitch, cards,
+headers, drag — and the toolbar around it.
+
+OUR design, no capture behind any of them, none may be cited as parity:
+
+| Screen | Where |
+|---|---|
+| Forecast tab | `components/ForecastPanel.tsx` |
+| Bulk Actions bar and the selection mode | `components/BulkActionsBar.tsx` |
+| Saved lists row and Manage smart lists | `components/SavedViews.tsx` |
+| Pipelines tab | `components/PipelinesPanel.tsx` |
+
+Re-measure all four if a live GHL session is ever opened again; where GHL differs,
+GHL wins on structure, exactly as everywhere else.

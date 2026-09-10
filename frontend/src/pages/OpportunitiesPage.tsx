@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
 import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
+import { PipelinesPanel } from '../components/PipelinesPanel'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
@@ -50,14 +51,15 @@ const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']
 const OVERFLOW = ['Export', 'Restore opportunities', 'Manage smart lists', 'Dashboard insights']
 
 /**
- * Which tabs actually go somewhere.
+ * All four tabs go somewhere now. The one thing a tab can still be dead for is a
+ * ROLE: `/api/forecast` is STAFF, so a TECH gets it dimmed with a title rather
+ * than a blank pane or a 403 — the disabled-rather-than-omitted rule used for
+ * Import above and for the Reporting tabs v1 does not implement.
  *
- * A tab that switches to a blank panel is worse than one that visibly refuses, so
- * the ones with nothing behind them stay dimmed and say so — the same
- * disabled-rather-than-omitted rule used for Import above and for the Reporting
- * tabs v1 does not implement. This set grows as each is built.
+ * Pipelines deliberately stays LIVE for every role: the panel itself disables the
+ * controls a non-admin cannot use, which is more useful than hiding the structure
+ * from the people who work it every day.
  */
-const LIVE_TABS = new Set(['Opportunities', 'Forecast', 'Bulk Actions'])
 const LAYOUTS = ['Default', 'Compact', 'Unlabeled'] as const
 type Layout = (typeof LAYOUTS)[number]
 
@@ -371,17 +373,13 @@ export function OpportunitiesPage({ user, onNavigate }: {
           Opportunities
         </div>
         {TABS.map((t) => {
-          const live = LIVE_TABS.has(t) && !(t === 'Forecast' && !canForecast)
+          const live = !(t === 'Forecast' && !canForecast)
           return (
             <button
               key={t}
               onClick={() => live && setTab(t)}
               disabled={!live}
-              title={
-                LIVE_TABS.has(t)
-                  ? live ? undefined : 'Your role cannot view the forecast'
-                  : 'Present in GHL; not implemented in v1'
-              }
+              title={live ? undefined : 'Your role cannot view the forecast'}
               style={{
                 fontSize: 14,
                 fontWeight: 500,
@@ -553,6 +551,10 @@ export function OpportunitiesPage({ user, onNavigate }: {
       {/* The Forecast tab replaces the filters and the board; the pipeline row
           above stays, because a forecast is still per-pipeline. */}
       {tab === 'Forecast' && <ForecastPanel pipeline={pipeline} />}
+
+      {/* Managing the structure is not filtering the board, so the pipeline row
+          above stays and everything below it is replaced. */}
+      {tab === 'Pipelines' && <PipelinesPanel user={user} />}
 
       {/* Bulk Actions keeps the board and the filters; only the bar is added, so
           the selection is made against the set the user is already looking at. */}

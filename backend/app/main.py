@@ -367,6 +367,233 @@ def list_pipelines(db: Session = Depends(get_db),
     return out
 
 
+# ---------- pipeline structure (create / rename / reorder / delete) ----------
+#
+# There were no write endpoints for pipelines or stages at all until 2026-09-10;
+# the structure came from the seed and was otherwise fixed. It is now editable,
+# which is a deliberate divergence from the measured GHL capture — see the dated
+# amendment in DECISIONS.md.
+#
+# Everything here is ADMIN. Renaming a stage changes a label four people navigate
+# by and that the `ghl` CLI resolves against; deleting one removes a column of the
+# board. That is not a dispatcher's call.
+#
+# Two rules do the safety work:
+#
+#   1. DELETE ONLY WHAT IS EMPTY. A stage holding opportunities cannot be deleted,
+#      and the refusal says how many are in the way. There is no `force`. Cascading
+#      would take real customer deals with it, and `custom_fields.owen_call_id` is
+#      the telephony project's join key — CLAUDE.md warns specifically against
+#      deleting opportunities as a side effect of tidying something else.
+#   2. REORDERING MOVES COLUMNS, NEVER DEALS. Reorder writes `Stage.position` and
+#      nothing else; no opportunity's `stage_id` is touched. The endpoint takes the
+#      full stage list as a permutation, so "move this one left" cannot be
+#      misapplied to a board that changed underneath the user.
+#
+# Names are NOT made unique. The measured pipeline has two distinct stages both
+# called "Call Back" (DECISIONS.md), the `ghl` CLI exits 5 rather than guess
+# between them, and quietly de-duplicating names here would break that.
+
+PIPELINE_NAME_MAX = 160
+
+
+class PipelineBody(BaseModel):
+    name: str = Field(max_length=PIPELINE_NAME_MAX)
+
+
+class StageBody(BaseModel):
+    name: str = Field(max_length=PIPELINE_NAME_MAX)
+
+
+class StageReorder(BaseModel):
+    """The pipeline's stages in their new order — every one of them, exactly once."""
+    stage_ids: list[int] = Field(min_length=1)
+
+
+def _clean_structure_name(name: str | None, kind: str) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(400, "a %s needs a name" % kind)
+    return cleaned
+
+
+def _opportunity_count(db: Session, **where) -> int:
+    stmt = select(func.count(Opportunity.id))
+    for column, value in where.items():
+        stmt = stmt.where(getattr(Opportunity, column) == value)
+    return db.scalar(stmt) or 0
+
+
+@app.post("/api/pipelines", status_code=201)
+def create_pipeline(body: PipelineBody, db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ADMIN):
+    """A new pipeline starts with no stages, so nothing can be filed in it yet.
+
+    Deliberately not seeded with a default set of stages: guessing at a roofing
+    pipeline's shape is exactly the kind of invention this project avoids, and an
+    empty pipeline is honest about needing its columns named.
+    """
+    n = db.scalar(select(func.count(Pipeline.id))) or 0
+    p = Pipeline(name=_clean_structure_name(body.name, "pipeline"), position=n)
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return {"id": p.id, "name": p.name, "position": p.position, "stages": []}
+
+
+@app.patch("/api/pipelines/{pipeline_id}")
+def rename_pipeline(pipeline_id: int, body: PipelineBody,
+                    db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ADMIN):
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+    p.name = _clean_structure_name(body.name, "pipeline")
+    db.commit()
+    return {"id": p.id, "name": p.name}
+
+
+@app.delete("/api/pipelines/{pipeline_id}")
+def delete_pipeline(pipeline_id: int, db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ADMIN):
+    """Only an EMPTY pipeline. No force, at any role.
+
+    `Pipeline.stages` cascades delete-orphan, so allowing this while stages
+    existed would silently take the columns — and every deal in them — with it.
+    The refusal names what is in the way, the way the contact delete's 409 does.
+    """
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+
+    stages = len(p.stages)
+    opps = _opportunity_count(db, pipeline_id=p.id)
+    if stages or opps:
+        raise HTTPException(409, (
+            "%r still has %d stage%s and %d opportunit%s. Empty it first — a "
+            "pipeline is never deleted with deals in it." % (
+                p.name, stages, "" if stages == 1 else "s",
+                opps, "y" if opps == 1 else "ies")))
+
+    # Weak references: both columns are nullable and neither carries data of its
+    # own. Detached rather than blocking the delete, and named in the response so
+    # it is not a silent side effect.
+    views = db.scalars(
+        select(SavedView).where(SavedView.pipeline_id == p.id)).all()
+    calendars = db.scalars(
+        select(Calendar).where(Calendar.pipeline_id == p.id)).all()
+    for v in views:
+        v.pipeline_id = None
+    for c in calendars:
+        c.pipeline_id = None
+
+    db.delete(p)
+    db.commit()
+    return {"deleted": pipeline_id,
+            "detached_saved_views": [v.id for v in views],
+            "detached_calendars": [c.id for c in calendars]}
+
+
+@app.post("/api/pipelines/{pipeline_id}/stages", status_code=201)
+def create_stage(pipeline_id: int, body: StageBody, db: Session = Depends(get_db),
+                 _: auth.Principal = auth.ADMIN):
+    """Appended at the end. A new stage is empty, so nothing moves."""
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+    n = db.scalar(select(func.count(Stage.id))
+                  .where(Stage.pipeline_id == p.id)) or 0
+    s = Stage(pipeline_id=p.id, name=_clean_structure_name(body.name, "stage"),
+              position=n)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return {"id": s.id, "pipeline_id": s.pipeline_id, "name": s.name,
+            "position": s.position, "count": 0, "value_cents": 0}
+
+
+@app.patch("/api/stages/{stage_id}")
+def rename_stage(stage_id: int, body: StageBody, db: Session = Depends(get_db),
+                 _: auth.Principal = auth.ADMIN):
+    """A rename, and ONLY a rename.
+
+    There is no `pipeline_id` here on purpose: moving a stage to another pipeline
+    would carry every opportunity in it across, and `PATCH /api/opportunities/{id}`
+    refuses a cross-pipeline move for that reason. Names stay non-unique — two
+    "Call Back" stages are the measured shape, and the CLI's exit 5 depends on it.
+    """
+    s = db.get(Stage, stage_id)
+    if not s:
+        raise HTTPException(404, "stage not found")
+    s.name = _clean_structure_name(body.name, "stage")
+    db.commit()
+    return {"id": s.id, "pipeline_id": s.pipeline_id, "name": s.name,
+            "position": s.position}
+
+
+@app.delete("/api/stages/{stage_id}")
+def delete_stage(stage_id: int, db: Session = Depends(get_db),
+                 _: auth.Principal = auth.ADMIN):
+    """Only an EMPTY stage. No force.
+
+    A populated stage is refused with the count in the message, so the admin knows
+    what to move where before trying again. The remaining stages are re-packed so
+    positions stay 0..n-1 with no hole.
+    """
+    s = db.get(Stage, stage_id)
+    if not s:
+        raise HTTPException(404, "stage not found")
+
+    held = _opportunity_count(db, stage_id=s.id)
+    if held:
+        raise HTTPException(409, (
+            "%r still holds %d opportunit%s. Move %s to another stage first — "
+            "deleting a stage never deletes the deals in it." % (
+                s.name, held, "y" if held == 1 else "ies",
+                "it" if held == 1 else "them")))
+
+    pipeline_id = s.pipeline_id
+    db.delete(s)
+    db.flush()
+    for i, remaining in enumerate(db.scalars(
+            select(Stage).where(Stage.pipeline_id == pipeline_id)
+            .order_by(Stage.position)).all()):
+        remaining.position = i
+    db.commit()
+    return {"deleted": stage_id, "pipeline_id": pipeline_id}
+
+
+@app.post("/api/pipelines/{pipeline_id}/stages/reorder")
+def reorder_stages(pipeline_id: int, body: StageReorder,
+                   db: Session = Depends(get_db),
+                   _: auth.Principal = auth.ADMIN):
+    """Re-order the columns. NO OPPORTUNITY MOVES.
+
+    Only `Stage.position` is written; nothing touches `Opportunity.stage_id`. The
+    request must name every stage of this pipeline exactly once, so a board that
+    changed underneath the user is refused outright rather than half-applied — and
+    a stage from another pipeline cannot be smuggled in.
+    """
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+
+    current = {s.id: s for s in p.stages}
+    wanted = body.stage_ids
+    if len(set(wanted)) != len(wanted) or set(wanted) != set(current):
+        raise HTTPException(400, (
+            "the new order must name every stage of this pipeline exactly once "
+            "(%d stages: %s)" % (len(current),
+                                 ", ".join(str(i) for i in sorted(current)))))
+
+    for i, stage_id in enumerate(wanted):
+        current[stage_id].position = i
+    db.commit()
+    return {"pipeline_id": p.id,
+            "stages": [{"id": current[i].id, "name": current[i].name,
+                        "position": current[i].position} for i in wanted]}
+
+
 @app.get("/api/opportunities")
 def list_opportunities(
     pipeline_id: int,

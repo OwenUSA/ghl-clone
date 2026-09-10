@@ -463,16 +463,17 @@ def test_the_forecast_tab_is_a_tab_and_not_a_label():
     assert "<ForecastPanel" in source, "the Forecast tab renders nothing"
 
 
-def test_a_tab_with_nothing_behind_it_says_so():
-    """Pipelines and Bulk Actions are not built yet. A tab that silently switches
-    to a blank pane is worse than one that refuses: disabled-rather-than-omitted,
-    the same rule as Import and the unimplemented Reporting tabs."""
+def test_every_tab_goes_somewhere():
+    """All four labels were inert. Each one now renders a panel, and a tab that
+    switched to a blank pane would be worse than the dimmed label it replaced."""
     source = _read("pages", "OpportunitiesPage.tsx")
-    live = source.split("const LIVE_TABS = new Set(", 1)[1].split(")", 1)[0]
-    assert "Forecast" in live and "Opportunities" in live
+    for tab, panel in (("Forecast", "<ForecastPanel"),
+                       ("Pipelines", "<PipelinesPanel"),
+                       ("Bulk Actions", "<BulkActionsBar")):
+        assert "tab === '%s'" % tab in source or "selecting" in source, tab
+        assert panel in source, "the %s tab renders nothing" % tab
     header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
-    assert "disabled={!live}" in header, "a dead tab still looks clickable"
-    assert "not implemented in v1" in header, "nothing says why the tab is dead"
+    assert "disabled={!live}" in header, "a tab a role cannot open still looks live"
 
 
 def test_the_forecast_tab_is_hidden_from_a_role_that_cannot_read_it():
@@ -658,3 +659,80 @@ def test_the_built_in_open_opportunities_list_is_not_deletable():
         "views.data?.map", 1)[0]
     assert "Open opportunities" in row
     assert "deleteSavedView" not in row, "the built-in default offers a delete"
+
+
+# ---------------- Opportunities > Pipelines ----------------
+
+def test_managing_pipelines_is_disabled_rather_than_403_on_submit():
+    """Every endpoint behind this panel is auth.ADMIN. The precedent set by
+    d1f7c50 and b943f4b is a dead control with a title, never a form that refuses
+    at the end."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "const canManage = user.role === 'ADMIN'" in source
+    assert "Only an admin can manage pipelines and stages" in source
+    # Every write control consults it: add pipeline, add stage, rename, reorder,
+    # and both deletes.
+    assert source.count("!canManage") >= 6, (
+        "a control on this panel does not ask whether the role may use it")
+
+
+def test_the_pipelines_tab_stays_open_to_everyone_who_works_the_board():
+    """The panel disables what a non-admin cannot do; hiding the structure from
+    the people who work it every day would be worse."""
+    page = _read("pages", "OpportunitiesPage.tsx")
+    assert "tab === 'Pipelines' && <PipelinesPanel user={user} />" in page
+    live = page.split("const live =", 1)[1].splitlines()[0]
+    assert "Pipelines" not in live, "the Pipelines tab was gated on a role"
+
+
+def test_deleting_a_populated_stage_is_not_offered_and_says_what_is_in_the_way():
+    """The server answers 409 either way; this is so the admin knows before
+    clicking, and knows what to move."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "const removable = s.count === 0" in source, (
+        "the Delete control ignores whether the stage holds anything")
+    assert "holds ${s.count} opportunit" in source, (
+        "the blocked title does not say how many are in the way")
+    assert "Move ${" in source, "the message does not say what to do about it"
+
+
+def test_deleting_a_pipeline_needs_it_to_be_completely_empty():
+    """`Pipeline.stages` cascades delete-orphan, so this guard stands between a
+    mis-click and every deal on the board."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "p.stages.length === 0 && deals === 0" in source, (
+        "a pipeline with stages can still be deleted from the browser")
+    assert "Empty it first" in source
+
+
+def test_a_structural_delete_always_asks_twice():
+    source = _read("components", "PipelinesPanel.tsx")
+    assert source.count("Really delete") == 2, (
+        "a stage or a pipeline is deleted on a single click")
+    assert "setConfirming('stage:'" in source and "setConfirming('pipeline:'" in source
+
+
+def test_reordering_sends_the_whole_order_and_never_a_deal():
+    """The endpoint takes a permutation, so a board that changed underneath is
+    refused rather than half-applied. Nothing here touches an opportunity."""
+    source = _read("components", "PipelinesPanel.tsx")
+    swap = source.split("const swap =", 1)[1].split("\n  }", 1)[0]
+    assert "stages.map((s) => s.id)" in swap, (
+        "the reorder sends something other than the full stage list")
+    assert "reorder.mutate(ids)" in swap
+    assert "moveOpportunity" not in source and "stage_id" not in source, (
+        "the pipelines panel touches an opportunity's stage")
+
+
+def test_the_panel_says_names_may_repeat_rather_than_tidying_them_up():
+    """Two distinct stages called "Call Back" are the measured shape, and the
+    `ghl` CLI exits 5 rather than guess between them."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "Two stages may share a name" in source
+    assert "Call Back" in source, "nothing records why duplicate names are kept"
+
+
+def test_the_panel_reports_a_refusal_instead_of_swallowing_it():
+    source = _read("components", "PipelinesPanel.tsx")
+    assert 'role="alert"' in source, "a refused structural change has no surface"
+    assert "const failed = (e: Error) => setError(e.message)" in source

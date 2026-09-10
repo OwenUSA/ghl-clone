@@ -607,3 +607,48 @@ export const patchSavedView = (id: number, body: Partial<SavedView>) =>
 /** ADMIN, per this app's standing rule: everyone reads, staff write, admin deletes. */
 export const deleteSavedView = (id: number) =>
   send<{ deleted: number }>(`/api/saved-views/${id}`, 'DELETE')
+
+/**
+ * Pipeline structure. ALL ADMIN.
+ *
+ * There were no write endpoints for pipelines or stages before 2026-09-10; the
+ * structure came from the seed. Two rules do the safety work, and both live on the
+ * server -- see the section comment in backend/app/main.py:
+ *
+ *   * only an EMPTY stage or pipeline can be deleted, with no `force` anywhere;
+ *   * reordering writes stage positions only, and never an opportunity's stage.
+ *
+ * Names are deliberately not unique: the measured pipeline has two distinct
+ * stages both called "Call Back", and the `ghl` CLI exits 5 rather than guess.
+ */
+export const createPipeline = (name: string) =>
+  send<{ id: number; name: string; position: number; stages: [] }>(
+    '/api/pipelines', 'POST', { name })
+
+export const renamePipeline = (id: number, name: string) =>
+  send<{ id: number; name: string }>(`/api/pipelines/${id}`, 'PATCH', { name })
+
+export type PipelineDeleted = {
+  deleted: number
+  detached_saved_views: number[]
+  detached_calendars: number[]
+}
+
+export const deletePipeline = (id: number) =>
+  send<PipelineDeleted>(`/api/pipelines/${id}`, 'DELETE')
+
+export const createStage = (pipelineId: number, name: string) =>
+  send<Stage & { pipeline_id: number }>(
+    `/api/pipelines/${pipelineId}/stages`, 'POST', { name })
+
+export const renameStage = (id: number, name: string) =>
+  send<{ id: number; pipeline_id: number; name: string; position: number }>(
+    `/api/stages/${id}`, 'PATCH', { name })
+
+export const deleteStage = (id: number) =>
+  send<{ deleted: number; pipeline_id: number }>(`/api/stages/${id}`, 'DELETE')
+
+/** The full stage list in its new order -- a permutation, never a single move. */
+export const reorderStages = (pipelineId: number, stageIds: number[]) =>
+  send<{ pipeline_id: number; stages: { id: number; name: string; position: number }[] }>(
+    `/api/pipelines/${pipelineId}/stages/reorder`, 'POST', { stage_ids: stageIds })
