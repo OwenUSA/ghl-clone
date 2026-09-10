@@ -16,6 +16,7 @@ import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
 import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
 import { PipelinesPanel } from '../components/PipelinesPanel'
+import { ContactPicker, type PickedContact } from '../components/ContactPicker'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useRef, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
@@ -31,7 +32,6 @@ import {
 import {
   centsFromDollars,
   createOpportunity,
-  listContacts,
   listOpportunities,
   listPipelines,
   moveOpportunity,
@@ -925,6 +925,7 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
         <AddOpportunityDialog
           pipelines={pipelines.data ?? []}
           initialPipelineId={pipeline.id}
+          user={user}
           onClose={() => setShowAdd(false)}
           onDone={(createdInPipelineId) => {
             setShowAdd(false)
@@ -1036,11 +1037,14 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
 function AddOpportunityDialog({
   pipelines,
   initialPipelineId,
+  user,
   onClose,
   onDone,
 }: {
   pipelines: Pipeline[]
   initialPipelineId: number
+  // Passed through to ContactPicker, which disables its "+" for a TECH.
+  user: Me
   onClose: () => void
   onDone: (createdInPipelineId: number) => void
 }) {
@@ -1048,8 +1052,7 @@ function AddOpportunityDialog({
   const [pipelineId, setPipelineId] = useState(initialPipelineId)
   const [stageId, setStageId] = useState<number | null>(null)
   const [value, setValue] = useState('')
-  const [contact, setContact] = useState<{ id: number; name: string } | null>(null)
-  const [q, setQ] = useState('')
+  const [contact, setContact] = useState<PickedContact | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const pipeline = pipelines.find((p) => p.id === pipelineId) ?? pipelines[0]
@@ -1058,12 +1061,6 @@ function AddOpportunityDialog({
   // holding a stage id the new pipeline has never heard of — the backend refuses
   // that pair, so keeping it would be a submit-time error for no reason.
   const stage = stages.find((s) => s.id === stageId) ?? stages[0]
-
-  const matches = useQuery({
-    queryKey: ['contacts', 'picker', q],
-    queryFn: () => listContacts({ page: 1, page_size: 6, q }),
-    enabled: !contact && q.trim().length > 0,
-  })
 
   const create = useMutation({
     mutationFn: () =>
@@ -1115,60 +1112,14 @@ function AddOpportunityDialog({
 
         <div style={{ marginTop: 12 }}>
           <div style={label}>Contact</div>
-          {contact ? (
-            <div
-              className="flex items-center justify-between"
-              style={{ ...input, display: 'flex', paddingRight: 6 }}
-            >
-              <span className="truncate" style={{ color: 'rgb(52,64,84)' }}>
-                {contact.name}
-              </span>
-              <button
-                onClick={() => { setContact(null); setQ('') }}
-                style={{ fontSize: 13, fontWeight: 500, color: 'rgb(0,78,235)', padding: '0 6px' }}
-              >
-                Clear
-              </button>
-            </div>
-          ) : (
-            <>
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Search contacts"
-                style={input}
-              />
-              {q.trim().length > 0 && (
-                <div
-                  style={{
-                    marginTop: 4, maxHeight: 148, overflowY: 'auto',
-                    border: '1px solid rgb(234,236,240)', borderRadius: 6,
-                  }}
-                >
-                  {matches.data?.items.length ? (
-                    matches.data.items.map((c) => (
-                      <button
-                        key={c.id}
-                        onClick={() => setContact({ id: c.id, name: c.name })}
-                        className="block w-full truncate text-left hover:bg-[rgb(249,250,251)]"
-                        style={{ padding: '8px 10px', fontSize: 14, color: 'rgb(52,64,84)' }}
-                      >
-                        {c.name}
-                        {c.phone ? ' · ' + c.phone : ''}
-                      </button>
-                    ))
-                  ) : (
-                    <div style={{ padding: '8px 10px', fontSize: 13, color: 'rgb(102,112,133)' }}>
-                      {matches.isFetching ? 'Searching…' : 'No matching contact'}
-                    </div>
-                  )}
-                </div>
-              )}
-              <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
-                Optional — an opportunity can be filed without a contact.
-              </div>
-            </>
-          )}
+          {/* The shared picker: phone-number search, and a `+` that creates a
+              contact without leaving this dialog. */}
+          <ContactPicker
+            value={contact}
+            onChange={setContact}
+            user={user}
+            hint="Optional — an opportunity can be filed without a contact."
+          />
         </div>
 
         <div style={{ marginTop: 12 }}>

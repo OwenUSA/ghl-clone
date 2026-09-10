@@ -419,17 +419,27 @@ def test_the_appointment_dialog_picks_a_contact_by_searching_for_one():
     <select> would render every contact in the account (268 locally).
 
     The picker now lives in its own module because the detail panel asks the same
-    question — see test_the_contact_picker_is_one_component_not_two below."""
+    question — see test_the_contact_picker_is_one_component_not_two below.
+
+    The two pickers that briefly existed (this one and the Add-opportunity one)
+    were unified on 2026-09-10 onto the richer component, which searches by phone
+    digits and can create a contact inline. The guarantees below are unchanged;
+    only their spelling moved, because the query is now gated on a `typed`
+    binding rather than on `q.trim()` inline."""
     dialog = _read("components", "NewAppointmentDialog.tsx")
     assert "<ContactPicker" in dialog, "the create dialog has no contact picker"
     picker = _read("components", "ContactPicker.tsx")
     assert "function ContactPicker(" in picker, "there is no contact picker"
     assert "listContacts(" in picker, (
         "the picker does not search — it is not backed by the contacts endpoint")
-    assert "enabled: q.trim().length > 0" in picker, (
+    assert "const typed = q.trim()" in picker, (
+        "the picker no longer trims what was typed before searching on it")
+    assert "enabled: !value && typed.length > 0" in picker, (
         "the picker queries on an empty box, listing contacts nobody asked for")
-    assert "onPick({ id: c.id, name: c.name })" in picker, (
+    assert "select({ id: c.id, name: c.name })" in picker, (
         "picking a result does not record which contact was chosen")
+    assert "onChange(contact)" in picker, (
+        "the picker never hands its selection back to the screen using it")
 
 
 def test_the_first_time_card_does_not_repeat_the_whole_windows_durations():

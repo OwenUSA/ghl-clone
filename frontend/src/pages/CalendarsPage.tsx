@@ -482,6 +482,7 @@ export function CalendarsPage({ user }: { user: Me }) {
         <NewAppointmentDialog
           initialStart={draft}
           initialEnd={new Date(draft.getTime() + 3_600_000)}
+          user={user}
           onClose={() => setDraft(null)}
           onCreated={() => {
             setDraft(null)

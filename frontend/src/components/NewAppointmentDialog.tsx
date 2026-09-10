@@ -6,6 +6,7 @@ import {
 import {
   dateInputValue, fromInputs, timeInputValue,
 } from '../lib/calendarGrid'
+import type { Me } from '../lib/auth'
 import { ContactPicker } from './ContactPicker'
 
 /**
@@ -44,10 +45,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export function NewAppointmentDialog({
-  initialStart, initialEnd, onClose, onCreated,
+  initialStart, initialEnd, user, onClose, onCreated,
 }: {
   initialStart: Date
   initialEnd: Date
+  /** The shared ContactPicker gates creating a contact on the role. */
+  user: Me
   onClose: () => void
   onCreated: () => void
 }) {
@@ -140,7 +143,7 @@ export function NewAppointmentDialog({
         </Field>
 
         <Field label="Contact">
-          <ContactPicker picked={contact} onPick={setContact} />
+          <ContactPicker value={contact} onChange={setContact} user={user} />
         </Field>
 
         <Field label="Calendar">

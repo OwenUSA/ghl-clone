@@ -330,9 +330,10 @@ export function AppointmentDetailDialog({
 
             <Field label="Contact">
               <ContactPicker
-                picked={form.contact}
+                value={form.contact}
                 disabled={!canWrite}
-                onPick={(c) => set({ contact: c })}
+                user={user}
+                onChange={(c) => set({ contact: c })}
               />
             </Field>
 

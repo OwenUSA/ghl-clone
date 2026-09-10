@@ -1,10 +1,11 @@
-import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import {
   IconDownload, IconFilter, IconList, IconPlus, IconSettings, IconSort,
 } from '../components/Icon'
 import { useEffect, useState } from 'react'
+import { AddContactDialog } from '../components/AddContactDialog'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
-import { createContact, listContacts } from '../lib/api'
+import { listContacts } from '../lib/api'
 import type { Me } from '../lib/auth'
 import { IconChevronDown } from '../components/Icon'
 import type { Focus } from '../lib/focus'
@@ -559,7 +560,7 @@ export function ContactsPage({ user, focus }: { user: Me; focus?: Focus | null }
         </div>
       </div>
 
-      {showAdd && <AddContactDialog onClose={() => setShowAdd(false)} onDone={() => {
+      {showAdd && <AddContactDialog onClose={() => setShowAdd(false)} onCreated={() => {
         setShowAdd(false)
         qc.invalidateQueries({ queryKey: ['contacts'] })
       }} />}
@@ -572,59 +573,6 @@ export function ContactsPage({ user, focus }: { user: Me; focus?: Focus | null }
           onDeleted={() => setOpenContact(null)}
         />
       )}
-      </div>
-    </div>
-  )
-}
-
-function AddContactDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [form, setForm] = useState({
-    first_name: '', last_name: '', phone: '', email: '', business_name: '', source: '',
-  })
-  const [error, setError] = useState<string | null>(null)
-  const create = useMutation({
-    mutationFn: () => createContact(form),
-    onSuccess: onDone,
-    onError: (e: Error) => setError(e.message),
-  })
-
-  return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(16,24,40,0.4)' }}
-      onClick={onClose}
-    >
-      <div onClick={(e) => e.stopPropagation()} className="bg-white"
-        style={{ width: 460, borderRadius: 8, padding: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, color: 'rgb(16,24,40)' }}>Add Contact</div>
-        {([
-          ['first_name', 'First name'], ['last_name', 'Last name'],
-          ['phone', 'Phone'], ['email', 'Email'],
-          ['business_name', 'Business name'], ['source', 'Contact source'],
-        ] as const).map(([k, label]) => (
-          <div key={k} style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 14, color: 'rgb(102,112,133)' }}>{label}</div>
-            <input
-              value={form[k]}
-              onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
-              style={{
-                width: '100%', height: 36, marginTop: 4, fontSize: 14,
-                borderRadius: 6, border: '1px solid rgb(234,236,240)', padding: '0 10px',
-              }}
-            />
-          </div>
-        ))}
-        {error && <div style={{ fontSize: 13, color: 'rgb(217,45,32)', marginTop: 10 }}>{error}</div>}
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose}
-            style={{ height: 36, padding: '0 14px', borderRadius: 6, fontSize: 14, border: '1px solid rgb(234,236,240)' }}>
-            Cancel
-          </button>
-          <button onClick={() => { setError(null); create.mutate() }} disabled={create.isPending}
-            style={{ height: 36, padding: '0 14px', borderRadius: 6, fontSize: 14, fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)' }}>
-            Create
-          </button>
-        </div>
       </div>
     </div>
   )

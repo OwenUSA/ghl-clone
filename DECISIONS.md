@@ -1790,3 +1790,63 @@ nothing, so today an unparseable number costs nothing. The day a real SMS transp
 wired in, a number stored verbatim is one the transport may not be able to dial —
 `phone_warning` is deliberately the same signal that would drive suppression, and the
 existing "missing-phone suppresses customer-facing sends" rule is where that would hang.
+## Finding a contact by phone — the last ten digits, both sides (2026-09-10)
+
+Companion to the storage decision above, and deliberately a separate one: that section
+says what a number **is stored as**, this one says when two numbers **are the same
+number**. They meet in the fact that the database now holds both formats at once.
+
+**The rule: compare the last ten digits.** `8135550102`, `(813) 555-0102`,
+`813-555-0102` and `+18135550102` are one person. This is not a new convention — it is
+the identity rule the telephony project on owen-main already uses to match an inbound
+caller to a contact, and two systems that share a database must not hold two different
+answers to "is this the same line".
+
+It is applied in the **shared** `/api/contacts?q=` search (`backend/app/phone_match.py`),
+not in a search of the picker's own, so the Contacts list got the same fix. Before it,
+typing a number the way a phone displays it was the one shape that never worked.
+
+Three limits, chosen rather than discovered:
+
+- **Only a phone-shaped query is digit-matched** — digits and phone punctuation, at least
+  four of them (`MIN_MATCH_DIGITS`). `Maria` must never be stripped to `""`, because an
+  empty match key matches every contact in the database. Four digits is the shortest
+  fragment people actually quote: "the customer ending 0102".
+- **The digit clause is ADDED to the existing ILIKE terms, never substituted for them.**
+  A number stored as a carrier email address (`8635550123@vtext.com`) is still findable,
+  and a business really named `24/7 Roofing` still matches its own name.
+- **Digits are extracted with nested `REPLACE`, not a regex**, because SQLite has no
+  `regexp_replace` and the tests must get the same answer as Postgres. The cost: a stored
+  number carrying letters is not digit-matched. `phones.InvalidPhone` refuses extensions
+  at the write path anyway.
+
+**This defeats the index on `contacts.phone`** — a function of the column cannot use a
+plain b-tree — so a phone search is a sequential scan. Measured against the actual sizes
+that exist: 13 rows in production, 268 in the local synthetic set. If contacts ever reach
+a size where this matters, the fix is an expression index on the same expression, not a
+different rule.
+
+**The browser holds a second copy of the rule** (`frontend/src/lib/phoneMatch.ts`) and
+that is deliberate, with a guard rail. It never re-runs the search — the server owns that
+— but it answers two questions asked before anything is written: does a prefill go in the
+phone field or the name field, and is this number already on file. The two
+implementations are pinned to each other by `test_contact_picker.py`, which runs the same
+cases through node and through Python and compares the answers.
+
+## The contact picker is shared, and adopted in exactly one place (2026-09-10)
+
+`frontend/src/components/ContactPicker.tsx` is the one picker: search, a `+` that opens
+**the real `AddContactDialog`** (lifted out of `ContactsPage` for the purpose — one
+definition of what a contact needs, pinned by a test asserting `createContact(` appears in
+exactly one `.tsx`), auto-selection of what it created, and a named confirmation.
+
+**Adopted only in the Add-opportunity dialog.** The appointment create dialog and the
+global search have pickers of their own; they were left alone on purpose because those
+files were being edited on other branches at the time. They are the next two adopters, in
+that order, and neither needs a change to this component.
+
+**The duplicate guard warns, it does not block.** If the number being entered is already
+on file the dialog names the contact and offers to select it instead — and the Create
+button stays live. Two people genuinely share one number: a couple, or a property manager
+who is the contact for a dozen addresses. A guard that refuses would be wrong more often
+than it would be right, and the dispatcher is the one who knows which case this is.
