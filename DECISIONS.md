@@ -996,3 +996,118 @@ stepping. That is a deliberate step up from this project's usual "assert against
 frontend idiom, which would have passed against the broken version. CI's backend job now
 installs node for it; if node is ever absent the file skips loudly rather than silently
 passing.
+
+## Global search — the endpoint is measured-free, and the overlay is OURS (2026-09-10)
+
+The sidebar search row has rendered a magnifier, the word "Search" and a `ctrlK`
+badge since the shell was built, inside a plain `<div>` with no handler. Nothing
+happened on click and ctrl+K did nothing. It is now a button and the shortcut is
+bound. This section records what is measured about the result and what is not.
+
+**The ROW is measured; the OVERLAY it opens is not.** `captures/contacts/` carries
+the row's geometry and the badge (the `measured:` comment in `Sidebar.tsx` cites
+it), and turning the `<div>` into a `<button>` changed none of those values —
+`backend/tests/test_search_ui.py` pins them so a later restyle has to argue with a
+test. **GHL's open search overlay was never captured on the live account.** It is
+not in `captures/`, it is on the "Still uncaptured … modals, drawers" list under
+"Known measurement gaps", and nobody opened it. So the palette's layout, its
+wording, its grouping and its keyboard model are **ours**, exactly like the
+Calendars Month view and the Contact Details Actions tab before it. This
+**overrides**, for this surface only, the rule that structural design is locked to
+a measured capture. **If a live GHL session is ever opened again, capture the
+search overlay and re-measure.** Until then it may not be cited as parity.
+
+Neither `capture/diff.py` (37 properties) nor `diff_panel.py` (35) looks at the
+search row — their landmarks are `body`, the `aside` box, the "Contacts" nav row,
+the location name and city, the page title and three column headers. Both diffs
+are therefore unaffected by this work; see the honest note about them in
+`.qa/state/search-done`.
+
+### Scope: three sources, and NOT call transcripts
+
+`GET /api/search` covers **contacts** (name, email, phone), **opportunities**
+(title, every status) and **conversation messages** (bodies). Call transcripts are
+**deliberately excluded**, on the owner's instruction, even though `GET /api/calls?q=`
+already searches them and will keep doing so. A recorded call is minutes of speech,
+so a short query hits nearly every one and buries the contact the user was actually
+reaching for. This is a scope decision, not an oversight — do not "finish" it by
+adding transcripts without asking.
+
+Opportunities are searched across **every status**, not the `open` default that
+`GET /api/opportunities` carries. A palette is how you go back to a deal you
+already won or lost; the row prints the status so the difference is visible.
+
+### One endpoint, not a fan-out
+
+The palette could have called `/api/contacts`, `/api/opportunities` and
+`/api/messages` itself. It does not, and the reason is not only request count:
+ranking, the per-group cap and the role rule would then live in three call sites
+with three chances to disagree, and `/api/opportunities` requires a `pipeline_id`
+the palette has no business choosing. One endpoint, one place to test.
+
+Every group appears in every response, empty ones included, so "no results" is a
+property of the groups rather than of a missing key; `total` is the true match
+count and `truncated` says the list was cut. **The cap is reported, never silent** —
+a palette that shows five of forty without saying so teaches people the record
+they want is not in the system.
+
+### AMENDMENT: internal notes (NOTE, INTERNAL_COMMENT) are STAFF-only (2026-09-10)
+
+**This removes access a TECH had.** It is a deliberate product change, made by the
+owner while deciding how search should treat them, and it is recorded here because
+nothing in this file previously said a TECH could not read them — they could,
+everywhere.
+
+The finding that prompted it: **there was no per-record role filtering anywhere in
+this application.** `/api/contacts`, `/api/opportunities`,
+`/api/conversations/{id}/events` and `/api/messages` are all `auth.ANY_USER`, so a
+TECH could already read every contact with email and phone, every opportunity with
+`value_cents` (locked as intended by the 2026-09-09 triage above) and every message
+body including the crew's internal commentary. "A TECH must not see anything they
+could not already reach" was therefore satisfied by *any* implementation, and no
+TECH/ADMIN difference could be demonstrated without introducing a new rule.
+
+The rule chosen: NOTE and INTERNAL_COMMENT are the team talking to itself —
+recorded for the crew, never transmitted, and already exempt from DND suppression
+for exactly that reason (`automations.INTERNAL_TYPES`). They are now STAFF-only.
+
+**Enforced at every door, in one predicate** (`_sees_internal` in `app/main.py`):
+the thread view, `GET /api/messages`, `GET /api/search`, and the composer. Search
+alone was considered and rejected — a TECH would fail to find a word in the
+palette and then read that same note two clicks later in Conversations, which is
+the inconsistent-gate failure the 2026-09-09 triage complains about once already.
+
+- An **explicit** ask (`?type=NOTE`, `?filter=internal_comment`) is refused **403**
+  rather than silently emptied, so `ghl msg list --type NOTE` says why it is empty.
+- An **unfiltered** read is **narrowed**, not refused: an inbox that 403s because
+  one hidden row exists would be unusable.
+- **Writes are gated by the same predicate.** A note whose author cannot then read
+  it is a worse bug than a refused write. A TECH's customer-facing SMS is
+  untouched.
+- The Conversations "Internal Comment" filter renders **disabled with a reason**
+  for a TECH rather than vanishing — the precedent set by Add Contact, Add
+  Opportunity and the Actions tab.
+
+Consequences to be aware of: the `ghl` CLI has no `--role` concept, so a TECH's
+token now gets 403 from `ghl msg list --type NOTE`; and `capture/`'s scripts sign
+in with whatever account `GHL_APP_EMAIL` names, which must stay staff for the
+thread captures to contain internal comments. Revert commit `89ff7c9` alone to put
+the old behaviour back.
+
+### Product judgement calls, all overrulable
+
+Made because the work needed an answer, not because they were specified:
+
+- **Per-group cap of 5** (`limit`, 1–25). Three groups at five rows fits one
+  screen without scrolling.
+- **Ranking**: contacts alphabetically by name; opportunities and messages
+  most-recently-touched first. Deterministic and explainable. Relevance ranking
+  (prefix beats infix, name beats email) was not attempted — it needs a corpus to
+  tune against and this database has 268 synthetic contacts.
+- **Message bodies only.** Email **subject lines are not matched**, because the
+  owner said bodies. One `or_` clause to add if that is wrong.
+- **Enter on a message opens its CONVERSATION**, not the message: there is no
+  per-message screen, and the thread is what the searcher wants.
+- **Arrow keys wrap** at both ends rather than clamping.
+- **Wording**: "Showing 5 of 12 — keep typing to narrow" under a capped group, and
+  the no-results state names the transcript exclusion so the gap stays visible.

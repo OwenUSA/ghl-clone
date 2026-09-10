@@ -63,7 +63,10 @@ plain Starlette routes with no dependant. Verified, deliberate, and pinned by a 
 
 Roles are `ADMIN` / `DISPATCHER` / `TECH`. Broadly: everyone reads, staff write, admin
 deletes and manages users. A TECH can move an opportunity between stages and send a
-message, but cannot edit records. Machine tokens can be scoped (`events:write` for the
+message, but cannot edit records. **Internal notes (`NOTE`, `INTERNAL_COMMENT`) are
+STAFF-only** as of 2026-09-10, on every path — the thread view, `/api/messages`,
+`/api/search` and the composer. Asking for them by name gets 403; an unfiltered read
+is just narrower. See `DECISIONS.md`. Machine tokens can be scoped (`events:write` for the
 telephony feed) — a scoped token can never exceed its owner's role.
 
 **Locked out?** `uv run python -m app.bootstrap set-password --email you@example.com`
@@ -89,6 +92,11 @@ Conventions worth knowing before you start:
 - **`--yes` is required** for anything customer-facing or destructive (`msg send`,
   `contacts delete`, `opps delete`, `appts cancel`). Without it the command refuses
   with exit 2 and makes no network call.
+
+There is also a **ctrl+K palette** in the browser (cmd+K on a Mac), backed by one
+endpoint, `GET /api/search?q=...&limit=5`. It returns contacts, opportunities and
+message bodies grouped and capped, reporting each group's true `total`. It does
+**not** search call transcripts — use `ghl calls list --q` for those.
 
 ```bash
 uv run ghl contacts list --q smith --json
@@ -146,7 +154,7 @@ against existing rows.
 ## Tests
 
 ```bash
-uv run pytest                        # backend + CLI, 262 tests
+uv run pytest                        # backend + CLI, 309 tests
 uv run ruff check .                  # must pass clean
 uv run python capture/capture_ours.py contacts Contacts            # regenerate OUR side
 uv run python capture/capture_ours.py conversations Conversations
