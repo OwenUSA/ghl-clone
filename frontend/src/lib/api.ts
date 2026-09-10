@@ -118,7 +118,12 @@ export type Contact = {
   first_name: string
   last_name: string
   email: string | null
+  /** E.164 when it parsed; otherwise exactly what was typed. */
   phone: string | null
+  /** What a person should read. Falls back to the stored string. */
+  phone_display: string | null
+  /** Non-blocking: set when the number could not be parsed. It was still saved. */
+  phone_warning: string | null
   business_name: string | null
   created_at: string
 }
@@ -415,6 +420,8 @@ export type ContactDetail = {
   last_name: string
   email: string | null
   phone: string | null
+  phone_display: string | null
+  phone_warning: string | null
   business_name: string | null
   source: string | null
   date_of_birth: string | null

@@ -1744,3 +1744,49 @@ OUR design, no capture behind any of them, none may be cited as parity:
 
 Re-measure all four if a live GHL session is ever opened again; where GHL differs,
 GHL wins on structure, exactly as everywhere else.
+## Phone numbers — store E.164, and never block a save (2026-09-10)
+
+Two decisions, made a day apart, and the second one overrides part of the first. Both are
+recorded here because the code carries only the end state.
+
+**2026-09-09 — store E.164, display formatted.** `+18135550102` in the row,
+`(813) 555-0102` on the screen. `backend/app/phones.py` does it, `phone_display` is
+computed by the backend so formatting lives in one place rather than in every client.
+
+- A bare 10-digit number is **US (+1)**. The business is in Bradenton FL.
+- A number that already carries a `+` **keeps its own country code**. The owner's own
+  mobile is Venezuelan (`+58…`); re-homing it to +1 would break it. `00` is accepted as
+  a synonym for `+`.
+- **No `phonenumbers` dependency.** ~5 MB of worldwide metadata for two rules in a
+  single-tenant CRM for one US company. The stated cost: a `+<cc>` number is
+  length-checked, not validated against its country's numbering plan.
+
+**2026-09-10 — a phone number can never stop a contact being saved.** As first written,
+`POST /api/contacts` and `PATCH /api/contacts/{id}` answered **422** for a number that
+would not parse. That is the wrong trade for this business: staff enter numbers standing
+on a roof with a customer talking at them, and a refusal at that moment does not produce
+a better number — it loses the number entirely. An oddly-formatted number in the record
+beats no number in the record.
+
+So the write path is `store_phone`, which **cannot raise**:
+
+- parses → stored E.164, rendered formatted;
+- does not parse → **stored exactly as typed** (trimmed like every other field), the save
+  succeeds, and `phone_warning` carries a sentence naming what we could not read. The
+  panel shows it in amber *under* the saved value. It is a note beside the number, never
+  a wall in front of it.
+
+`normalize_phone` still raises `InvalidPhone` — it is the parser, not the write path, and
+its messages are what `phone_warning` says. Do not wire it back into a validator.
+
+**No backfill, still.** Production holds 13 real contacts with hand-typed numbers like
+`(941) 555-0100`. Writes only; nothing rewrites an existing row, and an unrelated PATCH to
+another field leaves the stored number byte-for-byte as it was (pinned by
+`test_an_existing_row_is_left_exactly_as_it_was`). A backfill is a separate decision the
+owner has not made.
+
+**Consequence to be aware of when a real transport lands.** `LoggingTransport` transmits
+nothing, so today an unparseable number costs nothing. The day a real SMS transport is
+wired in, a number stored verbatim is one the transport may not be able to dial —
+`phone_warning` is deliberately the same signal that would drive suppression, and the
+existing "missing-phone suppresses customer-facing sends" rule is where that would hang.

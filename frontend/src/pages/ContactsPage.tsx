@@ -467,8 +467,12 @@ export function ContactsPage({ user, focus }: { user: Me; focus?: Focus | null }
                         c.last_activity
                           ? new Date(c.last_activity).toLocaleDateString('en-US')
                           : ''
+                      ) : col.key === 'phone' ? (
+                        // Stored E.164, shown formatted — the backend does the
+                        // formatting so every client reads the same string.
+                        (c.phone_display ?? c.phone ?? '')
                       ) : (
-                        (c[col.key as 'phone' | 'email' | 'business_name'] ?? '')
+                        (c[col.key as 'email' | 'business_name'] ?? '')
                       )}
                     </td>
                   ))}

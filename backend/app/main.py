@@ -40,6 +40,7 @@ from .models import (
     Tag,
     User,
 )
+from .phones import format_phone, phone_warning, store_phone
 from .transport import get_transport
 
 # The gate is applied ONCE, app-wide, rather than decorating 25 routes. Any route
@@ -121,6 +122,12 @@ class ContactOut(BaseModel):
     last_name: str
     email: str | None
     phone: str | None
+    # E.164 is what we store; it is not what a person reads. The grid renders
+    # this, so formatting lives in one place instead of in every client.
+    phone_display: str | None
+    # Non-blocking: a number we could not parse was still saved as typed, and this
+    # is the only place anything says so. None means it looks fine.
+    phone_warning: str | None
     business_name: str | None
     created_at: datetime
     tags: list[str] = []
@@ -222,7 +229,9 @@ def list_contacts(
     items = [
         ContactOut(
             id=r.id, name=r.name, first_name=r.first_name, last_name=r.last_name,
-            email=r.email, phone=r.phone, business_name=r.business_name,
+            email=r.email, phone=r.phone, phone_display=format_phone(r.phone),
+            phone_warning=phone_warning(r.phone),
+            business_name=r.business_name,
             created_at=r.created_at,
             tags=[ct.tag.name for ct in r.tags if ct.tag],
             last_activity=activity.get(r.id),
@@ -246,6 +255,8 @@ def _contact_detail(c: Contact) -> dict:
         "last_name": c.last_name,
         "email": c.email,
         "phone": c.phone,
+        "phone_display": format_phone(c.phone),
+        "phone_warning": phone_warning(c.phone),
         "business_name": c.business_name,
         "source": c.source,
         "date_of_birth": c.date_of_birth,
@@ -298,6 +309,21 @@ def _check_email(v: str | None) -> str | None:
     return v
 
 
+def _check_phone(v: str | None) -> str | None:
+    """Store E.164 when the number parses, and what was typed when it does not.
+
+    Deliberately *unlike* `_check_email`, which raises and so answers 422. The
+    owner's decision (2026-09-10): a phone number can never block a save. Staff
+    enter numbers with a customer in front of them, and refusing an unfamiliar
+    shape at that moment loses the number entirely. `store_phone` cannot raise, so
+    this validator cannot turn a save into a 422; `phone_warning` on the way back
+    out is what tells anyone the number looked odd.
+
+    Applies to writes only — nothing rewrites an existing row.
+    """
+    return store_phone(v)
+
+
 class ContactPatch(BaseModel):
     """All optional — the panel saves one field at a time as it is edited.
 
@@ -320,6 +346,7 @@ class ContactPatch(BaseModel):
     _strip = field_validator("first_name", "last_name", "email", "phone",
                              "business_name", "source", mode="after")(_blank_to_none)
     _email = field_validator("email", mode="after")(_check_email)
+    _phone = field_validator("phone", mode="after")(_check_phone)
 
 
 @app.patch("/api/contacts/{contact_id}")
@@ -723,6 +750,7 @@ class ContactCreate(BaseModel):
     _strip = field_validator("first_name", "last_name", "email", "phone",
                              "business_name", "source", mode="after")(_blank_to_none)
     _email = field_validator("email", mode="after")(_check_email)
+    _phone = field_validator("phone", mode="after")(_check_phone)
 
 
 @app.post("/api/contacts", status_code=201)
