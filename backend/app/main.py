@@ -178,18 +178,22 @@ def list_contacts(
     _: auth.Principal = auth.ANY_USER):
     stmt = select(Contact)
     if q:
-        like = "%%%s%%" % q
-        stmt = stmt.where(or_(Contact.first_name.ilike(like),
-                              Contact.last_name.ilike(like),
+        # contains() + escape=, not a bare "%s" pattern: typing a % into the box
+        # used to match every row here while narrowing to nothing in the palette,
+        # because only one of the two escaped it. One matching convention.
+        like = contains(q)
+        esc = LIKE_ESCAPE
+        stmt = stmt.where(or_(Contact.first_name.ilike(like, escape=esc),
+                              Contact.last_name.ilike(like, escape=esc),
                               # Searching a full name is the obvious thing to type,
                               # and matching the columns separately never does it:
                               # "jane doe" is in neither first_name nor last_name.
                               # Renders as || on both Postgres and SQLite.
                               (Contact.first_name + " "
-                               + Contact.last_name).ilike(like),
-                              Contact.email.ilike(like),
-                              Contact.phone.ilike(like),
-                              Contact.business_name.ilike(like)))
+                               + Contact.last_name).ilike(like, escape=esc),
+                              Contact.email.ilike(like, escape=esc),
+                              Contact.phone.ilike(like, escape=esc),
+                              Contact.business_name.ilike(like, escape=esc)))
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
@@ -1287,10 +1291,11 @@ def _search_events(db: Session, *, types: set[EventType],
     if q:
         # transcript as well as body: searching call transcripts is the whole
         # point of `ghl calls list --q`.
-        like = "%%%s%%" % q
-        stmt = stmt.where(or_(ConversationEvent.body.ilike(like),
-                              ConversationEvent.transcript.ilike(like),
-                              ConversationEvent.subject.ilike(like)))
+        like = contains(q)
+        esc = LIKE_ESCAPE
+        stmt = stmt.where(or_(ConversationEvent.body.ilike(like, escape=esc),
+                              ConversationEvent.transcript.ilike(like, escape=esc),
+                              ConversationEvent.subject.ilike(like, escape=esc)))
     for clause in (extra or []):
         stmt = stmt.where(clause)
 
@@ -1417,6 +1422,164 @@ def list_messages(
         "direction": e.direction.value, "subject": e.subject, "body": e.body,
         "delivery_status": e.delivery_status.value if e.delivery_status else None,
     } for e, c in rows], total, page, page_size)
+
+
+# ---------- global search (the ctrl+K palette) ----------
+#
+# ONE endpoint, deliberately, rather than the palette fanning out to /api/contacts,
+# /api/opportunities and /api/messages on every debounced keystroke. Three requests
+# per keystroke for a result set the user reads as a single list is the wrong shape,
+# and it would put ranking, the per-group cap and the role rule in three different
+# files with three chances to disagree.
+#
+# Scope is contacts, opportunities and messages. Call TRANSCRIPTS are deliberately
+# out (owner's decision, DECISIONS.md 2026-09-10) even though `GET /api/calls?q=`
+# already searches them: a recorded call is minutes of speech, so short queries hit
+# nearly every one and bury the contact the user was actually reaching for.
+
+SEARCH_GROUP_CAP = 5
+
+# NOT EventType.CALL: see above. MESSAGE_TYPES minus nothing -- the internal ones
+# are removed per-request, by role.
+SEARCH_MESSAGE_TYPES = frozenset(MESSAGE_TYPES)
+
+
+def _snippet(body: str | None, q: str, width: int = 90) -> str:
+    """A window of `body` around the first case-insensitive hit on `q`.
+
+    A thread found by something said in it is only useful if the row shows the
+    thing that was said. Whitespace is collapsed first, because an email body
+    arrives with newlines that would eat most of the width.
+    """
+    text = " ".join((body or "").split())
+    if len(text) <= width:
+        return text
+    at = text.lower().find(q.lower())
+    if at < 0:                                  # matched somewhere we do not show
+        return text[:width].rstrip() + "…"
+    start = max(0, at - width // 3)
+    end = min(len(text), start + width)
+    return ("…" if start else "") + text[start:end].strip() + (
+        "…" if end < len(text) else "")
+
+
+def _search_contacts(db: Session, term: str, limit: int) -> tuple[list, int]:
+    """Name, email, phone -- the three things anyone types to find a person.
+
+    `first_name + " " + last_name` is matched as well as the columns separately,
+    because "jane doe" is in neither column on its own. Same reasoning, and the
+    same rendering (`||` on both Postgres and SQLite), as GET /api/contacts.
+    """
+    like = contains(term)
+    stmt = select(Contact).where(or_(
+        Contact.first_name.ilike(like, escape=LIKE_ESCAPE),
+        Contact.last_name.ilike(like, escape=LIKE_ESCAPE),
+        (Contact.first_name + " " + Contact.last_name).ilike(
+            like, escape=LIKE_ESCAPE),
+        Contact.email.ilike(like, escape=LIKE_ESCAPE),
+        Contact.phone.ilike(like, escape=LIKE_ESCAPE)))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(
+        stmt.order_by(Contact.first_name, Contact.last_name, Contact.id)
+        .limit(limit)).all()
+    return [{"id": c.id, "name": c.name, "email": c.email, "phone": c.phone}
+            for c in rows], total
+
+
+def _search_opportunities(db: Session, term: str, limit: int) -> tuple[list, int]:
+    """Title only, per the owner. Every status, not just open: a palette is how
+    you go back to a deal you already won or lost, so `status` rides along and the
+    row says which."""
+    stmt = (select(Opportunity)
+            .options(selectinload(Opportunity.stage),
+                     selectinload(Opportunity.contact))
+            .where(Opportunity.title.ilike(contains(term), escape=LIKE_ESCAPE)))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(
+        stmt.order_by(Opportunity.updated_at.desc(), Opportunity.id.desc())
+        .limit(limit)).all()
+    return [{"id": o.id, "title": o.title, "status": o.status,
+             "value_cents": o.value_cents,
+             "pipeline_id": o.pipeline_id, "stage_id": o.stage_id,
+             "stage_name": o.stage.name if o.stage else None,
+             "contact_name": o.contact.name if o.contact else None}
+            for o in rows], total
+
+
+def _search_messages(db: Session, term: str, limit: int,
+                     types: set[EventType]) -> tuple[list, int]:
+    """Message BODIES, so a thread can be found by something said in it.
+
+    The result identifies the thread it belongs to (`conversation_id` plus the
+    contact), because finding the sentence is only half of what the user wants --
+    the other half is being taken to the conversation it was said in.
+
+    Subject lines are NOT matched: the owner asked for bodies. Cheap to add later.
+    """
+    stmt = (select(ConversationEvent, Contact)
+            .join(Conversation,
+                  Conversation.id == ConversationEvent.conversation_id)
+            .join(Contact, Contact.id == Conversation.contact_id)
+            .where(ConversationEvent.type.in_(types),
+                   ConversationEvent.body.ilike(contains(term),
+                                                escape=LIKE_ESCAPE)))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.execute(
+        stmt.order_by(ConversationEvent.occurred_at.desc(),
+                      ConversationEvent.id.desc())
+        .limit(limit)).all()
+    return [{"id": e.id, "conversation_id": e.conversation_id,
+             "contact_id": c.id, "contact_name": c.name,
+             "type": e.type.value, "direction": e.direction.value,
+             "occurred_at": e.occurred_at,
+             "snippet": _snippet(e.body, term)} for e, c in rows], total
+
+
+@app.get("/api/search")
+def search(
+    db: Session = Depends(get_db),
+    q: str = "",
+    limit: int = Query(SEARCH_GROUP_CAP, ge=1, le=25),
+    principal: auth.Principal = auth.ANY_USER,
+):
+    """Grouped, capped search across contacts, opportunities and messages.
+
+    Every group is present in every response, empty ones included, so the palette
+    renders a stable shape and "no results" is a property of the groups rather
+    than of a missing key. `total` is the real number of matches and `truncated`
+    says the list was cut -- the cap is reported, never silent.
+
+    A blank `q` is not an error: the palette calls this as the box is being
+    cleared. It returns the same empty shape rather than 422.
+
+    Role: internal notes are STAFF-only (see INTERNAL_TYPES), so a TECH's message
+    group is narrower. Everything else here is already ANY_USER-readable through
+    the list endpoints, so search adds no reach.
+    """
+    term = q.strip()
+    types = set(SEARCH_MESSAGE_TYPES)
+    if not _sees_internal(principal):
+        types -= INTERNAL_TYPES
+
+    if term:
+        found = [("contacts", "Contacts", _search_contacts(db, term, limit)),
+                 ("opportunities", "Opportunities",
+                  _search_opportunities(db, term, limit)),
+                 ("messages", "Messages",
+                  _search_messages(db, term, limit, types))]
+    else:
+        found = [(k, label, ([], 0)) for k, label in
+                 (("contacts", "Contacts"), ("opportunities", "Opportunities"),
+                  ("messages", "Messages"))]
+
+    return {
+        "q": term,
+        "limit": limit,
+        "total": sum(total for _, _, (_, total) in found),
+        "groups": [{"type": key, "label": label, "items": items,
+                    "total": total, "truncated": total > len(items)}
+                   for key, label, (items, total) in found],
+    }
 
 
 # ---------- outbound messaging ----------
