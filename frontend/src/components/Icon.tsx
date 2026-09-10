@@ -128,17 +128,11 @@ export const IconGrid = make(
     <rect x="14" y="14" width="7" height="7" rx="1" />
   </>,
 )
-export const IconRocket = make(
-  <path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2a2.8 2.8 0 0 0-3-3zM19 3s-5 0-9 4l-3 3 6 6 3-3c4-4 4-9 4-9z" />,
-)
 export const IconSettings = make(
   <>
     <circle cx="12" cy="12" r="3" />
     <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
   </>,
-)
-export const IconMegaphone = make(
-  <path d="M3 11v2a1 1 0 0 0 1 1h2l6 4V6L6 10H4a1 1 0 0 0-1 1zM16 8a5 5 0 0 1 0 8" />,
 )
 export const IconPlay = make(
   <>
@@ -160,28 +154,10 @@ export const IconImage = make(
   </>,
 )
 export const IconChart = make(<path d="M3 3v18h18M7 15l3-4 3 3 5-7" />)
-export const IconStore = make(
-  <>
-    <path d="M3 9 5 3h14l2 6" />
-    <path d="M4 9v11h16V9" />
-  </>,
-)
-export const IconAward = make(
-  <>
-    <circle cx="12" cy="9" r="6" />
-    <path d="m9 14-1 7 4-2 4 2-1-7" />
-  </>,
-)
 export const IconSparkle = make(
   <path d="M12 3v6M12 15v6M3 12h6M15 12h6M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3" />,
 )
 export const IconFilter = make(<path d="M4 5h16M7 12h10M10 19h4" />)
-export const IconDoc = make(
-  <>
-    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z" />
-    <path d="M14 3v5h5" />
-  </>,
-)
 
 export const IconDownload = make(
   <>

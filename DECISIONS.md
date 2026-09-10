@@ -535,6 +535,9 @@ integrations also avoids provisioning/consent prompts and anything billable.
 
 Reporting is now a real sidebar item, no longer dimmed.
 
+> **AMENDED 2026-09-09:** the sidebar was trimmed — see "Sidebar trimmed to the
+> product" at the end of this file. Reporting is unaffected and still a real item.
+
 ### AMENDED 2026-09-09 — the four dead tabs are gone from the UI
 
 The table above stands as the record of *why* each report was not built. What
@@ -784,3 +787,56 @@ in this file turned out to be false. Recorded so the next test run does not re-f
   telephony project holds no `ghl_pat_` value in its configuration), but the credential
   itself was unrecoverable. An unattended worker holding ADMIN will reach endpoints no UI
   route exposes: prefer the least role that can exercise a surface.
+
+## Sidebar trimmed to the product, and Dashboard is the landing view (2026-09-09)
+
+At the owner's request, **six items were removed from the sidebar outright** — gone from
+the DOM, not hidden and not dimmed:
+
+  Launchpad · Marketing · Sites · Memberships · Reputation · App Marketplace
+
+The "Scope — v1" section above put all of these out of scope, and the shell rendered the
+last five dimmed with an `Out of scope for v1` tooltip so the omission stayed visible
+against GHL. That reasoning held while v1 fidelity was the bar. It no longer does: the
+app is in daily use by four people who are not comparing it to GHL, and a permanently
+dead row reads as a feature that is coming. These six are not deferred, they are out of
+the product.
+
+**Four out-of-scope items were deliberately KEPT**, unchanged, and are still dimmed:
+
+  Payments · AI Agents · Automation · Media Storage
+
+This is a decision, not an oversight — removing them is a separate call the owner has not
+made. `backend/tests/test_frontend_nav.py` pins both halves, because "we removed the dead
+items" and "we removed every dimmed item" are indistinguishable in a diff.
+
+This narrows the GHL-parity claim: the sidebar is now **deliberately not** a 1:1 copy of
+GHL's shell. `capture/diff.py` (37/37) and `diff_panel.py` (35/35) measure the Contacts
+view and the contact panel, not the nav, so both still pass. Any future whole-shell
+comparison must treat these six rows as an intended deviation.
+
+### Landing route
+
+**The app lands on Dashboard**, and `/launchpad` resolves to Dashboard rather than
+dead-ending, so old bookmarks keep working.
+
+Two corrections to what was assumed when this was requested:
+
+- **Launchpad was never the landing view.** `App.tsx` opened on `contacts`
+  (`useState('contacts')`); Launchpad was only the first sidebar row. So the change of
+  landing view is Contacts → Dashboard, a real product change, not the preservation of
+  existing behaviour.
+- **There is no router**, so `/launchpad` never 404'd. `@tanstack/react-router` is in
+  `package.json` but nothing imports it, and nginx's `try_files` serves `index.html` for
+  every path (the config comments say "once TanStack Router lands"). Every URL rendered
+  the same default view and the path was ignored entirely.
+
+`App.tsx` now reads `window.location.pathname` once at boot: `RETIRED_PATHS` maps
+`/launchpad` to Dashboard and `history.replaceState` rewrites the dead path out of the
+address bar — `replaceState` rather than `pushState`, so Back does not bounce off the
+redirect. This is the app's only URL handling and it stays that way until the router
+lands; `RETIRED_PATHS` is where the next retired link goes.
+
+`frontend/src/pages/LaunchpadPage.tsx` was deleted (nothing else imported it), along with
+the five icons the removal orphaned: `IconRocket`, `IconMegaphone`, `IconStore`,
+`IconAward`, `IconDoc`.
