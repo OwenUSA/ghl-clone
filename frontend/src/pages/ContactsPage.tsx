@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tansta
 import {
   IconDownload, IconFilter, IconList, IconPlus, IconSettings, IconSort,
 } from '../components/Icon'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
 import { createContact, listContacts } from '../lib/api'
 import type { Me } from '../lib/auth'
 import { IconChevronDown } from '../components/Icon'
+import type { Focus } from '../lib/focus'
 
 /**
  * Measured from captures/contacts/*__1440x900__top__*.json:
@@ -62,7 +63,7 @@ function initials(name: string) {
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase()
 }
 
-export function ContactsPage({ user }: { user: Me }) {
+export function ContactsPage({ user, focus }: { user: Me; focus?: Focus | null }) {
   // `POST /api/contacts` is auth.STAFF, so a TECH's create is refused. Mirror that
   // here rather than let them fill six fields to find out on submit.
   const canCreate = user.role !== 'TECH'
@@ -74,6 +75,13 @@ export function ContactsPage({ user }: { user: Me }) {
   const [openContact, setOpenContact] = useState<number | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const qc = useQueryClient()
+
+  // The ctrl+K palette asked for one record. Opening it here, rather than
+  // teaching the palette how each page's detail panel works, keeps a searched
+  // record and a clicked row on exactly the same path.
+  useEffect(() => {
+    if (focus) setOpenContact(focus.id)
+  }, [focus])
 
   const [sort, setSort] = useState('created_at')
   const [order, setOrder] = useState<'asc' | 'desc'>('desc')

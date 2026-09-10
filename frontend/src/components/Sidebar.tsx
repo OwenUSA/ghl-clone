@@ -45,10 +45,13 @@ const SECONDARY: { label: string; Icon: IconCmp }[] = [
 export function Sidebar({
   active,
   onNavigate,
+  onOpenSearch,
   user,
 }: {
   active: string
   onNavigate: (key: string) => void
+  /** Opens the ctrl+K palette. The row used to be an inert <div>. */
+  onOpenSearch: () => void
   user?: { name: string; role: string }
 }) {
   return (
@@ -84,15 +87,23 @@ export function Sidebar({
         </div>
       </div>
 
+      {/* A <button>, not the <div> this used to be. Every measured value on the
+          row is unchanged -- the shell still matches the capture -- but the row
+          now opens the palette, and the ctrlK badge it has always shown is
+          finally telling the truth. */}
       <div className="px-4 pb-2 pt-3">
-        <div
-          className="flex items-center gap-2 px-2"
+        <button
+          onClick={onOpenSearch}
+          aria-label="Search"
+          className="flex w-full items-center gap-2 px-2 text-left"
           style={{
             height: 32,
             borderRadius: 6,
             backgroundColor: 'rgb(26,32,44)',
             color: 'rgb(152,162,179)',
             fontSize: 14,
+            border: 'none',
+            cursor: 'pointer',
           }}
         >
           <IconSearch size={16} color="rgb(152,162,179)" />
@@ -102,7 +113,7 @@ export function Sidebar({
             fontSize: 11, color: 'rgb(152,162,179)',
             backgroundColor: 'rgb(45,55,72)', borderRadius: 4, padding: '1px 5px',
           }}>ctrlK</span>
-        </div>
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-0 pt-2">

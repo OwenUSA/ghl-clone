@@ -1,3 +1,5 @@
+import type { SearchResponse } from './search'
+
 // Same-origin: Vite proxies /api to the backend in dev, Caddy does it in prod.
 // Must NOT be an absolute cross-origin URL — a SameSite=Lax session cookie would
 // never be sent with it. See the comment in vite.config.ts.
@@ -500,3 +502,11 @@ export function getAppointmentReport(p: {
   if (p.calendar_ids.length) sp.set('calendar_ids', p.calendar_ids.join(','))
   return get<AppointmentReport>(`/api/reports/appointments?${sp}`)
 }
+
+/**
+ * The ctrl+K palette. ONE request, not three: see the comment on /api/search in
+ * backend/app/main.py. `limit` is the per-group cap, and the response says how
+ * many matches each group really had.
+ */
+export const globalSearch = (q: string, limit = 5) =>
+  get<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`)

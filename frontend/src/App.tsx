@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from './components/Sidebar'
+import { SearchPalette } from './components/SearchPalette'
 import { ContactsPage } from './pages/ContactsPage'
 import { ConversationsPage } from './pages/ConversationsPage'
 import { OpportunitiesPage } from './pages/OpportunitiesPage'
@@ -10,6 +11,7 @@ import { ReportingPage } from './pages/ReportingPage'
 import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { me } from './lib/auth'
+import type { Focus } from './lib/focus'
 
 const PLACEHOLDER: Record<string, string> = {
   dashboard: 'Dashboard',
@@ -47,7 +49,35 @@ function initialView(): string {
 
 export default function App() {
   const [active, setActive] = useState(initialView)
+  const [searchOpen, setSearchOpen] = useState(false)
   const qc = useQueryClient()
+
+  // What the palette asked a page to open. `n` makes every request a new object
+  // even when it names the same record, so searching for the same contact twice
+  // in a row reopens the panel the user just closed instead of doing nothing.
+  const [focus, setFocus] = useState<(Focus & { view: string }) | null>(null)
+  const seq = useRef(0)
+  const openRecord = useCallback((view: string, id: number) => {
+    seq.current += 1
+    setActive(view)
+    setFocus({ view, id, n: seq.current })
+  }, [])
+  const focusFor = (view: string) => (focus?.view === view ? focus : null)
+
+  // ctrl+K, and cmd+K on a Mac. Bound on the window so it works from anywhere,
+  // including with the caret inside a page's own filter box -- which is exactly
+  // when someone reaches for it. preventDefault stops Chrome's own ctrl+K
+  // (focus the address bar as a search) from swallowing it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // The whole app is gated on this one query. There is no router yet
   // (DECISIONS.md), so a conditional render at the root is the whole mechanism.
@@ -79,13 +109,21 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
-      <Sidebar active={active} onNavigate={setActive} user={user} />
+      <Sidebar
+        active={active}
+        onNavigate={setActive}
+        onOpenSearch={() => setSearchOpen(true)}
+        user={user}
+      />
+      {searchOpen && (
+        <SearchPalette onClose={() => setSearchOpen(false)} onOpen={openRecord} />
+      )}
       {active === 'contacts' ? (
-        <ContactsPage user={user} />
+        <ContactsPage user={user} focus={focusFor('contacts')} />
       ) : active === 'conversations' ? (
-        <ConversationsPage user={user} />
+        <ConversationsPage user={user} focus={focusFor('conversations')} />
       ) : active === 'opportunities' ? (
-        <OpportunitiesPage user={user} />
+        <OpportunitiesPage user={user} focus={focusFor('opportunities')} />
       ) : active === 'calendars' ? (
         <CalendarsPage user={user} />
       ) : active === 'dashboard' ? (
