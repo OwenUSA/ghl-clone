@@ -313,3 +313,45 @@ def test_exit_codes_are_documented_in_the_cli_itself():
     assert r.exit_code == 0
     codes = {row["code"] for row in json.loads(r.stdout)}
     assert {0, 1, 2, 3, 4, 5, 6, 7, 8} <= codes
+
+
+# ---------------- reports ----------------
+
+CALL_REPORT = {
+    "total_calls": 5,
+    "by_status": {"completed": 2, "no-answer": 1, "voicemail": 1, "unknown": 1},
+    "first_time_by_status": {"no-answer": 1, "voicemail": 1, "unknown": 1},
+    "avg_duration_seconds": 186, "total_duration_seconds": 932,
+    "first_time_avg_duration_seconds": 77, "first_time_total_duration_seconds": 232,
+    "top_sources": [
+        {"source": "Google LSA", "calls": 3, "won": 3, "duration": 900,
+         "avg_duration": 300},
+        {"source": "Referral", "calls": 1, "won": 0, "duration": 20,
+         "avg_duration": 20},
+        {"source": "Yelp", "calls": 1, "won": 0, "duration": 12, "avg_duration": 12},
+    ],
+}
+
+
+def test_call_report_prints_every_source_with_its_own_figures(monkeypatch):
+    """`ghl reports calls` is how this data gets checked without a browser, and it
+    was printing the two donuts only -- no sources, no won deals, no per-source
+    duration, which is the half of the screen the owner was questioning."""
+    wire(monkeypatch, Recorder({("GET", "/api/reports/calls"): (200, CALL_REPORT)}))
+    r = runner.invoke(app, ["reports", "calls"])
+    assert r.exit_code == 0, r.output
+    for source in ("Google LSA", "Referral", "Yelp"):
+        assert source in r.output
+    assert "WON DEALS" in r.output
+    # Distinct per-source averages must survive rendering, not collapse to one.
+    for avg in ("300", "20", "12"):
+        assert avg in r.output
+    assert "unknown" in r.output, "a call with no status is its own bucket"
+
+
+def test_call_report_does_not_relabel_the_overall_duration_as_first_time(monkeypatch):
+    wire(monkeypatch, Recorder({("GET", "/api/reports/calls"): (200, CALL_REPORT)}))
+    r = runner.invoke(app, ["reports", "calls"])
+    assert "77s" in r.output and "186s" in r.output
+    assert r.output.count("186s") == 1, (
+        "the first-time figure is the overall one printed twice")

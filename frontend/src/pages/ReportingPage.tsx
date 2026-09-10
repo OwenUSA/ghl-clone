@@ -334,14 +334,17 @@ export function ReportingPage() {
                   total={calls.data?.total_duration_seconds ?? 0} />
               </Card>
 
+              {/* This card's strip is the first-time callers' own durations. It
+                  used to repeat the card above, which is a different figure under
+                  the same label. */}
               <Card title="First-time calls by status">
                 <div className="flex items-center justify-center gap-8">
                   <Donut segments={segs(firstBy)} caption="Total"
                     center={String(Object.values(firstBy).reduce((a, b) => a + b, 0))} />
                   {Object.keys(firstBy).length > 0 && <Legend items={legend(firstBy)} />}
                 </div>
-                <DurationStrip avg={calls.data?.avg_duration_seconds ?? 0}
-                  total={calls.data?.total_duration_seconds ?? 0} />
+                <DurationStrip avg={calls.data?.first_time_avg_duration_seconds ?? 0}
+                  total={calls.data?.first_time_total_duration_seconds ?? 0} />
               </Card>
             </div>
 

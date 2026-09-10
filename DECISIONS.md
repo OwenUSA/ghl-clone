@@ -570,6 +570,45 @@ those tabs existed *and were disabled*; that check now asserts they are absent.
 `capture/capture_reporting.py`'s FORBIDDEN list is untouched — it governs what
 may be clicked on the live GHL account, which is a different question.
 
+### Call report — AMENDED 2026-09-09 (what each number is allowed to claim)
+
+The owner read the Call report on production as placeholder data. Audited: the
+volume, duration and per-source figures were computed from real rows all along —
+production simply holds 6 calls and 10 opportunities that are all still `open`, so
+"Won deals 0" was the truth. Three things were not the truth, and are now fixed:
+
+- **A blank `call_status` is `unknown`, not `completed`.** The column is nullable,
+  and `POST /api/events` — the telephony project's own feed — had **no field for it
+  at all**, so every ingested call arrived blank and the donut labelled all of them
+  completed. `EventIngest` now carries `call_status`, validated against the measured
+  five; anything else is a 400 rather than a new slice of the donut. The sixth
+  bucket, `unknown`, is OUR addition to the measured set: it exists so an unmeasured
+  outcome cannot be reported as a good one.
+- **"First-time" means first ever, not first in the window.** It was the caller's
+  earliest call *inside the selected range*, which makes a caller of ten years'
+  standing new every month. It is now their earliest call of all time, in the
+  direction the Incoming/Outgoing tab selects.
+- **The first-time card gets its own duration strip.** Both cards were handed the
+  whole window's average and total, so the second card was the first card's figures
+  under a different label. New payload keys:
+  `first_time_avg_duration_seconds`, `first_time_total_duration_seconds`.
+
+**"Won deals" attribution — a product decision, overrulable.** A won opportunity is
+credited to a call source when the opportunity's contact **called inside the report's
+window and direction**; it is counted once per opportunity however often that contact
+rang. Previously any won opportunity whose contact merely shared a source was
+counted, so a source could show wins it never produced. What the schema does NOT
+support, and what was therefore not invented:
+
+- no per-call attribution — `Opportunity.custom_fields.owen_call_id` is a documented
+  join key to the telephony project, but no `ConversationEvent` column holds the
+  matching id, so "this deal came from this call" cannot be answered today;
+- no `won_at` — nothing records the date a deal was won, so the window selects the
+  *callers*, not the wins. A deal won last year still counts for a caller who rang
+  this week.
+
+Layout, typography and column order are untouched; only the numbers changed.
+
 ## Safety contract — AMENDED 2026-08-13 (narrow, on the record)
 
 The "Safety contract (binding)" section above is **read-only on the live GHL account**.

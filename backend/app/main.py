@@ -454,6 +454,13 @@ def create_contact(body: ContactCreate, db: Session = Depends(get_db),
     return {**_contact_detail(c), "automation": outcome}
 
 
+# The measured Call report groups calls by these five statuses (DECISIONS.md).
+CALL_STATUSES = {"completed", "no-answer", "busy", "voicemail", "failed"}
+# What a call with no status at all is reported as. NOT "completed": the column is
+# nullable, the feed does not always fill it, and a blank is an unknown outcome.
+UNKNOWN_CALL_STATUS = "unknown"
+
+
 class EventIngest(BaseModel):
     """Ingest endpoint for the telephony project.
 
@@ -465,6 +472,9 @@ class EventIngest(BaseModel):
     direction: Literal["INBOUND", "OUTBOUND"] = "INBOUND"
     body: str | None = None
     duration_seconds: int | None = None
+    # CALL only. The Call report's "Call by status" donut is built from this, so a
+    # feed that cannot send it leaves every ingested call with an unknown outcome.
+    call_status: str | None = None
     recording_url: str | None = None
     provider_ref: str | None = None
 
@@ -475,6 +485,12 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
     contact = db.get(Contact, body.contact_id)
     if not contact:
         raise HTTPException(404, "contact not found")
+    if body.call_status is not None:
+        if body.type != "CALL":
+            raise HTTPException(400, "call_status is only meaningful on a CALL")
+        if body.call_status not in CALL_STATUSES:
+            raise HTTPException(400, "unknown call_status %r — expected one of %s"
+                                % (body.call_status, sorted(CALL_STATUSES)))
 
     conv = db.scalar(select(Conversation).where(
         Conversation.contact_id == contact.id))
@@ -489,6 +505,7 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
         direction=Direction[body.direction],
         body=body.body,
         duration_seconds=body.duration_seconds,
+        call_status=body.call_status,
         recording_url=body.recording_url,
         provider_ref=body.provider_ref,
     )
@@ -882,7 +899,16 @@ def report_calls(
     _: auth.Principal = auth.STAFF):
     """Measured Call report: Incoming/Outgoing toggle, "Call by status",
     "First-time calls by status", avg + total duration, "Top call sources"
-    (Source | Total calls | Won deals | Avg duration)."""
+    (Source | Total calls | Won deals | Avg duration).
+
+    Every figure is computed from ConversationEvent rows of type CALL, except
+    "Won deals", which comes from Opportunity. The attribution is: a won
+    opportunity belonging to a contact who called inside this window, credited to
+    the source that contact's calls are listed under, counted once per
+    opportunity. The schema records no date on which a deal was won (there is no
+    `won_at`), so the deals are not themselves date-filtered — the window selects
+    the callers, not the wins.
+    """
     stmt = (select(ConversationEvent, Conversation, Contact)
             .join(Conversation, ConversationEvent.conversation_id == Conversation.id)
             .join(Contact, Conversation.contact_id == Contact.id)
@@ -896,41 +922,70 @@ def report_calls(
 
     rows = db.execute(stmt).all()
 
+    # "First-time" means new to us, not new to this month: a caller's earliest
+    # call is looked up across ALL time, not just the reported window. Scoped to
+    # the same direction, because Incoming/Outgoing scopes the whole report.
+    earliest = (select(Conversation.contact_id.label("cid"),
+                       func.min(ConversationEvent.occurred_at).label("first_at"))
+                .join(Conversation,
+                      ConversationEvent.conversation_id == Conversation.id)
+                .where(ConversationEvent.type == EventType.CALL)
+                .group_by(Conversation.contact_id))
+    if direction != "all":
+        earliest = earliest.where(ConversationEvent.direction == Direction[direction])
+    first_call_at = dict(db.execute(earliest).all())
+
+    # Won deals are attributed through the caller, so read them per contact and
+    # bucket them below under the source that contact's calls are bucketed under.
+    # Grouped in the database; the result is one row per contact with a win, which
+    # for a single-tenant account is a handful of rows.
+    won_by_contact = dict(db.execute(
+        select(Opportunity.contact_id, func.count(Opportunity.id))
+        .where(Opportunity.status == "won", Opportunity.contact_id.is_not(None))
+        .group_by(Opportunity.contact_id)).all())
+
     by_status: dict[str, int] = {}
     first_by_status: dict[str, int] = {}
     seen_contacts: set[int] = set()
+    attributed: set[int] = set()
     durations: list[int] = []
+    first_durations: list[int] = []
     per_source: dict[str, dict] = {}
 
-    # Ordered by time so "first-time" means the caller's earliest call in range.
     for ev, conv, contact in sorted(rows, key=lambda r: r[0].occurred_at):
-        status = ev.call_status or "completed"
+        # A blank status is unknown, not "completed". The telephony feed does not
+        # always supply one, and calling an unknown call a completed one is the
+        # difference between a missed lead and a served customer.
+        status = ev.call_status or UNKNOWN_CALL_STATUS
         by_status[status] = by_status.get(status, 0) + 1
-        if conv.contact_id not in seen_contacts:
-            seen_contacts.add(conv.contact_id)
-            first_by_status[status] = first_by_status.get(status, 0) + 1
 
         d = ev.duration_seconds or 0
         durations.append(d)
+
+        first_at = first_call_at.get(conv.contact_id)
+        if conv.contact_id not in seen_contacts and first_at is not None \
+                and ev.occurred_at <= first_at:
+            seen_contacts.add(conv.contact_id)
+            first_by_status[status] = first_by_status.get(status, 0) + 1
+            first_durations.append(d)
 
         src = contact.source or "Unknown"
         s = per_source.setdefault(src, {"source": src, "calls": 0, "won": 0,
                                         "duration": 0})
         s["calls"] += 1
         s["duration"] += d
+        # Only callers count, and each caller's deals count once however often
+        # they rang. A won deal on a contact who never called is not a call
+        # source's win — it belongs to whatever channel actually brought it in.
+        if conv.contact_id not in attributed:
+            attributed.add(conv.contact_id)
+            s["won"] += won_by_contact.get(conv.contact_id, 0)
 
-    # Won deals per source, counted from opportunities, not from calls.
-    for src, cnt in db.execute(
-        select(Contact.source, func.count(Opportunity.id))
-        .join(Opportunity, Opportunity.contact_id == Contact.id)
-        .where(Opportunity.status == "won")
-        .group_by(Contact.source)).all():
-        key = src or "Unknown"
-        if key in per_source:
-            per_source[key]["won"] = cnt
+    def _avg(xs: list[int]) -> int:
+        return round(sum(xs) / len(xs)) if xs else 0
 
-    total_dur = sum(durations)
-    sources = sorted(per_source.values(), key=lambda s: -s["calls"])
+    # Ties broken by name so the table does not reshuffle between refreshes.
+    sources = sorted(per_source.values(), key=lambda s: (-s["calls"], s["source"]))
     for s in sources:
         s["avg_duration"] = round(s["duration"] / s["calls"]) if s["calls"] else 0
 
@@ -938,8 +993,12 @@ def report_calls(
         "total_calls": len(rows),
         "by_status": by_status,
         "first_time_by_status": first_by_status,
-        "avg_duration_seconds": round(total_dur / len(durations)) if durations else 0,
-        "total_duration_seconds": total_dur,
+        "avg_duration_seconds": _avg(durations),
+        "total_duration_seconds": sum(durations),
+        # The first-time card has its own duration strip; it used to be handed the
+        # whole window's figures, which is a different number under the same label.
+        "first_time_avg_duration_seconds": _avg(first_durations),
+        "first_time_total_duration_seconds": sum(first_durations),
         "top_sources": sources[:10],
     }
 
@@ -1202,9 +1261,6 @@ def _search_events(db: Session, *, types: set[EventType],
 def _paged(items: list, total: int, page: int, page_size: int) -> dict:
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "pages": max(1, (total + page_size - 1) // page_size)}
-
-
-CALL_STATUSES = {"completed", "no-answer", "busy", "voicemail", "failed"}
 
 
 @app.get("/api/calls")

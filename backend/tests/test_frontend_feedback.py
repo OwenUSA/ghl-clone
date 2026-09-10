@@ -425,3 +425,22 @@ def test_the_appointment_dialog_picks_a_contact_by_searching_for_one():
         "the picker queries on an empty box, listing contacts nobody asked for")
     assert "onPick({ id: c.id, name: c.name })" in picker, (
         "picking a result does not record which contact was chosen")
+
+
+def test_the_first_time_card_does_not_repeat_the_whole_windows_durations():
+    """Both call cards were handed `avg_duration_seconds` / `total_duration_seconds`,
+    so "First-time calls by status" showed the duration of EVERY call under a label
+    saying otherwise. Two cards reading identically is exactly what made the screen
+    look synthetic; the backend now returns the first-time figures separately."""
+    source = _read("pages", "ReportingPage.tsx")
+    first_card = source.split('<Card title="First-time calls by status">', 1)[1] \
+                       .split("</Card>", 1)[0]
+    assert "first_time_avg_duration_seconds" in first_card, (
+        "the first-time card is still showing the whole window's average")
+    assert "first_time_total_duration_seconds" in first_card, (
+        "the first-time card is still showing the whole window's total")
+    # The card above it keeps the unqualified figures — that one is every call.
+    by_status_card = source.split('<Card title="Call by status">', 1)[1] \
+                           .split("</Card>", 1)[0]
+    assert "first_time_" not in by_status_card, (
+        "'Call by status' is every call, not just the first-time ones")
