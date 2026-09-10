@@ -13,12 +13,17 @@ import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
 import {
+  centsFromDollars,
+  createOpportunity,
+  listContacts,
   listOpportunities,
   listPipelines,
   moveOpportunity,
   money,
   type Opportunity,
+  type Pipeline,
 } from '../lib/api'
+import type { Me } from '../lib/auth'
 
 /**
  * Measured from captures/opportunities/ and menus.json:
@@ -176,8 +181,13 @@ function StageColumn({
   )
 }
 
-export function OpportunitiesPage() {
+export function OpportunitiesPage({ user }: { user: Me }) {
   const qc = useQueryClient()
+  // `POST /api/opportunities` is auth.STAFF, so a TECH's create is refused.
+  // Mirror that here rather than let them fill in the form to find out on submit
+  // (same precedent as Add Contact).
+  const canCreate = user.role !== 'TECH'
+  const [showAdd, setShowAdd] = useState(false)
   const [view, setView] = useState<'board' | 'list'>('board')
   const [layout, setLayout] = useState<Layout>('Default')
   const [q, setQ] = useState('')
@@ -390,13 +400,18 @@ export function OpportunitiesPage() {
             Import
           </button>
           <button
-            disabled
-            title="Creating an opportunity is not implemented in v1"
+            onClick={() => setShowAdd(true)}
+            disabled={!canCreate || !pipeline}
+            title={
+              canCreate
+                ? pipeline ? undefined : 'No pipeline loaded yet'
+                : 'Your role cannot create opportunities'
+            }
             className="flex items-center gap-1"
             style={{
               height: 34, padding: '0 12px', borderRadius: 6, fontSize: 13,
               fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)',
-              opacity: 0.5, cursor: 'not-allowed',
+              ...(canCreate && pipeline ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
             }}
           >
             <IconPlus size={16} color="#fff" />
@@ -531,6 +546,25 @@ export function OpportunitiesPage() {
         </div>
       )}
 
+      {showAdd && pipeline && (
+        <AddOpportunityDialog
+          pipelines={pipelines.data ?? []}
+          initialPipelineId={pipeline.id}
+          onClose={() => setShowAdd(false)}
+          onDone={(createdInPipelineId) => {
+            setShowAdd(false)
+            // Show the card that was just filed. It may have gone into a pipeline
+            // the board is not looking at, and a board filtered to Won or Lost
+            // would hide a new (always Open) opportunity entirely -- which reads
+            // as "nothing happened".
+            setPipelineId(createdInPipelineId)
+            if (status !== 'open' && status !== 'all') setStatus('open')
+            qc.invalidateQueries({ queryKey: ['opportunities'] })
+            qc.invalidateQueries({ queryKey: ['pipelines'] })
+          }}
+        />
+      )}
+
       {openOpp != null && (
         <OpportunityDetail
           opportunityId={openOpp}
@@ -607,6 +641,224 @@ export function OpportunitiesPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Add opportunity.
+ *
+ * GHL's own create form sits behind a write we never click — the live account is
+ * read-only (DECISIONS.md) — so unlike the rest of this screen there is no capture
+ * to match. Markup, styling, error display and close/submit behaviour therefore
+ * follow the in-repo idiom, AddContactDialog in ContactsPage, rather than a second
+ * invented dialog.
+ */
+function AddOpportunityDialog({
+  pipelines,
+  initialPipelineId,
+  onClose,
+  onDone,
+}: {
+  pipelines: Pipeline[]
+  initialPipelineId: number
+  onClose: () => void
+  onDone: (createdInPipelineId: number) => void
+}) {
+  const [title, setTitle] = useState('')
+  const [pipelineId, setPipelineId] = useState(initialPipelineId)
+  const [stageId, setStageId] = useState<number | null>(null)
+  const [value, setValue] = useState('')
+  const [contact, setContact] = useState<{ id: number; name: string } | null>(null)
+  const [q, setQ] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const pipeline = pipelines.find((p) => p.id === pipelineId) ?? pipelines[0]
+  const stages = pipeline?.stages ?? []
+  // Default to the first stage, and follow the pipeline when it changes instead of
+  // holding a stage id the new pipeline has never heard of — the backend refuses
+  // that pair, so keeping it would be a submit-time error for no reason.
+  const stage = stages.find((s) => s.id === stageId) ?? stages[0]
+
+  const matches = useQuery({
+    queryKey: ['contacts', 'picker', q],
+    queryFn: () => listContacts({ page: 1, page_size: 6, q }),
+    enabled: !contact && q.trim().length > 0,
+  })
+
+  const create = useMutation({
+    mutationFn: () =>
+      createOpportunity({
+        title: title.trim(),
+        pipeline_id: pipeline.id,
+        stage_id: stage.id,
+        contact_id: contact?.id ?? null,
+        // Dollars -> integer cents without a float in the middle; see api.ts.
+        value_cents: centsFromDollars(value),
+      }),
+    onSuccess: () => onDone(pipeline.id),
+    onError: (e: Error) => setError(e.message),
+  })
+
+  // A name is the one field GHL marks required, and `stage` is missing only if the
+  // chosen pipeline has no stages at all — there would be nowhere to file the card.
+  const ready = !!stage && title.trim().length > 0
+
+  const label = { fontSize: 14, color: 'rgb(102,112,133)' } as const
+  const input = {
+    width: '100%', height: 36, marginTop: 4, fontSize: 14,
+    borderRadius: 6, border: '1px solid rgb(234,236,240)', padding: '0 10px',
+    backgroundColor: '#fff',
+  } as const
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(16,24,40,0.4)' }}
+      onClick={onClose}
+    >
+      <div onClick={(e) => e.stopPropagation()} className="bg-white"
+        style={{ width: 460, borderRadius: 8, padding: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 600, color: 'rgb(16,24,40)' }}>
+          Add opportunity
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={label}>Opportunity name</div>
+          <input
+            autoFocus
+            value={title}
+            maxLength={120}
+            onChange={(e) => setTitle(e.target.value)}
+            style={input}
+          />
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={label}>Contact</div>
+          {contact ? (
+            <div
+              className="flex items-center justify-between"
+              style={{ ...input, display: 'flex', paddingRight: 6 }}
+            >
+              <span className="truncate" style={{ color: 'rgb(52,64,84)' }}>
+                {contact.name}
+              </span>
+              <button
+                onClick={() => { setContact(null); setQ('') }}
+                style={{ fontSize: 13, fontWeight: 500, color: 'rgb(0,78,235)', padding: '0 6px' }}
+              >
+                Clear
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search contacts"
+                style={input}
+              />
+              {q.trim().length > 0 && (
+                <div
+                  style={{
+                    marginTop: 4, maxHeight: 148, overflowY: 'auto',
+                    border: '1px solid rgb(234,236,240)', borderRadius: 6,
+                  }}
+                >
+                  {matches.data?.items.length ? (
+                    matches.data.items.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => setContact({ id: c.id, name: c.name })}
+                        className="block w-full truncate text-left hover:bg-[rgb(249,250,251)]"
+                        style={{ padding: '8px 10px', fontSize: 14, color: 'rgb(52,64,84)' }}
+                      >
+                        {c.name}
+                        {c.phone ? ' · ' + c.phone : ''}
+                      </button>
+                    ))
+                  ) : (
+                    <div style={{ padding: '8px 10px', fontSize: 13, color: 'rgb(102,112,133)' }}>
+                      {matches.isFetching ? 'Searching…' : 'No matching contact'}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
+                Optional — an opportunity can be filed without a contact.
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={label}>Pipeline</div>
+          <select
+            value={pipeline?.id ?? ''}
+            onChange={(e) => { setPipelineId(Number(e.target.value)); setStageId(null) }}
+            style={input}
+          >
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={label}>Stage</div>
+          <select
+            value={stage?.id ?? ''}
+            onChange={(e) => setStageId(Number(e.target.value))}
+            style={input}
+          >
+            {stages.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={label}>Value</div>
+          <div className="flex items-center gap-1">
+            <span style={{ fontSize: 14, color: 'rgb(52,64,84)', marginTop: 4 }}>$</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="Please Input"
+              style={input}
+            />
+          </div>
+        </div>
+
+        {error && (
+          <div style={{ fontSize: 13, color: 'rgb(217,45,32)', marginTop: 10 }}>{error}</div>
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose}
+            style={{ height: 36, padding: '0 14px', borderRadius: 6, fontSize: 14, border: '1px solid rgb(234,236,240)' }}>
+            Cancel
+          </button>
+          <button
+            onClick={() => { setError(null); create.mutate() }}
+            // Disabled while the POST is in flight: a second click would create a
+            // second opportunity, and nothing on the server dedupes them.
+            disabled={!ready || create.isPending}
+            title={ready ? undefined : 'An opportunity needs a name'}
+            style={{
+              height: 36, padding: '0 14px', borderRadius: 6, fontSize: 14,
+              fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)',
+              ...(ready && !create.isPending ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
+            }}
+          >
+            {create.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

@@ -85,7 +85,7 @@ export default function App() {
       ) : active === 'conversations' ? (
         <ConversationsPage />
       ) : active === 'opportunities' ? (
-        <OpportunitiesPage />
+        <OpportunitiesPage user={user} />
       ) : active === 'calendars' ? (
         <CalendarsPage />
       ) : active === 'dashboard' ? (

@@ -234,6 +234,34 @@ export const listEvents = (convId: number, filter: string) =>
 export const money = (cents: number) =>
   (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
+/**
+ * Dollars typed into a money input -> integer cents, without going through a float.
+ *
+ * `Math.round(Number(v) * 100)` looks equivalent and is not: 9500.005 * 100 is
+ * 950000.49999999994 in IEEE-754, so the half rounds DOWN and the cent the user
+ * typed disappears. Splitting the decimal string and rounding on the third digit
+ * keeps the arithmetic in integers, where a cent cannot be invented or lost.
+ *
+ * Anything that is not a plain decimal (a number input can still hand back "1e3")
+ * falls back to the float path rather than being silently read as zero.
+ */
+export function centsFromDollars(input: string): number {
+  const text = input.trim()
+  if (!text) return 0
+  const m = /^(-?)(\d*)(?:\.(\d*))?$/.exec(text)
+  if (!m) {
+    const n = Number(text)
+    return Number.isFinite(n) ? Math.round(n * 100) : 0
+  }
+  const [, sign, whole, frac = ''] = m
+  const cents =
+    Number(whole || '0') * 100 +
+    Number((frac + '00').slice(0, 2)) +
+    // half-up, decided on the digit itself
+    (frac.length > 2 && frac[2] >= '5' ? 1 : 0)
+  return sign === '-' ? -cents : cents
+}
+
 export type User = { id: number; name: string; email: string; role: string }
 export const listUsers = () => get<User[]>('/api/users')
 
@@ -344,6 +372,15 @@ export const getOpportunity = (id: number) =>
 
 export const patchOpportunity = (id: number, body: Partial<OpportunityDetail>) =>
   send<OpportunityDetail>(`/api/opportunities/${id}/detail`, 'PATCH', body)
+
+export const createOpportunity = (body: {
+  title: string
+  pipeline_id: number
+  stage_id: number
+  contact_id?: number | null
+  value_cents: number
+}) => send<{ id: number; title: string; stage_id: number }>(
+  '/api/opportunities', 'POST', body)
 
 export const createContact = (body: {
   first_name?: string

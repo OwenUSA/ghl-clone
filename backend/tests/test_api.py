@@ -319,6 +319,126 @@ def test_opportunity_detail_validation(client):
     assert ok.status_code == 200 and ok.json()["value_cents"] == 123456
 
 
+def _all_opps(client):
+    """Every opportunity in the fixture pipeline, whatever its status."""
+    pid = client.ids["pipeline"]
+    r = client.get(f"/api/opportunities?pipeline_id={pid}&status=all")
+    assert r.status_code == 200
+    return r.json()
+
+
+def _create(client, **over):
+    """POST a valid opportunity with `over` applied on top."""
+    body = {"title": "Jane roof", "pipeline_id": client.ids["pipeline"],
+            "stage_id": client.ids["stage2"], "contact_id": client.ids["contact"],
+            "value_cents": 950000}
+    body.update(over)
+    return client.post("/api/opportunities", json=body)
+
+
+def test_create_puts_the_card_in_the_chosen_stage(client):
+    """The board has to show the new card where it was filed, with its money intact.
+
+    Asserted through what comes back on the board and in the stage header, not on
+    the 201: a create that lands in the wrong stage still answers 201.
+    """
+    def stage_counts():
+        return {s["id"]: (s["count"], s["value_cents"])
+                for s in client.get("/api/pipelines").json()[0]["stages"]}
+
+    before, s2 = stage_counts(), client.ids["stage2"]
+    r = _create(client, title="  Jane roof  ", value_cents=950001)
+    assert r.status_code == 201
+    new_id = r.json()["id"]
+
+    card = next(o for o in _all_opps(client) if o["id"] == new_id)
+    assert card["stage_id"] == s2, "filed in the wrong stage"
+    assert card["value_cents"] == 950001
+    assert card["title"] == "Jane roof", "the name was stored unstripped"
+    assert card["status"] == "open"
+
+    after = stage_counts()
+    assert after[s2][0] == before[s2][0] + 1
+    assert after[s2][1] == before[s2][1] + 950001, "stage total did not pick it up"
+
+    detail = client.get(f"/api/opportunities/{new_id}").json()
+    assert detail["contact_id"] == client.ids["contact"]
+    assert detail["pipeline_id"] == client.ids["pipeline"]
+
+
+@pytest.mark.parametrize("bad", [
+    pytest.param({"title": "   "}, id="whitespace-only name"),
+    pytest.param({"title": ""}, id="empty name"),
+    pytest.param({"title": "x" * 121}, id="over-long name"),
+    pytest.param({"value_cents": -1}, id="negative value"),
+    pytest.param({"contact_id": 999999}, id="unknown contact"),
+])
+def test_a_refused_create_writes_no_row(client, bad):
+    """Each of these used to be stored. The point is the row count, not the status:
+    an orphan opportunity or a nameless card is damage a 400 does not undo."""
+    before = _all_opps(client)
+    r = _create(client, **bad)
+    assert r.status_code in (400, 422), r.text
+    assert _all_opps(client) == before, "a refused create still wrote a row"
+
+
+def test_a_stage_from_another_pipeline_creates_nothing(client):
+    """Pipelines are separate boards; a card cannot start life on neither."""
+    db = SessionLocal()
+    other = Pipeline(name="Retail")
+    db.add(other)
+    db.flush()
+    foreign = Stage(pipeline_id=other.id, name="New Lead", position=0)
+    db.add(foreign)
+    db.commit()
+    foreign_id, other_id = foreign.id, other.id
+    db.close()
+
+    before = _all_opps(client)
+    # A real stage, just not one of this pipeline's, and a stage id that is nobody's.
+    for stage_id in (foreign_id, 999999):
+        assert _create(client, stage_id=stage_id).status_code == 400
+    assert _all_opps(client) == before
+    assert not client.get(
+        f"/api/opportunities?pipeline_id={other_id}&status=all").json()
+
+
+def test_a_tech_cannot_create_an_opportunity(client):
+    """STAFF-only, and the refusal has to be a refusal — no row, no card."""
+    before = _all_opps(client)
+    tech = TestClient(app)
+    tech.headers["Authorization"] = "Bearer " + client.tokens["tech"]
+    tech.ids = client.ids
+    r = _create(tech)
+    assert r.status_code == 403
+    assert _all_opps(client) == before, "a forbidden create still wrote a row"
+
+
+def test_money_round_trips_without_cent_drift(client):
+    """Cents are integers end to end: what is posted is what the board adds up.
+
+    9500.005 dollars is the case that breaks a float conversion — 9500.005 * 100 is
+    950000.49999999994 — so the awkward amounts are pinned here at the cents the UI
+    is expected to send, and checked again in the stage total, which is a sum.
+    """
+    amounts = [950001, 0, 1, 99, 100, 12345678, 950000]
+    ids = []
+    for cents in amounts:
+        r = _create(client, title="MONEY %d" % cents, value_cents=cents)
+        assert r.status_code == 201
+        ids.append((r.json()["id"], cents))
+
+    by_id = {o["id"]: o for o in _all_opps(client)}
+    for oid, cents in ids:
+        assert by_id[oid]["value_cents"] == cents
+        assert client.get(f"/api/opportunities/{oid}").json()["value_cents"] == cents
+
+    s2 = client.ids["stage2"]
+    header = next(s for s in client.get("/api/pipelines").json()[0]["stages"]
+                  if s["id"] == s2)
+    assert header["value_cents"] == sum(amounts), "the stage total lost a cent"
+
+
 def test_status_filter_actually_filters(client):
     pid = client.ids["pipeline"]
     open_only = client.get(f"/api/opportunities?pipeline_id={pid}&status=open").json()
