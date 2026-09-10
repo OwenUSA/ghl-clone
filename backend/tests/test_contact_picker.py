@@ -242,8 +242,13 @@ def test_the_plus_is_disabled_with_a_reason_for_a_role_that_cannot_create():
 
 def test_the_duplicate_warning_offers_the_existing_contact_and_still_allows_create():
     src = DIALOG_TSX.read_text(encoding="utf-8")
-    assert "onUseExisting(duplicate)" in src
+    assert "onUseExisting(c)" in src
     assert "you can still create this contact" in src
+    # Every contact on that number is named and offered, not just the first —
+    # a property manager's number really is shared, and naming one of four
+    # would misdescribe what is on file.
+    assert ".filter((c) => sameNumber(c.phone, form.phone))" in src
+    assert "duplicates.map((c) => c.name).join(', ')" in src
     # The Create button's only disabled condition is the in-flight POST — a
     # duplicate must never make it unclickable.
     assert "disabled={create.isPending}" in src

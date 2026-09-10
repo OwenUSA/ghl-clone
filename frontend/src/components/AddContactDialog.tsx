@@ -73,9 +73,11 @@ export function AddContactDialog({
   })
   // The server matched the last ten digits; it also matched names and emails,
   // so confirm each candidate really is the same line before crying duplicate.
-  const duplicate = complete
-    ? (dupes.data?.items ?? []).find((c) => sameNumber(c.phone, form.phone))
-    : undefined
+  // All of them, not just the first: a property manager's number is genuinely
+  // shared, and naming one of four people would misdescribe what is on file.
+  const duplicates = complete
+    ? (dupes.data?.items ?? []).filter((c) => sameNumber(c.phone, form.phone))
+    : []
 
   const create = useMutation({
     mutationFn: () => createContact(form),
@@ -103,7 +105,7 @@ export function AddContactDialog({
                 borderRadius: 6, border: '1px solid rgb(234,236,240)', padding: '0 10px',
               }}
             />
-            {k === 'phone' && duplicate && (
+            {k === 'phone' && duplicates.length > 0 && (
               <div
                 role="status"
                 style={{
@@ -113,22 +115,25 @@ export function AddContactDialog({
                 }}
               >
                 <div>
-                  {duplicate.name} already has this number.{' '}
+                  {duplicates.map((c) => c.name).join(', ')}{' '}
+                  {duplicates.length === 1 ? 'already has' : 'already have'} this number.{' '}
                   {/* Said out loud, because the obvious reading of a duplicate
                       warning is "you cannot do this", and here you can. */}
                   Two people can share one — you can still create this contact.
                 </div>
-                {onUseExisting && (
+                {onUseExisting && duplicates.map((c) => (
                   <button
-                    onClick={() => onUseExisting(duplicate)}
+                    key={c.id}
+                    onClick={() => onUseExisting(c)}
+                    className="block"
                     style={{
                       marginTop: 6, fontSize: 13, fontWeight: 500,
                       color: 'rgb(0,78,235)',
                     }}
                   >
-                    Use {duplicate.name} instead
+                    Use {c.name} instead
                   </button>
-                )}
+                ))}
               </div>
             )}
           </div>
