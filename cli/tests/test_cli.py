@@ -355,3 +355,101 @@ def test_call_report_does_not_relabel_the_overall_duration_as_first_time(monkeyp
     assert "77s" in r.output and "186s" in r.output
     assert r.output.count("186s") == 1, (
         "the first-time figure is the overall one printed twice")
+
+
+# ---------------- appointments: edit, reschedule, cancel ----------------
+#
+# The endpoint behaviour is covered in backend/tests/test_messaging.py by counting
+# rows in `jobs`. What the CLI owes on top of that is to REPORT what happened to
+# the customer's reminders, because the failure mode is silent: a reschedule whose
+# reminder was not re-queued prints exactly the same as one that was, unless the
+# outcome is on screen.
+
+def test_rescheduling_prints_what_happened_to_the_reminders(monkeypatch):
+    rec = wire(monkeypatch, Recorder({
+        ("PATCH", "/api/appointments/7"): (200, {
+            "id": 7, "title": "Roof inspection", "status": "confirmed",
+            "starts_at": "2026-09-20T14:00:00Z", "ends_at": "2026-09-20T15:00:00Z",
+            "notes": None, "contact_id": 5, "contact_name": "Jane Doe",
+            "calendar_id": None, "calendar_name": None, "assigned_user_id": None,
+            "automation": "queued 24h,1h"}),
+    }))
+    r = runner.invoke(app, ["appts", "update", "7",
+                            "--start", "2026-09-20T14:00"])
+    assert r.exit_code == 0, r.output
+    assert ("PATCH", "/api/appointments/7") in rec.calls
+    assert "queued 24h,1h" in r.output, (
+        "the reschedule says nothing about the customer's reminders")
+
+
+def test_a_reschedule_that_could_not_queue_a_reminder_says_so(monkeypatch):
+    """A booking moved onto a DND contact, or into the next few minutes, gets no
+    reminder. Printing nothing there reads as success."""
+    wire(monkeypatch, Recorder({
+        ("PATCH", "/api/appointments/7"): (200, {
+            "id": 7, "title": "Tarp", "status": "confirmed",
+            "starts_at": "2026-09-20T14:00:00Z", "ends_at": "2026-09-20T15:00:00Z",
+            "notes": None, "contact_id": 5, "contact_name": "Jane Doe",
+            "calendar_id": None, "calendar_name": None, "assigned_user_id": None,
+            "automation": "suppressed: contact is on DND"}),
+    }))
+    r = runner.invoke(app, ["appts", "update", "7", "--start", "2026-09-20T14:00"])
+    assert r.exit_code == 0, r.output
+    assert "contact is on DND" in r.output
+
+
+def test_an_appointment_can_be_moved_to_another_contact_by_name(monkeypatch):
+    """The detail panel can re-pick the contact, so the CLI has to be able to as
+    well — CLAUDE.md says drive the app through `ghl`, not ad-hoc curl."""
+    rec = wire(monkeypatch, Recorder({
+        ("GET", "/api/contacts"): (200, CONTACTS),
+        ("PATCH", "/api/appointments/7"): (200, {
+            "id": 7, "title": "Roof inspection", "status": "confirmed",
+            "starts_at": "2026-09-20T14:00:00Z", "ends_at": "2026-09-20T15:00:00Z",
+            "notes": None, "contact_id": 5, "contact_name": "Jane Doe",
+            "calendar_id": None, "calendar_name": None, "assigned_user_id": None,
+            "automation": "unchanged"}),
+    }))
+    r = runner.invoke(app, ["appts", "update", "7", "-c", "Jane Doe"])
+    assert r.exit_code == 0, r.output
+    assert ("GET", "/api/contacts") in rec.calls, "the name was never resolved"
+
+
+def test_an_ambiguous_contact_never_reaches_the_patch(monkeypatch):
+    """Two Janes. Moving a booking to the wrong customer is worse than failing."""
+    rec = wire(monkeypatch, Recorder({("GET", "/api/contacts"): (200, CONTACTS)}))
+    r = runner.invoke(app, ["appts", "update", "7", "-c", "Jane"])
+    assert r.exit_code == 5, r.output
+    assert ("PATCH", "/api/appointments/7") not in rec.calls
+
+
+def test_cancelling_without_yes_never_reaches_the_network(monkeypatch):
+    """Cancelling withdraws the customer's reminder, so it is guarded like a send."""
+    rec = wire(monkeypatch, Recorder({("DELETE", "/api/appointments/7"): (200, {})}))
+    r = runner.invoke(app, ["appts", "cancel", "7"])
+    assert r.exit_code == 2
+    assert ("DELETE", "/api/appointments/7") not in rec.calls
+
+
+def test_cancelling_reports_how_many_reminders_were_withdrawn(monkeypatch):
+    """A reminder left queued for a cancelled appointment is the failure this
+    path guards against, so the count is the number worth printing."""
+    wire(monkeypatch, Recorder({
+        ("DELETE", "/api/appointments/7"): (200, {
+            "id": 7, "status": "cancelled", "reminders_cancelled": 2}),
+    }))
+    r = runner.invoke(app, ["appts", "cancel", "7", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert "2 pending reminders withdrawn" in r.output
+
+
+def test_cancelling_a_booking_with_no_reminders_does_not_claim_any(monkeypatch):
+    """A booking with no phone number, or one already past its reminders, has
+    none to withdraw. Saying "withdrawn" with no number reads as though one was."""
+    wire(monkeypatch, Recorder({
+        ("DELETE", "/api/appointments/7"): (200, {
+            "id": 7, "status": "cancelled", "reminders_cancelled": 0}),
+    }))
+    r = runner.invoke(app, ["appts", "cancel", "7", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert "0 pending reminders withdrawn" in r.output

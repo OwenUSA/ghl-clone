@@ -415,10 +415,14 @@ def test_the_appointment_dialog_offers_only_fields_the_backend_accepts():
 
 def test_the_appointment_dialog_picks_a_contact_by_searching_for_one():
     """Asking for a contact id would ask the user to know a primary key, and a
-    <select> would render every contact in the account (268 locally)."""
+    <select> would render every contact in the account (268 locally).
+
+    The picker now lives in its own module because the detail panel asks the same
+    question — see test_the_contact_picker_is_one_component_not_two below."""
     dialog = _read("components", "NewAppointmentDialog.tsx")
-    assert "function ContactPicker(" in dialog, "there is no contact picker"
-    picker = dialog.split("function ContactPicker(", 1)[1].split("\nexport function", 1)[0]
+    assert "<ContactPicker" in dialog, "the create dialog has no contact picker"
+    picker = _read("components", "ContactPicker.tsx")
+    assert "function ContactPicker(" in picker, "there is no contact picker"
     assert "listContacts(" in picker, (
         "the picker does not search — it is not backed by the contacts endpoint")
     assert "enabled: q.trim().length > 0" in picker, (
@@ -502,3 +506,287 @@ def test_the_board_sends_the_position_a_card_was_dropped_at():
     assert "position = 0" not in signature, (
         "moveOpportunity still defaults the position, so a caller that forgets "
         "it silently files the card at the top of the column")
+
+# ---------------- the appointment detail panel ----------------
+#
+# Clicking a booking opens AppointmentDetailDialog. The behaviour behind it is
+# covered end-to-end in test_messaging.py (the row, the range query and above all
+# the reminder queue) and the wording it reports is executed under node in
+# test_reminder_sentence.py. What is asserted here is the wiring the browser owns:
+# that a click reaches the panel at all, that a role which cannot write gets dead
+# controls rather than a form, that a failure is a sentence, and that a cancel is
+# confirmed by a prompt which names the appointment.
+#
+# THE PANEL'S LAYOUT IS OURS, NOT MEASURED GHL — see the 2026-09-10 amendment in
+# DECISIONS.md. Nothing here may be read as a parity assertion.
+
+def _detail_dialog() -> str:
+    return _read("components", "AppointmentDetailDialog.tsx")
+
+
+def test_clicking_an_appointment_opens_its_detail_panel():
+    """The blocks used to carry `onDoubleClick` with nothing but
+    `stopPropagation` in it — it existed so a double-click ON a booking did not
+    create a new one underneath, and a click did nothing at all. Every place a
+    booking is drawn has to be a way in, or the panel is unreachable from
+    whichever view the user happens to be in."""
+    page = _read("pages", "CalendarsPage.tsx")
+    assert "AppointmentDetailDialog" in page, "the page never renders the panel"
+    assert "function open(id: number, e: React.MouseEvent)" in page, (
+        "there is no handler that opens a booking")
+    assert "setOpenAppt(id)" in page, "the handler does not open anything"
+
+    # Day/Week block, month chip, and a row of the Appointment list view.
+    week_block = page.split("{buckets[i].map((a) => {", 1)[1].split("})}", 1)[0]
+    assert "onClick={(ev) => open(a.id, ev)}" in week_block, (
+        "a booking on the Day/Week grid still does nothing when clicked")
+    # NB the chip's `title` interpolation contains "))}" — split on its closing
+    # tag, not on the map's.
+    month_chip = page.split("{shown.map((a) => (", 1)[1].split("{hidden > 0", 1)[0]
+    assert "onClick={(e) => onOpen(a.id, e)}" in month_chip, (
+        "a month-view chip still does nothing when clicked")
+    list_row = page.split("{appts.data?.map((a: Appointment) => (", 1)[1] \
+                   .split("</tr>", 1)[0]
+    assert "onClick={(e) => open(a.id, e)}" in list_row, (
+        "a row of the Appointment list view still does nothing when clicked")
+
+    # ...and the click must not also be read as "book this slot": the day column
+    # underneath listens for a double-click to create.
+    handler = page.split("function open(id: number, e: React.MouseEvent) {", 1)[1] \
+                  .split("}", 1)[0]
+    assert "e.stopPropagation()" in handler, (
+        "the click bubbles to the day column, which books empty slots")
+
+
+def test_the_panel_draws_the_appointment_it_was_asked_for():
+    """It must read the record, not be handed a row from the grid: the grid's
+    rows carry no `notes` and no `contact_id`, so a panel built from one could
+    not show the notes or re-pick the contact."""
+    dialog = _detail_dialog()
+    assert "getAppointment(appointmentId)" in dialog, (
+        "the panel does not fetch the appointment")
+    assert "queryKey: ['appointment', appointmentId]" in dialog, (
+        "the panel's query is not keyed on which appointment it is showing")
+    # Everything the owner asked the panel to show.
+    for field in ('label="Title"', 'label="Contact"', 'label="Calendar"',
+                  'label="Starts"', 'label="Ends"', 'label="Status"',
+                  'label="Notes"'):
+        assert field in dialog, "the panel does not show %s" % field
+    page = _read("pages", "CalendarsPage.tsx")
+    assert "key={openAppt}" in page, (
+        "switching from one booking to another reuses the mounted panel, so an "
+        "unsaved draft carries across to a different appointment")
+
+
+def test_the_panel_only_sends_the_fields_that_changed():
+    """`PATCH` is `exclude_unset`, and an unchanged `starts_at` must stay OUT of
+    the body: the endpoint treats a start time that arrived and differs as a
+    reschedule, and re-queueing the customer's reminders because someone fixed a
+    typo in the title is churn at best."""
+    dialog = _detail_dialog()
+    assert "function changes(): AppointmentPatch | null" in dialog, (
+        "nothing works out what actually changed")
+    changes = dialog.split("function changes(): AppointmentPatch | null {", 1)[1] \
+                    .split("\n  }", 1)[0]
+    assert "const was = formOf(a)" in changes, (
+        "the diff is not taken against what the server stored")
+    for field in ("title", "status", "notes", "contact_id", "calendar_id",
+                  "assigned_user_id", "starts_at", "ends_at"):
+        assert field in changes, "%s can never be edited" % field
+    # Both ends travel together, or the backend validates a new start against an
+    # old end the user can no longer see.
+    ends = changes.split("body.starts_at", 1)[1]
+    assert "body.ends_at" in ends, (
+        "a reschedule can send a new start with the stored end")
+    # Save is dead until something has actually changed.
+    assert "const dirty = !!body && Object.keys(body).length > 0" in dialog
+    save = dialog.split("onClick={submit}", 1)[1].split("Save changes", 1)[0]
+    assert "disabled={!canWrite || !dirty || save.isPending}" in save, (
+        "Save is live with nothing to save, or can be double-submitted")
+
+
+def test_a_reschedule_reports_what_happened_to_the_reminders():
+    """The reason this task was deferred once. A reminder that silently did not
+    follow the appointment is indistinguishable from one that did, so the panel
+    has to say. `automation` is the backend's own answer."""
+    dialog = _detail_dialog()
+    assert "reminderSentence(updated.automation)" in dialog, (
+        "the panel throws away the backend's reminder outcome")
+    assert 'role="status"' in dialog, "there is nowhere to show it"
+    assert "reminders_cancelled" in dialog, (
+        "cancelling never says whether a pending reminder was withdrawn")
+    # The wording itself is import-free and executed under node.
+    assert "from '../lib/reminders'" in dialog
+
+
+def test_the_panel_refreshes_the_grid_after_a_write():
+    """An edited title, and above all a rescheduled booking, has to redraw
+    without a manual refresh — and a reschedule may have moved it out of the
+    window the current query key asks for, so one key is not enough."""
+    page = _read("pages", "CalendarsPage.tsx")
+    changed = page.split("onChanged={() => {", 1)[1].split("}}", 1)[0]
+    assert "invalidateQueries({ queryKey: ['appointments'] })" in changed, (
+        "the grid keeps drawing the booking in its old slot with its old title")
+
+
+def test_editing_is_disabled_for_a_role_that_cannot_edit():
+    """`PATCH` and `DELETE /api/appointments/{id}` are both `auth.STAFF`, and
+    this work did not widen them. So a TECH gets dead controls with a title
+    saying why — the precedent d1f7c50 and b943f4b set — not a form that fails
+    on submit. Reading is `ANY_USER`, so the panel still opens."""
+    dialog = _detail_dialog()
+    assert "const canWrite = user.role !== 'TECH'" in dialog, (
+        "the panel never asks whether this role may edit")
+    save = dialog.split("onClick={submit}", 1)[1].split("Save changes", 1)[0]
+    assert "disabled={!canWrite" in save and "title={canWrite" in save, (
+        "Save changes is offered to a role the backend will refuse")
+    cancel = dialog.split("setConfirmingCancel(true) }}", 1)[1] \
+                   .split("Cancel appointment", 1)[0]
+    assert "disabled={!canWrite" in cancel and "title={canWrite" in cancel, (
+        "Cancel appointment is offered to a role the backend will refuse")
+    # Every input, too: a form that accepts typing and then has no live Save is
+    # its own kind of lie.
+    assert dialog.count("disabled={!canWrite}") >= 8, (
+        "the fields are still editable for a role that cannot save them")
+    # ...and the page must not gate the click itself, or a TECH cannot even read
+    # the job they are driving to.
+    page = _read("pages", "CalendarsPage.tsx")
+    handler = page.split("function open(id: number, e: React.MouseEvent) {", 1)[1] \
+                  .split("}", 1)[0]
+    assert "canCreate" not in handler, (
+        "opening a booking to READ it was gated on the write role")
+
+
+def test_a_refused_edit_shows_a_sentence_and_keeps_the_form():
+    """A 400 or a 403 has to land in the panel as a readable sentence with the
+    typed values still there. Printing the wire body is how someone read
+    `500 Internal Server Error` in a dialog (9d5e1d2)."""
+    dialog = _detail_dialog()
+    assert 'role="alert"' in dialog, "the panel has no error surface"
+    mutation = dialog.split("const save = useMutation({", 1)[1].split("\n  })", 1)[0]
+    assert "onError: (e: Error) => { setSaved(null); setError(e.message) }" in mutation, (
+        "a refused edit is dropped on the floor, or leaves a stale success line")
+    assert "onClose" not in mutation, (
+        "the panel closes on failure, discarding what the user typed")
+    assert "JSON.stringify" not in dialog, "the wire body can reach the screen"
+    assert "readable(" in _read("lib", "api.ts"), "retarget this — the formatter moved"
+
+
+def test_cancelling_is_confirmed_by_a_prompt_that_names_the_appointment():
+    """Cancelling is irreversible from here and it withdraws the customer's
+    reminder. A bare "are you sure" over a calendar of similar-looking blocks
+    does not tell the user which one they are about to cancel."""
+    dialog = _detail_dialog()
+    assert "confirmingCancel" in dialog, "the cancel button fires without asking"
+    prompt = dialog.split("{confirmingCancel ? (", 1)[1].split("Keep it", 1)[0]
+    assert "{a.title}" in prompt, "the confirmation does not name the appointment"
+    assert "{a.contact_name" in prompt, "the confirmation does not name the customer"
+    assert "when(new Date(a.starts_at))" in prompt, (
+        "the confirmation does not say which slot is being cancelled")
+    assert "cannot be undone" in prompt
+    assert "reminder" in prompt, (
+        "the confirmation does not say the customer's reminder goes with it")
+    # Only the second click writes.
+    assert "onClick={() => cancel.mutate()}" in dialog
+    assert dialog.count("cancel.mutate()") == 1, (
+        "there is a second, unconfirmed path to cancelling")
+
+
+def test_a_saved_edit_reaches_the_confirmation_that_names_the_appointment():
+    """A real bug, found by driving the panel in a browser.
+
+    The summary line and the cancel confirmation are written from the LOADED
+    record (`a`), not from the draft. A save re-seeded the draft and left `a`
+    stale until the 30s refetch — so editing a booking and then cancelling it
+    showed "Cancel Roof inspection … on Sun, Sep 13, 2:00 PM?" for a booking that
+    had just been renamed and moved to Thursday. A destructive prompt describing
+    a slot that no longer exists is worse than no prompt: it is a prompt that
+    reads as being about a different appointment.
+
+    The PATCH response IS the fresh record, so it is written into the cache
+    rather than invalidated — invalidating would round-trip to learn what the
+    server just said, leaving the stale window open in the middle of it.
+    """
+    dialog = _detail_dialog()
+    ok = dialog.split("const save = useMutation({", 1)[1].split("onError:", 1)[0]
+    assert "qc.setQueryData(['appointment', appointmentId], updated)" in ok, (
+        "a saved edit never reaches the loaded record, so the cancel "
+        "confirmation and the summary line keep naming the old time")
+    assert "invalidateQueries({ queryKey: ['appointment'" not in ok, (
+        "the panel refetches what the PATCH response already told it, and stays "
+        "stale while it does")
+    # The confirmation must read from the loaded record, which is the thing that
+    # is now kept fresh — not from the draft, which is what the user typed and
+    # has not necessarily been accepted by the server.
+    prompt = dialog.split("{confirmingCancel ? (", 1)[1].split("Keep it", 1)[0]
+    assert "form.title" not in prompt, (
+        "the confirmation names what the user typed rather than what is stored")
+
+
+def test_an_already_cancelled_appointment_cannot_be_cancelled_again():
+    """`DELETE` on a cancelled booking is a 200 that changes nothing and reports
+    0 reminders withdrawn, which reads as a successful cancel of something that
+    was already off."""
+    dialog = _detail_dialog()
+    cancel = dialog.split("setConfirmingCancel(true) }}", 1)[1] \
+                   .split("Cancel appointment", 1)[0]
+    assert "a.status === 'cancelled'" in cancel, (
+        "Cancel appointment is live on a booking that is already cancelled")
+    assert "already cancelled" in cancel, "nothing says why the button is dead"
+
+
+def test_the_panel_does_not_offer_a_status_the_grid_cannot_explain():
+    """`blocked` is what the Manage view's "Blocked slots" filter selects — a
+    slot that is not an appointment. Offering it in the status dropdown would let
+    a customer's booking be moved out of the Appointments view from a control
+    that looks like the report's status tiles. A booking that already carries an
+    unlisted status keeps it, so opening one cannot silently rewrite it."""
+    dialog = _detail_dialog()
+    statuses = dialog.split("const STATUSES = [", 1)[1].split("]", 1)[0]
+    assert "'blocked'" not in statuses, (
+        "the status dropdown can turn a booking into a blocked slot")
+    for measured in ("booked", "confirmed", "cancelled", "new", "showed",
+                     "no-show", "invalid", "rescheduled"):
+        assert "'%s'" % measured in statuses, (
+            "%s is a measured Appointment report tile and is not offered" % measured)
+    assert "(STATUSES as readonly string[]).includes(form.status)" in dialog, (
+        "opening a booking whose status is not in the list silently rewrites it")
+
+
+def test_a_cancelled_booking_is_still_drawn_but_not_as_a_live_one():
+    """Cancelling is a status change, not a delete — GHL's own Appointment
+    report has a Cancelled tile, so the row is a record and the calendar keeps
+    it. It has to be visibly not a live booking, or the slot reads as taken."""
+    page = _read("pages", "CalendarsPage.tsx")
+    assert page.count("'line-through'") == 3, (
+        "the Day/Week block, the month chip and the list row must all show a "
+        "cancelled booking as cancelled")
+    week_block = page.split("{buckets[i].map((a) => {", 1)[1].split("})}", 1)[0]
+    assert "a.status === 'cancelled'" in week_block
+
+
+def test_the_contact_picker_is_one_component_not_two():
+    """The create dialog and the detail panel ask the same question. Two copies
+    of a search-as-you-type picker drift apart — the same reason the contact
+    panel is one component used in two places (DECISIONS.md)."""
+    picker = _read("components", "ContactPicker.tsx")
+    assert "export function ContactPicker(" in picker
+    for host in ("NewAppointmentDialog.tsx", "AppointmentDetailDialog.tsx"):
+        source = _read("components", host)
+        assert "from './ContactPicker'" in source, (
+            "%s does not use the shared picker" % host)
+        assert "function ContactPicker(" not in source, (
+            "%s still carries its own copy of the picker" % host)
+    assert "disabled" in picker, (
+        "the picker cannot be shown read-only, so the detail panel has to hide "
+        "who the booking is with from a role that cannot edit it")
+
+
+def test_dragging_a_booking_on_the_grid_was_not_built():
+    """Rescheduling is done through the panel's form. The owner chose that
+    deliberately over drag-to-move, and the Week grid is a MEASURED surface —
+    adding drag handlers to it is a change to the thing parity is judged on."""
+    page = _read("pages", "CalendarsPage.tsx")
+    for dnd in ("draggable", "onDragStart", "onDragEnd", "onDrop", "useDraggable"):
+        assert dnd not in page, (
+            "%r appeared on the calendar grid; drag-to-move is out of scope" % dnd)

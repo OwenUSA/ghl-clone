@@ -558,16 +558,22 @@ class AppointmentCreate(BaseModel):
     notes: str | None = None
 
 
+def _clean_appointment_title(title: str) -> str:
+    """`title: str` accepts "" and "   ", so an untitled booking used to be created
+    happily and then rendered as an empty chip on the calendar — indistinguishable
+    from a rendering bug. Rejected here rather than only in the browser, so the
+    CLI and the telephony feed get the same answer, and shared with PATCH so an
+    *edit* cannot blank a title the create path refuses to accept."""
+    cleaned = title.strip()
+    if not cleaned:
+        raise HTTPException(400, "an appointment needs a title")
+    return cleaned
+
+
 @app.post("/api/appointments", status_code=201)
 def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
                        _: auth.Principal = auth.STAFF):
-    # `title: str` accepts "" and "   ", so an untitled booking used to be created
-    # happily and then rendered as an empty chip on the calendar — indistinguishable
-    # from a rendering bug. Rejected here rather than only in the browser, so the
-    # CLI and the telephony feed get the same answer.
-    title = body.title.strip()
-    if not title:
-        raise HTTPException(400, "an appointment needs a title")
+    title = _clean_appointment_title(body.title)
     if body.ends_at <= body.starts_at:
         raise HTTPException(400, "ends_at must be after starts_at")
     a = Appointment(**{**body.model_dump(), "title": title})
@@ -1128,15 +1134,57 @@ class AppointmentPatch(BaseModel):
     notes: str | None = None
 
 
+def _drop_pending_reminders(db: Session, appointment_id: int) -> int:
+    """Retire every reminder still queued for this appointment. Returns how many.
+
+    Two things happen to each job, and both matter:
+
+    * `status = "cancelled"` — not a delete. A reminder that was queued and then
+      superseded is history worth keeping; the worker only ever claims `pending`.
+    * `dedupe_key = None` — the key is RELEASED. `enqueue()` refuses a key that
+      already exists *whatever its status*, and the key includes the start time
+      (`appt_reminder:<id>:<starts_at>:<offset>`). So moving a booking Tuesday ->
+      Friday -> back to Tuesday would hit the retired Tuesday key, `enqueue()`
+      would return None, and the customer would silently get NO reminder — the
+      exact failure the start time was put in the key to prevent, one move later.
+      The key is an idempotency guard on live work, not a permanent record, so it
+      is handed back when the work stops being live.
+
+    `payload` is a plain JSON column with no mutation tracking, so it is
+    reassigned rather than mutated in place — the released key is kept there so
+    the trail still says which reminder this row was.
+    """
+    dropped = 0
+    for job in db.scalars(select(Job).where(
+            Job.type == "appointment_reminder", Job.status == "pending")).all():
+        if job.payload.get("appointment_id") != appointment_id:
+            continue
+        job.status = "cancelled"
+        if job.dedupe_key:
+            job.payload = {**job.payload, "superseded_key": job.dedupe_key}
+            job.dedupe_key = None
+        dropped += 1
+    db.flush()
+    return dropped
+
+
 @app.patch("/api/appointments/{appointment_id}")
 def update_appointment(appointment_id: int, body: AppointmentPatch,
                        db: Session = Depends(get_db),
                        _: auth.Principal = auth.STAFF):
-    """Edit a booking. Moving it reschedules the reminders.
+    """Edit a booking. Moving it, or switching it off and on, reschedules the
+    reminders.
 
     Rescheduling is the interesting case: the T-24h and T-1h jobs were queued
     against the OLD time, so they must be dropped and re-queued, or the customer
     is reminded about a slot that no longer exists.
+
+    Turning the status to `cancelled` is the same problem wearing a different
+    hat. `_h_appointment_reminder` does re-check the status when it runs, so a
+    stale job cannot actually send — but leaving it `pending` means
+    `ghl jobs list --status pending` shows a reminder for an appointment that is
+    off, and reviving the booking would then find its keys taken. The jobs are
+    retired here instead, and re-queued if the booking comes back.
     """
     a = db.get(Appointment, appointment_id)
     if not a:
@@ -1146,8 +1194,20 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
     if "status" in data and data["status"] not in APPOINTMENT_STATUSES:
         raise HTTPException(400, "unknown status %r — expected one of %s" % (
             data["status"], sorted(APPOINTMENT_STATUSES)))
+    # An edit must not be able to blank a title that the create path refuses.
+    if "title" in data:
+        data["title"] = _clean_appointment_title(data["title"] or "")
+    # A dangling id is a 404 with a sentence, not an IntegrityError rendered as
+    # "Something went wrong (500)." in the panel. The dialog picks from lists, so
+    # this is really the CLI's and the telephony feed's answer.
+    for field, model, what in (("contact_id", Contact, "contact"),
+                               ("calendar_id", Calendar, "calendar"),
+                               ("assigned_user_id", User, "user")):
+        if data.get(field) is not None and not db.get(model, data[field]):
+            raise HTTPException(404, "%s %s not found" % (what, data[field]))
 
     old_start = _aware(a.starts_at)
+    was_off = a.status in automations.NO_REMINDER_STATUSES
     for k, v in data.items():
         setattr(a, k, v)
     # Validate against the stored values, so patching only one end still checks.
@@ -1155,17 +1215,17 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
         raise HTTPException(400, "ends_at must be after starts_at")
     db.flush()
 
+    moved = "starts_at" in data and _aware(a.starts_at) != old_start
+    is_off = a.status in automations.NO_REMINDER_STATUSES
+
     outcome = "unchanged"
-    if "starts_at" in data and _aware(a.starts_at) != old_start:
-        # Drop reminders that have not run yet; the ones already sent stay as
-        # history. Cancelled rather than deleted so the trail survives.
-        pending = db.scalars(select(Job).where(
-            Job.type == "appointment_reminder", Job.status == "pending")).all()
-        for job in pending:
-            if job.payload.get("appointment_id") == a.id:
-                job.status = "cancelled"
-        db.flush()
-        outcome = automations.on_appointment_booked(db, a)
+    if moved or is_off != was_off:
+        # Always retire first, including on the revive path: it is what makes
+        # "exactly one pending reminder per offset" true no matter how the
+        # booking got here.
+        _drop_pending_reminders(db, a.id)
+        outcome = ("reminders cancelled" if is_off
+                   else automations.on_appointment_booked(db, a))
 
     db.commit()
     db.refresh(a)
@@ -1177,16 +1237,22 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
                        _: auth.Principal = auth.STAFF):
     """Cancel, not delete.
 
-    `_h_appointment_reminder` already re-checks status when the job runs, so a
-    cancelled appointment suppresses its own pending reminders. Deleting the row
-    would throw away the history for no benefit.
+    The row survives: GHL's own Appointment report has a Cancelled tile, so a
+    cancelled booking is a record, and throwing it away would lose the fact that
+    the slot was ever taken.
+
+    The reminders do NOT survive. `_h_appointment_reminder` re-checks the status
+    at run time, so a leftover job could never send — but "could never send" and
+    "is not queued" are different things to the dispatcher reading
+    `ghl jobs list --status pending`, and only the second one is true here.
     """
     a = db.get(Appointment, appointment_id)
     if not a:
         raise HTTPException(404, "appointment not found")
     a.status = "cancelled"
+    dropped = _drop_pending_reminders(db, a.id)
     db.commit()
-    return {"id": a.id, "status": a.status}
+    return {"id": a.id, "status": a.status, "reminders_cancelled": dropped}
 
 
 # ---------- deletes ----------
