@@ -547,10 +547,63 @@ export type DashboardStats = {
   status: Record<string, number>
   total_value_cents: number
   won_value_cents: number
+  /** Real money per status. The Opportunity value card used to draw Lost as $0
+   *  and Open as `total - won`, which is only true when nothing has been lost. */
+  value_by_status: Record<string, number>
+  /** Won / (Won + Lost) — of the deals that have been decided. */
   conversion_rate: number
+  /** Won / every opportunity. The card's settings choose which one it shows. */
+  conversion_rate_all: number
+  range: { start: string | null; end: string | null }
 }
-export const getDashboard = (pipelineId?: number) =>
-  get<DashboardStats>(`/api/dashboard${pipelineId ? `?pipeline_id=${pipelineId}` : ''}`)
+
+export type FunnelStage = {
+  id: number
+  name: string
+  position: number
+  /** Sitting in this stage now — the same number the kanban column shows. */
+  count: number
+  value_cents: number
+  /** Got this far: this stage's count plus every stage after it. */
+  reached: number
+  /** `reached / reached[0]`. Starts at 100% and only falls. `null` if nothing
+   *  reached the pipeline at all, which has no denominator. */
+  cumulative_pct: number | null
+  /** `reached[i+1] / reached[i]`. `null` on the last stage — nothing follows it. */
+  next_step_pct: number | null
+}
+
+export type DashboardFunnel = {
+  pipeline_id: number | null
+  pipeline_name: string | null
+  total: number
+  stages: FunnelStage[]
+}
+
+export type DashboardQuery = { pipelineId?: number; start?: string; end?: string }
+
+/**
+ * Dashboard query string.
+ *
+ * Built with URLSearchParams and never by concatenation: an ISO timestamp's
+ * `+00:00` decodes as a space when it is pasted straight into a URL, and the date
+ * filter then silently matches nothing. That has bitten this project before --
+ * see "Things that have bitten us" in CLAUDE.md.
+ */
+function dashboardQuery(q: DashboardQuery): string {
+  const sp = new URLSearchParams()
+  if (q.pipelineId) sp.set('pipeline_id', String(q.pipelineId))
+  if (q.start) sp.set('start', q.start)
+  if (q.end) sp.set('end', q.end)
+  const s = sp.toString()
+  return s ? '?' + s : ''
+}
+
+export const getDashboard = (q: DashboardQuery = {}) =>
+  get<DashboardStats>('/api/dashboard' + dashboardQuery(q))
+
+export const getDashboardFunnel = (q: DashboardQuery = {}) =>
+  get<DashboardFunnel>('/api/dashboard/funnel' + dashboardQuery(q))
 
 export type CallReport = {
   total_calls: number
