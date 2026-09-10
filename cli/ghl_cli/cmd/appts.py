@@ -96,13 +96,19 @@ def update(
     end: str = typer.Option(None, "--end"),
     status: str = typer.Option(None, "--status",
                                help="booked|confirmed|showed|no-show|cancelled|..."),
+    contact: str = typer.Option(None, "--contact", "-c",
+                                help="Move the booking to another contact."),
     user: str = typer.Option(None, "--user"),
     calendar: str = typer.Option(None, "--calendar"),
     notes: str = typer.Option(None, "--notes"),
 ):
     """Edit an appointment.
 
-    Changing --start reschedules the reminder texts to match the new time.
+    Changing --start reschedules the reminder texts to match the new time: the
+    superseded jobs are retired and fresh ones queued against the new slot. The
+    printed "Reminders:" line is the server's own account of what happened to
+    them, so a move that could not queue a reminder says so instead of going
+    quiet — `ghl jobs list --status pending` is the other half of that check.
     """
     def body():
         c = client()
@@ -113,6 +119,8 @@ def update(
             payload["starts_at"] = start
         if end:
             payload["ends_at"] = end
+        if contact:
+            payload["contact_id"] = resolve.contact(c, contact)["id"]
         if user:
             payload["assigned_user_id"] = resolve.user(c, user)["id"]
         if calendar:
@@ -128,11 +136,26 @@ def update(
 
 @app.command()
 def cancel(appointment_id: int, yes: YesOpt = False):
-    """Cancel an appointment. Pending reminders stop firing."""
+    """Cancel an appointment and withdraw its pending reminders.
+
+    The row survives with `status = cancelled` — GHL's Appointment report has a
+    Cancelled tile, so it is a record, not a mistake to erase. The reminders do
+    not: the count printed here is how many queued texts were taken out of the
+    queue, which is the number worth seeing, because a reminder left behind for a
+    cancelled appointment is the failure this whole path guards against.
+    """
     def body():
         output.confirm("cancel appointment %d" % appointment_id, yes)
+
+        def said(d):
+            n = d.get("reminders_cancelled", 0)
+            return output.note(
+                "Cancelled (id %d). %s withdrawn."
+                % (d["id"], "1 pending reminder" if n == 1
+                   else "%d pending reminders" % n))
+
         output.emit(client().delete("/api/appointments/%d" % appointment_id),
-                    render=lambda d: output.note("Cancelled (id %d)." % d["id"]))
+                    render=said)
     run(body)
 
 

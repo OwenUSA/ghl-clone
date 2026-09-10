@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconChevronDown, IconPlus, IconSettings } from '../components/Icon'
+import { AppointmentDetailDialog } from '../components/AppointmentDetailDialog'
 import { NewAppointmentDialog } from '../components/NewAppointmentDialog'
 import { useMemo, useState } from 'react'
 import {
@@ -61,6 +62,8 @@ export function CalendarsPage({ user }: { user: Me }) {
   const [filterQ, setFilterQ] = useState('')
   // The slot a double-click or the New button asked to book. Null = closed.
   const [draft, setDraft] = useState<Date | null>(null)
+  // The appointment whose detail panel is open. Null = closed.
+  const [openAppt, setOpenAppt] = useState<number | null>(null)
   const qc = useQueryClient()
 
   // `POST /api/appointments` is auth.STAFF, so a TECH's create is refused with
@@ -106,6 +109,19 @@ export function CalendarsPage({ user }: { user: Me }) {
   function book(at: Date) {
     if (!canCreate) return
     setDraft(at)
+  }
+
+  /**
+   * Open a booking's detail panel. NOT gated on the role: reading one is
+   * `auth.ANY_USER`, and the panel itself disables the controls a TECH may not
+   * use. A tech looking at their own day needs to see the notes and the phone
+   * number on the job they are driving to.
+   */
+  function open(id: number, e: React.MouseEvent) {
+    // The day column underneath listens for a double-click to book an empty
+    // slot; a click that lands on a booking is not a request for a new one.
+    e.stopPropagation()
+    setOpenAppt(id)
   }
 
   /**
@@ -255,7 +271,14 @@ export function CalendarsPage({ user }: { user: Me }) {
                     </td></tr>
                   )}
                   {appts.data?.map((a: Appointment) => (
-                    <tr key={a.id} className="hover:bg-[rgb(249,250,251)]">
+                    <tr key={a.id} data-appointment={a.id}
+                      onClick={(e) => open(a.id, e)}
+                      title="Click for details"
+                      className="cursor-pointer hover:bg-[rgb(249,250,251)]"
+                      style={{
+                        opacity: a.status === 'cancelled' ? 0.55 : 1,
+                        textDecoration: a.status === 'cancelled' ? 'line-through' : undefined,
+                      }}>
                       <td style={{ height: 48, padding: '0 12px', fontSize: 14, borderBottom: '1px solid rgb(242,244,247)' }}>{a.title}</td>
                       <td style={{ padding: '0 12px', fontSize: 14, borderBottom: '1px solid rgb(242,244,247)' }}>{a.contact_name ?? ''}</td>
                       <td style={{ padding: '0 12px', fontSize: 14, borderBottom: '1px solid rgb(242,244,247)' }}>{new Date(a.starts_at).toLocaleString('en-US')}</td>
@@ -274,6 +297,7 @@ export function CalendarsPage({ user }: { user: Me }) {
               today={now}
               canCreate={canCreate}
               onBook={book}
+              onOpen={open}
             />
           ) : (
             <>
@@ -332,8 +356,11 @@ export function CalendarsPage({ user }: { user: Me }) {
                         const e = new Date(a.ends_at)
                         const top = s.getHours() * HOUR_PX + (s.getMinutes() / 60) * HOUR_PX
                         const h = Math.max(24, ((e.getTime() - s.getTime()) / 3_600_000) * HOUR_PX)
+                        const off = a.status === 'cancelled'
                         return (
-                          <div key={a.id} title={a.title}
+                          <div key={a.id} data-appointment={a.id}
+                            title={`${a.title}${off ? ' (cancelled)' : ''} — click for details`}
+                            onClick={(ev) => open(a.id, ev)}
                             onDoubleClick={(ev) => ev.stopPropagation()}
                             style={{
                               position: 'absolute', left: 2, right: 2, top, height: h,
@@ -341,6 +368,13 @@ export function CalendarsPage({ user }: { user: Me }) {
                               borderLeft: `3px solid ${a.color}`,
                               borderRadius: 4, padding: '2px 6px', overflow: 'hidden',
                               fontSize: 12, color: 'rgb(52,64,84)',
+                              cursor: 'pointer',
+                              // Cancelled is a status, not a delete — the row
+                              // survives and the Cancelled report tile counts it.
+                              // It has to be visibly not a live booking, or the
+                              // slot reads as still taken.
+                              opacity: off ? 0.55 : 1,
+                              textDecoration: off ? 'line-through' : undefined,
                             }}>
                             <div className="truncate" style={{ fontWeight: 500 }}>{a.title}</div>
                             <div className="truncate">{fmtChipTime(s)}</div>
@@ -425,6 +459,25 @@ export function CalendarsPage({ user }: { user: Me }) {
         )}
       </div>
 
+      {/* Clicking a booking opens it. The panel is keyed on the id so switching
+          from one appointment to another remounts it with a clean form rather
+          than carrying an unsaved draft across. */}
+      {openAppt !== null && (
+        <AppointmentDetailDialog
+          key={openAppt}
+          appointmentId={openAppt}
+          user={user}
+          onClose={() => setOpenAppt(null)}
+          onChanged={() => {
+            // An edit or a reschedule has to show on the grid without a manual
+            // refresh, and a rescheduled booking may have left the window the
+            // current key asks for, so invalidate the whole 'appointments'
+            // family rather than this one key.
+            qc.invalidateQueries({ queryKey: ['appointments'] })
+          }}
+        />
+      )}
+
       {draft && (
         <NewAppointmentDialog
           initialStart={draft}
@@ -455,7 +508,7 @@ export function CalendarsPage({ user }: { user: Me }) {
  * cell reads as "nothing booked", and one of those days may well have a booking.
  */
 function MonthGrid({
-  cells, buckets, month, today, canCreate, onBook,
+  cells, buckets, month, today, canCreate, onBook, onOpen,
 }: {
   cells: Date[]
   buckets: Appointment[][]
@@ -463,6 +516,7 @@ function MonthGrid({
   today: Date
   canCreate: boolean
   onBook: (at: Date) => void
+  onOpen: (id: number, e: React.MouseEvent) => void
 }) {
   const weeks = cells.length / 7
   return (
@@ -527,7 +581,10 @@ function MonthGrid({
                   <div
                     key={a.id}
                     data-appointment={a.id}
-                    title={`${a.title} — ${fmtChipTime(new Date(a.starts_at))}`}
+                    title={`${a.title} — ${fmtChipTime(new Date(a.starts_at))}`
+                           + (a.status === 'cancelled' ? ' (cancelled)' : '')
+                           + ' — click for details'}
+                    onClick={(e) => onOpen(a.id, e)}
                     onDoubleClick={(e) => e.stopPropagation()}
                     className="truncate"
                     style={{
@@ -535,6 +592,9 @@ function MonthGrid({
                       padding: '1px 4px', color: 'rgb(52,64,84)',
                       backgroundColor: 'rgb(239,244,255)',
                       borderLeft: `3px solid ${a.color}`,
+                      cursor: 'pointer',
+                      opacity: a.status === 'cancelled' ? 0.55 : 1,
+                      textDecoration: a.status === 'cancelled' ? 'line-through' : undefined,
                     }}
                   >
                     {fmtChipTime(new Date(a.starts_at))} {a.title}

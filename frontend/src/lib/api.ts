@@ -321,6 +321,77 @@ export const createAppointment = (body: {
   notes?: string | null
 }) => send<AppointmentCreated>('/api/appointments', 'POST', body)
 
+/**
+ * What `GET /api/appointments/{id}` returns -- everything the detail panel draws.
+ * Wider than the `Appointment` rows the grid is built from: the grid never needs
+ * `notes`, and the panel cannot edit a contact it only knows the name of.
+ */
+export type AppointmentDetail = {
+  id: number
+  title: string
+  starts_at: string
+  ends_at: string
+  status: string
+  notes: string | null
+  contact_id: number | null
+  contact_name: string | null
+  calendar_id: number | null
+  calendar_name: string | null
+  assigned_user_id: number | null
+}
+
+export const getAppointment = (id: number) =>
+  get<AppointmentDetail>(`/api/appointments/${id}`)
+
+/**
+ * Edit or reschedule. STAFF-only on the backend, so the panel gates its Save and
+ * Cancel controls on the role first.
+ *
+ * The fields are `AppointmentPatch` in backend/app/main.py, and unlike the create
+ * body this one DOES carry `status` -- the PATCH model accepts it, validated
+ * against the measured status set. Send only what changed: the endpoint uses
+ * `exclude_unset`, so an absent key leaves the stored value alone, and a
+ * `starts_at` that is present but unchanged must not look like a reschedule.
+ *
+ * `automation` says what happened to the customer's reminders: "queued 24h,1h"
+ * after a move, "reminders cancelled" when the booking was switched off, or
+ * "unchanged" when the edit did not touch the time. Reminder jobs dedupe on a key
+ * that includes the start time, so this is the field that says the reminder
+ * followed the appointment (CLAUDE.md, and the tests in test_messaging.py).
+ */
+export type AppointmentPatch = {
+  title?: string
+  starts_at?: string
+  ends_at?: string
+  status?: string
+  contact_id?: number | null
+  calendar_id?: number | null
+  assigned_user_id?: number | null
+  notes?: string | null
+}
+
+export const patchAppointment = (id: number, body: AppointmentPatch) =>
+  send<AppointmentDetail & { automation: string }>(
+    `/api/appointments/${id}`, 'PATCH', body)
+
+/**
+ * Cancel a booking. This is a status change to `cancelled`, NOT a row delete --
+ * GHL's own Appointment report has a Cancelled tile, so a cancelled booking is a
+ * record and the calendar keeps drawing it, struck through.
+ *
+ * `reminders_cancelled` is how many pending reminders were retired with it. It is
+ * returned rather than assumed because a reminder left in the queue for a
+ * cancelled appointment is the failure mode this whole task exists around.
+ */
+export type AppointmentCancelled = {
+  id: number
+  status: string
+  reminders_cancelled: number
+}
+
+export const cancelAppointment = (id: number) =>
+  send<AppointmentCancelled>(`/api/appointments/${id}`, 'DELETE')
+
 export type ContactTag = { id: number; name: string; color: string }
 
 /** Enough to name an opportunity in the "these will be detached" confirmation. */
