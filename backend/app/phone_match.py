@@ -36,6 +36,12 @@ there as it does on Postgres. The cost is that only the punctuation in
 `STRIPPED` is removed — a stored number carrying letters, `(813) 555-0102 ext 4`,
 is not digit-matched. Numbers like that are refused at the write path anyway
 (`phones.InvalidPhone`, "extensions are not stored on a contact number").
+
+**This does not use the index on `contacts.phone`** — no b-tree can serve a
+function of the column — so a phone search is a sequential scan. Stated against
+the sizes that actually exist: 13 rows in production, 268 in the local synthetic
+set. If contacts ever reach a size where that matters, the answer is an
+expression index on this same expression, not a weaker rule.
 """
 import re
 
