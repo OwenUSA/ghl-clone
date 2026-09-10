@@ -7,10 +7,11 @@ half-performed the delete.
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from app.auth import mint_api_token
+from app.auth import as_aware, mint_api_token
 from app.db import Base, SessionLocal, engine
 from app.main import app
 from app.models import (
+    Appointment,
     Contact,
     ContactTag,
     Conversation,
@@ -471,3 +472,339 @@ def test_deleting_an_opportunity(client):
     oid = client.ids["opp"]
     assert client.delete("/api/opportunities/%d" % oid).status_code == 200
     assert client.get("/api/opportunities/%d" % oid).status_code == 404
+
+
+# ---------------- the detail panel: edit, reschedule, cancel ----------------
+#
+# THE REMINDER TRAP. Every assertion below counts rows in `jobs`, because the
+# failure this whole surface was deferred for is silent: a rescheduled
+# appointment whose reminder never fires looks exactly like one whose reminder is
+# waiting. `ghl jobs list --status pending` is how a dispatcher checks it, so
+# `pending_reminders()` reads the same model with the same filter.
+
+def _reminder_offsets(appointment_id):
+    """Which offsets are live, as a list — so a duplicate shows up as ['1h','1h']
+    rather than being hidden by a set."""
+    return sorted(j.payload["offset"] for j in pending_reminders(appointment_id))
+
+
+def _appointment_row(appointment_id):
+    db = SessionLocal()
+    try:
+        return db.get(Appointment, appointment_id)
+    finally:
+        db.close()
+
+
+def test_the_detail_panel_gets_the_data_it_draws(client):
+    """Clicking a block opens the panel from `GET /api/appointments/{id}`, so
+    everything the panel shows has to be in that one response: what it is, who
+    it is with, which calendar, when, its status and its notes."""
+    starts = utcnow().replace(microsecond=0) + timedelta(days=3)
+    made = client.post("/api/appointments", json={
+        "title": "Roof inspection", "contact_id": client.ids["reachable"],
+        "notes": "gate code 1174",
+        "starts_at": starts.isoformat(),
+        "ends_at": (starts + timedelta(hours=1)).isoformat()}).json()
+
+    got = client.get("/api/appointments/%d" % made["id"]).json()
+    assert got["id"] == made["id"]
+    assert got["title"] == "Roof inspection"
+    assert got["contact_id"] == client.ids["reachable"]
+    assert got["contact_name"] == "Reach Able", "the panel would have to show an id"
+    assert got["notes"] == "gate code 1174"
+    assert got["status"] == "confirmed"
+    assert datetime.fromisoformat(got["starts_at"]).replace(tzinfo=UTC) == starts
+    # A booking with no calendar must say so rather than 500 on `.name`.
+    assert got["calendar_id"] is None and got["calendar_name"] is None
+
+
+def test_editing_the_title_and_contact_persists_and_the_grid_sees_it(client):
+    """The block on the grid is drawn from the range query, not from the panel,
+    so an edit that only updates the detail response would leave the calendar
+    showing the old title until a reload."""
+    appt = _book(client).json()
+    other = client.get("/api/contacts?q=NotDisturb").json()["items"][0]
+
+    r = client.patch("/api/appointments/%d" % appt["id"], json={
+        "title": "  Tarp the north slope  ", "contact_id": other["id"],
+        "notes": "dog in the yard"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Tarp the north slope", "the title kept its spaces"
+
+    row = _appointment_row(appt["id"])
+    assert row.title == "Tarp the north slope"
+    assert row.contact_id == other["id"]
+    assert row.notes == "dog in the yard"
+
+    window = client.get("/api/appointments", params={
+        "start": (utcnow() - timedelta(days=1)).isoformat(),
+        "end": (utcnow() + timedelta(days=10)).isoformat()}).json()
+    drawn = [a for a in window if a["id"] == appt["id"]]
+    assert len(drawn) == 1
+    assert drawn[0]["title"] == "Tarp the north slope"
+    assert drawn[0]["contact_name"] == "Do NotDisturb", (
+        "the grid still names the old contact")
+
+
+def test_rescheduling_moves_it_in_the_range_query(client):
+    """The grid asks for a window and draws what comes back. A move that does not
+    change which window returns it has not moved on screen."""
+    appt = _book(client, hours_ahead=72).json()
+    new_start = (utcnow() + timedelta(days=20)).replace(microsecond=0)
+
+    def in_window(days_from, days_to):
+        rows = client.get("/api/appointments", params={
+            "start": (utcnow() + timedelta(days=days_from)).isoformat(),
+            "end": (utcnow() + timedelta(days=days_to)).isoformat()}).json()
+        return [a["id"] for a in rows]
+
+    assert appt["id"] in in_window(0, 7)
+    assert appt["id"] not in in_window(14, 28)
+
+    r = client.patch("/api/appointments/%d" % appt["id"], json={
+        "starts_at": new_start.isoformat(),
+        "ends_at": (new_start + timedelta(hours=1)).isoformat()})
+    assert r.status_code == 200
+
+    assert appt["id"] not in in_window(0, 7), "the old slot still draws it"
+    assert appt["id"] in in_window(14, 28), "the new slot does not draw it"
+    row = _appointment_row(appt["id"])
+    assert row.starts_at.replace(tzinfo=UTC) == new_start
+
+
+def test_rescheduling_leaves_exactly_one_pending_reminder_per_offset(client):
+    """The core of this task. Not "two exist" — exactly one per offset, at the
+    NEW time, with the superseded ones gone from the queue."""
+    appt = _book(client, hours_ahead=72).json()
+    before = pending_reminders(appt["id"])
+    assert _reminder_offsets(appt["id"]) == ["1h", "24h"]
+
+    new_start = (utcnow() + timedelta(days=5)).replace(microsecond=0)
+    client.patch("/api/appointments/%d" % appt["id"], json={
+        "starts_at": new_start.isoformat(),
+        "ends_at": (new_start + timedelta(hours=1)).isoformat()})
+
+    after = pending_reminders(appt["id"])
+    assert _reminder_offsets(appt["id"]) == ["1h", "24h"], (
+        "the customer has a duplicate or a missing reminder")
+    assert {f.id for f in before} & {j.id for j in after} == set(), (
+        "a job queued against the old time is still pending")
+    at = {j.payload["offset"]: as_aware(j.run_after) for j in after}
+    assert at["1h"] == new_start - timedelta(hours=1), "T-1h is not at the new time"
+    assert at["24h"] == new_start - timedelta(hours=24), "T-24h is not at the new time"
+
+
+def test_rescheduling_twice_still_leaves_exactly_one_pending_reminder(client):
+    appt = _book(client, hours_ahead=72).json()
+    last = None
+    for days in (5, 9):
+        last = (utcnow() + timedelta(days=days)).replace(microsecond=0)
+        client.patch("/api/appointments/%d" % appt["id"], json={
+            "starts_at": last.isoformat(),
+            "ends_at": (last + timedelta(hours=1)).isoformat()})
+        assert _reminder_offsets(appt["id"]) == ["1h", "24h"], (
+            "reschedule to +%dd left the wrong number of reminders" % days)
+
+    at = {j.payload["offset"]: as_aware(j.run_after)
+          for j in pending_reminders(appt["id"])}
+    assert at["1h"] == last - timedelta(hours=1), (
+        "the live reminder still points at the FIRST reschedule")
+
+
+def test_rescheduling_back_to_the_original_time_still_leaves_a_reminder(client):
+    """Undo. The dedupe key is `appt_reminder:<id>:<starts_at>:<offset>`, and
+    `enqueue()` refuses a key that exists whatever its status — so retiring the
+    first Tuesday jobs by status alone would make the move back to Tuesday a
+    no-op and the customer would get NO reminder. A retired job releases its key
+    for exactly this."""
+    appt = _book(client, hours_ahead=72).json()
+    original = _appointment_row(appt["id"])
+    original_start = as_aware(original.starts_at)
+    original_end = as_aware(original.ends_at)
+
+    away = (utcnow() + timedelta(days=6)).replace(microsecond=0)
+    client.patch("/api/appointments/%d" % appt["id"], json={
+        "starts_at": away.isoformat(),
+        "ends_at": (away + timedelta(hours=1)).isoformat()})
+    back = client.patch("/api/appointments/%d" % appt["id"], json={
+        "starts_at": original_start.isoformat(),
+        "ends_at": original_end.isoformat()})
+    assert back.status_code == 200
+
+    assert _reminder_offsets(appt["id"]) == ["1h", "24h"], (
+        "moving a booking back to its original time left the customer with no "
+        "reminder — the retired jobs are still holding the dedupe keys")
+    at = {j.payload["offset"]: as_aware(j.run_after)
+          for j in pending_reminders(appt["id"])}
+    assert at["1h"] == original_start - timedelta(hours=1)
+
+
+def test_rescheduling_into_the_next_hours_drops_the_reminder_that_cannot_fire(client):
+    """A booking moved to two hours from now cannot have a T-24h reminder — that
+    would fire immediately. Exactly one reminder, and it is the T-1h."""
+    appt = _book(client, hours_ahead=72).json()
+    soon = (utcnow() + timedelta(hours=2)).replace(microsecond=0)
+    client.patch("/api/appointments/%d" % appt["id"], json={
+        "starts_at": soon.isoformat(),
+        "ends_at": (soon + timedelta(hours=1)).isoformat()})
+
+    live = pending_reminders(appt["id"])
+    assert len(live) == 1, "a T-24h reminder was queued in the past"
+    assert live[0].payload["offset"] == "1h"
+    assert as_aware(live[0].run_after) == soon - timedelta(hours=1)
+
+
+def test_editing_only_the_title_does_not_churn_the_reminders(client):
+    """Retiring and re-queueing on every save would move the reminders' ids and
+    their `run_after` for no reason, and a reschedule-to-the-same-time is the
+    case that used to silently drop them."""
+    appt = _book(client, hours_ahead=72).json()
+    before = {j.id: as_aware(j.run_after) for j in pending_reminders(appt["id"])}
+
+    r = client.patch("/api/appointments/%d" % appt["id"],
+                     json={"title": "Roof inspection (rear)"})
+    assert r.json()["automation"] == "unchanged"
+    after = {j.id: as_aware(j.run_after) for j in pending_reminders(appt["id"])}
+    assert after == before, "a title edit re-queued the customer's reminders"
+
+
+def test_cancelling_leaves_no_pending_reminder(client):
+    """A reminder for an appointment that is off must not sit in the queue. The
+    handler would refuse to send it, but a dispatcher reading
+    `ghl jobs list --status pending` would still see it."""
+    appt = _book(client, hours_ahead=72).json()
+    assert len(pending_reminders(appt["id"])) == 2
+
+    r = client.delete("/api/appointments/%d" % appt["id"])
+    assert r.status_code == 200
+    assert r.json()["reminders_cancelled"] == 2
+
+    assert pending_reminders(appt["id"]) == [], (
+        "cancelling left a reminder queued for a cancelled appointment")
+    assert _appointment_row(appt["id"]).status == "cancelled", (
+        "cancel is a status change, not a delete — the Cancelled report tile "
+        "counts these rows")
+
+
+def test_cancelling_through_the_edit_form_also_stops_the_reminders(client):
+    """The panel can reach `cancelled` two ways: the Cancel appointment button
+    (DELETE) and the Status select (PATCH). Both have to end in the same place."""
+    appt = _book(client, hours_ahead=72).json()
+    r = client.patch("/api/appointments/%d" % appt["id"], json={"status": "cancelled"})
+    assert r.status_code == 200
+    assert r.json()["automation"] == "reminders cancelled"
+    assert pending_reminders(appt["id"]) == []
+
+
+def test_reviving_a_cancelled_appointment_queues_its_reminders_again(client):
+    """The panel's Status select can go back to `confirmed`, so it must. Without
+    the key release this is the undo trap again: the retired jobs hold the keys
+    for this exact start time."""
+    appt = _book(client, hours_ahead=72).json()
+    client.delete("/api/appointments/%d" % appt["id"])
+    assert pending_reminders(appt["id"]) == []
+
+    r = client.patch("/api/appointments/%d" % appt["id"], json={"status": "confirmed"})
+    assert r.status_code == 200
+    assert _reminder_offsets(appt["id"]) == ["1h", "24h"], (
+        "a re-confirmed appointment gets no reminder at all")
+
+
+def test_a_reminder_already_sent_is_left_alone_by_a_reschedule(client):
+    """Only `pending` jobs are superseded. A reminder that has already gone out
+    is history: rewriting it would say the customer was told about a time they
+    were never told about."""
+    appt = _book(client, hours_ahead=72).json()
+    db = SessionLocal()
+    done = next(j for j in db.query(Job).filter(
+        Job.type == "appointment_reminder").all()
+        if j.payload.get("appointment_id") == appt["id"])
+    done.status = "done"
+    done_key, done_id = done.dedupe_key, done.id
+    db.commit()
+    db.close()
+
+    start = (utcnow() + timedelta(days=5)).replace(microsecond=0)
+    client.patch("/api/appointments/%d" % appt["id"], json={
+        "starts_at": start.isoformat(),
+        "ends_at": (start + timedelta(hours=1)).isoformat()})
+
+    db = SessionLocal()
+    still = db.get(Job, done_id)
+    assert still.status == "done" and still.dedupe_key == done_key, (
+        "a reminder that had already been sent was rewritten")
+    db.close()
+
+
+@pytest.mark.parametrize("why,body", [
+    ("end before start", {"ends_at": -1}),
+    ("end equal to start", {"ends_at": 0}),
+    ("blank title", {"title": ""}),
+    ("whitespace title", {"title": "   "}),
+    ("unknown status", {"status": "rained-off"}),
+    ("missing contact", {"contact_id": 9_999}),
+    ("missing calendar", {"calendar_id": 9_999}),
+])
+def test_an_invalid_edit_changes_nothing(client, why, body):
+    """A refused PATCH must leave the row and the queue exactly as it found them.
+    The endpoint assigns onto the loaded object BEFORE it validates, so "the
+    response was a 400" is not the same statement as "nothing was written"."""
+    appt = _book(client, hours_ahead=72).json()
+    before = _appointment_row(appt["id"])
+    was = (before.title, as_aware(before.starts_at), as_aware(before.ends_at),
+           before.status, before.contact_id, before.calendar_id, before.notes)
+    reminders = {j.id: as_aware(j.run_after) for j in pending_reminders(appt["id"])}
+
+    payload = dict(body)
+    if "ends_at" in payload:
+        payload["ends_at"] = (as_aware(before.starts_at)
+                              + timedelta(hours=payload["ends_at"])).isoformat()
+    r = client.patch("/api/appointments/%d" % appt["id"], json=payload)
+    assert r.status_code in (400, 404), why
+    # A sentence, not a schema dump: the panel renders `detail` verbatim.
+    assert isinstance(r.json()["detail"], str) and r.json()["detail"]
+
+    after = _appointment_row(appt["id"])
+    assert (after.title, as_aware(after.starts_at), as_aware(after.ends_at),
+            after.status, after.contact_id, after.calendar_id,
+            after.notes) == was, "%s still mutated the row" % why
+    assert {j.id: as_aware(j.run_after)
+            for j in pending_reminders(appt["id"])} == reminders, (
+        "%s still disturbed the reminders" % why)
+
+
+def test_a_tech_cannot_edit_or_cancel_an_appointment_and_no_row_is_mutated(client):
+    """PATCH and DELETE are both `auth.STAFF`, unchanged by this work. The panel
+    disables Save and Cancel appointment for a TECH, but the backend is the thing
+    that enforces it — and a 403 that had already assigned onto the row would
+    pass a status-only assertion."""
+    appt = _book(client, hours_ahead=72).json()
+    before = _appointment_row(appt["id"])
+    was = (before.title, as_aware(before.starts_at), before.status)
+    reminders = {j.id for j in pending_reminders(appt["id"])}
+
+    tech_user = User(email="tech@x.test", name="Tech", role=Role.TECH)
+    db = SessionLocal()
+    db.add(tech_user)
+    db.flush()
+    plain, token = mint_api_token(tech_user, name="tech")
+    db.add(token)
+    db.commit()
+    db.close()
+
+    tech = TestClient(app)
+    tech.headers["Authorization"] = "Bearer " + plain
+
+    # A TECH may still READ it — the grid and the panel are ANY_USER.
+    assert tech.get("/api/appointments/%d" % appt["id"]).status_code == 200
+
+    assert tech.patch("/api/appointments/%d" % appt["id"],
+                      json={"title": "TECH WAS HERE"}).status_code == 403
+    assert tech.delete("/api/appointments/%d" % appt["id"]).status_code == 403
+
+    after = _appointment_row(appt["id"])
+    assert (after.title, as_aware(after.starts_at), after.status) == was, (
+        "a refused edit still mutated the appointment")
+    assert {j.id for j in pending_reminders(appt["id"])} == reminders, (
+        "a refused cancel still retired the customer's reminders")

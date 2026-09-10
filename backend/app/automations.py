@@ -172,12 +172,24 @@ def on_contact_created(db: Session, contact: Contact) -> str:
     return "queued" if job else "already queued"
 
 
+# A reminder is never sent for an appointment in one of these states, so a
+# booking that reaches one has no live reminders to keep. `_h_appointment_reminder`
+# re-checks this at run time and `update_appointment` cancels the queued jobs at
+# edit time; both read this set so they cannot disagree about what "off" means.
+NO_REMINDER_STATUSES = {"cancelled", "blocked"}
+
+
 def on_appointment_booked(db: Session, appt: Appointment) -> str:
     """Rule 3 — appointment booked -> reminders at T-24h and T-1h.
 
     Reminders already in the past are not scheduled; back-dating a send would
     fire immediately, which is worse than not sending.
     """
+    # Re-entered by `update_appointment` on every reschedule, so it has to be
+    # safe to call on a booking that is off: a cancelled slot must not acquire
+    # reminders because someone corrected its title.
+    if appt.status in NO_REMINDER_STATUSES:
+        return "no reminders for a %s appointment" % appt.status
     contact = db.get(Contact, appt.contact_id) if appt.contact_id else None
     ok, why = _can_message(contact)
     if not ok:
@@ -246,7 +258,7 @@ def _h_new_lead(db: Session, payload: dict) -> None:
 
 def _h_appointment_reminder(db: Session, payload: dict) -> None:
     appt = db.get(Appointment, payload["appointment_id"])
-    if not appt or appt.status in ("cancelled", "blocked"):
+    if not appt or appt.status in NO_REMINDER_STATUSES:
         log.info("reminder skipped: appointment missing or cancelled")
         return
     contact = db.get(Contact, appt.contact_id) if appt.contact_id else None
