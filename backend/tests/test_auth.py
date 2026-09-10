@@ -396,6 +396,29 @@ def test_tech_may_drag_an_opportunity_between_stages(env):
         "/api/opportunities/%d" % env["ids"]["opp"]).json()["value_cents"] == 1000
 
 
+def test_only_admin_can_delete_a_contact_and_a_refusal_deletes_nothing(env):
+    """Delete is `auth.ADMIN`. The other two roles must be refused *and* leave the
+    contact, its conversations and its opportunity exactly where they were — a 403
+    raised after the detach loop had run would still pass a status-only check."""
+    cid = env["ids"]["contact"]
+    admin = client_for(env, "admin")
+    before = admin.get("/api/contacts/%d" % cid).json()
+
+    for who in ("dispatcher", "tech"):
+        for url in ("/api/contacts/%d" % cid, "/api/contacts/%d?force=true" % cid):
+            assert client_for(env, who).delete(url).status_code == 403, (
+                "%s deleted a contact via %s" % (who, url))
+            assert admin.get("/api/contacts/%d" % cid).json() == before, (
+                "a refused delete still changed the contact")
+            assert admin.get("/api/opportunities/%d" % env["ids"]["opp"]
+                             ).json()["contact_id"] == cid, (
+                "a refused delete still detached the opportunity")
+
+    # ...and the admin can, which is what makes the three-way comparison meaningful.
+    assert admin.delete("/api/contacts/%d?force=true" % cid).status_code == 200
+    assert admin.get("/api/contacts/%d" % cid).status_code == 404
+
+
 def test_dispatcher_cannot_reach_the_admin_surface(env):
     d = client_for(env, "dispatcher")
     assert d.post("/api/users", json={"email": "new@x.test", "name": "New",

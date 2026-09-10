@@ -219,3 +219,137 @@ def test_the_stage_select_follows_the_pipeline():
     assert "setStageId(null)" in change, "the stage keeps pointing at the old pipeline"
     assert "const stage = stages.find((s) => s.id === stageId) ?? stages[0]" in dialog, (
         "the stage does not default to the first stage of the chosen pipeline")
+
+
+# ---------------- the Contact Details "Actions" tab ----------------
+#
+# The tab shipped as the words "Actions are not implemented in v1." It now holds
+# exactly one action, Delete contact, backed by DELETE /api/contacts/{id}. The
+# backend behaviour is covered in test_api.py and test_auth.py; what is asserted
+# here is that the panel drives that endpoint the way the endpoint is written --
+# in particular that its 409 is treated as a confirmation step and not as a
+# failure to swallow.
+
+def _actions_tab() -> str:
+    """The Actions branch of the panel, from its guard to the closing of the tab."""
+    source = _read("components", "ContactDetailsPanel.tsx")
+    assert "{tab === 'Actions' && (" in source, "retarget this test -- the tab moved"
+    return source.split("{tab === 'Actions' && (", 1)[1].split("{tab === '", 1)[0]
+
+
+def test_the_actions_tab_actually_offers_the_delete():
+    tab = _actions_tab()
+    source = _read("components", "ContactDetailsPanel.tsx")
+    assert "Actions are not implemented in v1" not in source, (
+        "the placeholder is still on screen")
+    assert "Delete contact" in tab, "the tab offers no delete"
+    assert "deleteContact" in source, "nothing in the panel calls the delete endpoint"
+
+
+def test_the_actions_tab_invented_no_action_ghl_was_never_measured_for():
+    """GHL's Actions tab was never captured (DECISIONS.md, 2026-09-09), so one
+    action backed by a real endpoint is the whole of it. A merge/export/workflow
+    menu here would be a guess presented as parity."""
+    tab = _actions_tab()
+    for absent in ("Merge", "Export", "workflow", "Add to campaign", "Bulk"):
+        assert absent not in tab, (
+            "%r appeared in the Actions tab and was never measured on GHL" % absent)
+
+
+def test_delete_is_disabled_for_a_role_that_cannot_delete():
+    """`DELETE /api/contacts/{id}` is auth.ADMIN. A DISPATCHER or TECH given a live
+    button can only ever click through to a 403 -- the same trap d1f7c50 closed on
+    Add Contact, and the same fix: disabled, with a title saying why."""
+    source = _read("components", "ContactDetailsPanel.tsx")
+    assert "const canDelete = user.role === 'ADMIN'" in source, (
+        "the panel never asks whether this role may delete")
+    button = _actions_tab().split("setConfirm('plain')", 1)[1].split(
+        "Delete contact", 1)[0]
+    assert "disabled={!canDelete}" in button, (
+        "Delete contact is live for a role the backend will refuse")
+    assert "title={canDelete ?" in button, "nothing tells them why it is dead"
+
+
+def test_deleting_always_asks_first_and_the_first_ask_does_not_force():
+    """Two separate guarantees.
+
+    Deletion is irreversible, so even a contact with nothing attached is confirmed
+    once. And that first confirm must send force=false: forcing straight away would
+    detach opportunities without the user ever being told there were any, which is
+    the entire reason the endpoint answers 409.
+    """
+    tab = _actions_tab()
+    assert "setConfirm('plain')" in tab, "the delete button fires without asking"
+    assert "del.mutate(confirm === 'detach')" in tab, (
+        "the confirm button does not derive force from which confirmation was shown")
+
+
+def test_the_409_becomes_a_confirmation_naming_the_opportunities():
+    """The 409 is the endpoint refusing to detach opportunities behind the user's
+    back. Rendered as a red error it reads as "delete is broken"; the user needs to
+    be told which opportunities survive and asked again."""
+    source = _read("components", "ContactDetailsPanel.tsx")
+    handler = source.split("const del = useMutation({", 1)[1].split(
+        "const fields = [", 1)[0]
+    assert "e.status === 409" in handler and "setConfirm('detach')" in handler, (
+        "a 409 is not turned into the detach confirmation")
+    assert "setDeleteError(null)" in handler.split("setConfirm('detach')", 1)[1].split(
+        "return", 1)[0], "the 409 is also left sitting in the error banner"
+
+    assert "function detachSentence(" in source, (
+        "nothing composes the sentence that names the opportunities")
+    sentence = source.split("function detachSentence(", 1)[1]
+    assert "opps.length === 1" in sentence, (
+        "'1 opportunities' -- the same plural bug ce48b4b fixed in the count pill")
+    assert "will be kept" in sentence and "detached" in sentence, (
+        "the sentence does not say the opportunities survive")
+
+    # It names them from the contact's own list, not by parsing the error prose.
+    assert "opportunities: ContactOpportunity[]" in _read("lib", "api.ts"), (
+        "the loaded contact does not carry its opportunities, so the only way to "
+        "name them is to scrape the 409's wording")
+
+
+def test_the_delete_does_not_ride_the_panels_shared_write_banner():
+    """`writeError` is rendered as a red alert at the top of the panel. Joining the
+    delete to it would paint the 409 -- a step in the flow -- as a failure."""
+    source = _read("components", "ContactDetailsPanel.tsx")
+    line = [ln for ln in source.splitlines() if ln.startswith("  const writeError")]
+    assert len(line) == 1, "retarget this test -- writeError moved"
+    assert "del.error" not in line[0], "the delete's 409 renders as a write failure"
+    assert 'role="alert"' in _actions_tab(), (
+        "a delete that fails for a real reason has no surface of its own")
+
+
+def test_a_successful_delete_clears_the_panel_and_the_list():
+    """The user must not be left looking at a contact that no longer exists, and the
+    row must go without a manual refresh."""
+    source = _read("components", "ContactDetailsPanel.tsx")
+    ok = source.split("const del = useMutation({", 1)[1].split("onError:", 1)[0]
+    assert "onDeleted?.()" in ok, "nothing tells the host the contact is gone"
+    assert "removeQueries({ queryKey: ['contact', contactId] })" in ok, (
+        "invalidating the dead contact refetches it and 404s over the closing panel")
+    for key in ("['contacts']", "['conversations']", "['opportunities']"):
+        assert "invalidateQueries({ queryKey: %s })" % key in ok, (
+            "%s still shows the deleted contact until a manual refresh" % key)
+
+    # Both hosts of the panel have to act on it: the Contacts list keeps the open
+    # contact id, and Conversations keeps the selected thread -- whose conversation
+    # was deleted along with the contact.
+    assert "onDeleted={() => setOpenContact(null)}" in _read("pages", "ContactsPage.tsx")
+    assert "onDeleted={() => setSelected(null)}" in _read("pages", "ConversationsPage.tsx")
+
+
+def test_delete_is_offered_nowhere_but_the_actions_tab():
+    """Bulk delete was deliberately deferred: this CRM is in real daily use and the
+    list checkboxes are the easiest way to lose real customer records."""
+    for page in ("ContactsPage.tsx", "ConversationsPage.tsx"):
+        source = _read("pages", page)
+        assert "deleteContact" not in source, (
+            "%s can delete a contact outside the Actions tab" % page)
+    contacts = _read("pages", "ContactsPage.tsx")
+    checkbox = contacts.split('<input type="checkbox" />', 1)[0].rsplit("<td", 1)[1]
+    assert "onClick={(e) => e.stopPropagation()}" in checkbox, (
+        "retarget this test -- the row checkbox moved")
+    assert "checked=" not in checkbox and "onChange=" not in checkbox, (
+        "the row checkboxes were wired up; bulk actions are out of scope")

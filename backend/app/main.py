@@ -223,6 +223,11 @@ def _contact_detail(c: Contact) -> dict:
         "owner_name": c.owner.name if c.owner else None,
         "tags": [{"id": ct.tag.id, "name": ct.tag.name, "color": ct.tag.color}
                  for ct in c.tags if ct.tag],
+        # Named, not counted: DELETE /api/contacts/{id} refuses with 409 while this
+        # list is non-empty, and the Actions tab has to say *which* opportunities
+        # are about to be detached before anyone confirms. Reading them back out of
+        # the 409's prose would tie the panel to the wording of an error message.
+        "opportunities": [{"id": o.id, "title": o.title} for o in c.opportunities],
         "custom_fields": c.custom_fields or {},
     }
 

@@ -238,6 +238,79 @@ def test_contact_patch_refuses_a_value_wider_than_its_column(client):
     assert after["last_name"] == before["last_name"], "a refused patch still wrote"
 
 
+def test_contact_delete_keeps_the_opportunities_and_drops_the_conversations(client):
+    """The whole shape of this endpoint in one test.
+
+    `custom_fields.owen_call_id` is the telephony project's join key (DECISIONS.md),
+    so an opportunity must outlive the contact it hung off — detached, not deleted.
+    A conversation has nothing anyone else joins to, `conversations.contact_id` is
+    NOT NULL, and nothing cascades it, so it has to go explicitly.
+    """
+    cid = client.ids["contact"]
+    detail = client.get(f"/api/contacts/{cid}").json()
+    opp_ids = [o["id"] for o in detail["opportunities"]]
+    assert opp_ids, "fixture changed — this contact is supposed to have an opportunity"
+    convs_before = client.get("/api/conversations?tab=all").json()
+    mine = [c["id"] for c in convs_before if c["contact_id"] == cid]
+    assert mine, "fixture changed — this contact is supposed to have a conversation"
+
+    r = client.delete(f"/api/contacts/{cid}?force=true")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": cid, "detached_opportunities": opp_ids}
+
+    # The contact is gone, and gone from the list the UI renders.
+    assert client.get(f"/api/contacts/{cid}").status_code == 404
+    listed = client.get("/api/contacts?page=1&page_size=100").json()
+    assert cid not in {i["id"] for i in listed["items"]}
+    assert listed["total"] == 24
+
+    # Its conversations went with it...
+    convs_after = client.get("/api/conversations?tab=all").json()
+    assert not [c for c in convs_after if c["id"] in mine]
+
+    # ...and its opportunities did NOT.
+    for oid in opp_ids:
+        opp = client.get(f"/api/opportunities/{oid}")
+        assert opp.status_code == 200, "an opportunity was deleted with the contact"
+        assert opp.json()["contact_id"] is None, "it is still attached to a dead row"
+        assert opp.json()["contact_name"] is None
+
+
+def test_contact_delete_is_refused_while_it_has_opportunities_and_mutates_nothing(client):
+    """A 409 that had already detached half of them would pass a status assertion."""
+    cid = client.ids["contact"]
+    before = client.get(f"/api/contacts/{cid}").json()
+    opp_ids = [o["id"] for o in before["opportunities"]]
+    convs = [c["id"] for c in client.get("/api/conversations?tab=all").json()
+             if c["contact_id"] == cid]
+    assert opp_ids and convs, "fixture changed — retarget this test"
+
+    r = client.delete(f"/api/contacts/{cid}")
+    assert r.status_code == 409
+    # The message has to name them: the panel turns this refusal into the
+    # "these will be detached" confirmation.
+    for oid in opp_ids:
+        assert str(oid) in r.json()["detail"]
+
+    assert client.get(f"/api/contacts/{cid}").json() == before
+    assert [c["id"] for c in client.get("/api/conversations?tab=all").json()
+            if c["contact_id"] == cid] == convs
+    for oid in opp_ids:
+        assert client.get(f"/api/opportunities/{oid}").json()["contact_id"] == cid
+
+
+def test_contact_delete_needs_no_force_when_there_is_nothing_to_detach(client):
+    """force=true is consent to detach, not a general "really delete" flag — a
+    contact with no opportunities must not need it."""
+    fresh = client.post("/api/contacts", json={
+        "first_name": "Nobody", "last_name": "Attached",
+        "phone": "(941) 555-7777"}).json()
+    assert client.get(f"/api/contacts/{fresh['id']}").json()["opportunities"] == []
+
+    assert client.delete(f"/api/contacts/{fresh['id']}").status_code == 200
+    assert client.get(f"/api/contacts/{fresh['id']}").status_code == 404
+
+
 # ---------------- Conversations ----------------
 
 def test_conversation_tabs_filter(client):

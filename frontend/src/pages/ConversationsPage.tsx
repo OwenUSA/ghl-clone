@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import type { Me } from '../lib/auth'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
 import {
   IconCalendar, IconChat, IconChevronDown, IconClock, IconEye, IconFilter,
@@ -221,7 +222,7 @@ function EventBubble({ e }: { e: ThreadEvent }) {
   )
 }
 
-export function ConversationsPage() {
+export function ConversationsPage({ user }: { user: Me }) {
   const [tab, setTab] = useState<string>('all')
   const [sort, setSort] = useState('latest')
   const [filter, setFilter] = useState('all')
@@ -534,7 +535,16 @@ export function ConversationsPage() {
             </div>
           </div>
 
-          {current && <ContactDetailsPanel contactId={current.contact_id} />}
+          {current && (
+            <ContactDetailsPanel
+              contactId={current.contact_id}
+              user={user}
+              // Deleting the contact deletes its conversations, so the thread this
+              // pane is showing goes with it. Without this, `selected` still holds
+              // the dead id and the thread pane sits empty after the list refetches.
+              onDeleted={() => setSelected(null)}
+            />
+          )}
         </div>
       </div>
     </div>
