@@ -130,3 +130,46 @@ def test_the_pipeline_select_actually_selects_a_pipeline():
     assert "value={pipeline?.id" in select, "the select does not show the chosen pipeline"
     assert "<option key={p.id} value={p.id}>" in select, (
         "the options carry no value, so onChange has nothing to read")
+
+
+def test_reporting_shows_only_the_three_tabs_that_can_work():
+    """Four Reporting tabs existed only to be disabled; they are gone from the DOM.
+
+    Google Ads, Meta Ads (Facebook Ads) report and Local Marketing Audit are
+    third-party marketing integrations, which CLAUDE.md puts out of scope, and
+    Attribution report rendered empty on the live account -- so none of the four
+    could ever be enabled by anything this app might do next. A greyed tab implies
+    a switch exists somewhere; there is none. Removed at the owner's request,
+    amended into DECISIONS.md on 2026-09-09.
+
+    Custom reports stays: visible, disabled, reason on hover, by the same request.
+
+    Asserted against source because there is no JS test runner here -- so this
+    checks the tab row is *driven* by TABS before trusting TABS' contents.
+    """
+    source = (FRONTEND / "pages" / "ReportingPage.tsx").read_text(encoding="utf-8")
+
+    # The row renders TABS and nothing else, so the array is the whole tab row.
+    row = source.split("{TABS.map((t) => (", 1)[1].split("))}", 1)[0]
+    assert "{t.label}" in row, "retarget this test -- the tab row no longer maps TABS"
+    assert re.search(r"disabled=\{!!t\.off\}", row), (
+        "a tab's `off` no longer disables it, so a stub is clickable")
+
+    tabs = source.split("const TABS: TabDef[] = [", 1)[1].split("\n]", 1)[0]
+    labels = re.findall(r"label: '([^']+)'", tabs)
+    assert labels == ["Custom reports", "Call report", "Appointment report"], (
+        f"the Reporting tab row is {labels}, not the three tabs that can work")
+
+    # Custom reports is a stub on purpose -- it must keep saying why on hover.
+    custom = next(t for t in tabs.splitlines() if "'Custom reports'" in t)
+    assert "off:" in custom, "Custom reports lost its hover reason and now looks live"
+    for live in ("'Call report'", "'Appointment report'"):
+        entry = next(t for t in tabs.splitlines() if live in t)
+        assert "off:" not in entry, f"{live} is disabled -- it is an implemented report"
+
+    # ...and the four are not lurking anywhere else on the page either. The
+    # leading block comment records why they went, so it is not evidence.
+    body = source.split("*/", 1)[1]
+    for gone in ("Google Ads", "Meta Ads (Facebook Ads) report",
+                 "Attribution report", "Local Marketing Audit"):
+        assert gone not in body, f"{gone} still renders on the Reporting page"

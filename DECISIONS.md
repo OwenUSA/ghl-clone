@@ -535,6 +535,38 @@ integrations also avoids provisioning/consent prompts and anything billable.
 
 Reporting is now a real sidebar item, no longer dimmed.
 
+### AMENDED 2026-09-09 — the four dead tabs are gone from the UI
+
+The table above stands as the record of *why* each report was not built. What
+changed is only how that shows on screen. At the owner's request the four tabs
+that could never be enabled were **removed from the DOM entirely** — not hidden,
+not disabled:
+
+- Google Ads
+- Meta Ads (Facebook Ads) report
+- Local Marketing Audit
+- Attribution report
+
+The first three are third-party marketing integrations, and CLAUDE.md puts
+everything marketing-related out of scope, so no future version of this app
+enables them; keeping a greyed tab implied a setting somewhere would switch it
+on. Attribution rendered empty on the live account, so there is nothing to
+build towards there either. The measured GHL tab row is therefore *deliberately*
+no longer matched on this screen — `capture/diff.py` landmarks do not cover it,
+but do not "fix" this back to parity.
+
+**Custom reports remains**, still a visible but disabled tab with its hover
+reason, because the owner asked for it to stay. It is a stub only: the report
+builder is a separate product and is not being written.
+
+The tab row is now: `Custom reports · Call report · Appointment report`.
+
+Pinned by `test_reporting_shows_only_the_three_tabs_that_can_work` in
+`backend/tests/test_frontend_layout.py`. `capture/ui_check.py` used to assert
+those tabs existed *and were disabled*; that check now asserts they are absent.
+`capture/capture_reporting.py`'s FORBIDDEN list is untouched — it governs what
+may be clicked on the live GHL account, which is a different question.
+
 ## Safety contract — AMENDED 2026-08-13 (narrow, on the record)
 
 The "Safety contract (binding)" section above is **read-only on the live GHL account**.

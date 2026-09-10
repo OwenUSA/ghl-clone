@@ -422,12 +422,17 @@ def _(page):
         assert t in body, f"missing tile: {t}"
 
 
-@check("Reporting: excluded tabs are disabled")
+@check("Reporting: excluded tabs are absent, Custom reports is a disabled stub")
 def _(page):
+    """They used to be disabled tabs; since 2026-09-09 they are not rendered at
+    all (DECISIONS.md). Custom reports is the one stub the owner kept."""
     nav(page, "Reporting")
-    for label in ["Google Ads", "Meta Ads (Facebook Ads) report", "Local Marketing Audit"]:
-        btn = page.get_by_role("button", name=label, exact=True).first
-        assert btn.is_disabled(), f"{label} should be disabled"
+    for label in ["Google Ads", "Meta Ads (Facebook Ads) report",
+                  "Local Marketing Audit", "Attribution report"]:
+        n = page.get_by_role("button", name=label, exact=True).count()
+        assert n == 0, f"{label} is still in the tab row ({n} found)"
+    custom = page.get_by_role("button", name="Custom reports", exact=True).first
+    assert custom.is_disabled(), "Custom reports should still be a disabled stub"
 
 
 def main():
