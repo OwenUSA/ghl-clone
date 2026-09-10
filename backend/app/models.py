@@ -235,6 +235,42 @@ class Opportunity(Base):
     owner: Mapped["User | None"] = relationship()
 
 
+class SavedView(Base):
+    """A named filter set for the Opportunities board. GHL calls these smart lists.
+
+    OUR design — the `+ List` row and "Manage smart lists" were measured as labels
+    only, and no saved-list screen was ever opened on the live account
+    (DECISIONS.md, 2026-09-10).
+
+    It holds exactly the filters the board actually has, and nothing speculative:
+    a pipeline, the status filter and the search term. `pipeline_id` is nullable
+    on purpose — a view that only says "Won, matching 'skylight'" applies to
+    whichever pipeline is open, while one that names a pipeline switches to it.
+
+    Views are shared, not per-user, because this is a four-person single-tenant
+    CRM and "the list Owen made" is the useful thing. `created_by_id` records who
+    made it; it is not an ownership check.
+
+    The board's built-in "Open opportunities" is NOT a row here. It is the default
+    state of the board and always available, so there is nothing to delete and no
+    seed to keep in step.
+    """
+    __tablename__ = "saved_views"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    pipeline_id: Mapped[int | None] = mapped_column(ForeignKey("pipelines.id"))
+    # Mirrors the board's own filter: open | won | lost | abandoned | all.
+    status: Mapped[str] = mapped_column(String(20), default="open",
+                                        server_default="open")
+    q: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+    pipeline: Mapped["Pipeline | None"] = relationship()
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -35,6 +35,7 @@ from .models import (
     Opportunity,
     Pipeline,
     Role,
+    SavedView,
     Stage,
     Tag,
     User,
@@ -397,6 +398,233 @@ def list_pipelines(db: Session = Depends(get_db),
                            "count": rows[0], "value_cents": int(rows[1])})
         out.append({"id": p.id, "name": p.name, "stages": stages})
     return out
+
+
+# ---------- pipeline structure (create / rename / reorder / delete) ----------
+#
+# There were no write endpoints for pipelines or stages at all until 2026-09-10;
+# the structure came from the seed and was otherwise fixed. It is now editable,
+# which is a deliberate divergence from the measured GHL capture — see the dated
+# amendment in DECISIONS.md.
+#
+# Everything here is ADMIN. Renaming a stage changes a label four people navigate
+# by and that the `ghl` CLI resolves against; deleting one removes a column of the
+# board. That is not a dispatcher's call.
+#
+# Two rules do the safety work:
+#
+#   1. DELETE ONLY WHAT IS EMPTY. A stage holding opportunities cannot be deleted,
+#      and the refusal says how many are in the way. There is no `force`. Cascading
+#      would take real customer deals with it, and `custom_fields.owen_call_id` is
+#      the telephony project's join key — CLAUDE.md warns specifically against
+#      deleting opportunities as a side effect of tidying something else.
+#   2. REORDERING MOVES COLUMNS, NEVER DEALS. Reorder writes `Stage.position` and
+#      nothing else; no opportunity's `stage_id` is touched. The endpoint takes the
+#      full stage list as a permutation, so "move this one left" cannot be
+#      misapplied to a board that changed underneath the user.
+#
+# Names are NOT made unique. The measured pipeline has two distinct stages both
+# called "Call Back" (DECISIONS.md), the `ghl` CLI exits 5 rather than guess
+# between them, and quietly de-duplicating names here would break that.
+
+PIPELINE_NAME_MAX = 160
+
+
+class PipelineBody(BaseModel):
+    name: str = Field(max_length=PIPELINE_NAME_MAX)
+
+
+class StageBody(BaseModel):
+    name: str = Field(max_length=PIPELINE_NAME_MAX)
+
+
+class StageReorder(BaseModel):
+    """The pipeline's stages in their new order — every one of them, exactly once."""
+    stage_ids: list[int] = Field(min_length=1)
+
+
+def _clean_structure_name(name: str | None, kind: str) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(400, "a %s needs a name" % kind)
+    return cleaned
+
+
+def _opportunity_count(db: Session, **where) -> int:
+    stmt = select(func.count(Opportunity.id))
+    for column, value in where.items():
+        stmt = stmt.where(getattr(Opportunity, column) == value)
+    return db.scalar(stmt) or 0
+
+
+@app.post("/api/pipelines", status_code=201)
+def create_pipeline(body: PipelineBody, db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ADMIN):
+    """A new pipeline starts with no stages, so nothing can be filed in it yet.
+
+    Deliberately not seeded with a default set of stages: guessing at a roofing
+    pipeline's shape is exactly the kind of invention this project avoids, and an
+    empty pipeline is honest about needing its columns named.
+    """
+    n = db.scalar(select(func.count(Pipeline.id))) or 0
+    p = Pipeline(name=_clean_structure_name(body.name, "pipeline"), position=n)
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return {"id": p.id, "name": p.name, "position": p.position, "stages": []}
+
+
+@app.patch("/api/pipelines/{pipeline_id}")
+def rename_pipeline(pipeline_id: int, body: PipelineBody,
+                    db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ADMIN):
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+    p.name = _clean_structure_name(body.name, "pipeline")
+    db.commit()
+    return {"id": p.id, "name": p.name}
+
+
+@app.delete("/api/pipelines/{pipeline_id}")
+def delete_pipeline(pipeline_id: int, db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ADMIN):
+    """Only an EMPTY pipeline. No force, at any role.
+
+    `Pipeline.stages` cascades delete-orphan, so allowing this while stages
+    existed would silently take the columns — and every deal in them — with it.
+    The refusal names what is in the way, the way the contact delete's 409 does.
+    """
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+
+    stages = len(p.stages)
+    opps = _opportunity_count(db, pipeline_id=p.id)
+    if stages or opps:
+        raise HTTPException(409, (
+            "%r still has %d stage%s and %d opportunit%s. Empty it first — a "
+            "pipeline is never deleted with deals in it." % (
+                p.name, stages, "" if stages == 1 else "s",
+                opps, "y" if opps == 1 else "ies")))
+
+    # Weak references: both columns are nullable and neither carries data of its
+    # own. Detached rather than blocking the delete, and named in the response so
+    # it is not a silent side effect.
+    views = db.scalars(
+        select(SavedView).where(SavedView.pipeline_id == p.id)).all()
+    calendars = db.scalars(
+        select(Calendar).where(Calendar.pipeline_id == p.id)).all()
+    for v in views:
+        v.pipeline_id = None
+    for c in calendars:
+        c.pipeline_id = None
+
+    db.delete(p)
+    db.commit()
+    return {"deleted": pipeline_id,
+            "detached_saved_views": [v.id for v in views],
+            "detached_calendars": [c.id for c in calendars]}
+
+
+@app.post("/api/pipelines/{pipeline_id}/stages", status_code=201)
+def create_stage(pipeline_id: int, body: StageBody, db: Session = Depends(get_db),
+                 _: auth.Principal = auth.ADMIN):
+    """Appended at the end. A new stage is empty, so nothing moves."""
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+    n = db.scalar(select(func.count(Stage.id))
+                  .where(Stage.pipeline_id == p.id)) or 0
+    s = Stage(pipeline_id=p.id, name=_clean_structure_name(body.name, "stage"),
+              position=n)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return {"id": s.id, "pipeline_id": s.pipeline_id, "name": s.name,
+            "position": s.position, "count": 0, "value_cents": 0}
+
+
+@app.patch("/api/stages/{stage_id}")
+def rename_stage(stage_id: int, body: StageBody, db: Session = Depends(get_db),
+                 _: auth.Principal = auth.ADMIN):
+    """A rename, and ONLY a rename.
+
+    There is no `pipeline_id` here on purpose: moving a stage to another pipeline
+    would carry every opportunity in it across, and `PATCH /api/opportunities/{id}`
+    refuses a cross-pipeline move for that reason. Names stay non-unique — two
+    "Call Back" stages are the measured shape, and the CLI's exit 5 depends on it.
+    """
+    s = db.get(Stage, stage_id)
+    if not s:
+        raise HTTPException(404, "stage not found")
+    s.name = _clean_structure_name(body.name, "stage")
+    db.commit()
+    return {"id": s.id, "pipeline_id": s.pipeline_id, "name": s.name,
+            "position": s.position}
+
+
+@app.delete("/api/stages/{stage_id}")
+def delete_stage(stage_id: int, db: Session = Depends(get_db),
+                 _: auth.Principal = auth.ADMIN):
+    """Only an EMPTY stage. No force.
+
+    A populated stage is refused with the count in the message, so the admin knows
+    what to move where before trying again. The remaining stages are re-packed so
+    positions stay 0..n-1 with no hole.
+    """
+    s = db.get(Stage, stage_id)
+    if not s:
+        raise HTTPException(404, "stage not found")
+
+    held = _opportunity_count(db, stage_id=s.id)
+    if held:
+        raise HTTPException(409, (
+            "%r still holds %d opportunit%s. Move %s to another stage first — "
+            "deleting a stage never deletes the deals in it." % (
+                s.name, held, "y" if held == 1 else "ies",
+                "it" if held == 1 else "them")))
+
+    pipeline_id = s.pipeline_id
+    db.delete(s)
+    db.flush()
+    for i, remaining in enumerate(db.scalars(
+            select(Stage).where(Stage.pipeline_id == pipeline_id)
+            .order_by(Stage.position)).all()):
+        remaining.position = i
+    db.commit()
+    return {"deleted": stage_id, "pipeline_id": pipeline_id}
+
+
+@app.post("/api/pipelines/{pipeline_id}/stages/reorder")
+def reorder_stages(pipeline_id: int, body: StageReorder,
+                   db: Session = Depends(get_db),
+                   _: auth.Principal = auth.ADMIN):
+    """Re-order the columns. NO OPPORTUNITY MOVES.
+
+    Only `Stage.position` is written; nothing touches `Opportunity.stage_id`. The
+    request must name every stage of this pipeline exactly once, so a board that
+    changed underneath the user is refused outright rather than half-applied — and
+    a stage from another pipeline cannot be smuggled in.
+    """
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+
+    current = {s.id: s for s in p.stages}
+    wanted = body.stage_ids
+    if len(set(wanted)) != len(wanted) or set(wanted) != set(current):
+        raise HTTPException(400, (
+            "the new order must name every stage of this pipeline exactly once "
+            "(%d stages: %s)" % (len(current),
+                                 ", ".join(str(i) for i in sorted(current)))))
+
+    for i, stage_id in enumerate(wanted):
+        current[stage_id].position = i
+    db.commit()
+    return {"pipeline_id": p.id,
+            "stages": [{"id": current[i].id, "name": current[i].name,
+                        "position": current[i].position} for i in wanted]}
 
 
 @app.get("/api/opportunities")
@@ -774,6 +1002,234 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
     return {"id": o.id, "title": o.title, "stage_id": o.stage_id}
 
 
+# ---------- bulk actions ----------
+#
+# Move a selection between stages, and assign a selection an owner. Both are the
+# single-record write applied to many records, deliberately: a bulk move that took
+# a shortcut past `on_opportunity_stage_changed` would silently stop texting
+# customers the moment anyone used it on more than one card.
+#
+# THERE IS NO BULK DELETE, and its absence is a decision, not an omission.
+# `Opportunity.custom_fields.owen_call_id` is the live join key to the telephony
+# project, opportunities are never cascade-deleted from a contact for that reason,
+# and a multi-select is the easiest way there is to lose real customer records in
+# one click. The same call was already made for Contacts (DECISIONS.md, "Contact
+# Details Actions tab"). `DELETE /api/opportunities/{id}` still exists, one at a
+# time, ADMIN.
+
+# An upper bound so one request cannot walk the whole table. The board shows one
+# pipeline; the largest measured pipeline held 40 opportunities.
+BULK_MAX = 500
+
+
+class BulkIds(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=BULK_MAX)
+
+
+class BulkStageMove(BulkIds):
+    stage_id: int
+
+
+class BulkOwnerAssign(BulkIds):
+    owner_id: int | None = None
+
+
+def _bulk_load(db: Session, ids: list[int]) -> list[Opportunity]:
+    """Resolve every id, or refuse the whole request having written nothing.
+
+    Partially applying a bulk action is the worst of the three outcomes: the user
+    cannot tell which half landed, and re-running it is not safe. Duplicates in
+    the selection collapse rather than being applied twice.
+    """
+    unique = list(dict.fromkeys(ids))
+    rows = db.scalars(select(Opportunity).where(Opportunity.id.in_(unique))).all()
+    found = {o.id: o for o in rows}
+    missing = [str(i) for i in unique if i not in found]
+    if missing:
+        raise HTTPException(404, "no opportunity with id " + ", ".join(missing))
+    return [found[i] for i in unique]
+
+
+@app.post("/api/opportunities/bulk/stage")
+def bulk_move_stage(body: BulkStageMove, db: Session = Depends(get_db),
+                    _: auth.Principal = auth.ANY_USER):
+    """Move a selection into one stage.
+
+    ANY_USER, matching `PATCH /api/opportunities/{id}` — a TECH may move a deal
+    between stages, they simply cannot edit it (CLAUDE.md). Selecting five cards
+    must not need a role that dragging one does not.
+
+    An opportunity ALREADY in the destination is reported as unchanged and its
+    automation is not fired: rule 4 texts the customer, and "your job is now at
+    Inspection" arriving because someone included the card in a selection is a
+    message the customer should never have received.
+    """
+    stage = db.get(Stage, body.stage_id)
+    if not stage:
+        raise HTTPException(400, "unknown stage_id")
+
+    opps = _bulk_load(db, body.ids)
+    wrong = [str(o.id) for o in opps if o.pipeline_id != stage.pipeline_id]
+    if wrong:
+        raise HTTPException(
+            400, "stage is not in the pipeline of opportunity " + ", ".join(wrong))
+
+    changed = [o for o in opps if o.stage_id != stage.id]
+    unchanged = [o.id for o in opps if o.stage_id == stage.id]
+    was = {o.id: o.stage_id for o in changed}
+
+    # Read the destination's current occupants BEFORE moving anyone in, so the
+    # arrivals land after them in the order they were selected rather than
+    # interleaving on whatever position they held in their old stage.
+    settled = db.scalars(
+        select(Opportunity)
+        .where(Opportunity.stage_id == stage.id)
+        .order_by(Opportunity.position)).all()
+    for o in changed:
+        o.stage_id = stage.id
+    for i, o in enumerate([*settled, *changed]):
+        o.position = i
+    db.flush()
+
+    # Rule 4, once per opportunity that actually changed stage.
+    automation = {str(o.id): automations.on_opportunity_stage_changed(db, o, was[o.id])
+                  for o in changed}
+    db.commit()
+    return {"stage_id": stage.id, "moved": [o.id for o in changed],
+            "unchanged": unchanged, "automation": automation}
+
+
+@app.post("/api/opportunities/bulk/owner")
+def bulk_assign_owner(body: BulkOwnerAssign, db: Session = Depends(get_db),
+                      _: auth.Principal = auth.STAFF):
+    """Assign a selection an owner, or `owner_id: null` to unassign.
+
+    STAFF, matching `PATCH /api/opportunities/{id}/detail`, which is where a single
+    opportunity's owner is set. Changing an owner is editing the record, and a TECH
+    cannot edit records.
+    """
+    if body.owner_id is not None and not db.get(User, body.owner_id):
+        raise HTTPException(400, "unknown owner_id")
+    opps = _bulk_load(db, body.ids)
+    for o in opps:
+        o.owner_id = body.owner_id
+    db.commit()
+    return {"owner_id": body.owner_id, "updated": [o.id for o in opps]}
+
+
+# ---------- saved views (GHL's "smart lists") ----------
+#
+# A named filter set for the Opportunities board. OUR design: `+ List` and
+# "Manage smart lists" were measured as labels and nothing behind them was ever
+# opened on the live account (DECISIONS.md).
+#
+# The board's built-in "Open opportunities" is deliberately NOT a row in this
+# table. It is the board's default state, so it is always there, cannot be
+# deleted, and there is no seeded row to keep in step with the code.
+
+def _saved_view_public(v: SavedView) -> dict:
+    return {"id": v.id, "name": v.name, "pipeline_id": v.pipeline_id,
+            "pipeline_name": v.pipeline.name if v.pipeline else None,
+            "status": v.status, "q": v.q, "position": v.position,
+            "created_by_id": v.created_by_id}
+
+
+def _clean_view_name(name: str | None) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(400, "a saved view needs a name")
+    return cleaned
+
+
+def _check_view_pipeline(db: Session, pipeline_id: int | None) -> None:
+    if pipeline_id is not None and not db.get(Pipeline, pipeline_id):
+        raise HTTPException(400, "unknown pipeline_id")
+
+
+class SavedViewCreate(BaseModel):
+    name: str = Field(max_length=80)
+    pipeline_id: int | None = None
+    status: Literal["open", "won", "lost", "abandoned", "all"] = "open"
+    q: str = Field("", max_length=200)
+
+
+class SavedViewPatch(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    pipeline_id: int | None = None
+    status: Literal["open", "won", "lost", "abandoned", "all"] | None = None
+    q: str | None = Field(None, max_length=200)
+    position: int | None = None
+
+
+@app.get("/api/saved-views")
+def list_saved_views(db: Session = Depends(get_db),
+                     _: auth.Principal = auth.ANY_USER):
+    """Shared, not per-user: four people in one company, and "the list Owen made"
+    is the useful thing. Everyone reads them."""
+    rows = db.scalars(
+        select(SavedView).options(selectinload(SavedView.pipeline))
+        .order_by(SavedView.position, SavedView.id)).all()
+    return [_saved_view_public(v) for v in rows]
+
+
+@app.post("/api/saved-views", status_code=201)
+def create_saved_view(body: SavedViewCreate, db: Session = Depends(get_db),
+                      principal: auth.Principal = auth.STAFF):
+    """STAFF: saving a view is a write, and it is shared with everyone.
+
+    Duplicate names are allowed, deliberately. The pipeline this app was measured
+    against holds two distinct stages both called "Call Back" and the whole
+    codebase resolves by id rather than deduplicating names; a uniqueness rule
+    here would be the only place that disagreed.
+    """
+    _check_view_pipeline(db, body.pipeline_id)
+    n = db.scalar(select(func.count(SavedView.id))) or 0
+    v = SavedView(name=_clean_view_name(body.name), pipeline_id=body.pipeline_id,
+                  status=body.status, q=body.q.strip(), position=n,
+                  created_by_id=principal.user_id)
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    return _saved_view_public(v)
+
+
+@app.patch("/api/saved-views/{view_id}")
+def update_saved_view(view_id: int, body: SavedViewPatch,
+                      db: Session = Depends(get_db),
+                      _: auth.Principal = auth.STAFF):
+    v = db.get(SavedView, view_id)
+    if not v:
+        raise HTTPException(404, "saved view not found")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data:
+        data["name"] = _clean_view_name(data["name"])
+    if "pipeline_id" in data:
+        _check_view_pipeline(db, data["pipeline_id"])
+    if "q" in data and data["q"] is not None:
+        data["q"] = data["q"].strip()
+    for k, value in data.items():
+        if value is not None or k == "pipeline_id":
+            setattr(v, k, value)
+    db.commit()
+    db.refresh(v)
+    return _saved_view_public(v)
+
+
+@app.delete("/api/saved-views/{view_id}")
+def delete_saved_view(view_id: int, db: Session = Depends(get_db),
+                      _: auth.Principal = auth.ADMIN):
+    """ADMIN, following this app's standing rule — everyone reads, staff write,
+    admin deletes (CLAUDE.md). A saved view is a shared object: one person
+    removing another's list is the kind of thing the rule exists for.
+    """
+    v = db.get(SavedView, view_id)
+    if not v:
+        raise HTTPException(404, "saved view not found")
+    db.delete(v)
+    db.commit()
+    return {"deleted": view_id}
+
+
 # ---------- conversations ----------
 
 @app.get("/api/conversations")
@@ -925,18 +1381,19 @@ def _opportunities_in_range(db: Session, pipeline_id: int | None,
     return db.scalars(stmt).all()
 
 
-@app.get("/api/dashboard")
-def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
-              start: datetime | None = None, end: datetime | None = None,
-              _: auth.Principal = auth.STAFF):
-    """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
-    Opportunity value (Total vs Won revenue), Conversion rate.
+def _status_rollup(opps) -> dict:
+    """Roll a set of opportunities up by status. THE dashboard arithmetic.
 
-    `start`/`end` bound the opportunity's **creation** date; omitting both means
-    all time. Every figure below obeys the same window — nothing on this endpoint
-    is exempt from it.
+    `/api/dashboard` and `/api/forecast` both need these numbers, and a forecast
+    that disagreed with the Dashboard about how many deals are open — or about the
+    conversion rate — would just be a second, contradictory set of figures on the
+    same data. They share this function so the two cannot drift.
 
-    Two keys exist because the cards used to invent them in the browser:
+    `conversion_rate` is a percentage rounded to two decimals, and it is the
+    published one: the forecast weights its open money with exactly this value, so
+    every number in the forecast can be re-derived by hand from the response.
+
+    Two keys exist because the Dashboard cards used to invent them in the browser:
 
     * `value_by_status` — the Opportunity value card draws one bar per status. It
       had no per-status money to draw, so it hard-coded Lost at $0 and rendered
@@ -947,8 +1404,6 @@ def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
       reasonable reading, so the card offers both rather than the API picking for
       the owner. Neither can exceed 100%.
     """
-    opps = _opportunities_in_range(db, pipeline_id, start, end)
-
     by_status = {"won": 0, "open": 0, "lost": 0, "abandoned": 0}
     value_by_status = {"won": 0, "open": 0, "lost": 0, "abandoned": 0}
     total_value = won_value = 0
@@ -970,6 +1425,25 @@ def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
         "value_by_status": value_by_status,
         "conversion_rate": round(conversion, 2),
         "conversion_rate_all": round(conversion_all, 2),
+    }
+
+
+@app.get("/api/dashboard")
+def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
+              start: datetime | None = None, end: datetime | None = None,
+              _: auth.Principal = auth.STAFF):
+    """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
+    Opportunity value (Total vs Won revenue), Conversion rate.
+
+    `start`/`end` bound the opportunity's **creation** date; omitting both means
+    all time. Every figure below obeys the same window — nothing on this endpoint
+    is exempt from it.
+
+    The arithmetic itself lives in `_status_rollup`, which `/api/forecast` also
+    uses, so the forecast cannot publish a conversion rate the Dashboard disagrees
+    with.
+    """
+    return _status_rollup(_opportunities_in_range(db, pipeline_id, start, end)) | {
         # Echoed so the browser and the CLI can show which window produced these
         # numbers rather than trusting the control that was last clicked.
         "range": {"start": _range_utc(start), "end": _range_utc(end)},
@@ -1052,6 +1526,101 @@ def dashboard_funnel(db: Session = Depends(get_db), pipeline_id: int | None = No
     return {"pipeline_id": pipeline.id, "pipeline_name": pipeline.name,
             "total": total, "stages": stages,
             "range": {"start": _range_utc(start), "end": _range_utc(end)}}
+
+
+def _weighted(open_value_cents: int, conversion_rate: float) -> int:
+    """`open_value_cents` at `conversion_rate` percent, in whole cents, half up.
+
+    Kept in integers on purpose, the same reason `centsFromDollars` is: money is
+    integer cents everywhere in this app and `round(v * rate / 100)` is a float
+    round trip that both loses halves (banker's rounding) and depends on IEEE-754
+    representation. `conversion_rate` carries two decimals, so it is exactly a
+    whole number of hundredths of a percent — multiply by that instead.
+    """
+    hundredths = round(conversion_rate * 100)
+    return (open_value_cents * hundredths + 5000) // 10000
+
+
+@app.get("/api/forecast")
+def forecast(pipeline_id: int, db: Session = Depends(get_db),
+             _: auth.Principal = auth.STAFF):
+    """Projected revenue by stage for one pipeline.
+
+    OUR design — GHL's own Forecast tab was never opened on the live account, so
+    there is no capture to match (DECISIONS.md). What it is NOT is a second
+    opinion: the per-stage `count`/`value_cents` are the same figures
+    `GET /api/pipelines` feeds the Dashboard funnel with (every status, not just
+    open), and the rollup and `conversion_rate` come from `_status_rollup`, which
+    is what `GET /api/dashboard` returns.
+
+    The projection itself is deliberately one rule, applied uniformly:
+
+        weighted = open value in the stage x the pipeline's conversion rate
+        projected = money already won in the stage + weighted
+
+    Per-stage win probabilities would be the richer model and this app cannot
+    honestly compute them — nothing records stage history, so a won deal sits in
+    whatever stage it was won in, and "the win rate of Inspection" would really be
+    measuring where deals get marked won. One published rate that the user can see
+    on the Dashboard beats a curve nobody can check.
+
+    STAFF, matching `/api/dashboard`, whose aggregates this repeats.
+    """
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+
+    opps = list(db.scalars(
+        select(Opportunity).where(Opportunity.pipeline_id == pipeline_id)).all())
+    roll = _status_rollup(opps)
+    rate = roll["conversion_rate"]
+
+    by_stage: dict[int, list[Opportunity]] = {}
+    for o in opps:
+        by_stage.setdefault(o.stage_id, []).append(o)
+
+    stages = []
+    for s in p.stages:                      # relationship is ordered by position
+        rows = by_stage.get(s.id, [])
+        open_value = sum(o.value_cents for o in rows if o.status == "open")
+        won_value = sum(o.value_cents for o in rows if o.status == "won")
+        weighted = _weighted(open_value, rate)
+        stages.append({
+            "stage_id": s.id,
+            "name": s.name,
+            "position": s.position,
+            # These two are exactly what /api/pipelines reports for the stage.
+            "count": len(rows),
+            "value_cents": sum(o.value_cents for o in rows),
+            "open_count": sum(1 for o in rows if o.status == "open"),
+            "open_value_cents": open_value,
+            "won_count": sum(1 for o in rows if o.status == "won"),
+            "won_value_cents": won_value,
+            "weighted_value_cents": weighted,
+            "projected_value_cents": won_value + weighted,
+        })
+
+    # Summed from the rows, not recomputed, so the column adds up to its own total.
+    def col(key: str) -> int:
+        return sum(s[key] for s in stages)
+
+    return {
+        "pipeline_id": p.id,
+        "pipeline_name": p.name,
+        "conversion_rate": rate,
+        "status": roll["status"],
+        "stages": stages,
+        "totals": {
+            "count": roll["total"],
+            "value_cents": roll["total_value_cents"],
+            "open_count": col("open_count"),
+            "open_value_cents": col("open_value_cents"),
+            "won_count": col("won_count"),
+            "won_value_cents": roll["won_value_cents"],
+            "weighted_value_cents": col("weighted_value_cents"),
+            "projected_value_cents": col("projected_value_cents"),
+        },
+    }
 
 
 @app.get("/api/appointments")

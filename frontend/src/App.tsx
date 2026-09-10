@@ -117,7 +117,11 @@ export default function App() {
       ) : active === 'conversations' ? (
         <ConversationsPage user={user} focus={focusFor('conversations')} />
       ) : active === 'opportunities' ? (
-        <OpportunitiesPage user={user} focus={focusFor('opportunities')} />
+        <OpportunitiesPage
+          user={user}
+          focus={focusFor('opportunities')}
+          onNavigate={setActive}
+        />
       ) : active === 'calendars' ? (
         <CalendarsPage user={user} />
       ) : active === 'dashboard' ? (

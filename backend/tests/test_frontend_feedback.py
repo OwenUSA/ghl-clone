@@ -791,3 +791,304 @@ def test_dragging_a_booking_on_the_grid_was_not_built():
     for dnd in ("draggable", "onDragStart", "onDragEnd", "onDrop", "useDraggable"):
         assert dnd not in page, (
             "%r appeared on the calendar grid; drag-to-move is out of scope" % dnd)
+
+# ---------------- Opportunities > Forecast ----------------
+
+def test_the_forecast_tab_is_a_tab_and_not_a_label():
+    """The four tab names were four `<div>`s with no handler at all.
+
+    `i === 0` painted the first one blue forever, so the header said "you are on
+    Opportunities" whatever the screen was showing.
+    """
+    source = _read("pages", "OpportunitiesPage.tsx")
+    assert "i === 0 ? 'rgb(56,160,219)'" not in source, (
+        "the active tab is still hardcoded to the first one")
+    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
+    assert "setTab(t)" in header, "clicking a tab does nothing"
+    assert "tab === t" in header, "the header cannot show which tab is open"
+    assert "<ForecastPanel" in source, "the Forecast tab renders nothing"
+
+
+def test_every_tab_goes_somewhere():
+    """All four labels were inert. Each one now renders a panel, and a tab that
+    switched to a blank pane would be worse than the dimmed label it replaced."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    for tab, panel in (("Forecast", "<ForecastPanel"),
+                       ("Pipelines", "<PipelinesPanel"),
+                       ("Bulk Actions", "<BulkActionsBar")):
+        assert "tab === '%s'" % tab in source or "selecting" in source, tab
+        assert panel in source, "the %s tab renders nothing" % tab
+    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
+    assert "disabled={!live}" in header, "a tab a role cannot open still looks live"
+
+
+def test_the_forecast_tab_is_hidden_from_a_role_that_cannot_read_it():
+    """`GET /api/forecast` is STAFF, exactly like `/api/dashboard`. A TECH must not
+    be able to open the tab and land on a refusal."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    assert "const canForecast = user.role !== 'TECH'" in source, (
+        "the page never asks whether this role can read a forecast")
+    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
+    assert "!canForecast" in header, "the Forecast tab ignores the role"
+    assert "Your role cannot view the forecast" in header, (
+        "nothing tells the user why the tab is dead")
+
+
+def test_the_forecast_reports_a_failed_query_instead_of_drawing_zeros():
+    """A forecast of $0.00 and an unreachable API look identical on screen."""
+    source = _read("components", "ForecastPanel.tsx")
+    assert 'role="alert"' in source, "the panel has no error surface"
+    assert "forecast.error" in source, (
+        "a refused or failed forecast renders as a table of zeros")
+
+
+def test_the_forecast_quotes_the_server_rather_than_recomputing():
+    """The whole point of /api/forecast is that the Dashboard and this screen
+    cannot disagree. Deriving a rate or a weighting in the browser would put that
+    back — so the panel may format numbers and must not compute them."""
+    source = _read("components", "ForecastPanel.tsx")
+    body = source.split("export function ForecastPanel", 1)[1]
+    for banned in ("conversion_rate *", "/ 100 *", "* conversion", "reduce("):
+        assert banned not in body, (
+            "the panel computes %r itself instead of using the server's figure"
+            % banned)
+    assert "weighted_value_cents" in body and "projected_value_cents" in body, (
+        "the panel does not render the server's projection at all")
+
+
+def test_the_forecast_says_what_the_weighting_is():
+    """A weighted number whose weighting is invisible reads as a promise."""
+    source = _read("components", "ForecastPanel.tsx")
+    assert "conversion_rate.toFixed(2)" in source, (
+        "the rate the money is weighted at is never shown")
+    assert "Dashboard" in source, (
+        "nothing tells the reader this is the Dashboard's own rate")
+
+
+# ---------------- Opportunities > Bulk Actions ----------------
+
+def test_the_bulk_bar_offers_no_delete_and_says_why():
+    """The absence is the decision. A control that is simply missing reads as an
+    oversight and gets "fixed" later by someone who does not know why."""
+    source = _read("components", "BulkActionsBar.tsx")
+    assert "No bulk delete" in source, (
+        "nothing on the bar tells the user bulk delete is deliberate")
+    # No import of a delete helper and no handler that could reach one. The API
+    # client has no bulk delete to import, which is the other half of this.
+    assert "deleteOpportunity" not in source and "bulkDelete" not in source, (
+        "the bar wires up a delete after all")
+    assert "bulkDelete" not in _read("lib", "api.ts")
+
+
+def test_bulk_assign_is_disabled_for_a_role_that_cannot_edit():
+    """`POST /api/opportunities/bulk/owner` is STAFF; the stage move is not.
+    A TECH may move deals and may not re-assign them."""
+    source = _read("components", "BulkActionsBar.tsx")
+    assert "const canAssign = user.role !== 'TECH'" in source
+    assign = source.split("assign.isPending ? 'Assigning", 1)[0].rsplit("<button", 1)[1]
+    assert "!canAssign" in assign, "Assign owner is offered to a role that cannot"
+    assert "Your role cannot change an opportunity owner" in assign, (
+        "nothing tells the user why the button is dead")
+    move = source.split("move.isPending ? 'Moving", 1)[0].rsplit("<button", 1)[1]
+    assert "canAssign" not in move, (
+        "the stage move borrowed the owner gate; a TECH can drag a card, so a "
+        "TECH can move a selection")
+
+
+def test_a_bulk_action_reports_what_it_actually_did():
+    """"3 moved" when one of the four was already there is how a bulk action loses
+    trust. The response distinguishes moved from unchanged; the bar has to say so,
+    including how many customers were texted."""
+    source = _read("components", "BulkActionsBar.tsx")
+    assert "r.unchanged.length" in source and "already there" in source
+    assert "notified" in source, "nothing says how many customers were messaged"
+    assert "role={error ? 'alert' : 'status'}" in source, (
+        "a refused bulk action has no error surface")
+    assert "onError: (e: Error) => setError(e.message)" in source, (
+        "a refused bulk action is dropped on the floor")
+
+
+def test_the_export_writes_the_selection_and_not_the_board():
+    """`chosen` is the selection narrowed to what the board is currently showing;
+    exporting anything else would silently include rows the user cannot see."""
+    page = _read("pages", "OpportunitiesPage.tsx")
+    assert "const chosen = visible.filter((o) => selected.has(o.id))" in page, (
+        "the selection is not narrowed to the visible rows")
+    bar = _read("components", "BulkActionsBar.tsx")
+    assert "opportunitiesCsv(chosen" in bar, "the export does not write the selection"
+
+
+def test_selection_mode_does_not_open_the_detail_dialog():
+    """A click that both ticks a card and opens its dialog is unusable."""
+    page = _read("pages", "OpportunitiesPage.tsx")
+    # Written as a branch rather than a ternary since board-reorder's sortable
+    # Card and this one were merged, so match the two arms rather than one line.
+    handler = page.split("function Card({", 1)[1].split("<CardFace", 1)[0]
+    assert "if (selectable && onToggle) onToggle(o.id)" in handler, (
+        "a card in selection mode still opens the opportunity")
+    assert "else onOpen(o.id)" in handler, (
+        "a card that is not selecting no longer opens the opportunity")
+    assert handler.index("if (selectable && onToggle)") < handler.index("else onOpen(o.id)"), (
+        "opening wins over selecting, so a tick also opens the dialog")
+    assert "selecting ? toggle(o.id) : setOpenOpp(o.id)" in page, (
+        "a list row in selection mode still opens the opportunity")
+    assert "e.stopPropagation(); onToggle?.(o.id)" in page, (
+        "the checkbox and the card both fire, so the tick lands back where it was")
+
+
+# ---------------- Opportunities: the ⋯ menu and the saved-list row ----------------
+
+def test_the_overflow_items_that_work_are_no_longer_dimmed():
+    """All four were `<div>`s with `cursor: not-allowed` and one shared tooltip.
+    Three of them now do something, and the fourth still does not — which has to
+    be visible, or "not implemented" becomes indistinguishable from "broken"."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    menu = source.split("{OVERFLOW.map(", 1)[1].split("</div>", 1)[0]
+    assert "overflowAction(t)" in menu, "the menu items are still inert labels"
+    assert "disabled={!item.run}" in menu, "a dead item still looks clickable"
+    assert "item.run ? 'pointer' : 'not-allowed'" in menu
+
+    actions = source.split("const overflowAction =", 1)[1].split("\n  }\n", 1)[0]
+    for live in ("Export", "Manage smart lists", "Dashboard insights"):
+        assert "'%s'" % live in actions, "%s does nothing" % live
+
+
+def test_restore_opportunities_stays_dead_and_says_exactly_why():
+    """It implies a trash. This codebase has no soft delete, and inventing one as
+    a side quest is how a schema grows a `deleted_at` half the queries forget."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    actions = source.split("const overflowAction =", 1)[1].split("\n  }\n", 1)[0]
+    assert "soft-deleted" in actions, (
+        "nothing explains why Restore opportunities cannot work")
+    assert "'Restore opportunities'" not in actions.split("return {\n      title:")[0], (
+        "Restore opportunities was given a handler after all")
+    # ...and no soft-delete column was invented to make it work.
+    models = (Path(__file__).resolve().parents[1] / "app" / "models.py").read_text(
+        encoding="utf-8")
+    assert "deleted_at" not in models and "is_deleted" not in models
+
+
+def test_export_writes_the_filtered_set_and_not_the_whole_pipeline():
+    """The ⋯ Export means "what the board is showing", which is the point of it
+    sitting next to the filters."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    fn = source.split("const exportFiltered =", 1)[1].split("\n  }", 1)[0]
+    assert "opportunitiesCsv(visible" in fn, (
+        "Export writes something other than the rows the board is showing")
+
+
+def test_dashboard_insights_goes_to_the_dashboard():
+    source = _read("pages", "OpportunitiesPage.tsx")
+    assert "onNavigate('dashboard')" in source, (
+        "Dashboard insights does not open the Dashboard")
+    app_tsx = _read("App.tsx")
+    # The element carries several props since global-search added `focus`, so
+    # read the element and look inside it rather than matching one whole line.
+    element = app_tsx.split("<OpportunitiesPage", 1)[1].split("/>", 1)[0]
+    assert "onNavigate={setActive}" in element, (
+        "the page is given no way to navigate, so the menu item cannot work")
+
+
+def test_saving_a_list_is_disabled_for_a_role_that_cannot_write_one():
+    """`POST /api/saved-views` is STAFF and a list is shared with everyone."""
+    source = _read("components", "SavedViews.tsx")
+    assert "const canSave = user.role !== 'TECH'" in source
+    add = source.split("<span style={CHIP_TEXT}>List</span>", 1)[0].rsplit("<button", 1)[1]
+    assert "disabled={!canSave}" in add and "Your role cannot save a shared list" in add
+
+
+def test_deleting_a_list_is_admin_only_and_asks_first():
+    """`DELETE /api/saved-views/{id}` is ADMIN. A shared list belongs to everyone,
+    so removing one is not a click that should land on the first press."""
+    source = _read("components", "SavedViews.tsx")
+    assert "const canDelete = user.role === 'ADMIN'" in source
+    assert "Only an admin can delete a shared list" in source
+    assert "Really delete" in source, "the delete lands on a single click"
+    assert "setConfirming(v.id)" in source
+
+
+def test_the_built_in_open_opportunities_list_is_not_deletable():
+    """It is the board's own default state, drawn as a chip, so it cannot be
+    renamed or removed and there is no seeded row to keep in step."""
+    source = _read("components", "SavedViews.tsx")
+    row = source.split("export function SavedViewsRow", 1)[1].split(
+        "views.data?.map", 1)[0]
+    assert "Open opportunities" in row
+    assert "deleteSavedView" not in row, "the built-in default offers a delete"
+
+
+# ---------------- Opportunities > Pipelines ----------------
+
+def test_managing_pipelines_is_disabled_rather_than_403_on_submit():
+    """Every endpoint behind this panel is auth.ADMIN. The precedent set by
+    d1f7c50 and b943f4b is a dead control with a title, never a form that refuses
+    at the end."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "const canManage = user.role === 'ADMIN'" in source
+    assert "Only an admin can manage pipelines and stages" in source
+    # Every write control consults it: add pipeline, add stage, rename, reorder,
+    # and both deletes.
+    assert source.count("!canManage") >= 6, (
+        "a control on this panel does not ask whether the role may use it")
+
+
+def test_the_pipelines_tab_stays_open_to_everyone_who_works_the_board():
+    """The panel disables what a non-admin cannot do; hiding the structure from
+    the people who work it every day would be worse."""
+    page = _read("pages", "OpportunitiesPage.tsx")
+    assert "tab === 'Pipelines' && <PipelinesPanel user={user} />" in page
+    live = page.split("const live =", 1)[1].splitlines()[0]
+    assert "Pipelines" not in live, "the Pipelines tab was gated on a role"
+
+
+def test_deleting_a_populated_stage_is_not_offered_and_says_what_is_in_the_way():
+    """The server answers 409 either way; this is so the admin knows before
+    clicking, and knows what to move."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "const removable = s.count === 0" in source, (
+        "the Delete control ignores whether the stage holds anything")
+    assert "holds ${s.count} opportunit" in source, (
+        "the blocked title does not say how many are in the way")
+    assert "Move ${" in source, "the message does not say what to do about it"
+
+
+def test_deleting_a_pipeline_needs_it_to_be_completely_empty():
+    """`Pipeline.stages` cascades delete-orphan, so this guard stands between a
+    mis-click and every deal on the board."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "p.stages.length === 0 && deals === 0" in source, (
+        "a pipeline with stages can still be deleted from the browser")
+    assert "Empty it first" in source
+
+
+def test_a_structural_delete_always_asks_twice():
+    source = _read("components", "PipelinesPanel.tsx")
+    assert source.count("Really delete") == 2, (
+        "a stage or a pipeline is deleted on a single click")
+    assert "setConfirming('stage:'" in source and "setConfirming('pipeline:'" in source
+
+
+def test_reordering_sends_the_whole_order_and_never_a_deal():
+    """The endpoint takes a permutation, so a board that changed underneath is
+    refused rather than half-applied. Nothing here touches an opportunity."""
+    source = _read("components", "PipelinesPanel.tsx")
+    swap = source.split("const swap =", 1)[1].split("\n  }", 1)[0]
+    assert "stages.map((s) => s.id)" in swap, (
+        "the reorder sends something other than the full stage list")
+    assert "reorder.mutate(ids)" in swap
+    assert "moveOpportunity" not in source and "stage_id" not in source, (
+        "the pipelines panel touches an opportunity's stage")
+
+
+def test_the_panel_says_names_may_repeat_rather_than_tidying_them_up():
+    """Two distinct stages called "Call Back" are the measured shape, and the
+    `ghl` CLI exits 5 rather than guess between them."""
+    source = _read("components", "PipelinesPanel.tsx")
+    assert "Two stages may share a name" in source
+    assert "Call Back" in source, "nothing records why duplicate names are kept"
+
+
+def test_the_panel_reports_a_refusal_instead_of_swallowing_it():
+    source = _read("components", "PipelinesPanel.tsx")
+    assert 'role="alert"' in source, "a refused structural change has no surface"
+    assert "const failed = (e: Error) => setError(e.message)" in source

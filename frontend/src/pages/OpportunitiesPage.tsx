@@ -12,6 +12,10 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { IconDownload, IconGrid, IconList, IconPlus } from '../components/Icon'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BulkActionsBar } from '../components/BulkActionsBar'
+import { ForecastPanel } from '../components/ForecastPanel'
+import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
+import { PipelinesPanel } from '../components/PipelinesPanel'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useRef, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
@@ -35,6 +39,8 @@ import {
   type Opportunity,
   type Pipeline,
 } from '../lib/api'
+import { csvFilename, opportunitiesCsv } from '../lib/csv'
+import { downloadCsv } from '../lib/download'
 import type { Me } from '../lib/auth'
 import type { Focus } from '../lib/focus'
 
@@ -56,18 +62,56 @@ import type { Focus } from '../lib/focus'
  */
 const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']
 const OVERFLOW = ['Export', 'Restore opportunities', 'Manage smart lists', 'Dashboard insights']
+
+/**
+ * All four tabs go somewhere now. The one thing a tab can still be dead for is a
+ * ROLE: `/api/forecast` is STAFF, so a TECH gets it dimmed with a title rather
+ * than a blank pane or a 403 — the disabled-rather-than-omitted rule used for
+ * Import above and for the Reporting tabs v1 does not implement.
+ *
+ * Pipelines deliberately stays LIVE for every role: the panel itself disables the
+ * controls a non-admin cannot use, which is more useful than hiding the structure
+ * from the people who work it every day.
+ */
 const LAYOUTS = ['Default', 'Compact', 'Unlabeled'] as const
 type Layout = (typeof LAYOUTS)[number]
 
-/** The card's own markup, with no drag wiring — also what the drag preview draws. */
-function CardFace({ o, layout }: { o: Opportunity; layout: Layout }) {
+/**
+ * The card's own markup, with no drag wiring — also what the drag preview draws.
+ *
+ * The selection controls live here rather than on the drag wrapper so the Bulk
+ * Actions checkbox is part of the face, and the DragOverlay — which renders a
+ * face with no selection props — carries a plain card rather than a checkbox.
+ */
+function CardFace({ o, layout, selectable = false, selected = false, onToggle }: {
+  o: Opportunity
+  layout: Layout
+  /** Bulk Actions tab: the card picks rather than opens. */
+  selectable?: boolean
+  selected?: boolean
+  onToggle?: (id: number) => void
+}) {
   return (
     <>
-      <div
-        className="truncate"
-        style={{ fontSize: 14, fontWeight: 500, color: 'rgb(52,64,84)' }}
-      >
-        {o.title}
+      <div className="flex items-start gap-2">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            aria-label={'Select ' + o.title}
+            // The card's own onClick already toggles; without this the change and
+            // the click both fire and the selection lands back where it started.
+            onChange={() => {}}
+            onClick={(e) => { e.stopPropagation(); onToggle?.(o.id) }}
+            style={{ marginTop: 2 }}
+          />
+        )}
+        <div
+          className="min-w-0 flex-1 truncate"
+          style={{ fontSize: 14, fontWeight: 500, color: 'rgb(52,64,84)' }}
+        >
+          {o.title}
+        </div>
       </div>
       {/* Measured: "Value:" and the amount are TWO spans —
           label 12px/600 rgb(96,113,121), amount 12px/400 rgb(96,113,121).
@@ -120,13 +164,17 @@ const CARD_SURFACE = {
  * answer "a card was dropped on me somewhere" and a reorder has no index.
  */
 function Card({
-  o, layout, onOpen, dragging,
+  o, layout, onOpen, dragging, selectable = false, selected = false, onToggle,
 }: {
   o: Opportunity
   layout: Layout
   onOpen: (id: number) => void
   /** True from the start of a drag until the next press — see the page. */
   dragging: React.RefObject<boolean>
+  /** Bulk Actions tab: the card picks rather than opens. */
+  selectable?: boolean
+  selected?: boolean
+  onToggle?: (id: number) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: cardDragId(o.id) })
@@ -142,7 +190,13 @@ function Card({
       // after the drop, and there is no delay that is reliably longer than the
       // browser's own gap and reliably shorter than a deliberate second click.
       onPointerDownCapture={() => { dragging.current = false }}
-      onClick={() => { if (!dragging.current) onOpen(o.id) }}
+      // Selecting takes precedence over opening, exactly as it does on the
+      // checkbox: in Bulk Actions the whole card is the picker.
+      onClick={() => {
+        if (dragging.current) return
+        if (selectable && onToggle) onToggle(o.id)
+        else onOpen(o.id)
+      }}
       style={{
         ...CARD_SURFACE,
         marginBottom: 8,
@@ -159,9 +213,16 @@ function Card({
           ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
           : undefined,
         transition,
+        outline: selected ? '2px solid rgb(0,78,235)' : undefined,
       }}
     >
-      <CardFace o={o} layout={layout} />
+      <CardFace
+        o={o}
+        layout={layout}
+        selectable={selectable}
+        selected={selected}
+        onToggle={onToggle}
+      />
     </div>
   )
 }
@@ -172,12 +233,18 @@ function StageColumn({
   layout,
   onOpen,
   dragging,
+  selectable = false,
+  selected,
+  onToggle,
 }: {
   stage: { id: number; name: string; count: number; value_cents: number }
   opps: Opportunity[]
   layout: Layout
   onOpen: (id: number) => void
   dragging: React.RefObject<boolean>
+  selectable?: boolean
+  selected?: Set<number>
+  onToggle?: (id: number) => void
 }) {
   // The column is still a droppable in its own right, for the empty space below
   // the last card — and for a column with no cards at all, which has nothing
@@ -238,7 +305,9 @@ function StageColumn({
           }}
         >
           {opps.map((o) => (
-            <Card key={o.id} o={o} layout={layout} onOpen={onOpen} dragging={dragging} />
+            <Card key={o.id} o={o} layout={layout} onOpen={onOpen} dragging={dragging}
+              selectable={selectable} selected={selected?.has(o.id) ?? false}
+              onToggle={onToggle} />
           ))}
         </div>
       </SortableContext>
@@ -246,12 +315,23 @@ function StageColumn({
   )
 }
 
-export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | null }) {
+export function OpportunitiesPage({ user, focus, onNavigate }: {
+  user: Me
+  /** A record the ctrl+K palette asked for. */
+  focus?: Focus | null
+  /** The shell's view switcher. The ⋯ menu's "Dashboard insights" uses it. */
+  onNavigate: (view: string) => void
+}) {
   const qc = useQueryClient()
   // `POST /api/opportunities` is auth.STAFF, so a TECH's create is refused.
   // Mirror that here rather than let them fill in the form to find out on submit
   // (same precedent as Add Contact).
   const canCreate = user.role !== 'TECH'
+  // `GET /api/forecast` is auth.STAFF, matching /api/dashboard whose aggregates it
+  // repeats. Dim the tab rather than let a TECH open it onto a refusal.
+  const canForecast = user.role !== 'TECH'
+  const [tab, setTab] = useState('Opportunities')
+  const [selected, setSelected] = useState<Set<number>>(new Set())
   const [showAdd, setShowAdd] = useState(false)
   const [view, setView] = useState<'board' | 'list'>('board')
   const [layout, setLayout] = useState<Layout>('Default')
@@ -263,6 +343,7 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
   // remembered -- without this, Cancel and Apply were the same button twice.
   const [layoutOnOpen, setLayoutOnOpen] = useState<Layout>('Default')
   const [showOverflow, setShowOverflow] = useState(false)
+  const [showLists, setShowLists] = useState(false)
   const [openOpp, setOpenOpp] = useState<number | null>(null)
 
   // The ctrl+K palette asked for one record. Opening it here, rather than
@@ -366,6 +447,60 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
 
   const total = opps.data?.length ?? 0
 
+  // ---- Bulk Actions ----
+  // The tab IS the selection mode: the board stays exactly as it is and the cards
+  // start picking instead of opening.
+  const selecting = tab === 'Bulk Actions'
+  const visible = opps.data ?? []
+  // A selection is only ever applied to rows the board is currently showing.
+  // Otherwise changing the status filter, the search or the pipeline would leave
+  // ids selected that nobody can see, and "Move to stage" would move them. This
+  // is also what makes the CSV contain exactly the rows that are ticked.
+  const chosen = visible.filter((o) => selected.has(o.id))
+  const toggle = (id: number) =>
+    setSelected((s) => {
+      const next = new Set(s)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+
+  /** CSV of the board's CURRENT FILTERED SET — what the ⋯ menu's Export means. */
+  const exportFiltered = () => {
+    const names = new Map((pipeline?.stages ?? []).map((s) => [s.id, s.name]))
+    downloadCsv(
+      csvFilename(pipeline?.name ?? 'opportunities', new Date()),
+      opportunitiesCsv(visible, (id) => names.get(id) ?? ''),
+    )
+  }
+
+  /**
+   * What each ⋯ item does, or why it does nothing.
+   *
+   * "Restore opportunities" is the one that stays dead, and deliberately: it
+   * implies a trash, and this codebase HAS NO SOFT DELETE. Inventing one as a
+   * side quest is how a schema grows a `deleted_at` that half the queries forget
+   * to filter on. See DECISIONS.md for what building it would actually take.
+   */
+  const overflowAction = (item: string): { run?: () => void; title: string } => {
+    if (item === 'Export') {
+      return {
+        run: exportFiltered,
+        title: `Download the ${visible.length} opportunit${
+          visible.length === 1 ? 'y' : 'ies'} the board is showing as CSV`,
+      }
+    }
+    if (item === 'Manage smart lists') {
+      return { run: () => setShowLists(true), title: 'Rename or delete a saved list' }
+    }
+    if (item === 'Dashboard insights') {
+      return { run: () => onNavigate('dashboard'), title: 'Open the Dashboard' }
+    }
+    return {
+      title: 'Restoring needs a trash to restore from, and nothing in this app is '
+        + 'soft-deleted — a delete is a delete. See DECISIONS.md.',
+    }
+  }
+
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
       <div
@@ -375,18 +510,27 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
         <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)' }}>
           Opportunities
         </div>
-        {TABS.map((t, i) => (
-          <div
-            key={t}
-            style={{
-              fontSize: 14,
-              fontWeight: 500,
-              color: i === 0 ? 'rgb(56,160,219)' : 'rgb(102,112,133)',
-            }}
-          >
-            {t}
-          </div>
-        ))}
+        {TABS.map((t) => {
+          const live = !(t === 'Forecast' && !canForecast)
+          return (
+            <button
+              key={t}
+              onClick={() => live && setTab(t)}
+              disabled={!live}
+              title={live ? undefined : 'Your role cannot view the forecast'}
+              style={{
+                fontSize: 14,
+                fontWeight: 500,
+                color: tab === t
+                  ? 'rgb(56,160,219)'
+                  : live ? 'rgb(102,112,133)' : 'rgb(152,162,179)',
+                cursor: live ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {t}
+            </button>
+          )
+        })}
       </div>
 
       {/* pipeline row */}
@@ -483,20 +627,27 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
                     padding: 4,
                   }}
                 >
-                  {OVERFLOW.map((t) => (
-                    <div
-                      key={t}
-                      title="Present in GHL; not implemented in v1"
-                      style={{
-                        padding: '8px 12px',
-                        fontSize: 14,
-                        color: 'rgb(152,162,179)',
-                        cursor: 'not-allowed',
-                      }}
-                    >
-                      {t}
-                    </div>
-                  ))}
+                  {OVERFLOW.map((t) => {
+                    const item = overflowAction(t)
+                    return (
+                      <button
+                        key={t}
+                        role="menuitem"
+                        className="block w-full text-left"
+                        disabled={!item.run}
+                        title={item.title}
+                        onClick={() => { setShowOverflow(false); item.run?.() }}
+                        style={{
+                          padding: '8px 12px',
+                          fontSize: 14,
+                          color: item.run ? 'rgb(52,64,84)' : 'rgb(152,162,179)',
+                          cursor: item.run ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        {t}
+                      </button>
+                    )
+                  })}
                 </div>
               </>
             )}
@@ -535,21 +686,31 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
         </div>
       </div>
 
+      {/* The Forecast tab replaces the filters and the board; the pipeline row
+          above stays, because a forecast is still per-pipeline. */}
+      {tab === 'Forecast' && <ForecastPanel pipeline={pipeline} />}
+
+      {/* Managing the structure is not filtering the board, so the pipeline row
+          above stays and everything below it is replaced. */}
+      {tab === 'Pipelines' && <PipelinesPanel user={user} />}
+
+      {/* Bulk Actions keeps the board and the filters; only the bar is added, so
+          the selection is made against the set the user is already looking at. */}
+      {(tab === 'Opportunities' || selecting) && (
+      <>
       {/* saved views — measured 14px/400 rgb(102,112,133) with 16x16 icons */}
-      <div className="flex shrink-0 items-center gap-6 px-4" style={{ height: 42 }}>
-        <div className="flex items-center gap-2">
-          <IconList size={16} color="rgb(102,112,133)" />
-          <span style={{ fontSize: 14, fontWeight: 400, color: 'rgb(102,112,133)' }}>
-            Open opportunities
-          </span>
-        </div>
-        <div className="flex items-center gap-2" title="Saved views are not implemented in v1">
-          <IconPlus size={16} color="rgb(102,112,133)" />
-          <span style={{ fontSize: 14, fontWeight: 400, color: 'rgb(102,112,133)' }}>
-            List
-          </span>
-        </div>
-      </div>
+      <SavedViewsRow
+        user={user}
+        now={{ pipelineId: pipeline?.id, status, q }}
+        onApply={(f) => {
+          // A saved view that named a pipeline puts the board back on it; one
+          // that did not leaves the pipeline alone and only re-filters.
+          if (f.pipelineId != null) setPipelineId(f.pipelineId)
+          setStatus(f.status)
+          setQ(f.q)
+        }}
+        onManage={() => setShowLists(true)}
+      />
 
       {/* toolbar */}
       <div className="flex shrink-0 items-center gap-2 px-4 pb-3">
@@ -623,6 +784,17 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
         </div>
       )}
 
+      {selecting && (
+        <BulkActionsBar
+          user={user}
+          pipeline={pipeline}
+          chosen={chosen}
+          visibleCount={visible.length}
+          onSelectAll={() => setSelected(new Set(visible.map((o) => o.id)))}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
       {/* board / list */}
       {view === 'board' ? (
         <DndContext
@@ -645,6 +817,9 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
                   layout={layout}
                   onOpen={setOpenOpp}
                   dragging={dragging}
+                  selectable={selecting}
+                  selected={selected}
+                  onToggle={toggle}
                 />
               ))}
             </div>
@@ -672,6 +847,22 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
           <table className="w-full">
             <thead>
               <tr>
+                {selecting && (
+                  <th className="sticky top-0 bg-white"
+                    style={{
+                      width: 36, borderBottom: '1px solid rgb(234,236,240)',
+                    }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select every visible opportunity"
+                      checked={visible.length > 0 && chosen.length === visible.length}
+                      onChange={(e) =>
+                        setSelected(e.target.checked
+                          ? new Set(visible.map((o) => o.id))
+                          : new Set())}
+                    />
+                  </th>
+                )}
                 {['Opportunity name', 'Stage', 'Value', 'Business name', 'Source'].map((h) => (
                   <th
                     key={h}
@@ -692,7 +883,20 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
             </thead>
             <tbody>
               {opps.data?.map((o) => (
-                <tr key={o.id} onClick={() => setOpenOpp(o.id)} className="cursor-pointer hover:bg-[rgb(249,250,251)]">
+                <tr key={o.id}
+                  onClick={() => (selecting ? toggle(o.id) : setOpenOpp(o.id))}
+                  className="cursor-pointer hover:bg-[rgb(249,250,251)]">
+                  {selecting && (
+                    <td style={{ borderBottom: '1px solid rgb(242,244,247)', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        aria-label={'Select ' + o.title}
+                        checked={selected.has(o.id)}
+                        onChange={() => {}}
+                        onClick={(e) => { e.stopPropagation(); toggle(o.id) }}
+                      />
+                    </td>
+                  )}
                   <td style={{ height: 48, padding: '0 12px', fontSize: 14, borderBottom: '1px solid rgb(242,244,247)' }}>
                     {o.title}
                   </td>
@@ -714,6 +918,8 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
           </table>
         </div>
       )}
+      </>
+      )}
 
       {showAdd && pipeline && (
         <AddOpportunityDialog
@@ -732,6 +938,10 @@ export function OpportunitiesPage({ user, focus }: { user: Me; focus?: Focus | n
             qc.invalidateQueries({ queryKey: ['pipelines'] })
           }}
         />
+      )}
+
+      {showLists && (
+        <ManageSavedViews user={user} onClose={() => setShowLists(false)} />
       )}
 
       {openOpp != null && (

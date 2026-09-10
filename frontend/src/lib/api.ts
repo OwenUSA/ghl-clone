@@ -643,3 +643,155 @@ export function getAppointmentReport(p: {
  */
 export const globalSearch = (q: string, limit = 5) =>
   get<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`)
+
+export type ForecastStage = {
+  stage_id: number
+  name: string
+  position: number
+  count: number
+  value_cents: number
+  open_count: number
+  open_value_cents: number
+  won_count: number
+  won_value_cents: number
+  weighted_value_cents: number
+  projected_value_cents: number
+}
+
+export type Forecast = {
+  pipeline_id: number
+  pipeline_name: string
+  conversion_rate: number
+  status: Record<string, number>
+  stages: ForecastStage[]
+  totals: {
+    count: number
+    value_cents: number
+    open_count: number
+    open_value_cents: number
+    won_count: number
+    won_value_cents: number
+    weighted_value_cents: number
+    projected_value_cents: number
+  }
+}
+
+/**
+ * Projected revenue by stage. STAFF-only, exactly like `/api/dashboard`, whose
+ * conversion rate and totals it repeats rather than recomputing -- so the callers
+ * gate on the role first instead of opening the tab onto a 403.
+ */
+export const getForecast = (pipelineId: number) =>
+  get<Forecast>(`/api/forecast?pipeline_id=${pipelineId}`)
+
+export type BulkStageMoved = {
+  stage_id: number
+  moved: number[]
+  unchanged: number[]
+  /** Per opportunity that actually changed stage: what rule 4 did about it. */
+  automation: Record<string, string>
+}
+
+/**
+ * Move a selection into one stage. ANY_USER, exactly like a single drag -- a TECH
+ * may move a deal between stages, they just cannot edit it.
+ *
+ * There is deliberately no bulk delete to pair with these: see the comment above
+ * the endpoints in backend/app/main.py.
+ */
+export const bulkMoveStage = (ids: number[], stageId: number) =>
+  send<BulkStageMoved>('/api/opportunities/bulk/stage', 'POST', {
+    ids,
+    stage_id: stageId,
+  })
+
+export type BulkOwnerAssigned = { owner_id: number | null; updated: number[] }
+
+/** Assign a selection an owner, or `null` to unassign. STAFF, like the detail PATCH. */
+export const bulkAssignOwner = (ids: number[], ownerId: number | null) =>
+  send<BulkOwnerAssigned>('/api/opportunities/bulk/owner', 'POST', {
+    ids,
+    owner_id: ownerId,
+  })
+
+/**
+ * A named filter set for the Opportunities board -- GHL calls these smart lists.
+ *
+ * `pipeline_id` is nullable on purpose: a view that only says "Won, matching
+ * 'skylight'" applies to whichever pipeline is open, while one that names a
+ * pipeline switches the board to it.
+ *
+ * The board's built-in "Open opportunities" is NOT one of these. It is the
+ * board's default state, so there is no row to delete and nothing to seed.
+ */
+export type SavedView = {
+  id: number
+  name: string
+  pipeline_id: number | null
+  pipeline_name: string | null
+  status: string
+  q: string
+  position: number
+  created_by_id: number | null
+}
+
+export const listSavedViews = () => get<SavedView[]>('/api/saved-views')
+
+export const createSavedView = (body: {
+  name: string
+  pipeline_id?: number | null
+  status?: string
+  q?: string
+}) => send<SavedView>('/api/saved-views', 'POST', body)
+
+export const patchSavedView = (id: number, body: Partial<SavedView>) =>
+  send<SavedView>(`/api/saved-views/${id}`, 'PATCH', body)
+
+/** ADMIN, per this app's standing rule: everyone reads, staff write, admin deletes. */
+export const deleteSavedView = (id: number) =>
+  send<{ deleted: number }>(`/api/saved-views/${id}`, 'DELETE')
+
+/**
+ * Pipeline structure. ALL ADMIN.
+ *
+ * There were no write endpoints for pipelines or stages before 2026-09-10; the
+ * structure came from the seed. Two rules do the safety work, and both live on the
+ * server -- see the section comment in backend/app/main.py:
+ *
+ *   * only an EMPTY stage or pipeline can be deleted, with no `force` anywhere;
+ *   * reordering writes stage positions only, and never an opportunity's stage.
+ *
+ * Names are deliberately not unique: the measured pipeline has two distinct
+ * stages both called "Call Back", and the `ghl` CLI exits 5 rather than guess.
+ */
+export const createPipeline = (name: string) =>
+  send<{ id: number; name: string; position: number; stages: [] }>(
+    '/api/pipelines', 'POST', { name })
+
+export const renamePipeline = (id: number, name: string) =>
+  send<{ id: number; name: string }>(`/api/pipelines/${id}`, 'PATCH', { name })
+
+export type PipelineDeleted = {
+  deleted: number
+  detached_saved_views: number[]
+  detached_calendars: number[]
+}
+
+export const deletePipeline = (id: number) =>
+  send<PipelineDeleted>(`/api/pipelines/${id}`, 'DELETE')
+
+export const createStage = (pipelineId: number, name: string) =>
+  send<Stage & { pipeline_id: number }>(
+    `/api/pipelines/${pipelineId}/stages`, 'POST', { name })
+
+export const renameStage = (id: number, name: string) =>
+  send<{ id: number; pipeline_id: number; name: string; position: number }>(
+    `/api/stages/${id}`, 'PATCH', { name })
+
+export const deleteStage = (id: number) =>
+  send<{ deleted: number; pipeline_id: number }>(`/api/stages/${id}`, 'DELETE')
+
+/** The full stage list in its new order -- a permutation, never a single move. */
+export const reorderStages = (pipelineId: number, stageIds: number[]) =>
+  send<{ pipeline_id: number; stages: { id: number; name: string; position: number }[] }>(
+    `/api/pipelines/${pipelineId}/stages/reorder`, 'POST', { stage_ids: stageIds })

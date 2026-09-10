@@ -247,6 +247,11 @@ will need the user to run that export themselves, or an explicit one-time lift.
 
   Two distinct stages are both named **"Call Back"** — preserved as measured, not deduplicated.
 
+  > **Superseded as a description of OUR schema (2026-09-10).** Stages are now
+  > user-editable, so this table is a historical measurement of GHL and not a
+  > guarantee about our own stage list. See "Pipelines and stages are now
+  > USER-EDITABLE" at the end of this file.
+
   Two traps hit while fixing this, both now handled in the tooling:
   1. The collector matched a stage's header container *and* its inner line, double-counting
      to 78. Only `"<name> | <n> opportunities | $<value>"` shaped entries are real headers.
@@ -1463,3 +1468,279 @@ Made because the work needed an answer, not because they were specified:
 - **Arrow keys wrap** at both ends rather than clamping.
 - **Wording**: "Showing 5 of 12 — keep typing to narrow" under a capped group, and
   the no-results state names the transcript exclusion so the gap stays visible.
+
+## AMENDMENT (2026-09-10): the Opportunities tabs are OURS, not measured
+
+`TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']` and the `⋯`
+menu's `Export | Restore opportunities | Manage smart lists | Dashboard insights`
+were **measured as labels and nothing else**. `captures/opportunities/` holds the
+**board** — the kanban, its columns, its cards and the toolbar around it. Nobody
+ever opened any of those tabs or menu items on the live account, and the safety
+contract forbids clicking Export there, so there is no HTML, no screenshot and no
+computed style behind any of them.
+
+This section **overrides**, for these screens only, the rule that structural
+design is locked to a measured capture ("Design system — LOCKED", "Responsive
+behaviour — LOCKED"). Everything built behind those labels is **our design**. It
+may not be cited as evidence of GHL parity, and if a live session is ever opened
+again these screens should be captured and re-measured, with GHL winning on
+structure exactly as everywhere else.
+
+**The board itself is unchanged** and remains a measured surface: same 240px
+column pitch, same 230px cards, same drag handling. The tabs switch what is drawn
+*below* the pipeline row; they do not restyle the board.
+
+### Forecast — projected revenue by stage (OUR design)
+
+`GET /api/forecast?pipeline_id=` and `frontend/src/components/ForecastPanel.tsx`.
+Read-only, no new tables.
+
+The real risk here was never the layout, it was arithmetic: a forecast is the
+easiest possible way to put a **second, contradictory set of numbers** on data the
+Dashboard already publishes. So:
+
+- `_status_rollup()` in `backend/app/main.py` is now the single implementation of
+  the Dashboard's by-status arithmetic. `GET /api/dashboard` returns it verbatim
+  and the forecast quotes it, so the two cannot drift apart in a later edit.
+- The forecast's per-stage `count` and `value_cents` are the same figures
+  `GET /api/pipelines` feeds the Dashboard **funnel** with — every status, not
+  only the open ones. A forecast that counted only open deals would draw a
+  different bar for the same stage on two screens.
+- The panel formats numbers and computes none. `test_the_forecast_quotes_the_
+  server_rather_than_recomputing` pins that.
+
+**The projection rule, stated because it is a judgement call the owner can
+overrule:**
+
+    weighted  = the stage's OPEN value x the pipeline's conversion rate
+    projected = money already WON in the stage + weighted
+
+One rate for the whole pipeline, and it is the rate the Dashboard already shows
+(`won / (won + lost)`, two decimals). **Per-stage win probabilities were rejected
+deliberately**: nothing in this schema records stage history, so a won deal simply
+sits in whatever stage it was won in, and "the win rate of Inspection" would in
+fact be measuring *where deals get marked won*. That is a plausible-looking number
+nobody can check. The screen states the rate and where it comes from, rather than
+weighting invisibly.
+
+Weighting is integer arithmetic in whole cents, half up (`_weighted()`), for the
+same reason `centsFromDollars` avoids floats — `round(v * rate / 100)` both loses
+halves to banker's rounding and depends on IEEE-754. Because the published rate
+carries exactly two decimals, every figure in the response can be re-derived by
+hand from the other figures in the same response.
+
+**Role: STAFF, matching `/api/dashboard`.** The tab is dimmed for a TECH with an
+explanatory title rather than opening onto a 403 (precedent: `d1f7c50`, `b943f4b`).
+This deliberately repeats the inconsistency recorded under "Triage decisions" —
+per-stage money is already TECH-visible through `/api/pipelines` — rather than
+inventing a third rule for a third screen.
+
+**Tabs with nothing behind them stay dimmed and say so**, in a `LIVE_TABS` set,
+rather than switching to a blank pane. Same disabled-rather-than-omitted rule as
+Import, the Conversations filter types and the Reporting tabs v1 does not
+implement.
+
+### Bulk Actions — three actions, and the fourth is refused (OUR design)
+
+`POST /api/opportunities/bulk/stage`, `POST /api/opportunities/bulk/owner`, and a
+client-side CSV of the selection. The Bulk Actions **tab is the selection mode**:
+the board and its filters stay exactly as they are, the cards start picking
+instead of opening, and a bar appears above them.
+
+- **Bulk move stage — ANY_USER**, matching `PATCH /api/opportunities/{id}`. A TECH
+  may move a deal between stages (CLAUDE.md); ticking five cards must not need a
+  right that dragging one of them does not.
+- **Bulk assign owner — STAFF**, matching `PATCH /api/opportunities/{id}/detail`.
+  Changing an owner is editing the record. The control is disabled with a title
+  for a TECH rather than 403-ing on Apply.
+- **Bulk export — no request at all.** The rows are already on the client.
+
+**NO BULK DELETE.** Deliberate, and the same call already made for the Contacts
+list. `Opportunity.custom_fields.owen_call_id` is the telephony project's live
+join key; opportunities are never cascade-deleted from a contact for exactly that
+reason; and a checkbox column is the fastest way ever invented to lose real
+customer records in one click. `DELETE /api/opportunities/{id}` still exists, one
+at a time. The bar **says this out loud** rather than just omitting the button — a
+missing control reads as an oversight and gets "fixed" later by someone who does
+not know why. `test_there_is_no_bulk_delete` pins the route table so adding one
+has to be a decision somebody takes on purpose.
+
+**A bulk move is the single move, applied N times, and that is load-bearing.**
+Rule 4 (stage change → text the customer) fires once per opportunity that
+*actually changed stage*, and **not at all** for one already sitting in the
+destination — "your job is now at Inspection" arriving because a card happened to
+be inside a selection is a message the customer should never have received. The
+response separates `moved` from `unchanged` and reports the automation outcome per
+id, including suppressions (DND, no phone), and the bar repeats those numbers
+instead of claiming it moved everything it was given.
+
+**A partly valid selection is refused whole**, having written nothing: applying the
+half that resolved leaves the user unable to tell which half landed, and re-running
+it is then not safe. Duplicate ids in a selection collapse rather than applying
+twice.
+
+**Selection is narrowed to what the board is showing.** Changing the status filter,
+the search or the pipeline drops those rows out of the selection, so a bulk action
+can never touch a record the user cannot currently see — and it is what makes
+"the export contains exactly the ticked rows" true.
+
+**`frontend/src/lib/csv.ts` imports nothing**, like `calendarGrid.ts`, so
+`backend/tests/test_csv_export.py` runs the real module under node and asserts the
+file rather than the source that writes it. Money is written as a plain decimal
+(`9500.01`, not `$9,500.01`, which Excel imports as text) using integer arithmetic,
+for the same reason `centsFromDollars` avoids floats. Fields beginning `=`, `+`,
+`@` or a tab are prefixed with an apostrophe — a contact named `=cmd|...` is a
+name, not an instruction — while `-` is deliberately left alone, because a negative
+number is a legitimate value and far more common here than a leading minus sign in
+a title.
+
+### The ⋯ menu and the saved-list row (OUR design)
+
+All four ⋯ items were `<div>`s with `cursor: not-allowed` and one shared tooltip,
+and the `+ List` / "Open opportunities" row was two static labels. Three of the
+four now do something; the fourth deliberately still does not.
+
+- **Export** — CSV of **the current filtered set**, which is what an Export sitting
+  next to the filters has to mean. Client-side, from rows already on the page;
+  shares `lib/csv.ts` with the Bulk Actions export so there is one CSV writer and
+  one set of escaping rules.
+- **Manage smart lists** — opens the saved-list manager.
+- **Dashboard insights** — opens the Dashboard. `OpportunitiesPage` now takes an
+  `onNavigate` prop from the shell. There is still no router (DECISIONS.md), so
+  this is a view switch and not a URL.
+- **Restore opportunities — LEFT DISABLED, with a title saying exactly why.**
+
+**Why Restore stays dead.** It implies a trash, and **this codebase has no soft
+delete**: `DELETE /api/contacts/{id}` and `DELETE /api/opportunities/{id}` remove
+rows, and a delete is a delete. Building it is not a menu item, it is a data-model
+change — a `deleted_at` on `opportunities`, every read path in the API, the CLI and
+the board taught to exclude it (miss one and deleted deals reappear on a report),
+`DELETE` rewritten to soft-delete with a separate hard delete behind it, a
+retention rule so the table does not grow forever, and a decision about what
+happens to the telephony join key `custom_fields.owen_call_id` while a deal is in
+the bin. That is its own task with its own tests, and inventing it as a side quest
+is how a schema grows a `deleted_at` that half the queries forget to filter on.
+`test_restore_opportunities_stays_dead_and_says_exactly_why` also asserts no
+soft-delete column was quietly added to `models.py`.
+
+**Saved views (smart lists).** New table `saved_views` (migration
+`79c22cf0590c`), holding exactly the filters the board has: a pipeline, the status
+filter and the search term. Nothing speculative — a saved filter for a control
+that does not exist would be a promise the board cannot keep.
+
+- **Shared, not per-user.** Four people, one company; "the list Owen made" is the
+  useful thing. `created_by_id` records who made it and is not an ownership check.
+- **`pipeline_id` is nullable.** A view that names a pipeline switches the board to
+  it; one that does not only re-filters, so "Won deals" is useful on whichever
+  board is open.
+- **"Open opportunities" is NOT a row.** It is the board's default state, drawn as
+  a built-in chip. So there is nothing to delete, and no seeded row that can drift
+  out of step with the code.
+- **Duplicate names are allowed**, consistent with the two stages both called
+  "Call Back": this codebase resolves by id everywhere, and a uniqueness rule here
+  would be the only place that disagreed.
+- **Roles: read ANY_USER, create/rename STAFF, delete ADMIN** — the standing rule
+  in CLAUDE.md (everyone reads, staff write, admin deletes), applied to a shared
+  object where deleting one takes another person's list away. Delete also asks
+  twice. **This is a judgement call the owner can overrule**: if a dispatcher
+  tidying their own lists should not need an admin, move the DELETE to STAFF.
+- `frontend/src/lib/savedViews.ts` imports nothing, so `test_saved_views.py` runs
+  the real `applyView`/`matchesView` under node. The failure that guards against is
+  a view that resolves back to the filters already in effect — nothing on screen
+  would look wrong.
+
+### Pipelines and stages are now USER-EDITABLE (2026-09-10) — read this one
+
+**This supersedes the implicit assumption everywhere above that the pipeline
+structure is fixed.** Until today there were **no write endpoints for pipelines or
+stages at all** — no POST, no PATCH, no DELETE. The structure came from the seed
+and could only be changed by editing the database. On the owner's instruction it
+is now editable from the Opportunities > Pipelines tab:
+
+    POST   /api/pipelines                          create a pipeline
+    PATCH  /api/pipelines/{id}                     rename it
+    DELETE /api/pipelines/{id}                     only when EMPTY
+    POST   /api/pipelines/{id}/stages              add a stage (appended)
+    PATCH  /api/stages/{id}                        rename a stage
+    DELETE /api/stages/{id}                        only when EMPTY
+    POST   /api/pipelines/{id}/stages/reorder      reorder the columns
+
+**Consequence, binding: the stage list is no longer guaranteed to match the
+measured GHL capture.** The table under "Known measurement gaps" — 10 stages, the
+`Approved- Repair Schedule` typo, the two "Call Back" stages — records what GHL
+held on 2026-08-13. From today it is a **historical measurement, not a description
+of our schema**: anyone may add, rename, reorder or remove a stage, and a
+divergence between our board and that table is now expected rather than a defect.
+Nothing should assert against those stage names. (`capture/build/verify.py`
+already asserts pipelines *exist* rather than pinning a stage count — that choice
+now covers this too.)
+
+**The delete rule, which is the whole safety story:**
+
+- **A stage can only be deleted while it holds ZERO opportunities.** A populated
+  stage is refused **409**, and the message names the count so the admin knows
+  what to move. **There is no `force`, at any role, by any query parameter.**
+- **A pipeline can only be deleted while it has ZERO stages and ZERO
+  opportunities.** `Pipeline.stages` cascades delete-orphan, so a pipeline delete
+  that ran with stages present would take the columns and every deal in them.
+  Empty means empty: the columns are somebody's configuration too.
+- **Nothing here ever deletes a deal.** CLAUDE.md warns specifically never to
+  delete opportunities as a side effect of tidying something else, because
+  `custom_fields.owen_call_id` is the telephony project's live join key. A
+  cascading delete on this screen would break attribution history in a separate
+  production system.
+- A saved view or a calendar pointing at a deleted (empty) pipeline is **detached**
+  rather than blocking it — both columns are nullable and carry no data of their
+  own — and the response names what it detached, so it is not a silent side effect.
+
+**Reordering moves columns, never deals.** `POST .../stages/reorder` writes
+`Stage.position` and nothing else; no opportunity's `stage_id` is touched. It
+takes the **whole stage list as a permutation** — every stage of that pipeline
+exactly once — so a board that changed underneath the user is refused outright
+instead of half-applied, and a stage from another pipeline cannot be smuggled in.
+`test_reordering_stages_moves_no_opportunity_between_stages` compares the entire
+`opportunity -> stage` map before and after, not a sample.
+
+**Renaming does NOT make names unique, and that is deliberate.** The measured
+pipeline holds **two distinct stages both called "Call Back"**, `resolve.pick` in
+the CLI exits **5 (ambiguous)** rather than guessing between them, and this
+codebase resolves by id everywhere. Renaming one stage to match another is
+allowed, and `test_renaming_does_not_make_stage_names_unique` asserts it stays
+allowed — a uniqueness rule added here would silently retire the CLI's exit 5.
+**Making names unique is a product decision for the owner, not a cleanup**; if it
+is ever wanted, it changes the CLI's contract and needs its own note here.
+
+**`PATCH /api/stages/{id}` renames and nothing else.** There is no `pipeline_id`
+in the body on purpose: moving a stage to another pipeline would carry every deal
+in it across, which `PATCH /api/opportunities/{id}` already refuses as a
+cross-pipeline move.
+
+**Role: ADMIN for all seven endpoints.** Renaming a stage changes a label four
+people navigate by and that the `ghl` CLI resolves against; deleting one removes a
+column of the board. The Pipelines **tab stays open to every role** and the panel
+disables the controls a non-admin cannot use, each with a title saying why —
+hiding the structure from the people who work it daily would be worse, and a form
+that 403s on submit is the thing `d1f7c50` / `b943f4b` ruled out. A dispatcher can
+still move a card; the gate is on the structure, not on the deals.
+
+**Not done, on the record:** the `ghl` CLI has **no** pipeline-management commands.
+Every endpoint above is reachable with a PAT, but there is no `ghl pipelines
+create` / `stages rename` / `stages reorder`. If pipeline structure should be
+scriptable, that is a separate task.
+
+### Which of these screens are OURS, in one list
+
+Measured (do not restyle): the **Opportunities board** — column pitch, cards,
+headers, drag — and the toolbar around it.
+
+OUR design, no capture behind any of them, none may be cited as parity:
+
+| Screen | Where |
+|---|---|
+| Forecast tab | `components/ForecastPanel.tsx` |
+| Bulk Actions bar and the selection mode | `components/BulkActionsBar.tsx` |
+| Saved lists row and Manage smart lists | `components/SavedViews.tsx` |
+| Pipelines tab | `components/PipelinesPanel.tsx` |
+
+Re-measure all four if a live GHL session is ever opened again; where GHL differs,
+GHL wins on structure, exactly as everywhere else.
