@@ -500,3 +500,43 @@ export function getAppointmentReport(p: {
   if (p.calendar_ids.length) sp.set('calendar_ids', p.calendar_ids.join(','))
   return get<AppointmentReport>(`/api/reports/appointments?${sp}`)
 }
+
+export type ForecastStage = {
+  stage_id: number
+  name: string
+  position: number
+  count: number
+  value_cents: number
+  open_count: number
+  open_value_cents: number
+  won_count: number
+  won_value_cents: number
+  weighted_value_cents: number
+  projected_value_cents: number
+}
+
+export type Forecast = {
+  pipeline_id: number
+  pipeline_name: string
+  conversion_rate: number
+  status: Record<string, number>
+  stages: ForecastStage[]
+  totals: {
+    count: number
+    value_cents: number
+    open_count: number
+    open_value_cents: number
+    won_count: number
+    won_value_cents: number
+    weighted_value_cents: number
+    projected_value_cents: number
+  }
+}
+
+/**
+ * Projected revenue by stage. STAFF-only, exactly like `/api/dashboard`, whose
+ * conversion rate and totals it repeats rather than recomputing -- so the callers
+ * gate on the role first instead of opening the tab onto a 403.
+ */
+export const getForecast = (pipelineId: number) =>
+  get<Forecast>(`/api/forecast?pipeline_id=${pipelineId}`)

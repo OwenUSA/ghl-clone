@@ -444,3 +444,75 @@ def test_the_first_time_card_does_not_repeat_the_whole_windows_durations():
                            .split("</Card>", 1)[0]
     assert "first_time_" not in by_status_card, (
         "'Call by status' is every call, not just the first-time ones")
+
+
+# ---------------- Opportunities > Forecast ----------------
+
+def test_the_forecast_tab_is_a_tab_and_not_a_label():
+    """The four tab names were four `<div>`s with no handler at all.
+
+    `i === 0` painted the first one blue forever, so the header said "you are on
+    Opportunities" whatever the screen was showing.
+    """
+    source = _read("pages", "OpportunitiesPage.tsx")
+    assert "i === 0 ? 'rgb(56,160,219)'" not in source, (
+        "the active tab is still hardcoded to the first one")
+    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
+    assert "setTab(t)" in header, "clicking a tab does nothing"
+    assert "tab === t" in header, "the header cannot show which tab is open"
+    assert "<ForecastPanel" in source, "the Forecast tab renders nothing"
+
+
+def test_a_tab_with_nothing_behind_it_says_so():
+    """Pipelines and Bulk Actions are not built yet. A tab that silently switches
+    to a blank pane is worse than one that refuses: disabled-rather-than-omitted,
+    the same rule as Import and the unimplemented Reporting tabs."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    live = source.split("const LIVE_TABS = new Set(", 1)[1].split(")", 1)[0]
+    assert "Forecast" in live and "Opportunities" in live
+    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
+    assert "disabled={!live}" in header, "a dead tab still looks clickable"
+    assert "not implemented in v1" in header, "nothing says why the tab is dead"
+
+
+def test_the_forecast_tab_is_hidden_from_a_role_that_cannot_read_it():
+    """`GET /api/forecast` is STAFF, exactly like `/api/dashboard`. A TECH must not
+    be able to open the tab and land on a refusal."""
+    source = _read("pages", "OpportunitiesPage.tsx")
+    assert "const canForecast = user.role !== 'TECH'" in source, (
+        "the page never asks whether this role can read a forecast")
+    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
+    assert "!canForecast" in header, "the Forecast tab ignores the role"
+    assert "Your role cannot view the forecast" in header, (
+        "nothing tells the user why the tab is dead")
+
+
+def test_the_forecast_reports_a_failed_query_instead_of_drawing_zeros():
+    """A forecast of $0.00 and an unreachable API look identical on screen."""
+    source = _read("components", "ForecastPanel.tsx")
+    assert 'role="alert"' in source, "the panel has no error surface"
+    assert "forecast.error" in source, (
+        "a refused or failed forecast renders as a table of zeros")
+
+
+def test_the_forecast_quotes_the_server_rather_than_recomputing():
+    """The whole point of /api/forecast is that the Dashboard and this screen
+    cannot disagree. Deriving a rate or a weighting in the browser would put that
+    back — so the panel may format numbers and must not compute them."""
+    source = _read("components", "ForecastPanel.tsx")
+    body = source.split("export function ForecastPanel", 1)[1]
+    for banned in ("conversion_rate *", "/ 100 *", "* conversion", "reduce("):
+        assert banned not in body, (
+            "the panel computes %r itself instead of using the server's figure"
+            % banned)
+    assert "weighted_value_cents" in body and "projected_value_cents" in body, (
+        "the panel does not render the server's projection at all")
+
+
+def test_the_forecast_says_what_the_weighting_is():
+    """A weighted number whose weighting is invisible reads as a promise."""
+    source = _read("components", "ForecastPanel.tsx")
+    assert "conversion_rate.toFixed(2)" in source, (
+        "the rate the money is weighted at is never shown")
+    assert "Dashboard" in source, (
+        "nothing tells the reader this is the Dashboard's own rate")

@@ -996,3 +996,74 @@ stepping. That is a deliberate step up from this project's usual "assert against
 frontend idiom, which would have passed against the broken version. CI's backend job now
 installs node for it; if node is ever absent the file skips loudly rather than silently
 passing.
+
+## AMENDMENT (2026-09-10): the Opportunities tabs are OURS, not measured
+
+`TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']` and the `⋯`
+menu's `Export | Restore opportunities | Manage smart lists | Dashboard insights`
+were **measured as labels and nothing else**. `captures/opportunities/` holds the
+**board** — the kanban, its columns, its cards and the toolbar around it. Nobody
+ever opened any of those tabs or menu items on the live account, and the safety
+contract forbids clicking Export there, so there is no HTML, no screenshot and no
+computed style behind any of them.
+
+This section **overrides**, for these screens only, the rule that structural
+design is locked to a measured capture ("Design system — LOCKED", "Responsive
+behaviour — LOCKED"). Everything built behind those labels is **our design**. It
+may not be cited as evidence of GHL parity, and if a live session is ever opened
+again these screens should be captured and re-measured, with GHL winning on
+structure exactly as everywhere else.
+
+**The board itself is unchanged** and remains a measured surface: same 240px
+column pitch, same 230px cards, same drag handling. The tabs switch what is drawn
+*below* the pipeline row; they do not restyle the board.
+
+### Forecast — projected revenue by stage (OUR design)
+
+`GET /api/forecast?pipeline_id=` and `frontend/src/components/ForecastPanel.tsx`.
+Read-only, no new tables.
+
+The real risk here was never the layout, it was arithmetic: a forecast is the
+easiest possible way to put a **second, contradictory set of numbers** on data the
+Dashboard already publishes. So:
+
+- `_status_rollup()` in `backend/app/main.py` is now the single implementation of
+  the Dashboard's by-status arithmetic. `GET /api/dashboard` returns it verbatim
+  and the forecast quotes it, so the two cannot drift apart in a later edit.
+- The forecast's per-stage `count` and `value_cents` are the same figures
+  `GET /api/pipelines` feeds the Dashboard **funnel** with — every status, not
+  only the open ones. A forecast that counted only open deals would draw a
+  different bar for the same stage on two screens.
+- The panel formats numbers and computes none. `test_the_forecast_quotes_the_
+  server_rather_than_recomputing` pins that.
+
+**The projection rule, stated because it is a judgement call the owner can
+overrule:**
+
+    weighted  = the stage's OPEN value x the pipeline's conversion rate
+    projected = money already WON in the stage + weighted
+
+One rate for the whole pipeline, and it is the rate the Dashboard already shows
+(`won / (won + lost)`, two decimals). **Per-stage win probabilities were rejected
+deliberately**: nothing in this schema records stage history, so a won deal simply
+sits in whatever stage it was won in, and "the win rate of Inspection" would in
+fact be measuring *where deals get marked won*. That is a plausible-looking number
+nobody can check. The screen states the rate and where it comes from, rather than
+weighting invisibly.
+
+Weighting is integer arithmetic in whole cents, half up (`_weighted()`), for the
+same reason `centsFromDollars` avoids floats — `round(v * rate / 100)` both loses
+halves to banker's rounding and depends on IEEE-754. Because the published rate
+carries exactly two decimals, every figure in the response can be re-derived by
+hand from the other figures in the same response.
+
+**Role: STAFF, matching `/api/dashboard`.** The tab is dimmed for a TECH with an
+explanatory title rather than opening onto a 403 (precedent: `d1f7c50`, `b943f4b`).
+This deliberately repeats the inconsistency recorded under "Triage decisions" —
+per-stage money is already TECH-visible through `/api/pipelines` — rather than
+inventing a third rule for a third screen.
+
+**Tabs with nothing behind them stay dimmed and say so**, in a `LIVE_TABS` set,
+rather than switching to a blank pane. Same disabled-rather-than-omitted rule as
+Import, the Conversations filter types and the Reporting tabs v1 does not
+implement.

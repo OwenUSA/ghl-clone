@@ -810,16 +810,18 @@ def list_calendars(db: Session = Depends(get_db),
             for c in rows]
 
 
-@app.get("/api/dashboard")
-def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
-              _: auth.Principal = auth.STAFF):
-    """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
-    Opportunity value (Total vs Won revenue), Conversion rate."""
-    stmt = select(Opportunity)
-    if pipeline_id:
-        stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
-    opps = db.scalars(stmt).all()
+def _status_rollup(opps: list[Opportunity]) -> dict:
+    """Roll a set of opportunities up by status. THE dashboard arithmetic.
 
+    `/api/dashboard` and `/api/forecast` both need these numbers, and a forecast
+    that disagreed with the Dashboard about how many deals are open — or about the
+    conversion rate — would just be a second, contradictory set of figures on the
+    same data. They share this function so the two cannot drift.
+
+    `conversion_rate` is a percentage rounded to two decimals, and it is the
+    published one: the forecast weights its open money with exactly this value, so
+    every number in the forecast can be re-derived by hand from the response.
+    """
     by_status = {"won": 0, "open": 0, "lost": 0, "abandoned": 0}
     total_value = won_value = 0
     for o in opps:
@@ -836,6 +838,112 @@ def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
         "total_value_cents": total_value,
         "won_value_cents": won_value,
         "conversion_rate": round(conversion, 2),
+    }
+
+
+@app.get("/api/dashboard")
+def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
+              _: auth.Principal = auth.STAFF):
+    """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
+    Opportunity value (Total vs Won revenue), Conversion rate."""
+    stmt = select(Opportunity)
+    if pipeline_id:
+        stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
+    return _status_rollup(list(db.scalars(stmt).all()))
+
+
+def _weighted(open_value_cents: int, conversion_rate: float) -> int:
+    """`open_value_cents` at `conversion_rate` percent, in whole cents, half up.
+
+    Kept in integers on purpose, the same reason `centsFromDollars` is: money is
+    integer cents everywhere in this app and `round(v * rate / 100)` is a float
+    round trip that both loses halves (banker's rounding) and depends on IEEE-754
+    representation. `conversion_rate` carries two decimals, so it is exactly a
+    whole number of hundredths of a percent — multiply by that instead.
+    """
+    hundredths = round(conversion_rate * 100)
+    return (open_value_cents * hundredths + 5000) // 10000
+
+
+@app.get("/api/forecast")
+def forecast(pipeline_id: int, db: Session = Depends(get_db),
+             _: auth.Principal = auth.STAFF):
+    """Projected revenue by stage for one pipeline.
+
+    OUR design — GHL's own Forecast tab was never opened on the live account, so
+    there is no capture to match (DECISIONS.md). What it is NOT is a second
+    opinion: the per-stage `count`/`value_cents` are the same figures
+    `GET /api/pipelines` feeds the Dashboard funnel with (every status, not just
+    open), and the rollup and `conversion_rate` come from `_status_rollup`, which
+    is what `GET /api/dashboard` returns.
+
+    The projection itself is deliberately one rule, applied uniformly:
+
+        weighted = open value in the stage x the pipeline's conversion rate
+        projected = money already won in the stage + weighted
+
+    Per-stage win probabilities would be the richer model and this app cannot
+    honestly compute them — nothing records stage history, so a won deal sits in
+    whatever stage it was won in, and "the win rate of Inspection" would really be
+    measuring where deals get marked won. One published rate that the user can see
+    on the Dashboard beats a curve nobody can check.
+
+    STAFF, matching `/api/dashboard`, whose aggregates this repeats.
+    """
+    p = db.get(Pipeline, pipeline_id)
+    if not p:
+        raise HTTPException(404, "pipeline not found")
+
+    opps = list(db.scalars(
+        select(Opportunity).where(Opportunity.pipeline_id == pipeline_id)).all())
+    roll = _status_rollup(opps)
+    rate = roll["conversion_rate"]
+
+    by_stage: dict[int, list[Opportunity]] = {}
+    for o in opps:
+        by_stage.setdefault(o.stage_id, []).append(o)
+
+    stages = []
+    for s in p.stages:                      # relationship is ordered by position
+        rows = by_stage.get(s.id, [])
+        open_value = sum(o.value_cents for o in rows if o.status == "open")
+        won_value = sum(o.value_cents for o in rows if o.status == "won")
+        weighted = _weighted(open_value, rate)
+        stages.append({
+            "stage_id": s.id,
+            "name": s.name,
+            "position": s.position,
+            # These two are exactly what /api/pipelines reports for the stage.
+            "count": len(rows),
+            "value_cents": sum(o.value_cents for o in rows),
+            "open_count": sum(1 for o in rows if o.status == "open"),
+            "open_value_cents": open_value,
+            "won_count": sum(1 for o in rows if o.status == "won"),
+            "won_value_cents": won_value,
+            "weighted_value_cents": weighted,
+            "projected_value_cents": won_value + weighted,
+        })
+
+    # Summed from the rows, not recomputed, so the column adds up to its own total.
+    def col(key: str) -> int:
+        return sum(s[key] for s in stages)
+
+    return {
+        "pipeline_id": p.id,
+        "pipeline_name": p.name,
+        "conversion_rate": rate,
+        "status": roll["status"],
+        "stages": stages,
+        "totals": {
+            "count": roll["total"],
+            "value_cents": roll["total_value_cents"],
+            "open_count": col("open_count"),
+            "open_value_cents": col("open_value_cents"),
+            "won_count": col("won_count"),
+            "won_value_cents": roll["won_value_cents"],
+            "weighted_value_cents": col("weighted_value_cents"),
+            "projected_value_cents": col("projected_value_cents"),
+        },
     }
 
 

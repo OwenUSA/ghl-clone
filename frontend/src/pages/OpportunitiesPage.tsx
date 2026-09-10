@@ -9,6 +9,7 @@ import {
 import { IconDownload, IconGrid, IconList, IconPlus } from '../components/Icon'
 import { useDraggable } from '@dnd-kit/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ForecastPanel } from '../components/ForecastPanel'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useState } from 'react'
 import { IconChevronLeft, IconFilter } from '../components/Icon'
@@ -43,6 +44,16 @@ import type { Me } from '../lib/auth'
  */
 const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']
 const OVERFLOW = ['Export', 'Restore opportunities', 'Manage smart lists', 'Dashboard insights']
+
+/**
+ * Which tabs actually go somewhere.
+ *
+ * A tab that switches to a blank panel is worse than one that visibly refuses, so
+ * the ones with nothing behind them stay dimmed and say so — the same
+ * disabled-rather-than-omitted rule used for Import above and for the Reporting
+ * tabs v1 does not implement. This set grows as each is built.
+ */
+const LIVE_TABS = new Set(['Opportunities', 'Forecast'])
 const LAYOUTS = ['Default', 'Compact', 'Unlabeled'] as const
 type Layout = (typeof LAYOUTS)[number]
 
@@ -187,6 +198,10 @@ export function OpportunitiesPage({ user }: { user: Me }) {
   // Mirror that here rather than let them fill in the form to find out on submit
   // (same precedent as Add Contact).
   const canCreate = user.role !== 'TECH'
+  // `GET /api/forecast` is auth.STAFF, matching /api/dashboard whose aggregates it
+  // repeats. Dim the tab rather than let a TECH open it onto a refusal.
+  const canForecast = user.role !== 'TECH'
+  const [tab, setTab] = useState('Opportunities')
   const [showAdd, setShowAdd] = useState(false)
   const [view, setView] = useState<'board' | 'list'>('board')
   const [layout, setLayout] = useState<Layout>('Default')
@@ -260,18 +275,31 @@ export function OpportunitiesPage({ user }: { user: Me }) {
         <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)' }}>
           Opportunities
         </div>
-        {TABS.map((t, i) => (
-          <div
-            key={t}
-            style={{
-              fontSize: 14,
-              fontWeight: 500,
-              color: i === 0 ? 'rgb(56,160,219)' : 'rgb(102,112,133)',
-            }}
-          >
-            {t}
-          </div>
-        ))}
+        {TABS.map((t) => {
+          const live = LIVE_TABS.has(t) && !(t === 'Forecast' && !canForecast)
+          return (
+            <button
+              key={t}
+              onClick={() => live && setTab(t)}
+              disabled={!live}
+              title={
+                LIVE_TABS.has(t)
+                  ? live ? undefined : 'Your role cannot view the forecast'
+                  : 'Present in GHL; not implemented in v1'
+              }
+              style={{
+                fontSize: 14,
+                fontWeight: 500,
+                color: tab === t
+                  ? 'rgb(56,160,219)'
+                  : live ? 'rgb(102,112,133)' : 'rgb(152,162,179)',
+                cursor: live ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {t}
+            </button>
+          )
+        })}
       </div>
 
       {/* pipeline row */}
@@ -420,6 +448,12 @@ export function OpportunitiesPage({ user }: { user: Me }) {
         </div>
       </div>
 
+      {/* The Forecast tab replaces the filters and the board; the pipeline row
+          above stays, because a forecast is still per-pipeline. */}
+      {tab === 'Forecast' && <ForecastPanel pipeline={pipeline} />}
+
+      {tab === 'Opportunities' && (
+      <>
       {/* saved views — measured 14px/400 rgb(102,112,133) with 16x16 icons */}
       <div className="flex shrink-0 items-center gap-6 px-4" style={{ height: 42 }}>
         <div className="flex items-center gap-2">
@@ -544,6 +578,8 @@ export function OpportunitiesPage({ user }: { user: Me }) {
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
 
       {showAdd && pipeline && (
