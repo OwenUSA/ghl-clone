@@ -56,7 +56,8 @@ def test_dashboard_cards_show_a_refusal_instead_of_zeros():
     source = _read("pages", "DashboardPage.tsx")
     assert 'role="alert"' in source, "no card can report a failed query"
     for card, query in (("Opportunity status", "status"), ("Opportunity value", "value"),
-                        ("Conversion rate", "conv")):
+                        ("Conversion rate", "conv"), ("Funnel", "funnel"),
+                        ("Stage distribution", "dist")):
         block = source.split(f'<Card title="{card}"', 1)[1].split(">", 1)[0]
         assert f"error={{{query}.error}}" in block, (
             f"the {card} card never reads {query}.error, so a 403 renders as 0")

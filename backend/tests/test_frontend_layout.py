@@ -51,11 +51,18 @@ def test_each_dashboard_card_is_filtered_by_its_own_select():
     assert len(set(picked)) == 3, (
         f"row-1 cards share pipeline state {picked} — one card's select filters another")
 
-    # ...and the card must read the query its own select keys.
+    # ...and the card must render the query its own select keys. The percentage
+    # is computed just above the JSX now, because the card offers two
+    # denominators, so both halves are checked: the figure comes from `conv`,
+    # and the card renders that figure rather than a neighbour's.
+    rate = source.split("const rate =", 1)[1].split("\n", 1)[0]
+    assert "conv.data" in rate and "conversion_rate" in rate, (
+        "the conversion figure no longer comes from the Conversion rate card's query")
     conversion = source.split('<Card title="Conversion rate"', 1)[1].split("</Card>", 1)[0]
-    assert "conversion_rate" in conversion, "retarget this test — the card moved"
-    assert "status.data" not in conversion, (
-        "Conversion rate renders the status query while its select drives another")
+    assert "rate.toFixed" in conversion, "the card does not render the figure it computed"
+    for other in ("status.data", "value.data", "funnel.data"):
+        assert other not in conversion, (
+            f"Conversion rate renders {other} while its select drives another query")
 
 
 def test_the_contacts_count_pill_pluralises():
@@ -254,3 +261,140 @@ def test_a_new_appointment_appears_without_a_manual_refresh():
     assert "invalidateQueries({ queryKey: ['appointments'] })" in created, (
         "the new appointment is not re-fetched, so it does not appear until "
         "something else happens to refresh the query")
+
+
+# ---------------- the Dashboard's controls ----------------
+
+def _jsx_tags(source: str, tag: str) -> list[str]:
+    """Every `<tag ...>` opening tag in a .tsx file, with braces respected.
+
+    Splitting on the next `>` does not work here: `onClick={() => close()}`
+    contains one, and so does every other arrow function in a prop. (An attribute
+    written as a double-quoted string containing `>` would still fool this; there
+    are none, and one would be worth noticing anyway.)
+    """
+    out = []
+    for at in re.finditer(r"<%s[\s/>]" % tag, source):
+        i, depth = at.end() - 1, 0
+        while i < len(source):
+            ch = source[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            elif ch == ">" and depth == 0:
+                break
+            i += 1
+        out.append(source[at.start():i + 1])
+    return out
+
+
+def test_nothing_on_the_dashboard_looks_clickable_and_does_nothing():
+    """The owner's standing rule for this app, and the reason four controls on
+    this screen were rebuilt: the "Dashboard" selector was a bare `<button>` with
+    no handler, the `⋮` was a `<span>` that could not even be focused, and every
+    per-card gear was `disabled` with "not implemented in v1" on hover.
+
+    A button either does something or says why it cannot. Nothing in between.
+    """
+    source = (FRONTEND / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+    buttons = _jsx_tags(source, "button")
+    assert len(buttons) >= 5, "retarget this test — the header controls moved"
+    for b in buttons:
+        one_line = " ".join(b.split())[:120]
+        assert "onClick=" in b or "disabled" in b, (
+            "an enabled button with no handler: %s" % one_line)
+        if "disabled" in b and "onClick=" not in b:
+            assert "title=" in b, (
+                "a disabled control with no reason on hover: %s" % one_line)
+    # Every select must be wired too — a `<select>` without onChange changes the
+    # option text and nothing else, which is how the Opportunities pipeline
+    # picker shipped broken (test_the_pipeline_select_actually_selects_a_pipeline).
+    for s in _jsx_tags(source, "select"):
+        assert "onChange=" in s and "value=" in s, (
+            "a select that ignores the choice: %s" % " ".join(s.split())[:120])
+
+
+def test_every_dashboard_card_asks_for_the_chosen_date_range():
+    """`/api/dashboard` took only `pipeline_id`, so "Last 30 days" and "All time"
+    returned identical figures. Both halves have to be right: the window belongs
+    in the query KEY, or changing the range never refetches, and in the query
+    FUNCTION, or the request does not carry it.
+    """
+    source = (FRONTEND / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+    win = source.split("const win =", 1)[1].split("\n", 1)[0]
+    assert "rangeWindow(range)" in win, "the header range no longer produces a window"
+    # ...and it MUST be memoised on `range`. `rangeWindow` defaults to `new Date()`,
+    # so an unmemoised call returns a start a few milliseconds later on every
+    # render; that start is part of all five query keys, so every render
+    # invalidated every card, whose results re-rendered the page. The dashboard
+    # refetched in a loop for as long as it was open and drew zeros throughout,
+    # because the key each card was reading had already been replaced. Caught in a
+    # browser, not here — which is why it is pinned here.
+    assert "useMemo" in win and "[range]" in win, (
+        "the range window is rebuilt on every render, so every card's query key "
+        "changes on every render and the dashboard refetches in a loop")
+    for name in ("status", "value", "conv", "funnel", "dist"):
+        block = source.split("const %s = useQuery({" % name, 1)[1]
+        key = block.split("queryKey:", 1)[1].split("]", 1)[0]
+        fn = block.split("queryFn:", 1)[1].split("\n  })", 1)[0]
+        assert "winFor(" in key, (
+            "the %s card's query key ignores the range, so changing it does not "
+            "refetch" % name)
+        assert "winFor(" in fn, (
+            "the %s card's request does not carry the range" % name)
+
+
+def test_the_funnel_percentages_are_not_recomputed_in_the_browser():
+    """Both columns were computed in the JSX and both were wrong.
+
+    Cumulative was `count / total` — a distribution under a heading that promises
+    a cumulative, so it rose and fell down the column (30% / 10% / 40% on
+    production). Next step was `next.count / st.count`, a ratio of two stage
+    OCCUPANCIES, which read 400% wherever a later stage held more deals than an
+    earlier one. The server computes both from `reached` now; the card renders
+    them and does no percentage arithmetic of its own.
+    """
+    source = (FRONTEND / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+    card = source.split('<Card title="Funnel"', 1)[1].split("</Card>", 1)[0]
+    assert "pct(st.cumulative_pct)" in card and "pct(st.next_step_pct)" in card, (
+        "the funnel columns no longer render the server's figures")
+    for gone in ("funnelTotal", "nextConv", "next?.count", "stages[i + 1]"):
+        assert gone not in card, (
+            "%s is back: the browser is deriving a funnel percentage again" % gone)
+
+
+def test_the_funnel_select_does_not_offer_all_pipelines():
+    """It did, and then rendered the first pipeline anyway. A funnel lays one
+    pipeline's stages end to end; stages from two different pipelines cannot be
+    put in a row, so "All pipelines" could never have meant anything here."""
+    source = (FRONTEND / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+    for title in ("Funnel", "Stage distribution"):
+        card = source.split('<Card title="%s"' % title, 1)[1].split("</Card>", 1)[0]
+        select = card.split("<PipelineSelect", 1)[1].split("/>", 1)[0]
+        assert "allPipelines={false}" in select, (
+            "the %s card still offers All pipelines" % title)
+
+
+def test_the_status_donut_cannot_disagree_with_the_number_in_its_middle():
+    """The legend drew Won/Open/Lost while the centre read `total`, which counts
+    abandoned deals too. On any pipeline holding one, the ring was drawn full and
+    its segments summed to less than the number printed inside it."""
+    source = (FRONTEND / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+    block = source.split("const segs", 1)[1].split("// ---- Opportunity value", 1)[0]
+    assert "abandoned" in block, "an abandoned opportunity is still not drawn"
+    assert "unaccounted" in block and "status.data?.total" in block, (
+        "nothing reconciles the segments against the total in the centre, so a "
+        "status the legend does not know about vanishes from the ring")
+
+
+def test_the_value_bars_are_data_rather_than_arithmetic():
+    """Lost was hard-coded to `0` and Open was drawn as `totalRev - wonRev`, which
+    is only true when nothing has been lost or abandoned. Production has neither,
+    so the card looked right and would have started lying on the first lost deal.
+    """
+    source = (FRONTEND / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+    bars = source.split("const bars = [", 1)[1].split("]", 1)[0]
+    assert "byValue.lost" in bars and "byValue.open" in bars and "byValue.won" in bars, (
+        "the bars no longer read the server's per-status money")
+    assert "totalRev - wonRev" not in source, "Open is being inferred again"
