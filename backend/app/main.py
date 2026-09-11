@@ -16,8 +16,7 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import (auth, automations, crmlink, custom_fields, models, openphone,
-               phone_match, softphone)
+from . import auth, automations, crmlink, custom_fields, models, openphone, phone_match, softphone
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
