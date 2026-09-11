@@ -2092,3 +2092,49 @@ straight from the production database. That is what this closes.
   fastest way ever invented to lose real customer records in one click"). The
   second is simply not built; the endpoint is reachable with a PAT if it is ever
   wanted.
+
+### The Conversations icon rail — wired, and one row left dead (2026-09-11)
+
+Six icons with labels and no handlers. The decisions taken, all overrulable.
+
+**"Assigned to me" is `Contact.owner_id`, and `Conversation` gains no assignee.**
+The owner's instruction, and it is the right shape anyway: a thread is
+correspondence with a customer, and the customer already has an owner — the one
+the contact panel shows. A column on `conversations` would be a second answer to
+"whose is this" with nothing keeping the two in step, and it would need a
+migration to say something the schema already says. A contact nobody owns is in
+the team inbox and in nobody's own.
+
+**Scope, tab and search intersect, and they narrow ONE query on the server.**
+"My conversations, unread, matching Reyes" is a reasonable thing to ask for, and
+each control answers a different question — whose, what state, which contact, in
+what order. Doing any of it on the client would let the Unread badge and the list
+it labels be computed over different sets again, which is the bug that opened
+this work.
+
+**The in-place search matches NAME and PHONE only** — exactly the two fields the
+row on screen shows. Matching an email or a business name produces a row whose
+reason for matching is invisible to the person reading it. The ctrl+K palette
+already searches those and is the control for "find anything anywhere"; this one
+narrows the inbox you are looking at. `phone_match` is reused, so a number typed
+the way a caller ID reads it finds a row stored in E.164.
+
+**"Unread only" and "Filters" drive existing state or nothing at all.** "Unread
+only" writes the same `tab` the Unread tab writes and reads its highlight back
+from it — a second `unreadOnly` flag would drift, and the copy nobody fixed would
+win silently. **"Filters" is left DISABLED with its reason on hover**, because
+the toolbar control it would have to share state with is *itself* unimplemented:
+GHL's measured filter builder (Filter Type / Is / Value, AND/OR, Cancel/Apply)
+does not exist here, so wiring the rail would mean inventing a second filter
+model for it to own. Building the filter builder is its own task.
+
+**The highlight is derived, never stored.** It was a `rail` index nothing else
+read, so the first row sat permanently lit whatever the list was showing. Each
+row now lights when the thing it names is actually applied, and more than one can
+be lit because scope, search and the unread filter compose. `Conversations` is
+always lit: it is the screen you are on, which is all the owner asked it to be.
+
+**The measured list pane does not move.** The search box renders only while the
+search is open, so the default screen is byte-for-byte the one under measurement;
+the "Team inbox" title is left alone even when the scope is "assigned to me",
+because it is measured text and the rail is the scope indicator.
