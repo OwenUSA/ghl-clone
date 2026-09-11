@@ -2138,3 +2138,160 @@ always lit: it is the screen you are on, which is all the owner asked it to be.
 search is open, so the default screen is byte-for-byte the one under measurement;
 the "Team inbox" title is left alone even when the scope is "assigned to me",
 because it is measured text and the rail is the scope indicator.
+
+## The Workiz import — the real business data arrives (2026-09-11)
+
+The owner is migrating off Workiz. Two exports (856 clients, 389 jobs) are on the
+build machine at `~/workiz/`, chmod 600, holding REAL customers' names, phone
+numbers, email addresses and home addresses. `backend/app/workiz_import.py` reads
+them; `backend/tests/test_workiz_import.py` covers it against fixtures, never
+against the export.
+
+    uv run python -m app.workiz_import                # DRY RUN. Writes nothing.
+    uv run python -m app.workiz_import --commit       # ...and this one writes.
+
+### It is a module, not a `ghl` CLI command, and that is the whole safety story
+
+The CLI talks to the API over HTTP, and **every write endpoint it would use fires
+an automation**: `POST /api/appointments` schedules T-24h and T-1h reminder texts,
+`POST /api/contacts` notifies the team, a stage change texts the customer. An
+import through the front door would queue hundreds of messages about roofs that
+were fixed in March. So it takes the `app.bootstrap` shape — argparse, `SessionLocal`,
+whatever `DATABASE_URL` points at — and writes through the ORM.
+
+**No reminders, ever. Three guarantees, deliberately not one:**
+
+1. The module does **not import `app.automations` or `app.queue`**. There is no code
+   path from an import to `enqueue()` for a future change to find. This is why
+   `_thread_for` is four lines of its own rather than `automations.thread_for` —
+   the duplication is the price of the guarantee and is a deliberate purchase.
+2. The `jobs` table is **counted before and after, inside the transaction**. One new
+   row rolls the entire import back and exits non-zero. That one holds even if
+   something underneath this file starts enqueueing on its own, which an import
+   check cannot.
+3. Appointments are written through the ORM, never through the endpoint that books.
+   There are no SQLAlchemy event listeners anywhere in `app/` for one to hide behind.
+
+Asserted on the queue itself, including a test that makes the import queue a row on
+purpose and proves nothing at all was written.
+
+**Only FUTURE jobs become appointments.** 381 of the 389 `Scheduled` datetimes are in
+the past. Back-dating a booking is the shape that would have produced the texts.
+
+### AMENDS "Renaming does NOT make names unique" — for the data, not the rule
+
+The section "Pipelines and stages are now USER-EDITABLE" says making stage names
+unique "is a product decision for the owner, not a cleanup". **The owner has now made
+it**, for the AHS board, while it was empty. The importer removes the duplicate
+`Call Back` column and the empty near-duplicate `Submit Invoices`.
+
+What has **not** changed, and must not: there is still **no uniqueness rule in the
+API**. `PATCH /api/stages/{id}` will still happily rename one stage to match another,
+`test_renaming_does_not_make_stage_names_unique` still passes, and the CLI's exit 5
+(ambiguous) is intact for anyone who recreates the situation. This was a one-off fix
+to *the data on one board*, not a constraint added to the schema.
+
+The safety rules are unchanged and are re-checked at write time, not only when the
+plan was built:
+
+- A duplicate column holding deals is **renamed, never emptied**. Nothing in the
+  importer moves or deletes an opportunity — `custom_fields.owen_call_id` is the
+  telephony project's live join key (CLAUDE.md).
+- `NEAR_DUPLICATE_STAGES` is the one judgement call, written down as a constant so
+  removing an entry is a one-line veto. It only ever removes an EMPTY column.
+
+### Routing: status -> MEANING -> that board's word for it
+
+`Source` picks the board (AHS, or Retail for everything else), unconditionally, as
+asked. A flat status->stage table then **cannot file six real rows**: four AHS-sourced
+"Pending (Estimate Follow Up)" and two retail-sourced "In Progress (Request Approval  )"
+— the trailing spaces are in the raw data — whose status has no column on the board
+their source sends them to. So a status maps to a meaning and the meaning is spelled
+in each board's own vocabulary (`STAGE_FOR`). Statuses match with all whitespace
+stripped and case folded; one that is not in the table **skips its row and says so**
+rather than being guessed at. 49 cancelled jobs become nothing at all.
+
+Two judgement calls in that table, both overrulable in one line: AHS
+"Pending (Estimate Follow Up)" files under **Call Back** (chasing a decision is a
+callback; the alternative reading is "Request the Approval (AHS)"), and a **won** deal
+lands in its board's invoice column because that is where the work ended.
+
+### `workiz_*` is a reserved namespace alongside `owen_*`
+
+`RESERVED_PREFIX` became `RESERVED_PREFIXES`, checked in the one `is_reserved()` that
+already existed — the guard was extended, not duplicated. A user-defined field whose
+**derived** key lands in either namespace is refused, so "Workiz ID" is refused as
+well as `workiz_id`.
+
+`workiz_*` is **stricter than `owen_call_id`**, which may still be set where there was
+none: these are read-only in every direction — not set, not changed, not removed.
+`workiz_id` is the whole of the import's idempotency (the `Client #` on a contact, the
+`Job #` on an opportunity); edit one by hand and the next import stops recognising that
+record and creates a second copy of the customer. An unchanged echo is still not a
+write, so the detail form posting the whole blob back on every save keeps working.
+
+`Contact.custom_fields` is not writable through the API at all, so the contact half of
+the namespace needs no guard and deliberately did not get a decorative one.
+
+### Contacts gained four address columns, and nothing backfills them
+
+`contacts` had never had an address. `address_street` / `address_city` /
+`address_state` / `address_postal_code`, all nullable, migration `e7a3d1c05f84` — four
+`add_column` calls and nothing else. Four columns rather than one blob because the two
+exports disagree about the shape: the jobs file already has City / State / Zip code
+separately, the clients file has one combined string.
+
+The parser's rule is **anything not confidently identified stays in `street`**, checked
+as a property: over the real export, not one character of any address is dropped. The
+clients file turns out to write `"<street>, Florida <ZIP>"` — the **state** where a city
+would go, 754 times — so a US state list is what stops "Florida" landing in
+`address_city` on three quarters of the database. The city comes from the jobs file's
+own column, blank-fill only, never an override.
+
+Read-only on `_contact_detail` and deliberately **not** on `ContactPatch`: the measured
+Contact Details panel has no address control, and adding one is a change to the surface
+parity is judged on. An address that is written and cannot be read would be worse than
+either.
+
+### Measured against the real export, and it reconciles
+
+856 client rows -> **821 contacts** (27 phone numbers shared by 62 records; 35 rows
+collapse), **331 Customer / 490 Lead**. 389 job rows -> **340 opportunities** (49
+cancelled, **0 skipped, 0 unrouted**), **238 won**, **$301,219.62** to the cent.
+5 future appointments, 335 past jobs booked nothing. **0 rows in `jobs`.**
+
+Re-running `--commit` a third time leaves a SHA-256 of every row of every table
+byte-identical. A dry run leaves the database file byte-identical.
+
+### Merging is on the last ten digits, and nothing is discarded silently
+
+The identity rule the picker, the contacts search and the telephony project already
+share. Most-complete record wins, its blanks fill from the others, and every name,
+email and address that **lost** is written into a STAFF-only `NOTE` on the surviving
+contact naming the `Client #` it came from — rewritten in place on a re-run, never
+duplicated. A phone with fewer than ten digits is **its own group**: an empty match key
+is how four strangers become one person.
+
+Where a job's phone and its client name point at different records, **the phone wins**
+and the row is listed under "Conflicts a human should look at". One real row does this.
+
+### Deliberately not done
+
+- **`Tech` creates no users**, by the owner's decision. `Tags`, `Created by` and
+  `Job origin` are not mapped either; `Lead Created Date` is empty in all 389 rows.
+- **The importer has never been run against production.** It is built, tested locally,
+  and stopped there. A human runs it after reviewing a dry run.
+- It **never deletes** a contact, an opportunity or an appointment, and never deletes a
+  stage that holds deals.
+
+### It depends on `feature/opportunity-fields`, which was not on main
+
+That branch (`e163cbb`) supplies `CustomFieldDef`, the `owen_` guard this one extends,
+and `appointments.opportunity_id`. It was **not merged into origin/main** when this was
+built, so it was merged into this branch instead — designing against it in the air would
+have meant either a second custom-field system or untestable code. **It carries no
+Alembic migration of its own**, so `alembic upgrade head` does not create
+`custom_field_defs`, `custom_field_pipelines` or `appointments.opportunity_id`.
+`workiz_import.preflight()` refuses to run and names what is missing rather than failing
+half-way through writing 800 contacts. That migration is owed by that branch, and is the
+first thing to check before running this for real.
