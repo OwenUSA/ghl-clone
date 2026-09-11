@@ -3,11 +3,16 @@ import { useEffect, useState } from 'react'
 import {
   centsFromDollars,
   getOpportunity,
+  listCustomFields,
   listUsers,
   patchOpportunity,
   type OpportunityDetail as OppDetail,
   type Pipeline,
 } from '../lib/api'
+import { describeBooking } from '../lib/customFields'
+import { CustomFieldAnswers } from './CustomFieldAnswers'
+import { NewAppointmentDialog } from './NewAppointmentDialog'
+import type { Me } from '../lib/auth'
 
 /**
  * Opportunity detail.
@@ -33,6 +38,11 @@ import {
  *                 owen_is_new_caller — written by the telephony project
  *   footer        Created by / Created on / Audit log · Cancel | Update
  *   labels 14px/400 rgb(16,24,40); inputs 15px/400; values 14px rgb(52,64,84)
+ *
+ * Two blocks below the measured ones are OURS and have no capture behind them:
+ * the JOB QUESTIONS (CustomFieldAnswers — the admin's own custom fields, plus the
+ * read-only owen_* block that replaced the old free-text list), and APPOINTMENTS,
+ * which lists the visits booked for this deal and books another.
  */
 const STATUSES = ['open', 'won', 'lost', 'abandoned'] as const
 
@@ -56,25 +66,34 @@ function Row({ children }: { children: React.ReactNode }) {
 export function OpportunityDetail({
   opportunityId,
   pipeline,
+  user,
   onClose,
 }: {
   opportunityId: number
   pipeline?: Pipeline
+  /** Booking is STAFF, so the Book button is dead for a TECH with a reason. */
+  user: Me
   onClose: () => void
 }) {
   const qc = useQueryClient()
   const [draft, setDraft] = useState<Partial<OppDetail>>({})
   const [error, setError] = useState<string | null>(null)
+  const [booking, setBooking] = useState(false)
 
   const { data: o } = useQuery({
     queryKey: ['opportunity', opportunityId],
     queryFn: () => getOpportunity(opportunityId),
   })
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
+  // Every definition, archived ones included: a deal holding an answer to an
+  // archived field still has to be able to LABEL it, or the form renders
+  // "roof_age: 14" as a bare key.
+  const fields = useQuery({ queryKey: ['custom-fields'], queryFn: listCustomFields })
 
   useEffect(() => {
     setDraft({})
     setError(null)
+    setBooking(false)
   }, [opportunityId])
 
   const save = useMutation({
@@ -83,6 +102,7 @@ export function OpportunityDetail({
       qc.invalidateQueries({ queryKey: ['opportunities'] })
       qc.invalidateQueries({ queryKey: ['pipelines'] })
       qc.invalidateQueries({ queryKey: ['opportunity', opportunityId] })
+      qc.invalidateQueries({ queryKey: ['appointments'] })
       onClose()
     },
     onError: (e: Error) => setError(e.message),
@@ -94,9 +114,11 @@ export function OpportunityDetail({
   const set = (k: keyof OppDetail, val: unknown) =>
     setDraft((d) => ({ ...d, [k]: val }))
 
-  const custom = Object.entries(v('custom_fields') ?? {})
+  const answers = (v('custom_fields') ?? {}) as Record<string, unknown>
+  const canBook = user.role !== 'TECH'
 
   return (
+    <>
     <div
       className="fixed inset-0 z-40 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(16,24,40,0.4)' }}
@@ -249,41 +271,53 @@ export function OpportunityDetail({
             </div>
           </Row>
 
-          {custom.length > 0 && (
-            <div className="mb-4">
-              <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(16,24,40)', marginBottom: 8 }}>
-                Custom fields
-              </div>
-              {custom.map(([k, val]) => {
-                // owen_call_id is the live join key to the telephony project
-                // (DECISIONS.md) — editing it silently breaks call attribution for
-                // records this form knows nothing about. Same readOnly treatment as
-                // Pipeline, Followers and Tags above; the backend refuses a change too.
-                const joinKey = k === 'owen_call_id'
-                return (
-                  <div key={k} className="mb-3">
-                    <div style={{ fontSize: 14, color: 'rgb(16,24,40)' }}>{k}</div>
-                    <input
-                      value={String(val ?? '')}
-                      readOnly={joinKey}
-                      title={joinKey
-                        ? 'The join key to the telephony project — not editable here'
-                        : undefined}
-                      onChange={joinKey ? undefined : (e) =>
-                        set('custom_fields', { ...(v('custom_fields') ?? {}), [k]: e.target.value })
-                      }
-                      style={joinKey
-                        ? { ...INPUT, backgroundColor: 'rgb(249,250,251)' }
-                        : INPUT}
-                    />
-                  </div>
-                )
-              })}
-              <div style={{ fontSize: 12, color: 'rgb(102,112,133)' }}>
-                owen_* fields are written by the telephony project; owen_call_id is the join key.
-              </div>
+          <CustomFieldAnswers
+            defs={fields.data ?? []}
+            pipelineId={o.pipeline_id}
+            answers={answers}
+            onChange={(next) => set('custom_fields', next)}
+          />
+
+          {/* OUR block, no capture behind it: the visits booked for this deal.
+              Deliberately not on the board card — the board is already dense. */}
+          <div className="mb-4">
+            <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(16,24,40)',
+              marginBottom: 8 }}>
+              Appointments
             </div>
-          )}
+            {o.appointments.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'rgb(152,162,179)' }}>
+                No visit booked for this deal yet.
+              </div>
+            ) : (
+              o.appointments.map((a) => (
+                <div key={a.id} style={{ fontSize: 14, color: 'rgb(52,64,84)',
+                  padding: '4px 0' }}>
+                  {describeBooking(a.title, a.starts_at)}
+                  <span style={{ fontSize: 12, color: 'rgb(152,162,179)',
+                    marginLeft: 8 }}>
+                    {a.calendar_name ?? 'No calendar'}
+                    {a.status !== 'confirmed' && ' · ' + a.status}
+                  </span>
+                </div>
+              ))
+            )}
+            <button
+              onClick={() => setBooking(true)}
+              disabled={!canBook}
+              title={canBook
+                ? 'Book a visit for this deal'
+                : 'Your role cannot create an appointment'}
+              style={{
+                marginTop: 8, height: 34, padding: '0 12px', borderRadius: 6,
+                fontSize: 13, fontWeight: 500, color: 'rgb(0,78,235)',
+                border: '1px solid rgb(234,236,240)',
+                ...(canBook ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
+              }}
+            >
+              Book appointment
+            </button>
+          </div>
 
           {error && (
             <div style={{ fontSize: 13, color: 'rgb(217,45,32)', marginBottom: 8 }}>{error}</div>
@@ -314,5 +348,43 @@ export function OpportunityDetail({
         </div>
       </div>
     </div>
+
+      {/* Deliberately OUTSIDE the backdrop above. Nested inside it, every click in
+          the booking dialog would bubble to that backdrop's onClick and close the
+          deal behind it — the dialog would vanish mid-typing.
+
+          The EXISTING create dialog, not a second one: it already validates the
+          times and schedules the customer's reminders, and a booking made from a
+          deal must be identical to one made on the calendar. The deal is locked;
+          the contact and the title arrive prefilled and stay editable. */}
+      {booking && (
+        <NewAppointmentDialog
+          initialStart={nextHour()}
+          initialEnd={new Date(nextHour().getTime() + 3_600_000)}
+          initialTitle={(v('title') ?? '') + ' — inspection'}
+          initialContact={o.contact_id != null
+            ? { id: o.contact_id, name: o.contact_name ?? '' }
+            : null}
+          lockedOpportunity={{ id: o.id, title: o.title }}
+          user={user}
+          onClose={() => setBooking(false)}
+          onCreated={() => {
+            setBooking(false)
+            qc.invalidateQueries({ queryKey: ['opportunity', opportunityId] })
+            // The new booking has to show on the calendar without a reload, and
+            // the range key changes with every view, so invalidate the family.
+            qc.invalidateQueries({ queryKey: ['appointments'] })
+          }}
+        />
+      )}
+    </>
   )
+}
+
+/** The top of the next hour — a sane default slot for a booking made from a deal. */
+function nextHour(): Date {
+  const at = new Date()
+  at.setMinutes(0, 0, 0)
+  at.setHours(at.getHours() + 1)
+  return at
 }

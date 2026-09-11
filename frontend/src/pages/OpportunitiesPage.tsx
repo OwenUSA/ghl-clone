@@ -16,6 +16,8 @@ import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
 import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
 import { PipelinesPanel } from '../components/PipelinesPanel'
+import { CustomFieldsPanel } from '../components/CustomFieldsPanel'
+import { CustomFieldAnswers } from '../components/CustomFieldAnswers'
 import { ContactPicker, type PickedContact } from '../components/ContactPicker'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { useEffect, useRef, useState } from 'react'
@@ -32,6 +34,7 @@ import {
 import {
   centsFromDollars,
   createOpportunity,
+  listCustomFields,
   listOpportunities,
   listPipelines,
   moveOpportunity,
@@ -60,7 +63,11 @@ import type { Focus } from '../lib/focus'
  * 10 stages, measured by scrolling the board horizontally — the first capture saw
  * only 5. Board scrolls sideways; the document does not scroll.
  */
-const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']
+// "Custom fields" joined the measured four on 2026-09-11: the job questions the
+// owner defines himself attach to pipelines, so they live beside the Pipelines
+// tab. The tab row is OURS (DECISIONS.md, 2026-09-10) — nothing here is parity.
+const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Custom fields',
+              'Bulk Actions']
 const OVERFLOW = ['Export', 'Restore opportunities', 'Manage smart lists', 'Dashboard insights']
 
 /**
@@ -694,6 +701,11 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
           above stays and everything below it is replaced. */}
       {tab === 'Pipelines' && <PipelinesPanel user={user} />}
 
+      {/* Defining a field is ADMIN; the tab stays open to every role and the
+          panel disables what they cannot use, with a title saying why. Hiding
+          the questions from the people who answer them daily would be worse. */}
+      {tab === 'Custom fields' && <CustomFieldsPanel user={user} />}
+
       {/* Bulk Actions keeps the board and the filters; only the bar is added, so
           the selection is made against the set the user is already looking at. */}
       {(tab === 'Opportunities' || selecting) && (
@@ -949,6 +961,7 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
         <OpportunityDetail
           opportunityId={openOpp}
           pipeline={pipeline}
+          user={user}
           onClose={() => setOpenOpp(null)}
         />
       )}
@@ -1053,7 +1066,12 @@ function AddOpportunityDialog({
   const [stageId, setStageId] = useState<number | null>(null)
   const [value, setValue] = useState('')
   const [contact, setContact] = useState<PickedContact | null>(null)
+  const [answers, setAnswers] = useState<Record<string, unknown>>({})
   const [error, setError] = useState<string | null>(null)
+
+  // The job questions. Asked here as well as on the detail form, because the
+  // moment to ask "how many stories?" is while the caller is still on the phone.
+  const fields = useQuery({ queryKey: ['custom-fields'], queryFn: listCustomFields })
 
   const pipeline = pipelines.find((p) => p.id === pipelineId) ?? pipelines[0]
   const stages = pipeline?.stages ?? []
@@ -1071,6 +1089,7 @@ function AddOpportunityDialog({
         contact_id: contact?.id ?? null,
         // Dollars -> integer cents without a float in the middle; see api.ts.
         value_cents: centsFromDollars(value),
+        custom_fields: answers,
       }),
     onSuccess: () => onDone(pipeline.id),
     onError: (e: Error) => setError(e.message),
@@ -1094,7 +1113,8 @@ function AddOpportunityDialog({
       onClick={onClose}
     >
       <div onClick={(e) => e.stopPropagation()} className="bg-white"
-        style={{ width: 460, borderRadius: 8, padding: 20 }}>
+        style={{ width: 460, maxHeight: '88vh', overflowY: 'auto',
+          borderRadius: 8, padding: 20 }}>
         <div style={{ fontSize: 18, fontWeight: 600, color: 'rgb(16,24,40)' }}>
           Add opportunity
         </div>
@@ -1162,6 +1182,19 @@ function AddOpportunityDialog({
               style={input}
             />
           </div>
+        </div>
+
+        {/* The SAME component the detail form uses, so the two cannot end up
+            asking different questions. `showKept` is off: a deal being created
+            holds no earlier answers and has no owen_* keys yet. */}
+        <div style={{ marginTop: 12 }}>
+          <CustomFieldAnswers
+            defs={fields.data ?? []}
+            pipelineId={pipeline?.id}
+            answers={answers}
+            onChange={setAnswers}
+            showKept={false}
+          />
         </div>
 
         {error && (

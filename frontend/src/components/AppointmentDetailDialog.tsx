@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  cancelAppointment, getAppointment, listCalendars, listUsers, patchAppointment,
+  cancelAppointment, getAppointment, listCalendars, listOpenOpportunities,
+  listUsers, patchAppointment,
   type AppointmentDetail, type AppointmentPatch,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
@@ -82,6 +83,7 @@ type Form = {
   endTime: string
   status: string
   notes: string
+  opportunityId: string
 }
 
 function formOf(a: AppointmentDetail): Form {
@@ -98,6 +100,7 @@ function formOf(a: AppointmentDetail): Form {
     endTime: timeInputValue(e),
     status: a.status,
     notes: a.notes ?? '',
+    opportunityId: a.opportunity_id ? String(a.opportunity_id) : '',
   }
 }
 
@@ -138,6 +141,11 @@ export function AppointmentDetailDialog({
   })
   const calendars = useQuery({ queryKey: ['calendars'], queryFn: listCalendars })
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
+  // Open deals across every pipeline, for binding this booking to one.
+  const deals = useQuery({
+    queryKey: ['opportunities', 'open', 'all-pipelines'],
+    queryFn: listOpenOpportunities,
+  })
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -175,6 +183,11 @@ export function AppointmentDetailDialog({
       body.calendar_id = form.calendarId ? Number(form.calendarId) : null
     if (form.userId !== was.userId)
       body.assigned_user_id = form.userId ? Number(form.userId) : null
+    // Binding a deal is not a reschedule and must not read as one: it goes in
+    // the body on its own, and the backend only touches the reminder queue for
+    // `starts_at` and the status.
+    if (form.opportunityId !== was.opportunityId)
+      body.opportunity_id = form.opportunityId ? Number(form.opportunityId) : null
     // Both ends go together when either moves: the backend validates end-after-
     // start against the STORED values, so sending a new start alone can be
     // refused by an old end that the user can no longer see is the problem.
@@ -303,6 +316,7 @@ export function AppointmentDetailDialog({
                 {a.contact_name ?? 'No contact'}
                 {' · '}
                 {a.calendar_name ?? 'No calendar'}
+                {a.opportunity_title ? ' · ' + a.opportunity_title : ''}
                 {' · '}
                 <span style={{
                   color: a.status === 'cancelled' ? 'rgb(217,45,32)' : 'rgb(52,64,84)',
@@ -348,6 +362,31 @@ export function AppointmentDetailDialog({
                 <option value="">No calendar</option>
                 {calendars.data?.map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Opportunity">
+              {/* The other end of the link the deal's own panel shows. Only OPEN
+                  deals are offered; a booking already bound to one that has since
+                  been won keeps it, because the stored id is added as an option
+                  below rather than silently reset to "not linked". */}
+              <select
+                value={form.opportunityId}
+                disabled={!canWrite}
+                onChange={(e) => set({ opportunityId: e.target.value })}
+                title={canWrite ? undefined : why}
+                style={canWrite ? INPUT : { ...INPUT, ...OFF_INPUT }}
+              >
+                <option value="">Not linked to a deal</option>
+                {a.opportunity_id != null
+                  && !(deals.data ?? []).some((o) => o.id === a.opportunity_id) && (
+                  <option value={a.opportunity_id}>
+                    {a.opportunity_title ?? 'Deal ' + a.opportunity_id}
+                  </option>
+                )}
+                {deals.data?.map((o) => (
+                  <option key={o.id} value={o.id}>{o.title}</option>
                 ))}
               </select>
             </Field>

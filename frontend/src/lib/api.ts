@@ -191,6 +191,8 @@ export type Opportunity = {
   business_name: string | null
   source: string | null
   updated_at: string
+  /** Which board it is filed on. Only interesting when listing across pipelines. */
+  pipeline_id: number
 }
 
 export const listOpportunities = (pipelineId: number, q = '', status = 'open') => {
@@ -198,6 +200,16 @@ export const listOpportunities = (pipelineId: number, q = '', status = 'open') =
   if (q) sp.set('q', q)
   return get<Opportunity[]>(`/api/opportunities?${sp}`)
 }
+
+/**
+ * Every deal with this status, across every pipeline.
+ *
+ * `pipeline_id` is optional on the endpoint precisely so this can exist: the
+ * appointment dialog offers "bind this booking to an open deal" and has no
+ * business knowing, or asking, which board the deal is filed on.
+ */
+export const listOpenOpportunities = () =>
+  get<Opportunity[]>('/api/opportunities?status=open')
 
 export type OpportunityMove = { id: number; stage_id: number; position: number }
 
@@ -389,6 +401,9 @@ export type Appointment = {
   /** The owning calendar's colour, or the default blue. Sent by the API already. */
   color: string
   contact_name: string | null
+  /** The deal this visit is for, or null. Both ends of the link are readable. */
+  opportunity_id: number | null
+  opportunity_title: string | null
 }
 
 export function listAppointments(p: {
@@ -420,6 +435,7 @@ export type AppointmentCreated = {
   title: string
   starts_at: string
   ends_at: string
+  opportunity_id: number | null
   automation: string
 }
 
@@ -430,6 +446,8 @@ export const createAppointment = (body: {
   contact_id?: number | null
   assigned_user_id?: number | null
   calendar_id?: number | null
+  /** Optional in both directions -- see NewAppointmentDialog. */
+  opportunity_id?: number | null
   notes?: string | null
 }) => send<AppointmentCreated>('/api/appointments', 'POST', body)
 
@@ -449,6 +467,8 @@ export type AppointmentDetail = {
   contact_name: string | null
   calendar_id: number | null
   calendar_name: string | null
+  opportunity_id: number | null
+  opportunity_title: string | null
   assigned_user_id: number | null
 }
 
@@ -479,6 +499,9 @@ export type AppointmentPatch = {
   contact_id?: number | null
   calendar_id?: number | null
   assigned_user_id?: number | null
+  /** Bind or unbind the deal. Does NOT reschedule anything -- only the time and
+      the status touch the reminder queue. */
+  opportunity_id?: number | null
   notes?: string | null
 }
 
@@ -612,11 +635,24 @@ export type OpportunityDetail = {
   expected_close_date: string | null
   created_by: string | null
   created_at: string
+  /** The ANSWERS, keyed by a definition's `key`. The questions come from
+      `listCustomFields`; this blob is what somebody typed. */
   custom_fields: Record<string, unknown>
   contact_id: number | null
   contact_name: string | null
   contact_email: string | null
   contact_phone: string | null
+  /** The visits booked for this deal, soonest first. */
+  appointments: LinkedAppointment[]
+}
+
+export type LinkedAppointment = {
+  id: number
+  title: string
+  starts_at: string
+  ends_at: string
+  status: string
+  calendar_name: string | null
 }
 
 export const getOpportunity = (id: number) =>
@@ -631,6 +667,9 @@ export const createOpportunity = (body: {
   stage_id: number
   contact_id?: number | null
   value_cents: number
+  /** Answers given in the Add opportunity dialog, validated by the same server
+      code the detail form goes through. */
+  custom_fields?: Record<string, unknown>
 }) => send<{ id: number; title: string; stage_id: number }>(
   '/api/opportunities', 'POST', body)
 
@@ -897,6 +936,8 @@ export type PipelineDeleted = {
   deleted: number
   detached_saved_views: number[]
   detached_calendars: number[]
+  /** Definitions that lose the ATTACHMENT, never the field and never an answer. */
+  detached_custom_fields: number[]
 }
 
 export const deletePipeline = (id: number) =>
@@ -917,3 +958,47 @@ export const deleteStage = (id: number) =>
 export const reorderStages = (pipelineId: number, stageIds: number[]) =>
   send<{ pipeline_id: number; stages: { id: number; name: string; position: number }[] }>(
     `/api/pipelines/${pipelineId}/stages/reorder`, 'POST', { stage_ids: stageIds })
+
+/**
+ * Custom field definitions -- the job questions the owner defines himself.
+ *
+ * Reading is open to every role because the opportunity form has to render the
+ * questions for whoever opens a deal. Every write is ADMIN, so the panel disables
+ * what a role may not use rather than letting a form 403 on submit (d1f7c50,
+ * b943f4b).
+ *
+ * DELETE ARCHIVES. It never removes the definition and never touches a recorded
+ * answer; `restoreCustomField` brings the question back. There is no endpoint in
+ * this app that destroys an answer, and there is deliberately no client for one.
+ */
+export type { FieldDef as CustomField } from './customFields'
+
+export const listCustomFields = () =>
+  get<import('./customFields').FieldDef[]>('/api/custom-fields')
+
+export const createCustomField = (body: {
+  label: string
+  field_type: string
+  options?: string[]
+  pipeline_ids: number[]
+}) => send<import('./customFields').FieldDef>('/api/custom-fields', 'POST', body)
+
+export const patchCustomField = (id: number, body: {
+  label?: string
+  options?: string[]
+  pipeline_ids?: number[]
+}) => send<import('./customFields').FieldDef>(`/api/custom-fields/${id}`, 'PATCH', body)
+
+/** Archives. The name says what it does to the DEFINITION; the answers stay. */
+export const archiveCustomField = (id: number) =>
+  send<{ archived: number; key: string; note: string }>(
+    `/api/custom-fields/${id}`, 'DELETE')
+
+export const restoreCustomField = (id: number) =>
+  send<import('./customFields').FieldDef>(
+    `/api/custom-fields/${id}/restore`, 'POST')
+
+/** The whole live list as a permutation, never a single "move" instruction. */
+export const reorderCustomFields = (fieldIds: number[]) =>
+  send<import('./customFields').FieldDef[]>(
+    '/api/custom-fields/reorder', 'POST', { field_ids: fieldIds })
