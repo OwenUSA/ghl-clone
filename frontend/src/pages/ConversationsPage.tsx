@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import type { Me } from '../lib/auth'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
@@ -8,10 +8,11 @@ import {
   IconStar, IconTrash, IconUser, IconUsers,
 } from '../components/Icon'
 import {
-  PANE, listConversations, listEvents,
-  type ConversationSummary, type ThreadEvent,
+  ApiError, PANE, listConversations, listEvents, placeCall, sendMessage,
+  type ConversationSummary, type SendableType, type ThreadEvent,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
+import { sendSentence } from '../lib/sendOutcome'
 
 /**
  * Rebuilt from capture/spec.py geometry (captures/conversations, 1440x900).
@@ -101,24 +102,34 @@ function IconBtn({
 }
 
 function Dropdown({
-  items, value, onPick, onClose, right = false,
+  items, value, onPick, onClose, right = false, up = false,
 }: {
   items: { key: string; label: string; unimplemented?: boolean; blocked?: string }[]
   value: string
   onPick: (k: string) => void
   onClose: () => void
   right?: boolean
+  /**
+   * Open upward. The composer's channel picker sits on the last 40px of the
+   * viewport, so a menu dropped below it renders outside the thread pane and is
+   * clipped away entirely -- the same class of bug as the missing `top` below,
+   * at the other end of the window.
+   */
+  up?: boolean
 }) {
   return (
     <div
       role="menu"
-      className="absolute z-30 mt-1 bg-white"
+      className={`absolute z-30 bg-white ${up ? 'mb-1' : 'mt-1'}`}
       style={{
         // `top` must be set explicitly. Without it the menu falls back to its static
         // position, and its `relative` parent is a flex row with `items-center`, so the
         // menu is vertically CENTRED on the 24px icon row and overflows upward off the
         // top of the window. 100% drops it below the row, where `mt-1` spaces it.
-        top: '100%',
+        // Written as two literal properties rather than one computed key, so the
+        // anchoring stays greppable — test_frontend_layout reads this style block.
+        top: up ? undefined : '100%',
+        bottom: up ? '100%' : undefined,
         [right ? 'right' : 'left']: 0,
         minWidth: 224,
         borderRadius: 8,
@@ -156,6 +167,86 @@ function Dropdown({
         )
       })}
     </div>
+  )
+}
+
+/**
+ * A call row used to say "Call completed" unconditionally, which was true of every
+ * call in the database while the only ones were inbound records the feed had already
+ * closed out. It is not true now: the thread can place an outbound call, and that
+ * call has no outcome until it has one. A missed call labelled "completed" is
+ * precisely the kind of wrong the owner would catch before we did.
+ */
+const CALL_TONE: Record<string, string> = {
+  completed: 'rgb(18,183,106)',
+  'no-answer': 'rgb(181,71,8)',
+  busy: 'rgb(181,71,8)',
+  voicemail: 'rgb(102,112,133)',
+  failed: 'rgb(180,35,24)',
+}
+
+const CALL_WORD: Record<string, string> = {
+  completed: 'completed',
+  'no-answer': 'no answer',
+  busy: 'busy',
+  voicemail: 'went to voicemail',
+  failed: 'failed',
+}
+
+function callLabel(e: ThreadEvent): string {
+  const way = e.direction === 'INBOUND' ? 'Inbound call' : 'Outbound call'
+  const word = e.call_status ? CALL_WORD[e.call_status] ?? e.call_status : null
+  return word ? `${way} ${word}` : way
+}
+
+/**
+ * How each delivery state reads under a message, and in what colour.
+ *
+ * The owner's requirement was "i want to know if the text arrived or not", so the
+ * six states have to stay six states on the screen:
+ *
+ *  - QUEUED/SENT are on the way and not yet confirmed — grey, no alarm.
+ *  - DELIVERED is the only one that means it arrived — green, and the only one
+ *    allowed to say so.
+ *  - FAILED and REFUSED both mean it did not arrive, and they are kept apart
+ *    because the answer differs: FAILED might work on a retry, REFUSED will not
+ *    until something is switched on. Both carry `delivery_detail` beside them.
+ *  - LOGGED_ONLY is the stub transport. It keeps saying "not sent" in plain words
+ *    so a recorded-only message can never be mistaken for a real one sitting in the
+ *    same thread as real ones.
+ *
+ * An unknown status (a state added on the server before this file catches up) falls
+ * through to the raw word rather than being hidden — an unexplained label is a
+ * question someone asks; a silently dropped one is a message that looks delivered.
+ */
+const DELIVERY: Record<string, { label: string; color: string }> = {
+  QUEUED: { label: 'queued', color: 'rgb(102,112,133)' },
+  SENT: { label: 'sent', color: 'rgb(102,112,133)' },
+  DELIVERED: { label: 'delivered', color: 'rgb(2,122,72)' },
+  FAILED: { label: 'failed', color: 'rgb(180,35,24)' },
+  REFUSED: { label: 'not sent', color: 'rgb(181,71,8)' },
+  LOGGED_ONLY: { label: 'not sent (recorded only)', color: 'rgb(102,112,133)' },
+  PENDING: { label: 'pending', color: 'rgb(102,112,133)' },
+}
+
+function DeliveryNote({ e }: { e: ThreadEvent }) {
+  // Inbound messages and internal notes are delivered to nobody, so they carry no
+  // status and get no line.
+  if (!e.delivery_status) return null
+  const known = DELIVERY[e.delivery_status]
+  const label = known?.label ?? e.delivery_status.toLowerCase().replace(/_/g, ' ')
+  const color = known?.color ?? 'rgb(102,112,133)'
+  return (
+    <>
+      <span style={{ color }}> · {label}</span>
+      {e.delivery_detail && (
+        // The reason gets its own line rather than being appended to the timestamp
+        // row: these are whole sentences ("the number is still waiting on carrier
+        // approval"), and squeezing one onto the end of "10:42 AM · not sent"
+        // produces a line nobody finishes reading.
+        <div style={{ color, marginTop: 2, maxWidth: 460 }}>{e.delivery_detail}</div>
+      )}
+    </>
   )
 }
 
@@ -202,8 +293,8 @@ function EventBubble({ e }: { e: ThreadEvent }) {
                   row with play, waveform, 0:00 / 0:13, 1x, volume, download */}
               <div className="flex items-center gap-1"
                 style={{ fontSize: 14, fontWeight: 400, color: 'rgb(16,24,40)' }}>
-                <IconPhone size={14} color="rgb(18,183,106)" />
-                Call completed
+                <IconPhone size={14} color={CALL_TONE[e.call_status ?? ''] ?? 'rgb(102,112,133)'} />
+                {callLabel(e)}
               </div>
               <div className="mt-2 flex items-center gap-2">
                 <IconPlay size={26} color="rgb(21,112,239)" />
@@ -224,7 +315,7 @@ function EventBubble({ e }: { e: ThreadEvent }) {
         </div>
         <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
           {timeLabel(e.occurred_at)}
-          {e.delivery_status === 'LOGGED_ONLY' && ' · not sent (stub transport)'}
+          <DeliveryNote e={e} />
         </div>
       </div>
     </div>
@@ -241,6 +332,14 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   const [showFilter, setShowFilter] = useState(false)
   const [rail, setRail] = useState(0)
   const [checked, setChecked] = useState<number[]>([])
+  const [composerType, setComposerType] = useState<SendableType>('SMS')
+  const [showComposerType, setShowComposerType] = useState(false)
+  const [sending, setSending] = useState(false)
+  // One place for whatever the last action wants to tell the operator: a refused
+  // send, a call that is ringing, a suppression. Rendered above the composer.
+  const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null)
+  const [calling, setCalling] = useState(false)
+  const qc = useQueryClient()
 
   // Internal notes are STAFF-only as of 2026-09-10 (DECISIONS.md), and the
   // backend answers a TECH's ?filter=internal_comment with 403. Disable the row
@@ -261,17 +360,126 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     if (focus) setSelected(focus.id)
   }, [focus])
 
+  /**
+   * Inbound activity has to appear without a manual reload, and POLLING is the
+   * mechanism — deliberately, not for lack of alternatives.
+   *
+   * A websocket or SSE would be the reflex, and both are the wrong trade here: the
+   * app is four users in one office, it sits behind the shared Traefik with no
+   * websocket route configured, and the API is a synchronous FastAPI app with no
+   * pub/sub of any kind. A push channel would mean new infrastructure on the server
+   * and a reconnect/backoff state machine in the client, to deliver rows that a
+   * `SELECT` already returns in single-digit milliseconds against a 13-contact
+   * database.
+   *
+   * Ten seconds is the compromise: a missed call's auto-text-back and the inbound
+   * SMS after it land while the dispatcher is still looking at the thread, and the
+   * cost is six requests a minute per open tab. `refetchOnWindowFocus` is what
+   * actually covers the common case — coming back to the tab shows current data
+   * immediately rather than up to ten seconds late.
+   */
+  const LIVE = { refetchInterval: 10_000, refetchOnWindowFocus: true } as const
+
   const convs = useQuery({
     queryKey: ['conversations', tab, sort],
     queryFn: () => listConversations(tab, sort),
+    ...LIVE,
   })
   const active = selected ?? convs.data?.[0]?.id ?? null
   const events = useQuery({
     queryKey: ['events', active, filter],
     queryFn: () => listEvents(active as number, filter),
     enabled: active != null,
+    ...LIVE,
   })
   const current: ConversationSummary | undefined = convs.data?.find((c) => c.id === active)
+
+  // Internal notes are STAFF-only (DECISIONS.md, 2026-09-10) and the backend
+  // refuses a TECH's write with 403. The same rule that disables the filter row
+  // disables the composer's Internal Comment mode.
+  const canWriteInternal = user.role !== 'TECH'
+  const composerModes = [
+    { key: 'SMS', label: 'SMS' },
+    {
+      key: 'INTERNAL_COMMENT',
+      label: 'Internal Comment',
+      blocked: canWriteInternal ? undefined : 'Internal notes are staff-only',
+    },
+  ]
+
+  /**
+   * Why Send is dead, or null when it is live.
+   *
+   * Every one of these is a condition the SERVER also enforces -- this is not the
+   * gate, it is the explanation. Letting someone type a message and only then
+   * discover it was never going anywhere is the failure this avoids, and it is the
+   * same precedent as the disabled Internal Comment row rather than a missing one.
+   */
+  const sendBlocked = (): string | null => {
+    if (!current) return 'No conversation selected.'
+    if (composerType === 'INTERNAL_COMMENT') {
+      return canWriteInternal ? null : 'Internal notes are staff-only.'
+    }
+    if (!current.contact_phone) return 'This contact has no phone number.'
+    if (current.contact_dnd) return 'This contact is on Do Not Disturb.'
+    return null
+  }
+  const blocked = sendBlocked()
+
+  const onSend = async () => {
+    const text = draft.trim()
+    if (!text || blocked || active == null || sending) return
+    setSending(true)
+    setNote(null)
+    try {
+      const r = await sendMessage(active, text, composerType)
+      // The draft is cleared for anything that was RECORDED -- including a refusal,
+      // which writes a row carrying the text. It is kept only when nothing was
+      // written at all (a suppression), so the operator does not have to retype a
+      // message that never existed.
+      if (!r.suppressed) setDraft('')
+      // "queued" and "recorded" are the only two outcomes where the message is
+      // actually on its way (or was never meant to leave). Everything else -- a
+      // refusal, a failure, a suppression, and the stub transport's "sent" --
+      // means it did not go, and is shown as a problem rather than a confirmation.
+      const went = r.reason === 'queued' || r.reason === 'recorded'
+      setNote({ text: sendSentence(r.reason), bad: !went })
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['events', active] }),
+        qc.invalidateQueries({ queryKey: ['conversations'] }),
+      ])
+    } catch (err) {
+      setNote({
+        text: err instanceof ApiError ? err.message : 'The message could not be sent.',
+        bad: true,
+      })
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const onCall = async () => {
+    if (active == null || calling) return
+    setCalling(true)
+    setNote(null)
+    try {
+      const r = await placeCall(active)
+      setNote({ text: r.reason, bad: !r.placed })
+      if (r.placed) {
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ['events', active] }),
+          qc.invalidateQueries({ queryKey: ['conversations'] }),
+        ])
+      }
+    } catch (err) {
+      setNote({
+        text: err instanceof ApiError ? err.message : 'The call could not be placed.',
+        bad: true,
+      })
+    } finally {
+      setCalling(false)
+    }
+  }
 
   const unreadTotal = (convs.data ?? []).reduce((s, c) => s + c.unread_count, 0)
   const allChecked = (convs.data ?? []).length > 0 && checked.length === convs.data!.length
@@ -484,7 +692,18 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                     <IconChevronDown size={16} color="rgb(29,41,57)" />
                   </span>
                 </IconBtn>
-                <IconBtn title="Call (stubbed in v1)"><IconPhone size={24} color="rgb(71,84,103)" /></IconBtn>
+                {/* Click-to-call. owen-main rings an operator's handset first and
+                    then the customer, and bridges them -- so this places a real
+                    call without a browser softphone. */}
+                <IconBtn
+                  title={calling
+                    ? 'Placing the call…'
+                    : 'Call %s'.replace('%s', current?.contact_phone ?? 'this contact')}
+                  onClick={() => void onCall()}
+                >
+                  <IconPhone size={24}
+                    color={calling ? 'rgb(152,162,179)' : 'rgb(71,84,103)'} />
+                </IconBtn>
                 <IconBtn title="Add to Favorites"><IconStar size={24} color="rgb(71,84,103)" /></IconBtn>
                 <IconBtn title="Mark as read"><IconMail size={24} color="rgb(71,84,103)" /></IconBtn>
                 <IconBtn title="Delete Conversation (not implemented in v1)">
@@ -529,35 +748,91 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
 
             {/* composer — measured tray #F7F9FD, inner white radius 4, height 40 */}
             <div className="shrink-0" style={{ backgroundColor: '#F7F9FD', padding: 8 }}>
+              {note && (
+                <div
+                  role="status"
+                  style={{
+                    marginBottom: 6, padding: '6px 10px', borderRadius: 4, fontSize: 13,
+                    color: note.bad ? 'rgb(180,35,24)' : 'rgb(2,122,72)',
+                    backgroundColor: note.bad ? 'rgb(254,243,242)' : 'rgb(236,253,243)',
+                    border: '1px solid '
+                      + (note.bad ? 'rgb(254,205,202)' : 'rgb(171,239,198)'),
+                  }}
+                >
+                  {note.text}
+                </div>
+              )}
+              {blocked && composerType === 'SMS' && (
+                <div style={{ marginBottom: 6, fontSize: 13, color: 'rgb(181,71,8)' }}>
+                  {blocked}
+                </div>
+              )}
               <div className="flex items-center"
                 style={{
                   height: 40, borderRadius: 4, backgroundColor: '#fff',
                   border: '1px solid rgb(234,236,240)',
                 }}>
-                <div className="flex shrink-0 items-center justify-center gap-1"
+                {/* The channel picker. It rendered as decoration before there was
+                    anything to pick; it now chooses what the composer writes. */}
+                <div className="relative flex shrink-0 items-center justify-center"
                   style={{ width: 54 }}>
-                  <IconChat size={16} color="rgb(21,112,239)" />
-                  <IconChevronDown size={14} color="rgb(102,112,133)" />
+                  <button
+                    title={composerType === 'SMS' ? 'Sending as SMS' : 'Writing an internal note'}
+                    aria-label="Message type"
+                    onClick={() => setShowComposerType((s) => !s)}
+                    className="flex items-center gap-1"
+                  >
+                    <IconChat size={16}
+                      color={composerType === 'SMS' ? 'rgb(21,112,239)' : 'rgb(181,71,8)'} />
+                    <IconChevronDown size={14} color="rgb(102,112,133)" />
+                  </button>
+                  {showComposerType && (
+                    <Dropdown
+                      items={composerModes}
+                      value={composerType}
+                      onPick={(k) => setComposerType(k as SendableType)}
+                      onClose={() => setShowComposerType(false)}
+                      up
+                    />
+                  )}
                 </div>
                 <input
                   value={draft}
                   onChange={(ev) => setDraft(ev.target.value)}
-                  placeholder="Type a message"
+                  onKeyDown={(ev) => {
+                    // Enter sends, Shift+Enter does not. This is a single-line input
+                    // measured at 40px, so Shift+Enter cannot insert a newline
+                    // either -- it is reserved rather than implemented, so that
+                    // teaching this composer multi-line later does not change what
+                    // a key people are already pressing does.
+                    if (ev.key === 'Enter' && !ev.shiftKey) {
+                      ev.preventDefault()
+                      void onSend()
+                    }
+                  }}
+                  placeholder={composerType === 'SMS'
+                    ? 'Type a message'
+                    : 'Type an internal note — the customer never sees it'}
                   className="min-w-0 flex-1 outline-none"
                   style={{ fontSize: 14, height: 38 }}
                 />
                 <button
-                  disabled
-                  title="SMS is UI-only in v1 — the transport is a logging no-op"
+                  onClick={() => void onSend()}
+                  disabled={Boolean(blocked) || sending || !draft.trim()}
+                  title={blocked ?? (composerType === 'SMS'
+                    ? 'Send this text message'
+                    : 'Save this internal note')}
                   className="mr-1 flex items-center gap-1"
                   style={{
                     height: 30, padding: '0 10px', borderRadius: 4,
                     color: '#fff', backgroundColor: 'rgb(21,112,239)',
-                    opacity: 0.5, cursor: 'not-allowed',
+                    opacity: (blocked || sending || !draft.trim()) ? 0.5 : 1,
+                    cursor: (blocked || sending || !draft.trim())
+                      ? 'not-allowed' : 'pointer',
                   }}
                 >
                   <IconChat size={14} color="#fff" />
-                  <IconChevronDown size={12} color="#fff" />
+                  <span style={{ fontSize: 13 }}>{sending ? 'Sending…' : 'Send'}</span>
                 </button>
               </div>
             </div>

@@ -63,7 +63,11 @@ def _can_message(contact: Contact | None) -> tuple[bool, str]:
     return True, ""
 
 
-def _thread_for(db: Session, contact_id: int) -> Conversation:
+def thread_for(db: Session, contact_id: int) -> Conversation:
+    """The contact's thread, created on first use. Public: the API places
+    outbound call records on a thread too, and a second copy of "find or create
+    the conversation" is how two callers end up with two threads for one
+    contact."""
     conv = db.query(Conversation).filter(
         Conversation.contact_id == contact_id).one_or_none()
     if conv is None:
@@ -73,18 +77,35 @@ def _thread_for(db: Session, contact_id: int) -> Conversation:
     return conv
 
 
+# What the API and the CLI report for each outcome of a real send attempt. The
+# event's `delivery_status` is the machine-readable truth; this is the one-line
+# summary that goes back on the response.
+#
+# LOGGED_ONLY keeps saying "sent" rather than "logged": that is the wording the CLI
+# and three tests already expect, and the delivery_status beside it is what actually
+# tells the reader nothing was transmitted.
+def _outcome_reason(ref) -> str:
+    if ref.status is DeliveryStatus.QUEUED:
+        return "queued"
+    if ref.status is DeliveryStatus.REFUSED:
+        return "refused: " + (ref.detail or "the phone system refused it")
+    if ref.status is DeliveryStatus.FAILED:
+        return "failed: " + (ref.detail or "the phone system could not be reached")
+    return "sent"
+
+
 def _record_outbound(db: Session, contact: Contact, body: str,
                      type_: EventType = EventType.SMS) -> ConversationEvent:
     """Send via the transport seam and record the result on the thread."""
     ref = get_transport().send_sms(to=contact.phone or "", body=body,
                                    from_number="")
-    conv = _thread_for(db, contact.id)
+    conv = thread_for(db, contact.id)
     ev = ConversationEvent(
         conversation_id=conv.id, type=type_, direction=Direction.OUTBOUND,
         occurred_at=_utcnow(), body=body,
-        delivery_status=(DeliveryStatus.SENT if ref.delivered
-                         else DeliveryStatus.LOGGED_ONLY),
-        provider_ref=ref.provider_ref)
+        delivery_status=ref.status,
+        delivery_detail=ref.detail or None,
+        provider_ref=ref.provider_ref or None)
     db.add(ev)
     conv.last_event_at = ev.occurred_at
     db.flush()
@@ -110,7 +131,7 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
     directly; routing them through here would change 15 passing tests for no gain.
     """
     if type_ in INTERNAL_TYPES:
-        conv = _thread_for(db, contact.id)
+        conv = thread_for(db, contact.id)
         ev = ConversationEvent(
             conversation_id=conv.id, type=type_, direction=Direction.OUTBOUND,
             occurred_at=_utcnow(), body=body, subject=subject)
@@ -132,17 +153,24 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
         ref = get_transport().send_sms(to=contact.phone or "", body=body,
                                        from_number="")
 
-    conv = _thread_for(db, contact.id)
+    conv = thread_for(db, contact.id)
     ev = ConversationEvent(
         conversation_id=conv.id, type=type_, direction=Direction.OUTBOUND,
         occurred_at=_utcnow(), body=body, subject=subject,
-        delivery_status=(DeliveryStatus.SENT if ref.delivered
-                         else DeliveryStatus.LOGGED_ONLY),
-        provider_ref=ref.provider_ref)
+        delivery_status=ref.status,
+        delivery_detail=ref.detail or None,
+        provider_ref=ref.provider_ref or None)
     db.add(ev)
     conv.last_event_at = ev.occurred_at
     db.flush()
-    return ev, "sent"
+    # A REFUSED send is recorded, not discarded. It differs from a DND/no-phone
+    # suppression above, which writes nothing: there the send was stopped by OUR
+    # rule before anything was attempted, so there is nothing to show. Here the
+    # operator typed a message, pressed send, and the phone system declined it —
+    # the message they tried to send and the reason it did not go are exactly what
+    # they need to see on the thread. `delivery_status` keeps it from ever reading
+    # as sent.
+    return ev, _outcome_reason(ref)
 
 
 # ---------- triggers (called from the API) ----------

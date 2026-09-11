@@ -220,6 +220,9 @@ export type ConversationSummary = {
   contact_id: number
   contact_name: string | null
   contact_phone: string | null
+  /** Do Not Disturb. The composer disables Send rather than let a message be typed
+   *  and then silently suppressed. */
+  contact_dnd: boolean
   last_event_at: string
   unread_count: number
   starred: boolean
@@ -234,7 +237,20 @@ export type ThreadEvent = {
   subject: string | null
   duration_seconds: number | null
   recording_url: string | null
+  /**
+   * CALL only: completed | no-answer | busy | voicemail | failed, or null when the
+   * outcome is not known yet (an outbound call we just placed) or was never sent.
+   */
+  call_status: string | null
+  /**
+   * QUEUED -> SENT -> DELIVERED, or FAILED. Plus two that are not on that ladder:
+   * REFUSED (it never left, and we know why) and LOGGED_ONLY (recorded by the stub
+   * transport, never transmitted). Null on inbound messages and on internal notes,
+   * neither of which is delivered to anyone.
+   */
   delivery_status: string | null
+  /** The reason, as a sentence, when the status alone does not explain itself. */
+  delivery_detail: string | null
 }
 
 export const listConversations = (tab: string, sort: string) =>
@@ -246,6 +262,42 @@ export const listEvents = (convId: number, filter: string) =>
   get<ThreadEvent[]>(
     `/api/conversations/${convId}/events?filter=${encodeURIComponent(filter)}`,
   )
+
+/** What the composer may write. Internal notes are STAFF-only (DECISIONS.md). */
+export type SendableType = 'SMS' | 'INTERNAL_COMMENT'
+
+export type SentMessage = {
+  /**
+   * True when OUR rules stopped the send before anything was attempted -- the
+   * contact is on DND, or has no phone number. Nothing is written in that case, so
+   * there is no row to show and `id` is null.
+   */
+  suppressed: boolean
+  /** "queued" | "sent" | "recorded" | "refused: ..." | "suppressed: ..." */
+  reason: string
+  id: number | null
+  conversation_id: number | null
+  delivery_status?: string | null
+  delivery_detail?: string | null
+}
+
+export const sendMessage = (convId: number, body: string, type: SendableType) =>
+  send<SentMessage>(`/api/conversations/${convId}/messages`, 'POST', { body, type })
+
+export type CallPlaced = {
+  /** False for a refusal -- dark link, not allowlisted, DND, no number. */
+  placed: boolean
+  /** Always a sentence fit to show the operator, whether it worked or not. */
+  reason: string
+  id: number | null
+}
+
+/**
+ * Ring the customer from the bound DID. There is no browser softphone: owen-main
+ * rings an operator's handset first, then the customer, and bridges them.
+ */
+export const placeCall = (convId: number) =>
+  send<CallPlaced>(`/api/conversations/${convId}/call`, 'POST')
 
 export const money = (cents: number) =>
   (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })

@@ -250,7 +250,13 @@ _ADMIN_PREFIXES = ("/api/users", "/api/jobs")
 def _scope_allows(scopes: frozenset[str], method: str, path: str) -> bool:
     if not scopes:
         return True                                   # role governs
-    if "events:write" in scopes and method == "POST" and path == "/api/events":
+    # The telephony ingest surface. `/api/events` takes call and message events;
+    # `/api/events/delivery` takes the carrier delivery receipts that answer "did
+    # the text arrive". Both are the same feed from the same machine account, so
+    # they sit behind the same single scope rather than making the owner mint a
+    # second token to turn on delivery status.
+    if ("events:write" in scopes and method == "POST"
+            and path in ("/api/events", "/api/events/delivery")):
         return True
     if path.startswith(_ADMIN_PREFIXES):
         return "admin" in scopes
