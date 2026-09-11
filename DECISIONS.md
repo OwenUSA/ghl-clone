@@ -2138,3 +2138,88 @@ always lit: it is the screen you are on, which is all the owner asked it to be.
 search is open, so the default screen is byte-for-byte the one under measurement;
 the "Team inbox" title is left alone even when the scope is "assigned to me",
 because it is measured text and the rail is the scope indicator.
+
+## AMENDMENT (2026-09-11): a contact delete detaches appointments too, and refuses first
+
+`DELETE /api/contacts/{id}` returned a raw **500** for any contact that had ever had an
+appointment. Reproduced on production while clearing demo data:
+
+    sqlalchemy.exc.IntegrityError: (psycopg.errors.ForeignKeyViolation)
+    update or delete on table "contacts" violates foreign key constraint
+    "appointments_contact_id_fkey" on table "appointments"
+
+The endpoint reasoned about two of the three things that hang off a contact and was blind
+to the third. It now reasons about all three, and the rule is one sentence: **a contact
+delete destroys nothing that carries meaning of its own.**
+
+| Hangs off a contact | What the delete does | Why |
+|---|---|---|
+| Opportunities | detached (`contact_id = None`) | `custom_fields.owen_call_id` is the telephony join key |
+| Appointments | detached, pending reminders withdrawn | a booking is the record that a slot was taken |
+| Conversations | deleted | nothing outside this record joins to them; `contact_id` is NOT NULL and nothing cascades them |
+
+### Refuse first, detach on `force` — option (a), not a silent detach
+
+The refusal is one 409 naming **both** kinds and every id, not one per kind: an admin who
+clears the opportunities only to be refused again over the bookings has been made to play
+whack-a-mole with a confirmation dialog.
+
+`force=true` then detaches both. Rejected alternatives, on the record:
+
+- **Detaching appointments silently, with no 409.** `appointments.contact_id` is nullable,
+  so this was available and is what SQLAlchemy's default relationship behaviour would have
+  done on its own. Rejected: an appointment is a commitment to a customer and somebody may
+  still be driving out to it. Severing one is a deliberate act. It is also the existing
+  convention on this endpoint — opportunities have always been refused, never quietly
+  detached.
+- **Deleting the appointments under `force`.** Rejected for the same reason
+  `DELETE /api/appointments/{id}` cancels rather than deletes: GHL's Appointment report has
+  a Cancelled tile, so a booking is a record. A detached appointment keeps its title, slot,
+  calendar, assignee and notes, and the calendar still draws it — without a customer name.
+- **Cancelling future appointments under `force`.** Not done. It is a product decision
+  about what a deleted customer's diary should look like, not part of fixing a 500, and it
+  is the owner's call. The status is left exactly as it was.
+
+The pending reminders **are** withdrawn, through `_drop_pending_reminders()`, releasing the
+dedupe key like every other retire path. `_h_appointment_reminder` already skips a booking
+whose contact has gone, so nothing could have been sent — but "could never send" and "is
+not queued" are different things to the dispatcher reading `ghl jobs list --status
+pending`, which is the same distinction `cancel_appointment` already draws.
+
+### `DELETE /api/appointments/{id}` still cancels, and now says so in the body
+
+The behaviour is unchanged and still correct. What changed is that only the docstring knew:
+the response now carries `deleted: false` beside `status: "cancelled"`. **No hard delete
+was added.** If one is ever wanted it should be a separate, named endpoint, not this route
+quietly changing meaning.
+
+### The whole class of bug, audited (every `@app.delete` route)
+
+Driven with foreign keys **enforced**; `PRAGMA foreign_key_check` empty afterwards in all
+cases. Nothing else answers a delete with a raw `IntegrityError`:
+
+- `/api/contacts/{id}` — fixed here.
+- `/api/pipelines/{id}` — already this exact shape: refuses unless empty, detaches the
+  nullable `saved_views.pipeline_id` and `calendars.pipeline_id`, names both in the body.
+- `/api/stages/{id}` — refuses while opportunities hold it; nothing else points at a stage.
+- `/api/opportunities/{id}`, `/api/saved-views/{id}`, `/api/contacts/{id}/tags/{tag_id}` —
+  leaves. Nothing carries a foreign key to them.
+- `/api/appointments/{id}` — a status change; deletes no row.
+- `/api/auth/tokens/{id}` — revocation; sets `revoked_at`, deletes no row.
+
+**The gap is in what does not exist.** There is no delete endpoint for **users**,
+**calendars** or **tags**, and each would land in this class the day one is added:
+`api_tokens.user_id` and `contact_tags.tag_id` are NOT NULL (so a user or tag delete has to
+decide, not detach), while `appointments.calendar_id` is nullable (a calendar delete can
+detach, the way pipelines do). Not built — adding a delete endpoint nobody asked for is a
+bigger change than the bug being fixed.
+
+### SQLite hides this class of bug from the test suite
+
+`PRAGMA foreign_keys` defaults to **off**, so the production failure cannot reproduce
+itself here by accident: against the pre-fix code, the same delete "succeeded" and silently
+left an appointment pointing at a deleted contact. `test_delete_with_appointments.py` turns
+the pragma on for the tests that need it — and asserts the pragma really is on first, so
+the guard cannot rot into a test that proves nothing. It was **not** turned on globally in
+`app/db.py`: that is shared infrastructure several branches would each have to edit, the
+same reasoning already recorded for the shared-`TMPDIR` hazard above.

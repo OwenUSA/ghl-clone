@@ -498,6 +498,8 @@ export const patchAppointment = (id: number, body: AppointmentPatch) =>
 export type AppointmentCancelled = {
   id: number
   status: string
+  /** Always false. The route is a DELETE; the outcome is a status change. */
+  deleted: false
   reminders_cancelled: number
 }
 
@@ -508,6 +510,14 @@ export type ContactTag = { id: number; name: string; color: string }
 
 /** Enough to name an opportunity in the "these will be detached" confirmation. */
 export type ContactOpportunity = { id: number; title: string }
+
+/** The same, for the bookings that delete would sever from this customer. */
+export type ContactAppointment = {
+  id: number
+  title: string
+  starts_at: string
+  status: string
+}
 
 export type ContactDetail = {
   id: number
@@ -529,6 +539,7 @@ export type ContactDetail = {
   owner_name: string | null
   tags: ContactTag[]
   opportunities: ContactOpportunity[]
+  appointments: ContactAppointment[]
   custom_fields: Record<string, unknown>
 }
 
@@ -566,15 +577,23 @@ export const addContactTag = (id: number, name: string) =>
 export const removeContactTag = (id: number, tagId: number) =>
   send<ContactDetail>(`/api/contacts/${id}/tags/${tagId}`, 'DELETE')
 
-export type ContactDeleted = { deleted: number; detached_opportunities: number[] }
+export type ContactDeleted = {
+  deleted: number
+  detached_opportunities: number[]
+  detached_appointments: number[]
+  /** Pending reminders retired with the detached appointments. */
+  reminders_cancelled: number
+}
 
 /**
- * Delete a contact. ADMIN only, and 409 while it still has opportunities.
+ * Delete a contact. ADMIN only, and 409 while it still has opportunities or
+ * appointments.
  *
- * `force` does NOT mean "delete the opportunities too" -- they are detached and
- * kept, because `custom_fields.owen_call_id` is the telephony project's join key
- * (DECISIONS.md). It means "yes, detach them". The conversations are deleted
- * either way.
+ * `force` does NOT mean "delete those too" -- both are detached and kept. An
+ * opportunity carries `custom_fields.owen_call_id`, the telephony project's join
+ * key (DECISIONS.md); an appointment is the record that a slot was taken, the
+ * same reason cancelling one keeps its row. `force` means "yes, detach them".
+ * The conversations are deleted either way.
  */
 export const deleteContact = (id: number, force = false) =>
   send<ContactDeleted>(`/api/contacts/${id}${force ? '?force=true' : ''}`, 'DELETE')

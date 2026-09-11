@@ -200,10 +200,13 @@ export function ContactDetailsPanel({
       onClose?.()
       qc.removeQueries({ queryKey: ['contact', contactId] })
       qc.invalidateQueries({ queryKey: ['contacts'] })
-      // Its conversations were deleted with it, and its opportunities are still
-      // there but now show no customer.
+      // Its conversations were deleted with it, and its opportunities and
+      // appointments are still there but now show no customer.
       qc.invalidateQueries({ queryKey: ['conversations'] })
       qc.invalidateQueries({ queryKey: ['opportunities'] })
+      // ...and so are its appointments, which the calendar draws with a customer
+      // name that is now gone.
+      qc.invalidateQueries({ queryKey: ['appointments'] })
     },
     onError: (e: Error) => {
       // 409 is the backend refusing to detach opportunities behind the user's
@@ -574,11 +577,20 @@ export function ContactDetailsPanel({
                       : detachSentence(c, conflict)}
                   </div>
 
-                  {confirm === 'detach' && c.opportunities.length > 0 && (
+                  {confirm === 'detach'
+                    && c.opportunities.length + c.appointments.length > 0 && (
                     <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12,
                                  color: 'rgb(102,112,133)' }}>
                       {c.opportunities.map((o) => (
-                        <li key={o.id}>#{o.id} {o.title}</li>
+                        <li key={`o${o.id}`}>#{o.id} {o.title}</li>
+                      ))}
+                      {/* The date is what tells the user whether anyone is still
+                          expecting this visit. The booking itself is kept. */}
+                      {c.appointments.map((a) => (
+                        <li key={`a${a.id}`}>
+                          #{a.id} {a.title} -- {new Date(a.starts_at).toLocaleString()}
+                          {a.status === 'cancelled' ? ' (cancelled)' : ''}
+                        </li>
                       ))}
                     </ul>
                   )}
@@ -661,19 +673,39 @@ function Row({ label, value }: { label: string; value: string | null }) {
 /**
  * What the 409 means, in a sentence.
  *
+ * Two kinds of row block the delete, and both survive it detached: opportunities,
+ * which carry the telephony project's join key, and appointments, where a booking
+ * is the record that a slot was taken -- and where `appointments.contact_id` is a
+ * real foreign key, so one left pointing at a deleted contact is a database error
+ * rather than a delete.
+ *
  * The backend's own 409 detail names the ids too, but it ends in "pass force=true",
  * which is written for a caller and not for the person reading this panel. The
- * loaded contact carries the same list, so it is used when present; the 409's text
+ * loaded contact carries both lists, so they are used when present; the 409's text
  * is the fallback for the case where the two disagree (someone attached an
  * opportunity since this panel loaded).
  */
 function detachSentence(c: ContactDetail, conflict: string | null): string {
   const opps = c.opportunities
-  if (!opps.length) return conflict ?? 'This contact still has opportunities.'
-  const ids = opps.map((o) => `#${o.id}`).join(', ')
-  return opps.length === 1
-    ? `This contact has 1 opportunity (${ids}). It will be kept, but detached `
-      + 'from this customer. Deleting cannot be undone.'
-    : `This contact has ${opps.length} opportunities (${ids}). They will be kept, `
-      + 'but detached from this customer. Deleting cannot be undone.'
+  const appts = c.appointments
+  if (!opps.length && !appts.length) {
+    return conflict ?? 'This contact still has records attached to it.'
+  }
+  const held: string[] = []
+  if (opps.length) {
+    const ids = opps.map((o) => `#${o.id}`).join(', ')
+    held.push(opps.length === 1
+      ? `1 opportunity (${ids})`
+      : `${opps.length} opportunities (${ids})`)
+  }
+  if (appts.length) {
+    const ids = appts.map((a) => `#${a.id}`).join(', ')
+    held.push(appts.length === 1
+      ? `1 appointment (${ids})`
+      : `${appts.length} appointments (${ids})`)
+  }
+  const pronoun = opps.length + appts.length === 1 ? 'It' : 'They'
+  return `This contact has ${held.join(' and ')}. `
+    + `${pronoun} will be kept, but detached from this customer. `
+    + 'Deleting cannot be undone.'
 }

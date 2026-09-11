@@ -311,6 +311,31 @@ def test_the_409_becomes_a_confirmation_naming_the_opportunities():
         "name them is to scrape the 409's wording")
 
 
+def test_the_confirmation_names_the_appointments_as_well_as_the_opportunities():
+    """Added 2026-09-11 with the appointment fix. The 409 now fires over bookings
+    too, so a contact with an appointment and no opportunity reaches this dialog —
+    and used to be told "This contact still has opportunities." """
+    source = _read("components", "ContactDetailsPanel.tsx")
+    sentence = source.split("function detachSentence(", 1)[1].split("\n}", 1)[0]
+    assert "c.appointments" in sentence, (
+        "the sentence cannot name a booking it never reads")
+    assert "appts.length === 1" in sentence, "'1 appointments' in the confirmation"
+    assert "still has opportunities" not in sentence, (
+        "the fallback still claims opportunities are the only thing in the way")
+
+    # The list under the sentence has to show them too, or the user confirms a
+    # detach against an itemisation that is missing half of what it will touch.
+    detach_list = source.split("confirm === 'detach'", 1)[1].split("</ul>", 1)[0]
+    assert "c.appointments.map(" in detach_list, (
+        "the bookings about to lose their customer are not itemised")
+
+    # A detached appointment keeps drawing on the calendar, without a customer
+    # name, so that view has to be refetched like the other three.
+    ok = source.split("const del = useMutation({", 1)[1].split("onError:", 1)[0]
+    assert "invalidateQueries({ queryKey: ['appointments'] })" in ok, (
+        "the calendar still names a contact that no longer exists")
+
+
 def test_the_delete_does_not_ride_the_panels_shared_write_banner():
     """`writeError` is rendered as a red alert at the top of the panel. Joining the
     delete to it would paint the 409 -- a step in the flow -- as a failure."""
