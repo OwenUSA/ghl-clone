@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
-  createAppointment, listCalendars, listUsers,
+  createAppointment, listCalendars, listOpenOpportunities, listUsers,
 } from '../lib/api'
 import {
   dateInputValue, fromInputs, timeInputValue,
@@ -27,6 +27,16 @@ import { ContactPicker } from './ContactPicker'
  * click on a booking opens. This dialog only ever creates: `POST` and `PATCH`
  * take different field sets (`status` among them) and rescheduling has to retire
  * the customer's superseded reminder jobs, which a create never does.
+ *
+ * It has TWO entry points beyond the calendar now, and one component rather than
+ * a second dialog, so the validation and the reminder scheduling cannot drift:
+ *
+ *   * from the CALENDAR — the Opportunity control is an optional picker of open
+ *     deals, so a booking can be bound to one at the moment it is made;
+ *   * from an OPPORTUNITY — `lockedOpportunity` names the deal, and the control
+ *     becomes read-only text. The contact and a suggested title arrive prefilled
+ *     from the deal; both stay editable, because the visit is not always for the
+ *     person whose name is on the card.
  */
 const INPUT: React.CSSProperties = {
   width: '100%', height: 36, marginTop: 4, fontSize: 14,
@@ -46,6 +56,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 export function NewAppointmentDialog({
   initialStart, initialEnd, user, onClose, onCreated,
+  initialTitle = '', initialContact = null, lockedOpportunity,
 }: {
   initialStart: Date
   initialEnd: Date
@@ -53,9 +64,20 @@ export function NewAppointmentDialog({
   user: Me
   onClose: () => void
   onCreated: () => void
+  /** Prefills, when the dialog is opened from a deal. Both stay editable. */
+  initialTitle?: string
+  initialContact?: { id: number; name: string } | null
+  /**
+   * Opened from an opportunity: the booking is for THIS deal and the picker is
+   * replaced by its name. Absent on the calendar, where the deal is optional and
+   * chosen from the open ones.
+   */
+  lockedOpportunity?: { id: number; title: string }
 }) {
-  const [title, setTitle] = useState('')
-  const [contact, setContact] = useState<{ id: number; name: string } | null>(null)
+  const [title, setTitle] = useState(initialTitle)
+  const [contact, setContact] = useState<{ id: number; name: string } | null>(
+    initialContact)
+  const [opportunityId, setOpportunityId] = useState<string>('')
   const [calendarId, setCalendarId] = useState<string>('')
   const [userId, setUserId] = useState<string>('')
   const [notes, setNotes] = useState('')
@@ -67,6 +89,14 @@ export function NewAppointmentDialog({
 
   const calendars = useQuery({ queryKey: ['calendars'], queryFn: listCalendars })
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
+  // Only fetched when the deal is not already decided. Open deals only: binding a
+  // new visit to a deal that is already won or lost is not what this control is
+  // for, and an already-linked booking survives the deal being won regardless.
+  const deals = useQuery({
+    queryKey: ['opportunities', 'open', 'all-pipelines'],
+    queryFn: listOpenOpportunities,
+    enabled: !lockedOpportunity,
+  })
 
   // Escape closes, matching the opportunity overflow menu's precedent. The
   // backdrop click is on the wrapper below.
@@ -100,6 +130,9 @@ export function NewAppointmentDialog({
         contact_id: contact?.id ?? null,
         calendar_id: calendarId ? Number(calendarId) : null,
         assigned_user_id: userId ? Number(userId) : null,
+        opportunity_id: lockedOpportunity
+          ? lockedOpportunity.id
+          : opportunityId ? Number(opportunityId) : null,
         notes: notes.trim() || null,
       }),
     onSuccess: onCreated,
@@ -144,6 +177,36 @@ export function NewAppointmentDialog({
 
         <Field label="Contact">
           <ContactPicker value={contact} onChange={setContact} user={user} />
+        </Field>
+
+        <Field label="Opportunity">
+          {lockedOpportunity ? (
+            /* Booked FROM this deal. Read-only rather than a picker preset to it:
+               the deal is the reason the dialog is open, and quietly letting it be
+               changed here would make "Book" on a deal mean something else. */
+            <input
+              readOnly
+              value={lockedOpportunity.title}
+              title="This booking is for the deal it was opened from"
+              style={{ ...INPUT, backgroundColor: 'rgb(249,250,251)' }}
+            />
+          ) : (
+            <select
+              value={opportunityId}
+              onChange={(e) => setOpportunityId(e.target.value)}
+              style={INPUT}
+            >
+              <option value="">Not linked to a deal</option>
+              {deals.data?.map((o) => (
+                <option key={o.id} value={o.id}>{o.title}</option>
+              ))}
+            </select>
+          )}
+          {!lockedOpportunity && (
+            <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 4 }}>
+              Optional. A visit can be booked before anybody has filed a deal for it.
+            </div>
+          )}
         </Field>
 
         <Field label="Calendar">
