@@ -210,6 +210,13 @@ class Contact(Base):
     tags: Mapped[list["ContactTag"]] = relationship(
         back_populates="contact", cascade="all, delete-orphan")
     opportunities: Mapped[list["Opportunity"]] = relationship(back_populates="contact")
+    # No cascade, for the same reason opportunities have none: DELETE
+    # /api/contacts detaches both and deletes neither. The relationship exists so
+    # the detail payload can NAME the appointments the delete would sever —
+    # `appointments.contact_id` is a real foreign key, and a contact that still
+    # holds one cannot be deleted at all (see `delete_contact`).
+    appointments: Mapped[list["Appointment"]] = relationship(
+        back_populates="contact", order_by="Appointment.starts_at")
     owner: Mapped["User | None"] = relationship()
 
     @property
@@ -437,5 +444,5 @@ class Appointment(Base):
     status: Mapped[str] = mapped_column(String(40), default="confirmed")
     notes: Mapped[str | None] = mapped_column(Text)
 
-    contact: Mapped[Contact | None] = relationship()
+    contact: Mapped[Contact | None] = relationship(back_populates="appointments")
     calendar: Mapped["Calendar | None"] = relationship()

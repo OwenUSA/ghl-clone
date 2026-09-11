@@ -295,6 +295,11 @@ def _contact_detail(c: Contact) -> dict:
         # are about to be detached before anyone confirms. Reading them back out of
         # the 409's prose would tie the panel to the wording of an error message.
         "opportunities": [{"id": o.id, "title": o.title} for o in c.opportunities],
+        # Same reason, added 2026-09-11: the delete refuses over appointments too,
+        # and the panel has to say which bookings are about to lose their customer
+        # before anyone confirms.
+        "appointments": [{"id": a.id, "title": a.title, "starts_at": a.starts_at,
+                          "status": a.status} for a in c.appointments],
         "custom_fields": c.custom_fields or {},
     }
 

@@ -467,6 +467,14 @@ export type ContactTag = { id: number; name: string; color: string }
 /** Enough to name an opportunity in the "these will be detached" confirmation. */
 export type ContactOpportunity = { id: number; title: string }
 
+/** The same, for the bookings that delete would sever from this customer. */
+export type ContactAppointment = {
+  id: number
+  title: string
+  starts_at: string
+  status: string
+}
+
 export type ContactDetail = {
   id: number
   name: string
@@ -487,6 +495,7 @@ export type ContactDetail = {
   owner_name: string | null
   tags: ContactTag[]
   opportunities: ContactOpportunity[]
+  appointments: ContactAppointment[]
   custom_fields: Record<string, unknown>
 }
 
