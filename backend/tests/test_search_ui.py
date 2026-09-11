@@ -266,7 +266,15 @@ def test_a_searched_record_opens_the_same_panel_a_clicked_row_opens():
                         ("ConversationsPage", "setSelected")):
         assert "focus={focusFor(" in app
         source = read("pages", page + ".tsx")
-        assert re.search(r"if \(focus\) %s\(focus\.id\)" % state, source), page
+        # The effect keyed on `focus`, whatever else it has grown to do.
+        # (Conversations now also widens its scope and clears its in-place
+        # search, so that the thread the palette asked for is one the narrowed
+        # list can actually show -- it opens the record either way, which is
+        # what this pins.)
+        effect = source.split("}, [focus])", 1)
+        assert len(effect) == 2, "%s has no effect keyed on focus" % page
+        body = effect[0].rsplit("useEffect(", 1)[1]
+        assert re.search(r"%s\(focus\.id\)" % state, body), page
 
 
 def test_the_internal_comment_filter_is_disabled_for_a_tech_not_removed():

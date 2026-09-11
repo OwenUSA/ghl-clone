@@ -257,10 +257,25 @@ export type ThreadEvent = {
   delivery_detail: string | null
 }
 
-export const listConversations = (tab: string, sort: string) =>
-  get<ConversationSummary[]>(
-    `/api/conversations?tab=${encodeURIComponent(tab)}&sort=${encodeURIComponent(sort)}`,
-  )
+/**
+ * The inbox list.
+ *
+ * `assigned` and `q` are the icon rail: "Assigned to me" / "Team inbox", and the
+ * search that narrows the inbox in place. All four arguments narrow ONE query
+ * and intersect, so the Unread badge and the list it labels are always computed
+ * over the same set.
+ */
+export const listConversations = (
+  tab: string, sort: string, assigned: 'all' | 'me' = 'all', q = '',
+) => {
+  // URLSearchParams, not template interpolation: a `+` or a `&` typed into the
+  // search box would otherwise arrive as a different query than the one on
+  // screen. (An ISO timestamp's `+00:00` decoding as a space is the same bug
+  // this project has already been bitten by once.)
+  const sp = new URLSearchParams({ tab, sort, assigned })
+  if (q.trim()) sp.set('q', q.trim())
+  return get<ConversationSummary[]>(`/api/conversations?${sp}`)
+}
 
 export const listEvents = (convId: number, filter: string) =>
   get<ThreadEvent[]>(

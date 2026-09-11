@@ -1487,7 +1487,9 @@ def list_conversations(
     db: Session = Depends(get_db),
     tab: Literal["unread", "all", "recent", "starred"] = "all",
     sort: str = "latest",
-    _: auth.Principal = auth.ANY_USER):
+    assigned: Literal["all", "me"] = "all",
+    q: str | None = None,
+    principal: auth.Principal = auth.ANY_USER):
     """Tabs and sort options are the measured GHL set.
 
     Tabs:  Unread | All | Recent | Starred
@@ -1496,12 +1498,61 @@ def list_conversations(
     SLA sorts are accepted but fall back to recency: this account has no SLA
     configured ("SLA has not been set. Go to Settings to configure."), so there is
     nothing measured to replicate yet.
+
+    `assigned` and `q` are the Conversations icon rail — "Assigned to me" /
+    "Team inbox", and the in-place search that narrows the inbox you are looking
+    at (the ctrl+K palette is the one that finds anything anywhere).
+
+    **All four narrow the same query and INTERSECT.** "My conversations, unread,
+    matching Reyes" is a reasonable thing to ask for, and each control answers a
+    different question — scope: whose, tab: what state, q: which contact, sort:
+    in what order. Applying them anywhere but here would mean the Unread badge
+    and the list it labels could be computed over different sets again.
+
+    **`assigned` is `Contact.owner_id`, and there is deliberately no assignee on
+    `Conversation`.** A thread is correspondence with a customer, and the
+    customer already has an owner — the one shown in the contact panel. A second
+    column would be a second answer to "whose is this" with nothing keeping the
+    two in step, and no migration is worth that.
+
+    Neither narrows a role's view: this endpoint is ANY_USER and returns the
+    whole team inbox by default, exactly as before.
     """
     stmt = select(Conversation).options(selectinload(Conversation.contact))
     if tab == "unread":
         stmt = stmt.where(Conversation.unread_count > 0)
     elif tab == "starred":
         stmt = stmt.where(Conversation.starred.is_(True))
+
+    if assigned == "me":
+        # A contact with no owner belongs to nobody, so it is in the team inbox
+        # and in no one's "assigned to me" — an IS NULL never equals a user id.
+        stmt = stmt.join(Contact, Conversation.contact_id == Contact.id).where(
+            Contact.owner_id == principal.user_id)
+
+    if q and q.strip():
+        # NAME and PHONE only, which is exactly what the row on screen shows.
+        # Matching a field the row does not display (an email, a business name)
+        # produces a result whose reason is invisible — the user sees a row that
+        # plainly does not match what they typed. The palette already searches
+        # those, and that is the control for "find anything anywhere".
+        text = q.strip()
+        like = contains(text)
+        esc = LIKE_ESCAPE
+        terms = [Contact.first_name.ilike(like, escape=esc),
+                 Contact.last_name.ilike(like, escape=esc),
+                 (Contact.first_name + " "
+                  + Contact.last_name).ilike(like, escape=esc),
+                 Contact.phone.ilike(like, escape=esc)]
+        # A number typed the way a caller ID reads it has to find the row
+        # whatever shape the number is stored in — app/phone_match.py.
+        if phone_match.looks_like_phone(text):
+            terms.append(phone_match.phone_clause(Contact.phone, text))
+        # One join however many filters asked for it: joining twice is an error
+        # on Postgres and a silent cross product waiting to happen.
+        if assigned != "me":
+            stmt = stmt.join(Contact, Conversation.contact_id == Contact.id)
+        stmt = stmt.where(or_(*terms))
 
     oldest = sort.startswith("oldest")
     col = Conversation.last_event_at
