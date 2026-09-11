@@ -11,7 +11,19 @@ Shape is driven by what was measured in the live GHL account (see DECISIONS.md):
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, true
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    true,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -191,6 +203,26 @@ class Contact(Base):
     phone: Mapped[str | None] = mapped_column(String(40), index=True)
     business_name: Mapped[str | None] = mapped_column(String(200))
     source: Mapped[str | None] = mapped_column(String(120))
+
+    # Where the roof is. Added 2026-09-11 for the Workiz import, which is the first
+    # thing that ever had an address to put anywhere: 856 real client records, every
+    # one of them carrying one, and a roofing CRM that cannot say where the job is
+    # is missing the field the work is organised around.
+    #
+    # Four columns rather than one blob because the two exports disagree about the
+    # shape: `workiz_jobs.csv` already has City / State / Zip code as separate
+    # columns, while `workiz_clients.csv` has a single combined string. Splitting is
+    # the only way those two can agree on one record, and a city column is what
+    # makes "everything in Palmetto this week" answerable later.
+    #
+    # All four are NULLABLE and nothing backfills them. Production holds real
+    # contacts (CLAUDE.md) which simply have no address, and that is not an error —
+    # exactly the stance `phone` takes. Anything the importer cannot confidently
+    # split goes into `address_street` whole rather than being dropped.
+    address_street: Mapped[str | None] = mapped_column(String(255))
+    address_city: Mapped[str | None] = mapped_column(String(120))
+    address_state: Mapped[str | None] = mapped_column(String(80))
+    address_postal_code: Mapped[str | None] = mapped_column(String(20))
 
     # Fields the measured Contact Details panel renders (captures/conversations):
     # Owner, Followers, Tags, First/Last name, Email, Phone, Date of birth,
@@ -443,6 +475,90 @@ class Appointment(Base):
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(40), default="confirmed")
     notes: Mapped[str | None] = mapped_column(Text)
+    # The deal this visit is for. NULLABLE and deliberately NOT cascaded: deleting
+    # an opportunity detaches the booking and leaves it standing, exactly as
+    # deleting a contact detaches its opportunities. A booked visit is a promise to
+    # a customer and must survive a deal record being tidied up.
+    opportunity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("opportunities.id"), index=True)
 
     contact: Mapped[Contact | None] = relationship(back_populates="appointments")
     calendar: Mapped["Calendar | None"] = relationship()
+    opportunity: Mapped["Opportunity | None"] = relationship()
+
+
+class CustomFieldDef(Base):
+    """A job question the owner defines himself: "How many stories?", "Where is
+    the leak located?", "What type of roof?".
+
+    Three decisions are baked into the shape of this table, all the owner's:
+
+    * **It describes, it does not store.** The answers stay in the existing
+      `Opportunity.custom_fields` JSON blob, keyed by `key`. This table says a
+      field exists, what type it is and what its options are; nothing here holds a
+      customer's answer, so nothing here can destroy one.
+    * **It attaches to OPPORTUNITIES, not contacts.** "How old is the roof" is a
+      fact about this job — the same customer calling back next year gets their own
+      answers. `entity` exists so contact-level fields could be added later without
+      a second table; today it is always "opportunity" and nothing writes anything
+      else.
+    * **A definition can attach to SEVERAL pipelines** (`CustomFieldPipeline`), so
+      "Roof type" is defined once and answers stay comparable across pipelines,
+      while "AHS claim number" is attached to the warranty pipeline alone.
+
+    There is deliberately **no `required` flag**. An inbound call at 2am must still
+    become a deal; a required field would mean a missed lead.
+
+    Deleting is ARCHIVING (`archived_at`). An archived field stops appearing on new
+    deals, the answers already recorded survive in the blob and stay readable on the
+    deals that hold them, and un-archiving brings it back.
+    """
+    __tablename__ = "custom_field_defs"
+
+    # The five types the owner asked for. No multi-select: deliberately deferred.
+    TEXT = "text"
+    NUMBER = "number"
+    DROPDOWN = "dropdown"
+    DATE = "date"
+    BOOLEAN = "boolean"
+    TYPES = (TEXT, NUMBER, DROPDOWN, DATE, BOOLEAN)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # The key inside `Opportunity.custom_fields`. Derived from the label ONCE, at
+    # creation, and then immutable: it is what every recorded answer is filed
+    # under, so changing it would orphan every answer already given.
+    key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(160))
+    field_type: Mapped[str] = mapped_column(String(20))
+    # DROPDOWN only: the list of allowed answers, in the order they are offered.
+    options: Mapped[list] = mapped_column(JSONType, default=list)
+    entity: Mapped[str] = mapped_column(String(20), default="opportunity",
+                                        server_default="opportunity")
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Set = archived. Never deleted, because the answers are not ours to destroy.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow)
+
+    pipelines: Mapped[list["CustomFieldPipeline"]] = relationship(
+        back_populates="field", cascade="all, delete-orphan")
+
+
+class CustomFieldPipeline(Base):
+    """Which pipelines a definition is asked on. One row per attachment.
+
+    A field attached to NO pipeline appears on no deal — attachment is explicit,
+    never inferred from an empty set, so detaching the last pipeline cannot
+    silently turn a narrow field into a global one.
+    """
+    __tablename__ = "custom_field_pipelines"
+    __table_args__ = (UniqueConstraint("field_id", "pipeline_id",
+                                       name="uq_custom_field_pipeline"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    field_id: Mapped[int] = mapped_column(
+        ForeignKey("custom_field_defs.id"), index=True)
+    pipeline_id: Mapped[int] = mapped_column(
+        ForeignKey("pipelines.id"), index=True)
+
+    field: Mapped[CustomFieldDef] = relationship(back_populates="pipelines")

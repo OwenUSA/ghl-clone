@@ -173,6 +173,35 @@ The host Postgres on that box is shared with the telephony project (`callmon`) a
 craigslist. We have our own `dtr_ghl_clone` database on it, not a shared schema — see the
 amendment in `DECISIONS.md`.
 
+## Importing the Workiz data
+
+The owner's real business data arrives through `backend/app/workiz_import.py`. The
+exports live at `~/workiz/` (chmod 600) and hold **real customers' names, phones,
+emails and home addresses** — do not copy them, do not paste rows anywhere, do not
+commit them.
+
+```bash
+cd backend
+uv run python -m app.workiz_import                 # DRY RUN. Writes nothing.
+uv run python -m app.workiz_import --commit        # ...and this one writes.
+uv run python -m app.workiz_import --json | jq     # the same numbers, for a machine
+```
+
+- **Dry run is the default.** It prints counts by pipeline and stage, contacts
+  created vs updated vs merged, appointments, and every skipped row with its reason.
+  The report deliberately carries **no customer data** — it is safe to paste into a
+  ticket, and a test asserts that.
+- **An import can never text a customer.** It does not import `app.automations` or
+  `app.queue`, and it counts the `jobs` table before and after inside the
+  transaction — one new row rolls the whole import back. Do not "simplify" either
+  guard. Only FUTURE-dated jobs become appointments.
+- **`workiz_id` is the idempotency key**, in the reserved `workiz_*` namespace
+  alongside `owen_*`. It is read-only through the API in every direction: editing one
+  by hand makes the next import create a second copy of that customer. Records made
+  in the CRM by hand have no `workiz_id`, which is expected.
+- **It has never been run against production.** See the 2026-09-11 entry in
+  `DECISIONS.md` for what a human must check first.
+
 ## Schema changes go through Alembic
 
 `create_all()` no longer owns the Postgres schema — `alembic upgrade head` does. SQLite
