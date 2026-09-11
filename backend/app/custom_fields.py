@@ -32,11 +32,31 @@ from sqlalchemy.orm import Session, selectinload
 
 from .models import CustomFieldDef, CustomFieldPipeline
 
-# Written by the telephony project ("from OWEN"). See DECISIONS.md — the four keys
-# were measured on the live GHL account before any of this was built.
-RESERVED_PREFIX = "owen_"
+# Namespaces this app does not own. A key under one of these is written by a
+# machine, read by a machine, and shown to a person — never edited by one.
+#
+#   owen_*    the telephony project ("from OWEN"). See DECISIONS.md — the four keys
+#             were measured on the live GHL account before any of this was built.
+#   workiz_*  the Workiz migration (`app/workiz_import.py`, 2026-09-11).
+#             `workiz_id` is the Client # on a contact and the Job # on an
+#             opportunity, and it is the whole of the import's idempotency: the
+#             importer finds a record by it and UPDATES rather than duplicating.
+#             Editing one by hand would silently make the next import create a
+#             second copy of that customer, so the API refuses. A record created in
+#             the CRM by hand simply has no workiz_id, which is expected.
+#
+# One tuple, checked in one function, so a third namespace is a one-line change and
+# not a second guard that drifts from this one.
+RESERVED_PREFIXES = ("owen_", "workiz_")
+# Kept as a name because it reads better in the message `claim_key` raises, and
+# because it is the prefix that has been in this codebase the longest.
+RESERVED_PREFIX = RESERVED_PREFIXES[0]
 # The one key that is a live join key into another production system's data.
 JOIN_KEY = "owen_call_id"
+# The import's identity key. Unlike `owen_call_id`, which may be SET where there was
+# none, this one is immutable in every direction through this module — see
+# `_check_reserved`.
+IMPORT_PREFIX = "workiz_"
 
 KEY_MAX = 64
 LABEL_MAX = 160
@@ -59,7 +79,7 @@ _FALSE = {"false", "no", "n", "0", "off"}
 
 
 def is_reserved(key: str) -> bool:
-    return key.startswith(RESERVED_PREFIX)
+    return key.startswith(RESERVED_PREFIXES)
 
 
 def slug_for(label: str) -> str:
@@ -162,21 +182,28 @@ def clean_options(field_type: str, options: list | None) -> list[str]:
 def claim_key(db: Session, label: str) -> str:
     """Derive the storage key, and refuse the two ways it can be wrong.
 
-    The `owen_` refusal is the safety requirement: the telephony project owns that
-    namespace, and a field defined as `owen_campaign` would put a form control on
-    top of live call-attribution data. Note the check is on the DERIVED key, so
-    labelling a field "Owen campaign" is refused too — that is the case a prefix
-    check on the label alone would have let through.
+    The reserved refusal is the safety requirement. A field defined as
+    `owen_campaign` would put a form control on top of live call-attribution data;
+    a field defined as `workiz_id` would put one on top of the key the importer
+    matches records by, and the next import would then create a second copy of
+    every customer somebody had edited. Note the check is on the DERIVED key, so
+    labelling a field "Owen campaign" or "Workiz ID" is refused too — that is the
+    case a prefix check on the label alone would have let through.
     """
     key = slug_for(label)
     if not key:
         raise HTTPException(400, "that question has no letters or digits in it, so "
                                  "there is nothing to store the answers under")
     if is_reserved(key):
+        owner = ("the telephony project — those fields are written by OWEN"
+                 if key.startswith(RESERVED_PREFIX)
+                 else "the Workiz migration — those fields are written by the "
+                      "importer")
         raise HTTPException(400, (
-            "%r starts with %r, which belongs to the telephony project — those "
-            "fields are written by OWEN and cannot be redefined here. Try a "
-            "different wording." % (key, RESERVED_PREFIX)))
+            "%r starts with %r, which belongs to %s and cannot be redefined here. "
+            "Try a different wording." % (
+                key, next(p for p in RESERVED_PREFIXES if key.startswith(p)),
+                owner)))
     clash = db.scalar(select(CustomFieldDef).where(CustomFieldDef.key == key))
     if clash:
         raise HTTPException(409, (
@@ -287,6 +314,21 @@ def merge_answers(db: Session, *, pipeline_id: int | None,
     if was is not None and now != was:
         raise HTTPException(
             400, "owen_call_id is the telephony join key and cannot be changed here")
+    # `workiz_*` is stricter than `owen_call_id`, which may still be SET where there
+    # was none. These are read-only in every direction: not set, not changed, not
+    # removed. The importer writes them through the ORM and nothing else may. An
+    # unchanged echo is not a write — the detail form posts the whole blob back on
+    # every save — so only a real difference is refused, and it is refused out loud
+    # rather than ignored, because silently discarding a value somebody typed is how
+    # an edit looks like it worked when it did not.
+    for key in sorted(set(existing) | set(incoming)):
+        if not key.startswith(IMPORT_PREFIX):
+            continue
+        if key in incoming and incoming[key] != existing.get(key):
+            raise HTTPException(400, (
+                "%s is written by the Workiz import and is read-only here — it is "
+                "how a re-import recognises this record instead of creating a "
+                "second copy of it." % key))
     # Kept first, and unconditionally: no path through this function drops one.
     for key, value in existing.items():
         if is_reserved(key):

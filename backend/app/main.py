@@ -283,6 +283,16 @@ def _contact_detail(c: Contact) -> dict:
         "phone_warning": phone_warning(c.phone),
         "business_name": c.business_name,
         "source": c.source,
+        # Read-only, and deliberately not on `ContactPatch`. The Workiz import is
+        # the only writer today (`app/workiz_import.py`); the measured Contact
+        # Details panel has no address control and adding one is a change to the
+        # surface parity is judged on, which is a separate decision. Exposed here
+        # because an address the import writes and nothing can read would be worse
+        # than either.
+        "address_street": c.address_street,
+        "address_city": c.address_city,
+        "address_state": c.address_state,
+        "address_postal_code": c.address_postal_code,
         "date_of_birth": c.date_of_birth,
         "contact_type": c.contact_type,
         "dnd": c.dnd,

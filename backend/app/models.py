@@ -204,6 +204,26 @@ class Contact(Base):
     business_name: Mapped[str | None] = mapped_column(String(200))
     source: Mapped[str | None] = mapped_column(String(120))
 
+    # Where the roof is. Added 2026-09-11 for the Workiz import, which is the first
+    # thing that ever had an address to put anywhere: 856 real client records, every
+    # one of them carrying one, and a roofing CRM that cannot say where the job is
+    # is missing the field the work is organised around.
+    #
+    # Four columns rather than one blob because the two exports disagree about the
+    # shape: `workiz_jobs.csv` already has City / State / Zip code as separate
+    # columns, while `workiz_clients.csv` has a single combined string. Splitting is
+    # the only way those two can agree on one record, and a city column is what
+    # makes "everything in Palmetto this week" answerable later.
+    #
+    # All four are NULLABLE and nothing backfills them. Production holds real
+    # contacts (CLAUDE.md) which simply have no address, and that is not an error —
+    # exactly the stance `phone` takes. Anything the importer cannot confidently
+    # split goes into `address_street` whole rather than being dropped.
+    address_street: Mapped[str | None] = mapped_column(String(255))
+    address_city: Mapped[str | None] = mapped_column(String(120))
+    address_state: Mapped[str | None] = mapped_column(String(80))
+    address_postal_code: Mapped[str | None] = mapped_column(String(20))
+
     # Fields the measured Contact Details panel renders (captures/conversations):
     # Owner, Followers, Tags, First/Last name, Email, Phone, Date of birth,
     # Contact source, Contact type (default "Lead"), DND, "Created by:".
