@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Me } from '../lib/auth'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
 import {
@@ -8,10 +8,12 @@ import {
   IconStar, IconTrash, IconUser, IconUsers,
 } from '../components/Icon'
 import {
-  ApiError, PANE, listConversations, listEvents, placeCall, sendMessage,
+  ApiError, PANE, deleteConversation, listConversations, listEvents,
+  patchConversation, placeCall, sendMessage,
   type ConversationSummary, type SendableType, type ThreadEvent,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
+import { markConversationRead, shouldMarkRead, unreadTabCount } from '../lib/inbox'
 import { sendSentence } from '../lib/sendOutcome'
 
 /**
@@ -86,15 +88,31 @@ const fmtDur = (s: number) =>
   `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 
 function IconBtn({
-  children, title, onClick, size = 24,
-}: { children: React.ReactNode; title: string; onClick?: () => void; size?: number }) {
+  children, title, onClick, size = 24, disabled = false,
+}: {
+  children: React.ReactNode
+  title: string
+  onClick?: () => void
+  size?: number
+  /**
+   * A control a role may not use renders DISABLED with a title saying why, never
+   * as a form that 403s on submit -- the precedent set by d1f7c50 / b943f4b and
+   * followed by the Internal Comment row three inches away. Only the cursor and
+   * the opacity change, so the measured 24x24 geometry is untouched.
+   */
+  disabled?: boolean
+}) {
   return (
     <button
       title={title}
       aria-label={title}
       onClick={onClick}
+      disabled={disabled}
       className="flex items-center justify-center"
-      style={{ width: size, height: size, color: 'rgb(71,84,103)' }}
+      style={{
+        width: size, height: size, color: 'rgb(71,84,103)',
+        ...(disabled ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
+      }}
     >
       {children}
     </button>
@@ -339,6 +357,17 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   // send, a call that is ringing, a suppression. Rendered above the composer.
   const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null)
   const [calling, setCalling] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  // Is this tab in front? A thread left open on a background tab must keep its
+  // badge when a text arrives -- nobody read it. See `shouldMarkRead`.
+  const [visible, setVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState === 'visible')
+  // The (conversation, count) pair already asked about, so an effect that re-runs
+  // for an unrelated reason does not fire a second PATCH, and a REFUSED one is
+  // not retried every ten seconds against a server that has already said no.
+  const asked = useRef<string | null>(null)
   const qc = useQueryClient()
 
   // Internal notes are STAFF-only as of 2026-09-10 (DECISIONS.md), and the
@@ -393,6 +422,124 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     ...LIVE,
   })
   const current: ConversationSummary | undefined = convs.data?.find((c) => c.id === active)
+
+  useEffect(() => {
+    const on = () => setVisible(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', on)
+    return () => document.removeEventListener('visibilitychange', on)
+  }, [])
+
+  /**
+   * What the thread was holding when it was opened, captured BEFORE the badge is
+   * cleared.
+   *
+   * The measured "New" divider is drawn from the unread count, so clearing the
+   * count on open would delete a measured element from the screen by a side
+   * door: the divider would exist only in the instant before the PATCH came
+   * back. The snapshot keeps it for as long as the thread stays open, which is
+   * also what it means -- "this is where you were up to".
+   */
+  const [openedWith, setOpenedWith] = useState<{ id: number; unread: number } | null>(null)
+  useEffect(() => {
+    if (active == null) { setOpenedWith(null); return }
+    // Wait for the row: on a cold load `current` is undefined for a frame, and a
+    // snapshot of 0 taken then would stick for the whole visit.
+    if (!current) return
+    setOpenedWith((s) =>
+      s && s.id === active ? s : { id: active, unread: current.unread_count })
+  }, [active, current])
+
+  /**
+   * Mark one thread read: ask the server, and only then clear the badge.
+   *
+   * `update.apply` is applied to EVERY cached conversation list rather than just
+   * the one on screen -- the cache is keyed by (tab, sort), so the Unread tab's
+   * copy of this row would otherwise still be carrying the old count when the
+   * user switches to it. Nothing else is invalidated; the list refetch below is
+   * the only request this triggers beyond the PATCH itself.
+   */
+  const markRead = async (id: number): Promise<boolean> => {
+    const update = await markConversationRead(
+      id, (cid) => patchConversation(cid, { read: true }))
+    qc.setQueriesData<ConversationSummary[]>({ queryKey: ['conversations'] }, update.apply)
+    if (update.error) {
+      // The badge stays where it was -- `apply` is identity on a failure -- and
+      // the operator is told, rather than being shown a cleared badge for a
+      // thread the server still considers unread.
+      setNote({ text: update.error.message, bad: true })
+      return false
+    }
+    void qc.invalidateQueries({ queryKey: ['conversations'] })
+    return true
+  }
+
+  /**
+   * Opening a thread marks it read. So does a new message ARRIVING on a thread
+   * that is already open and in front of somebody.
+   *
+   * That second half is a decision, and the alternative was to let the badge come
+   * back: the poll raises `unread_count` and the row lights up again while the
+   * dispatcher is looking straight at the message. "Unread" has to mean "nobody
+   * has seen this", and somebody has -- it is on their screen, ten seconds after
+   * it landed. A badge that reappears on the thread you are reading is the same
+   * complaint the owner already made, arriving by a different route.
+   *
+   * The guard against that being wrong is `visible`: on a background tab the
+   * badge stays and clears when the tab comes forward.
+   *
+   * There is no hover handler and no keyboard navigation in this list, so
+   * "opened" and "selected" are the same event and nothing else can trigger
+   * this. The first row is auto-selected when nothing is chosen, and that counts
+   * as opening -- its thread is rendered in full beside the list, so a badge on
+   * it would be claiming nobody had seen messages that are on screen.
+   */
+  const openUnread = current?.unread_count ?? 0
+  useEffect(() => {
+    if (!shouldMarkRead(active, openUnread, visible)) return
+    const key = `${active}:${openUnread}`
+    if (asked.current === key) return
+    asked.current = key
+    void markRead(active as number)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, openUnread, visible])
+
+  // Switching threads must not carry a half-answered "are you sure" across to
+  // the next one -- the same rule the contact panel's delete follows.
+  useEffect(() => {
+    setConfirmDelete(false)
+    setDeleteError(null)
+  }, [active])
+
+  // `DELETE /api/conversations/{id}` is ADMIN. Mirror it here so the other two
+  // roles are never offered a control that can only answer 403.
+  const canDelete = user.role === 'ADMIN'
+
+  const onDelete = async () => {
+    if (active == null || deleting) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const r = await deleteConversation(active)
+      setConfirmDelete(false)
+      // Close the thread first, then drop the row from every cached list, so the
+      // pane is never rendering a conversation that no longer exists.
+      setSelected(null)
+      setChecked((s) => s.filter((x) => x !== r.deleted))
+      qc.setQueriesData<ConversationSummary[]>(
+        { queryKey: ['conversations'] },
+        (rows) => (rows ?? []).filter((c) => c.id !== r.deleted))
+      // Its timeline is gone too; invalidating instead would refetch a 404 over
+      // a pane that is on its way out.
+      qc.removeQueries({ queryKey: ['events', r.deleted] })
+      void qc.invalidateQueries({ queryKey: ['conversations'] })
+      setNote(null)
+    } catch (err) {
+      setDeleteError(
+        err instanceof ApiError ? err.message : 'The conversation could not be deleted.')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   // Internal notes are STAFF-only (DECISIONS.md, 2026-09-10) and the backend
   // refuses a TECH's write with 403. The same rule that disables the filter row
@@ -481,7 +628,11 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     }
   }
 
-  const unreadTotal = (convs.data ?? []).reduce((s, c) => s + c.unread_count, 0)
+  // The badge over the Unread TAB counts CONVERSATIONS, because that is what the
+  // tab filters. Summing unread messages made it read "2" above a list of one
+  // row. The per-row badge further down keeps the message total -- there it
+  // labels a single thread, so "2" means two unread texts, which is true.
+  const unreadTotal = unreadTabCount(convs.data)
   const allChecked = (convs.data ?? []).length > 0 && checked.length === convs.data!.length
 
   return (
@@ -705,9 +856,32 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                     color={calling ? 'rgb(152,162,179)' : 'rgb(71,84,103)'} />
                 </IconBtn>
                 <IconBtn title="Add to Favorites"><IconStar size={24} color="rgb(71,84,103)" /></IconBtn>
-                <IconBtn title="Mark as read"><IconMail size={24} color="rgb(71,84,103)" /></IconBtn>
-                <IconBtn title="Delete Conversation (not implemented in v1)">
-                  <IconTrash size={24} color="rgb(71,84,103)" />
+                {/* Was decorative. It now runs exactly the same PATCH that opening
+                    the thread does, so the two can never disagree about what
+                    "read" means. */}
+                <IconBtn
+                  title="Mark as read"
+                  disabled={active == null}
+                  onClick={() => {
+                    if (active == null) return
+                    // Clear the guard: this is a person asking, so it must go to
+                    // the server even if the same (thread, count) was tried and
+                    // refused a moment ago.
+                    asked.current = null
+                    void markRead(active)
+                  }}
+                >
+                  <IconMail size={24} color="rgb(71,84,103)" />
+                </IconBtn>
+                <IconBtn
+                  title={canDelete
+                    ? 'Delete Conversation'
+                    : 'Only an admin can delete a conversation'}
+                  disabled={!canDelete || active == null}
+                  onClick={() => { setDeleteError(null); setConfirmDelete(true) }}
+                >
+                  <IconTrash size={24}
+                    color={canDelete ? 'rgb(71,84,103)' : 'rgb(152,162,179)'} />
                 </IconBtn>
                 {showFilter && (
                   <Dropdown items={filters} value={filter} onPick={setFilter} right
@@ -715,6 +889,63 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                 )}
               </div>
             </div>
+
+            {/* The confirmation names the contact and how much correspondence is
+                about to go. A bare "are you sure" tells the person nothing they
+                did not already know, and this is irreversible: there is no soft
+                delete anywhere in this codebase (DECISIONS.md). */}
+            {confirmDelete && current && (
+              <div
+                role="dialog"
+                aria-label="Delete conversation"
+                className="shrink-0"
+                style={{
+                  margin: 12, padding: 12, borderRadius: 8,
+                  backgroundColor: 'rgb(254,243,242)',
+                  border: '1px solid rgb(253,162,155)',
+                }}
+              >
+                <div style={{ fontSize: 13, color: 'rgb(180,35,24)' }}>
+                  Delete the conversation with{' '}
+                  <strong>{current.contact_name ?? current.contact_phone ?? 'this contact'}</strong>
+                  {' '}and all {current.event_count}{' '}
+                  {current.event_count === 1 ? 'message' : 'messages'} on it —
+                  texts, calls, recordings and internal notes? This cannot be undone.
+                </div>
+                <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 6 }}>
+                  The contact, their opportunities and their appointments are kept.
+                  Only this thread is removed.
+                </div>
+                {deleteError && (
+                  <div role="alert" style={{
+                    marginTop: 8, fontSize: 13, color: 'rgb(180,35,24)',
+                  }}>{deleteError}</div>
+                )}
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => { setConfirmDelete(false); setDeleteError(null) }}
+                    style={{
+                      height: 30, padding: '0 12px', borderRadius: 6, fontSize: 13,
+                      fontWeight: 500, color: 'rgb(52,64,84)', backgroundColor: '#fff',
+                      border: '1px solid rgb(234,236,240)',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => void onDelete()}
+                    disabled={deleting}
+                    style={{
+                      height: 30, padding: '0 12px', borderRadius: 6, fontSize: 13,
+                      fontWeight: 500, color: '#fff', backgroundColor: 'rgb(180,35,24)',
+                      opacity: deleting ? 0.6 : 1,
+                    }}
+                  >
+                    {deleting ? 'Deleting…' : 'Delete conversation'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
               {events.isLoading && <div style={{ fontSize: 14 }}>Loading…</div>}
@@ -732,8 +963,11 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                       {dayLabel(events.data[0].occurred_at)}
                     </span>
                   </div>
-                  {/* unread divider — measured 14px/500 rgb(41,112,255) */}
-                  {(current?.unread_count ?? 0) > 0 && (
+                  {/* unread divider — measured 14px/500 rgb(41,112,255).
+                      Drawn from the snapshot taken when the thread was opened,
+                      not from the live count: opening now clears that count, and
+                      reading it here would make the divider flash and vanish. */}
+                  {(openedWith?.unread ?? 0) > 0 && (
                     <div className="flex items-center gap-2">
                       <span style={{ fontSize: 14, fontWeight: 500, color: 'rgb(41,112,255)' }}>
                         New

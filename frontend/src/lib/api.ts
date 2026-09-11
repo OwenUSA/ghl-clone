@@ -224,7 +224,11 @@ export type ConversationSummary = {
    *  and then silently suppressed. */
   contact_dnd: boolean
   last_event_at: string
+  /** Unread MESSAGES on this one thread. The Unread tab's badge counts rows
+   *  instead — see lib/inbox.ts. */
   unread_count: number
+  /** Everything on the thread, unfiltered. The delete confirmation names it. */
+  event_count: number
   starred: boolean
 }
 
@@ -262,6 +266,31 @@ export const listEvents = (convId: number, filter: string) =>
   get<ThreadEvent[]>(
     `/api/conversations/${convId}/events?filter=${encodeURIComponent(filter)}`,
   )
+
+/**
+ * Mark a thread read/unread, or star it.
+ *
+ * The endpoint has accepted `{"read": true}` since the inbox was built and the
+ * `ghl` CLI has used it all along; nothing in the browser ever called it, which
+ * is why the blue badge never cleared.
+ */
+export const patchConversation = (
+  convId: number, body: { read?: boolean; starred?: boolean },
+) => send<ConversationSummary>(`/api/conversations/${convId}`, 'PATCH', body)
+
+export type ConversationDeleted = {
+  deleted: number
+  contact_id: number
+  events_deleted: number
+}
+
+/**
+ * Delete a thread and its events. ADMIN only, and there is no undo — this
+ * codebase has no soft delete (DECISIONS.md). The contact, their opportunities
+ * and their appointments are untouched.
+ */
+export const deleteConversation = (convId: number) =>
+  send<ConversationDeleted>(`/api/conversations/${convId}`, 'DELETE')
 
 /** What the composer may write. Internal notes are STAFF-only (DECISIONS.md). */
 export type SendableType = 'SMS' | 'INTERNAL_COMMENT'
