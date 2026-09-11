@@ -16,7 +16,7 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations, crmlink, models, phone_match
+from . import auth, automations, crmlink, models, phone_match, softphone
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
@@ -58,6 +58,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# The browser softphone (`/api/softphone/*`) lives in its own module: it is the only
+# part of this app that talks OUT to the telephony project, and it holds the machine key
+# that does so. One router, mounted here, so the app-level auth gate covers it like
+# everything else -- see app/softphone.py.
+app.include_router(softphone.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
