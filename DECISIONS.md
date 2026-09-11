@@ -1850,3 +1850,94 @@ on file the dialog names the contact and offers to select it instead — and the
 button stays live. Two people genuinely share one number: a couple, or a property manager
 who is the contact for a dozen addresses. A guard that refuses would be wrong more often
 than it would be right, and the dispatcher is the one who knows which case this is.
+
+## AMENDMENT (2026-09-11): the outbound transport is no longer UI-only
+
+**This overrides the "SMS and email are UI-only in v1" decision recorded against
+the transport seam, and the CLAUDE.md line saying `LoggingTransport` is the only
+`MessageTransport` implementation.** It is an amendment rather than a reversal
+because the seam itself is unchanged and was built for exactly this: a second
+class, no UI change. What changed is that the second class now exists.
+
+There is a real phone number. `+19544829099` is a BulkVS DID bound to this CRM
+through a new module on owen-main (`backend/app/integrations/crm/`), which exposes
+`POST /api/crm-link/{calls,messages}` on the internal Docker network. The
+Conversations composer, which had never been able to send — the send button was
+literally `disabled` — now goes through it.
+
+### Nothing leaves the building until somebody arms it
+
+`get_transport()` returns `CrmLinkTransport` only when **both** `CRM_LINK_BASE_URL`
+and `CRM_LINK_API_KEY` are set, and otherwise returns `LoggingTransport`. Neither
+is set in any environment that exists today, including production, so merging this
+changes no behaviour anywhere. Arming it is a deliberate act of configuration; the
+two variables are documented in `.env.example`, and `GET /api/health` reports which
+transport is live so the question has an answer from outside.
+
+The resolution is per send, read from the environment, not frozen at import — so a
+test (and an operator) can turn it on and off without restarting anything.
+
+### SMS is DARK on the far side, and a refusal is the correct answer today
+
+owen-main refuses every SMS three times over: its own `CRM_LINK_SMS_ENABLED` is
+false, the DID's `sms_enabled` is false, and the 10DLC campaign is SUBMITTED rather
+than approved. A send today therefore comes back 403 and is recorded `REFUSED` with
+the reason in words. That is the system working. The day 10DLC is approved, nothing
+in this repository changes.
+
+### `delivery_status` is now a lifecycle, and LOGGED_ONLY stays visible
+
+The owner's requirement was "i want to know if the text arrived or not", which a
+boolean cannot answer. `DeliveryStatus` gains `QUEUED` and `REFUSED`:
+
+    QUEUED -> SENT -> DELIVERED | FAILED        the live ladder
+    REFUSED                                      it never left, and we know why
+    LOGGED_ONLY                                  recorded, never transmitted
+
+`REFUSED` is deliberately not folded into `FAILED`: nothing is broken, and a
+refusal will not fix itself on a retry the way a failure might. `LOGGED_ONLY` stays
+a distinct, visible state so a stubbed message and a real one can never look the
+same in one thread. The ladder is **forward-only** (`models.advance_delivery`),
+mirroring owen-main's `services/sms.OUTBOUND_STATUS_RANK` — two systems ranking the
+same ladder differently would disagree about a message's final state.
+
+A `REFUSED` send **writes a row**. That differs from a DND or no-phone suppression,
+which still writes nothing: there our own rule stopped the send before anything was
+attempted, so there is nothing to show. Here the operator typed a message and
+pressed send, and the message plus the reason it did not go is exactly what they
+need on the thread.
+
+### `POST /api/events` accepts a phone number, and creates the contact
+
+It used to require `contact_id` and 404 on anything else. owen-main's
+`client.resolve_contact_id` searches our contacts and, when nothing matched,
+**dropped the event** rather than post one it knew we would refuse — so a
+first-time caller, the new roofing lead, reached nobody. `from_number` (alias
+`caller_number`, owen-main's own field name) is now accepted instead: matched to a
+contact on the last ten digits, and a contact is **created** when nothing matches,
+named by the number.
+
+The explicit-`contact_id` path is byte-for-byte unchanged, including its 404, so
+the path owen-main uses today is untouched.
+
+Creating a contact per inbound call is the "hundreds of junk contacts" failure
+owen-main's own notes warn about. The judgement here went the other way, for this
+business: a roofing lead that rings once and is never recorded is a lost job, and a
+contact carrying a real number is recoverable while a dropped event is not. The
+last-ten-digits rule means a repeat caller resolves to the existing row rather than
+accumulating duplicates.
+
+### Known gaps on the far side, not fixable from this repository
+
+Both were verified by reading owen-main's source, not assumed:
+
+- **Delivery receipts are not relayed.** owen-main's
+  `/webhooks/bulkvs/message-status` updates its OWN `messages` row and returns 200.
+  It posts nothing onward. `POST /api/events/delivery` is the CRM half and is
+  built, tested and ready; the forwarding call is a change to owen-main.
+- **Inbound SMS is not pushed, and neither are outbound call outcomes.**
+  `push.report_call_phase` is called from exactly three places, all inside
+  `integrations/crm/handler.py` — the bound-DID **inbound call** handler. No message
+  path pushes to the CRM link at all, and a call placed via `/api/crm-link/calls`
+  produces no follow-up event. This is why a click-to-call is recorded with
+  `call_status` NULL: we know a call was placed and will never be told how it ended.

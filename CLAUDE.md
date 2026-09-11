@@ -13,11 +13,17 @@ deliberately out.
 - **The live GHL account is read-only.** The `capture/` harness drives a real logged-in
   browser. Never click anything that writes, deletes or sends there. Full rules in
   `DECISIONS.md`.
-- **No message actually leaves the building.** `LoggingTransport` is the only
-  `MessageTransport` implementation, so outbound sends are recorded with
-  `delivery_status = LOGGED_ONLY` and nothing is transmitted. When a real transport is
-  wired in, every `ghl msg send` becomes a real text — the `--yes` guard exists for
-  that day.
+- **No message leaves the building until somebody arms it.** There are now two
+  `MessageTransport` implementations. `get_transport()` returns `CrmLinkTransport` —
+  which hands the message to owen-main for delivery over the real BulkVS DID
+  `+19544829099` — only when **both** `CRM_LINK_BASE_URL` and `CRM_LINK_API_KEY` are
+  set. Neither is set anywhere today, including production, so the default is still
+  `LoggingTransport`: recorded with `delivery_status = LOGGED_ONLY`, nothing
+  transmitted. `GET /api/health` reports which one is live (`"crm_link": true|false`).
+  **The day those two variables are set, every `ghl msg send` becomes a real text** —
+  that is what the `--yes` guard has always been for. See the 2026-09-11 amendment in
+  `DECISIONS.md`. (SMS is currently dark on owen-main's side pending 10DLC approval,
+  so an armed send is refused with a reason rather than delivered.)
 - **Never run `python -m app.seed` against the working database.** It calls
   `drop_all()`. It is in the `deny` list in `.claude/settings.json`.
 
@@ -154,7 +160,7 @@ against existing rows.
 ## Tests
 
 ```bash
-uv run pytest                        # backend + CLI, 616 tests
+uv run pytest                        # backend + CLI, 675 tests
 uv run ruff check .                  # must pass clean
 uv run python capture/capture_ours.py contacts Contacts            # regenerate OUR side
 uv run python capture/capture_ours.py conversations Conversations
