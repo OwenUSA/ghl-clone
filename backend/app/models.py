@@ -69,12 +69,64 @@ class Direction(str, enum.Enum):
 
 
 class DeliveryStatus(str, enum.Enum):
+    """What happened to an outbound message. The owner's question is "did the text
+    arrive or not", so these have to stay distinguishable all the way to the screen.
+
+    The live ladder, driven by the BulkVS delivery receipt owen-main relays:
+
+        QUEUED -> SENT -> DELIVERED
+                       -> FAILED
+
+    and two states that are not on it:
+
+      * REFUSED — it never left, on purpose, and we know why: SMS is dark pending
+        10DLC approval, the destination is not allowlisted, the contact opted out.
+        Deliberately NOT folded into FAILED: nothing is broken, and a refusal will
+        not fix itself on a retry the way a failure might.
+      * LOGGED_ONLY — recorded by `LoggingTransport` and never transmitted. Kept
+        distinct and visible so a stubbed message and a real one can never look the
+        same in the same thread.
+
+    PENDING predates all of this and is left in place; nothing writes it.
+    """
     PENDING = "PENDING"
+    # Accepted by owen-main and queued for the carrier. Not yet sent.
+    QUEUED = "QUEUED"
     SENT = "SENT"
     DELIVERED = "DELIVERED"
     FAILED = "FAILED"
+    # Refused before it left, with a reason in `delivery_detail`.
+    REFUSED = "REFUSED"
     # Outbound while only LoggingTransport is wired: recorded, never transmitted.
     LOGGED_ONLY = "LOGGED_ONLY"
+
+
+# The delivery ladder is FORWARD-ONLY. Carriers re-deliver receipts and deliver them
+# out of order, so a late "sent" must never walk a message back from "delivered".
+# Mirrors owen-main's `services/sms.OUTBOUND_STATUS_RANK`, which applies the same
+# rule to its own copy of the row — two systems ranking the same ladder differently
+# would disagree about what a message's final state was.
+DELIVERY_RANK = {
+    DeliveryStatus.QUEUED: 1,
+    DeliveryStatus.SENT: 2,
+    DeliveryStatus.DELIVERED: 3,
+    DeliveryStatus.FAILED: 3,
+}
+
+
+def advance_delivery(current: "DeliveryStatus | None",
+                     new: "DeliveryStatus") -> "DeliveryStatus | None":
+    """The status a row should hold after seeing `new`. Keeps `current` unless
+    `new` ranks strictly higher, so DELIVERED and FAILED are terminal.
+
+    A status off the ladder (LOGGED_ONLY, REFUSED, PENDING) ranks 0, so a receipt
+    can still advance one — that matters: a row written REFUSED by a transport that
+    was wrong about the far side should be correctable by the truth from the
+    carrier. What cannot happen is a downgrade.
+    """
+    if DELIVERY_RANK.get(new, 0) > DELIVERY_RANK.get(current, 0):
+        return new
+    return current
 
 
 class User(Base):
@@ -314,7 +366,15 @@ class ConversationEvent(Base):
     transcript: Mapped[str | None] = mapped_column(Text)
 
     delivery_status: Mapped[DeliveryStatus | None] = mapped_column(Enum(DeliveryStatus))
-    provider_ref: Mapped[str | None] = mapped_column(String(120))
+    # Why a message is in the state it is in, as a sentence for a person: the
+    # refusal owen-main gave, or the carrier's failure reason. Null when the status
+    # speaks for itself. The status is what the UI branches on; this is what it
+    # prints beside it, so an unanticipated reason still reaches the operator.
+    delivery_detail: Mapped[str | None] = mapped_column(Text)
+    # The far side's id for this message — owen-main's `message_id`. This is the
+    # join key a delivery receipt arrives with, which is why it is indexed:
+    # POST /api/events/delivery looks a row up by it on every receipt.
+    provider_ref: Mapped[str | None] = mapped_column(String(120), index=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates="events")
 

@@ -12,11 +12,11 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations, phone_match
+from . import auth, automations, crmlink, models, phone_match
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
@@ -166,6 +166,10 @@ class EventOut(BaseModel):
     duration_seconds: int | None
     recording_url: str | None
     delivery_status: str | None
+    # Why the message is in that state, as a sentence. Null when the status speaks
+    # for itself; set for a refusal or a carrier failure, which are exactly the
+    # cases where the status alone does not tell the operator what to do next.
+    delivery_detail: str | None = None
 
 
 # ---------- contacts ----------
@@ -784,12 +788,28 @@ UNKNOWN_CALL_STATUS = "unknown"
 
 
 class EventIngest(BaseModel):
-    """Ingest endpoint for the telephony project.
+    """Ingest endpoint for the telephony project (owen-main).
 
     Inbound calls and messages are plain data we own; they do NOT go through
     MessageTransport, which governs outbound side effects only.
+
+    `contact_id` is OPTIONAL as of 2026-09-11. It used to be required, and that is
+    what made an inbound call from a stranger impossible to file: owen-main's
+    `client.resolve_contact_id` searches our contacts, and when nothing matched it
+    dropped the event rather than post one we would 404. A first-time caller — the
+    new roofing lead the owner most wants — therefore reached nobody.
+
+    Sending `from_number` instead (or as well) lets us do the matching here, where
+    the contact can also be created. `caller_number` is accepted as a synonym
+    because that is what owen-main calls the same field internally
+    (`events.CallEventFacts.caller_number`), so whichever name the far side sends,
+    it lands.
     """
-    contact_id: int
+    contact_id: int | None = None
+    # The customer's number. Matched to a contact on the last ten digits, and a
+    # contact is created when nothing matches.
+    from_number: str | None = Field(
+        default=None, validation_alias=AliasChoices("from_number", "caller_number"))
     type: Literal["SMS", "CALL", "EMAIL", "INTERNAL_COMMENT"]
     direction: Literal["INBOUND", "OUTBOUND"] = "INBOUND"
     body: str | None = None
@@ -800,13 +820,87 @@ class EventIngest(BaseModel):
     recording_url: str | None = None
     provider_ref: str | None = None
 
+    # owen-main's job payloads carry more than this (linkedid, outcome, winning
+    # destination...) and are explicitly documented as forward-compatible. Ignoring
+    # unknown keys rather than 422-ing on them means a newer owen-main deploy cannot
+    # break ingest. This is Pydantic's default; stated so it is not "fixed" later.
+    model_config = {"extra": "ignore"}
+
+
+def _contact_by_number(db: Session, number: str) -> Contact | None:
+    """The contact whose phone is this line, matched on the last ten digits.
+
+    The identity rule is shared with the picker, the Contacts search and owen-main
+    itself (DECISIONS.md, 2026-09-10) — two systems that disagree about whether two
+    renderings are the same line would file a customer's call on the wrong timeline.
+
+    Ordered by id so a database that already holds two contacts for one number (the
+    duplicate guard warns rather than blocks, deliberately) resolves to the same one
+    every time rather than to whichever the planner happened to return first.
+    """
+    if not phone_match.looks_like_phone(number):
+        return None
+    return db.scalars(
+        select(Contact)
+        .where(phone_match.phone_clause(Contact.phone, number))
+        .order_by(Contact.id)
+    ).first()
+
+
+def _resolve_ingest_contact(db: Session, body: EventIngest) -> Contact:
+    """The contact an ingested event belongs to, creating one if need be.
+
+    Three paths, in order of how much the caller claims to know:
+
+      1. an explicit `contact_id` — must exist, else 404. Unchanged: this is the
+         path owen-main uses today and the one its own tests pin.
+      2. a `from_number` that matches an existing contact on the last ten digits.
+      3. a `from_number` that matches nothing — a contact is CREATED, named by the
+         number, so a first-time caller becomes a lead instead of being dropped.
+    """
+    if body.contact_id is not None:
+        contact = db.get(Contact, body.contact_id)
+        if not contact:
+            raise HTTPException(404, "contact not found")
+        return contact
+
+    number = (body.from_number or "").strip()
+    if not number:
+        raise HTTPException(
+            422, "an event needs either contact_id or from_number")
+
+    existing = _contact_by_number(db, number)
+    if existing is not None:
+        return existing
+
+    # A stranger called. Create them rather than lose them — the owner's rule is
+    # that a new roofing lead is never lost, and an unnamed contact carrying a real
+    # number is recoverable while a dropped event is not.
+    #
+    # The display name IS the number, formatted, because that is the only true
+    # thing we know about them. `store_phone` cannot raise (DECISIONS.md): a number
+    # we could not parse is stored exactly as it arrived rather than refused.
+    stored = store_phone(number)
+    contact = Contact(
+        first_name=format_phone(stored) or number,
+        last_name="",
+        phone=stored,
+        source="Inbound call",
+        created_by="owen-main",
+        contact_type="Lead",
+    )
+    db.add(contact)
+    db.flush()
+    # Rule 2 — a contact that appeared from nowhere is exactly the case the
+    # new-lead notification exists for, so the crew hears about it.
+    automations.on_contact_created(db, contact)
+    return contact
+
 
 @app.post("/api/events", status_code=201)
 def ingest_event(body: EventIngest, db: Session = Depends(get_db),
                  _: auth.Principal = auth.EVENTS_INGEST):
-    contact = db.get(Contact, body.contact_id)
-    if not contact:
-        raise HTTPException(404, "contact not found")
+    contact = _resolve_ingest_contact(db, body)
     if body.call_status is not None:
         if body.type != "CALL":
             raise HTTPException(400, "call_status is only meaningful on a CALL")
@@ -840,7 +934,98 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
     # Rule 1: missed call -> auto text back.
     outcome = automations.on_inbound_call(db, ev)
     db.commit()
-    return {"id": ev.id, "conversation_id": conv.id, "automation": outcome}
+    return {"id": ev.id, "conversation_id": conv.id, "contact_id": contact.id,
+            "automation": outcome}
+
+
+# A BulkVS delivery receipt's vocabulary, mapped onto ours. `undelivered` and
+# `blocked` are carrier words for "it did not arrive and it is not going to" —
+# the owner's question is whether the text arrived, and for all three the answer is
+# no, so they collapse onto FAILED with the carrier's own word kept in the detail.
+# Taken from owen-main's `services/sms.OUTBOUND_STATUS_RANK`.
+DELIVERY_RECEIPT_STATUSES = {
+    "queued": DeliveryStatus.QUEUED,
+    "sent": DeliveryStatus.SENT,
+    "delivered": DeliveryStatus.DELIVERED,
+    "failed": DeliveryStatus.FAILED,
+    "undelivered": DeliveryStatus.FAILED,
+    "blocked": DeliveryStatus.FAILED,
+}
+
+
+class DeliveryReceipt(BaseModel):
+    """One carrier delivery receipt, relayed by owen-main.
+
+    `provider_ref` is the id owen-main gave us when it accepted the message — its
+    `message_id`, which we stored on the event. It is the only join key: the CRM
+    never sees the BulkVS RefId.
+    """
+    provider_ref: str
+    status: str
+    # The carrier's failure text, when it gave one. Shown to the operator verbatim
+    # beneath the message, because "failed" alone does not tell them whether to try
+    # a different number or wait.
+    detail: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+
+@app.post("/api/events/delivery")
+def ingest_delivery_receipt(body: DeliveryReceipt, db: Session = Depends(get_db),
+                            _: auth.Principal = auth.EVENTS_INGEST):
+    """Advance an outbound message's delivery state from a carrier receipt.
+
+    **NOT WIRED ON THE FAR SIDE YET.** owen-main receives these on
+    `/webhooks/bulkvs/message-status` and updates its OWN `messages` row; it does
+    not relay them anywhere. Verified by reading it, not assumed — see the sentinel.
+    This endpoint is the CRM half of that relay, and it is the half that could be
+    built here; the forwarding call is a change to owen-main, which another agent
+    owns.
+
+    Forward-only, via `advance_delivery`: carriers re-send receipts and deliver
+    them out of order, and a late "sent" must never walk a delivered message back.
+    Applying that rule here rather than trusting the order they arrive in is the
+    same choice owen-main makes about its own copy of the row.
+    """
+    key = (body.provider_ref or "").strip()
+    if not key:
+        raise HTTPException(422, "a delivery receipt needs a provider_ref")
+
+    word = (body.status or "").strip().lower()
+    if word not in DELIVERY_RECEIPT_STATUSES:
+        raise HTTPException(
+            400, "unknown delivery status %r — expected one of %s"
+            % (body.status, sorted(DELIVERY_RECEIPT_STATUSES)))
+    incoming = DELIVERY_RECEIPT_STATUSES[word]
+
+    ev = db.scalars(
+        select(ConversationEvent)
+        .where(ConversationEvent.provider_ref == key,
+               ConversationEvent.direction == Direction.OUTBOUND)
+        .order_by(ConversationEvent.id.desc())
+    ).first()
+    if ev is None:
+        raise HTTPException(404, "no outbound message with provider_ref %r" % key)
+
+    before = ev.delivery_status
+    ev.delivery_status = models.advance_delivery(before, incoming)
+    # Keep the carrier's words only while they explain something. A receipt that
+    # advances a message to DELIVERED clears a stale failure note rather than
+    # leaving "carrier rejected" sitting under a message that plainly arrived.
+    if ev.delivery_status is DeliveryStatus.FAILED:
+        ev.delivery_detail = (body.detail or "").strip() or "the carrier could not deliver it"
+    elif ev.delivery_status is DeliveryStatus.DELIVERED:
+        ev.delivery_detail = None
+    db.commit()
+
+    return {
+        "id": ev.id,
+        "conversation_id": ev.conversation_id,
+        "delivery_status": ev.delivery_status.value if ev.delivery_status else None,
+        # False when a stale or out-of-order receipt was correctly ignored. The
+        # relay needs to tell "we applied it" from "we already knew better".
+        "advanced": ev.delivery_status is not before,
+    }
 
 
 class AppointmentCreate(BaseModel):
@@ -1341,7 +1526,8 @@ def conversation_events(
                      duration_seconds=e.duration_seconds,
                      recording_url=e.recording_url,
                      delivery_status=e.delivery_status.value
-                     if e.delivery_status else None) for e in rows]
+                     if e.delivery_status else None,
+                     delivery_detail=e.delivery_detail) for e in rows]
 
 
 # ---------- appointments ----------
@@ -2240,8 +2426,17 @@ def list_messages(
 
     extra = []
     if delivery_status:
-        extra.append(ConversationEvent.delivery_status
-                     == DeliveryStatus[delivery_status.upper()])
+        # A bad value used to raise KeyError straight out of the enum lookup, which
+        # FastAPI turns into a 500 — an unknown filter is the caller's mistake, not
+        # ours, and the CLI's `--status` passes whatever it is given. Now it says
+        # what the valid words are, the way every other filter on this route does.
+        try:
+            wanted = DeliveryStatus[delivery_status.upper()]
+        except KeyError:
+            raise HTTPException(
+                400, "unknown delivery_status %r — expected one of %s"
+                % (delivery_status, sorted(s.value for s in DeliveryStatus))) from None
+        extra.append(ConversationEvent.delivery_status == wanted)
 
     rows, total = _search_events(
         db, types=types, start=start, end=end, direction=direction,
@@ -2254,6 +2449,7 @@ def list_messages(
         "occurred_at": e.occurred_at, "type": e.type.value,
         "direction": e.direction.value, "subject": e.subject, "body": e.body,
         "delivery_status": e.delivery_status.value if e.delivery_status else None,
+        "delivery_detail": e.delivery_detail,
     } for e, c in rows], total, page, page_size)
 
 
@@ -2446,7 +2642,8 @@ def _send_to_contact(db: Session, contact: Contact, body: MessageSend,
             "direction": ev.direction.value, "occurred_at": ev.occurred_at,
             "body": ev.body, "subject": ev.subject,
             "delivery_status": (ev.delivery_status.value
-                                if ev.delivery_status else None)}
+                                if ev.delivery_status else None),
+            "delivery_detail": ev.delivery_detail}
 
 
 @app.post("/api/contacts/{contact_id}/messages", status_code=201)
@@ -2477,6 +2674,94 @@ def send_to_conversation(conv_id: int, body: MessageSend,
     if not contact:
         raise HTTPException(404, "conversation has no contact")
     return _send_to_contact(db, contact, body, principal)
+
+
+def _place_call(db: Session, contact: Contact) -> dict:
+    """Ring the customer from the bound DID, via owen-main.
+
+    There is no browser softphone and there does not need to be: owen-main rings an
+    operator's phone first, then the customer, and bridges the two legs. The button
+    in the thread header starts that; the conversation happens on real handsets.
+
+    Refusals are answered 200 with `placed: false` and a sentence, not a 4xx. The
+    caller is a person who pressed a button, the outcome is a business rule rather
+    than a malformed request, and this matches how a suppressed send already
+    reports itself.
+    """
+    if not contact.phone:
+        return {"placed": False, "id": None,
+                "reason": "This contact has no phone number to call."}
+    # DND is a promise to the customer, and every other customer-facing path in
+    # this app honours it. Making voice the silent exception would be a surprise
+    # rather than a feature. Overrulable: the owner may well want a dispatcher to
+    # be able to ring someone who has only opted out of texts.
+    if contact.dnd:
+        return {"placed": False, "id": None,
+                "reason": "This contact is on Do Not Disturb."}
+    if not crmlink.configured():
+        return {"placed": False, "id": None,
+                "reason": "Calling is not switched on — this CRM is not connected "
+                          "to the phone system yet."}
+
+    result = crmlink.place_call(to_number=contact.phone)
+    if not result.ok:
+        return {"placed": False, "id": None, "reason": result.reason}
+
+    # The call is ringing. Record it so the thread shows it happened.
+    #
+    # `call_status` is left NULL on purpose. We know a call was PLACED; we do not
+    # know how it ended, and the five statuses are all outcomes. The column is
+    # nullable for exactly this and the Call report already renders a null as
+    # "unknown" rather than inventing "completed".
+    #
+    # Nothing will fill it in later, either: owen-main reports call lifecycle only
+    # for INBOUND calls on a bound DID (`integrations/crm/handler.py`), so an
+    # outbound call it places on our behalf produces no follow-up event. That is a
+    # gap on the far side, recorded in the sentinel, not something to paper over
+    # here with a status we did not observe.
+    linkedid = str((result.data or {}).get("linkedid") or "")
+    conv = automations.thread_for(db, contact.id)
+    ev = ConversationEvent(
+        conversation_id=conv.id, type=EventType.CALL,
+        direction=Direction.OUTBOUND, occurred_at=datetime.now(UTC),
+        body="Outbound call placed from %s. Ringing an operator, then the customer."
+             % crmlink.current().from_number,
+        provider_ref=linkedid or None,
+    )
+    db.add(ev)
+    conv.last_event_at = ev.occurred_at
+    db.commit()
+    db.refresh(ev)
+    return {"placed": True, "id": ev.id, "conversation_id": conv.id,
+            "reason": "Calling %s now — your phone will ring first."
+                      % (format_phone(contact.phone) or contact.phone)}
+
+
+@app.post("/api/contacts/{contact_id}/call")
+def call_contact(contact_id: int, db: Session = Depends(get_db),
+                 _: auth.Principal = auth.ANY_USER):
+    """Place a call to a contact.
+
+    ANY_USER: a TECH may send a customer a message (CLAUDE.md), and ringing the
+    customer they are already texting is the same kind of act, not a wider one.
+    """
+    contact = db.get(Contact, contact_id)
+    if not contact:
+        raise HTTPException(404, "contact not found")
+    return _place_call(db, contact)
+
+
+@app.post("/api/conversations/{conv_id}/call")
+def call_conversation(conv_id: int, db: Session = Depends(get_db),
+                      _: auth.Principal = auth.ANY_USER):
+    """The shape the thread header's phone button uses."""
+    conv = db.get(Conversation, conv_id)
+    if not conv:
+        raise HTTPException(404, "conversation not found")
+    contact = db.get(Contact, conv.contact_id)
+    if not contact:
+        raise HTTPException(404, "conversation has no contact")
+    return _place_call(db, contact)
 
 
 class ConversationPatch(BaseModel):
@@ -2852,4 +3137,12 @@ def update_user(user_id: int, body: UserPatch, db: Session = Depends(get_db),
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "transport": type(get_transport()).__name__}
+    """Unauthenticated (auth.EXEMPT), so it stays deliberately dull.
+
+    `transport` and `crm_link` answer "is this thing armed?" — the question worth
+    being able to ask from outside after a deploy, given that the difference
+    between LoggingTransport and CrmLinkTransport is the difference between a
+    recorded intent and a real text message. Neither field names a URL or a key.
+    """
+    return {"ok": True, "transport": type(get_transport()).__name__,
+            "crm_link": crmlink.configured()}
