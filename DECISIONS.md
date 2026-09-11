@@ -2521,3 +2521,161 @@ creates `custom_field_defs` and `custom_field_pipelines` and adds
 address columns) and `alembic heads` prints exactly one head. So
 `alembic upgrade head` now does create all three, and `workiz_import.preflight()`
 no longer has anything to refuse on that account.
+
+## OpenPhone is mirrored into the thread, READ-ONLY (2026-09-11)
+
+The company runs a second phone system, OpenPhone, on a line separate from the
+BulkVS DID `+19544829099` this CRM sends from. It is being migrated away from. The
+owner's requirement is that its history and its new activity appear on the same
+customer timelines this CRM already owns, so nobody has to keep two apps open — and
+that it stay strictly one-way.
+
+His words, and they govern everything below:
+
+> *"i should not be able to text, call or answer from the crm using the quo phone
+> number, just log everything live"*
+> *"if i want to answer or text someone calling to openphone number we must use
+> openphone platform"*
+
+**The mirror lives in owen-main** (`app/integrations/openphone/`, branch
+`feature/openphone-mirror`), which already holds the OpenPhone API key and already
+has a delivery path into this CRM. It reads OpenPhone and posts to `POST
+/api/events` exactly like any other telephony feed. **This repository has no
+OpenPhone client, no OpenPhone credential and no OpenPhone code path**, and a test
+tokenises every module under `app/` to keep it that way — `api.openphone.com` and
+`OPENPHONE_API_KEY` may not appear in executable code here.
+
+### What changed on this side, and why each was necessary
+
+**`conversation_events.dedupe_key`, UNIQUE and opt-in.** A mirrored feed can deliver
+the same object twice: OpenPhone has no time-based call sweep, so the poll re-reads
+its whole window every tick, and owen-main's `crm_report` job retries on a timeout —
+including one that happened *after* `POST /api/events` committed and before its 201
+got home. owen-main cannot know whether the first attempt landed, so the check has
+to be here.
+
+It is a NEW column and **not** a unique index on `provider_ref`, which was the
+obvious cheaper move and is wrong: owen-main deliberately sends the *same*
+`provider_ref` on all three call lifecycle phases ("the join key must not depend on
+which event survived"). Deduping there would collapse started/answered/ended into
+one row and break the live BulkVS path on the first call after deploy. A test pins
+that path at three rows.
+
+A repeat delivery returns the **existing row**, not a 409. To owen-main a repeat
+delivery succeeded — the event is on the thread, which is all it wanted — and a 4xx
+would dead-letter a `crm_report` job for behaving correctly. The check runs *before*
+the contact is resolved, because resolving CREATES a contact for an unknown number
+and fires the new-lead automation; a retry would otherwise notify the crew about a
+lead already on file.
+
+**`occurred_at` on ingest.** Without it a 30-day backfill lands as a month of history
+all dated today, in poll order, which is the opposite of the single timeline the
+feature exists to produce. Two consequences are handled with it:
+
+- **`last_event_at` is now forward-only.** It orders the inbox, so a three-week-old
+  mirrored call must not drag a thread that was active this morning down the list.
+- **Unread counts only a FRESH inbound.** A month of mirrored correspondence was
+  already read and answered — in OpenPhone, which is where it happened. A badge of
+  200 trains an operator to clear it without reading, which costs them the one
+  message that was genuinely new.
+
+**`source_system` / `source_number`, and a chip on every event that has them.** A
+thread can now hold two phone systems at once. An operator who cannot tell them apart
+cannot answer the question that decides what to do next: which number does this
+customer know us by? NULL renders **no chip** — every row written before the mirror
+existed has no observed source, and labelling those "BulkVS" would be writing a guess
+into a customer's record to make the UI tidier. Rows written from now on are stamped:
+mirrored ones by owen-main, outbound ones by `automations.SENT_SOURCE_SYSTEM`, which
+reads the bound DID at send time rather than freezing it.
+
+### THE BUG THIS FOUND, which would have texted real customers
+
+`automations.on_inbound_call` auto-texts the caller back for any INBOUND CALL whose
+duration is 15 seconds or less. It had no notion of *age*, and it did not need one:
+until now every ingested event WAS "just now", because `occurred_at` defaulted to the
+ingest clock and nothing could back-date it.
+
+A 30-day backfill breaks that assumption completely. Every short or unanswered
+OpenPhone call in the window is an inbound CALL under 15 seconds. Switching the
+mirror on would have queued **one auto text-back per missed call** — to real
+customers, about calls up to a month old, from a BulkVS number those customers have
+never seen. Today `LoggingTransport` would record them rather than send them; the day
+`CRM_LINK_BASE_URL` and `CRM_LINK_API_KEY` are set, every one becomes a real text.
+
+`automations.FRESH_EVENT_SECONDS` (one hour) guards it, and the guard can only ever
+*stop* a text nobody wanted: a live missed call reaches us seconds after it ends, and
+an hour of slack keeps a delayed relay or a retried job firing. Both directions are
+tested — a month-old call queues nothing, a live one and a ten-minutes-late one both
+queue.
+
+### Recordings stream through owen-main, and the tradeoff is accepted
+
+A mirrored call's `recording_url` is `/api/openphone/recordings/<id>` — a path on
+**this** server. The browser's `<audio src>` resolves it same-origin and sends the
+operator's httpOnly session cookie, which is the only credential it has; an `<audio>`
+tag cannot send an `Authorization` header, so a CRM-relative path is the only shape
+that works at all. This CRM then asks owen-main with its existing machine key, and
+owen-main asks OpenPhone with the OpenPhone key:
+
+    browser --cookie--> CRM --X-OWEN-Key--> owen-main --OpenPhone key--> OpenPhone
+
+The bytes are streamed rather than the URL redirected. A redirect would also keep the
+API key safe, but it would hand the browser a `share.quo.com` URL that is forwardable
+and outlives the session.
+
+**Nothing is copied into this database, so cancelling OpenPhone breaks this audio.**
+The owner accepted that explicitly. The thread entry, the call metadata and the
+transcript all survive, because those ARE ours — only the recording stops playing.
+
+### The composer never sends through OpenPhone, and says so
+
+There is no OpenPhone send path in this product, **not even a disabled one** — a
+disabled send path is a switch somebody eventually flips. A reply typed under a
+mirrored message goes out on the BulkVS line, which from the customer's side is a
+text from a number they have never seen, in the middle of a conversation they were
+having with a different one.
+
+So a thread containing a mirrored event shows a banner **above** the composer naming
+both numbers and pointing at the OpenPhone app for a reply on that line. Above,
+because the operator has to know before they type, not after. Only in threads that
+actually contain one: a banner that is always there is a banner nobody reads.
+
+### Polling, not webhooks — decided on owen-main, recorded here
+
+Registering an OpenPhone webhook requires `POST /v1/webhooks`, and the signing secret
+is returned only in that call's response. Both halves disqualify it: the POST is
+exactly the write owen-main may not make against OpenPhone, and without the secret a
+webhook's signature could not be verified at all. Polling it is; the full argument is
+in `app/integrations/openphone/sync.py` and `.qa/state/openphone-done`.
+
+### One hole this closed on the way past
+
+`test_auth.py` enumerates `app.routes` and is the enforcement behind CLAUDE.md's
+claim that *"a route added later is protected by default"*. It could not fail for a
+route it could not see: this FastAPI version does not splice an `include_router`'s
+routes into `app.routes`, it appends one opaque `_IncludedRouter` whose children hang
+off `.original_router`, and the enumerator's `isinstance(r, APIRoute)` filter skipped
+them. **`/api/softphone/*` has been invisible to that gate since the softphone
+shipped.** Those routes were never actually unprotected — authentication is an
+app-level dependency and each answers 401 — but "protected" and "pinned by the test
+that proves it" are different claims. The enumerator now follows both attributes, and
+the gate went from 88 cases to 91.
+
+### Not verified, and not verifiable from here
+
+- **No OpenPhone endpoint was called.** There are no live credentials in this
+  environment, and the key lives only on the server. `GET /messages` and `GET
+  /conversations` — the two reads the mirror adds — are shaped from documented
+  behaviour and are marked UNVERIFIED in the client, exactly as the rest of that
+  module was before its probe ran. `app.scripts.probe_openphone` has been extended to
+  confirm both, read-only, and must be run on the box before the mirror is enabled.
+- **The 30-day backfill volume is unknown.** `manage.py preview` sizes it without
+  writing anything; it needs the production key to answer.
+- **The parity gate could not be re-run.** `captures/` is gitignored and absent in a
+  fresh worktree, and regenerating it needs a live logged-in GHL browser session and
+  `GHL_APP_PASSWORD`, neither of which exists here. Both Conversations-screen
+  additions are conditional on data a parity capture does not contain — the chip
+  renders only when `source_system` is set, the banner only in a thread holding a
+  mirrored event — so in a capture of existing data neither renders and the measured
+  geometry is unchanged. That is an argument, not a measurement, and it is recorded
+  as such.

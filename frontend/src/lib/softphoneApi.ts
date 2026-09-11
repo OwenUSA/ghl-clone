@@ -79,18 +79,3 @@ export const fetchSoftphoneCredentials = () =>
 /** Who is calling. Best-effort by contract: an unknown number resolves to `null`. */
 export const lookupCaller = (number: string) =>
   request<CallerLookup>(`/api/softphone/caller?number=${encodeURIComponent(number)}`, 'GET')
-
-/**
- * A phone number as a person reads it. Falls back to exactly what arrived, because a
- * caller-ID that is not a NANP number (an international caller, `anonymous`) still has
- * to be shown -- the one thing the card must never do is render nothing.
- */
-export function formatPhone(raw: string | null | undefined): string {
-  const text = String(raw || '').trim()
-  const d = text.replace(/\D/g, '')
-  if (d.length === 11 && d.startsWith('1')) {
-    return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`
-  }
-  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
-  return text
-}

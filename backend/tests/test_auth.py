@@ -87,11 +87,44 @@ def client_for(env, who: str | None) -> TestClient:
 
 # ---------------- the gate ----------------
 
+def _walk(routes):
+    """Every APIRoute reachable from `routes`, INCLUDING inside included routers.
+
+    This used to be a flat `for r in app.routes`, and that silently under-covered
+    the gate. This FastAPI version does not splice an `include_router`'s routes
+    into `app.routes` — it appends one opaque `_IncludedRouter` object with no
+    `.path`, which the `isinstance(r, APIRoute)` filter then skipped. So every
+    route mounted from a module router was invisible here: `/api/softphone/*`
+    when the softphone shipped, and `/api/openphone/*` now.
+
+    Those routes were never actually unprotected — authentication is an app-level
+    dependency, and each answers 401 today — but "protected" and "pinned by the
+    test that proves it" are different claims, and CLAUDE.md makes the second one:
+    "a route added later is protected by default... if you add an endpoint and
+    that test fails, that is the system working." It could not fail for a route it
+    could not see.
+    """
+    out = []
+    for r in routes:
+        if isinstance(r, APIRoute):
+            out.append(r)
+        else:
+            # A `Mount` carries its children on `.routes`. An `_IncludedRouter` —
+            # what this FastAPI version appends for each `include_router` — keeps
+            # the original `APIRouter` on `.original_router` instead, and that is
+            # the attribute that made these routes invisible. Both are followed.
+            nested = (getattr(r, "routes", None)
+                      or getattr(getattr(r, "original_router", None), "routes", None))
+            if nested:
+                out.extend(_walk(nested))
+    return out
+
+
 def _protected_routes():
     """Every /api route that is not on the exemption allowlist."""
     out = []
-    for r in app.routes:
-        if not isinstance(r, APIRoute) or not r.path.startswith("/api"):
+    for r in _walk(app.routes):
+        if not r.path.startswith("/api"):
             continue
         if r.path in auth.EXEMPT:
             continue

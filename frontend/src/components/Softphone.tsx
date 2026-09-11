@@ -26,7 +26,8 @@
  */
 import { useEffect, useState } from 'react'
 import { useSoftphoneContext } from '../lib/softphoneContext'
-import { formatPhone, lookupCaller, type CallerContact } from '../lib/softphoneApi'
+import { lookupCaller, type CallerContact } from '../lib/softphoneApi'
+import { formatPhone } from '../lib/phone'
 import type { SoftphoneStatus } from '../lib/softphone'
 
 const TEXT = 'rgb(31,41,55)'

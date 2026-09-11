@@ -252,3 +252,57 @@ def health() -> LinkResult:
                           _human(_detail_text(payload, resp.status_code)))
     return LinkResult(True, resp.status_code, "",
                       payload if isinstance(payload, dict) else None)
+
+
+# --- the OpenPhone mirror's recording stream (2026-09-11) ---------------------
+#
+# owen-main holds the OpenPhone API key; this CRM never sees it and must never
+# see it. A mirrored call's `recording_url` is a path on THIS server, so the
+# browser's <audio src> resolves it same-origin and sends the operator's session
+# cookie — the one credential it legitimately has. We then fetch the bytes from
+# owen-main with our own X-OWEN-Key, and owen-main fetches them from OpenPhone.
+#
+#   browser --cookie--> CRM --X-OWEN-Key--> owen-main --OpenPhone key--> OpenPhone
+#
+# Nothing is copied into this database. That is a deliberate tradeoff and it is on
+# the record in DECISIONS.md: cancelling the OpenPhone account breaks this audio,
+# because the audio was never ours.
+
+OPENPHONE_RECORDING_PATH = "/api/openphone-mirror/recordings"
+
+
+def fetch_openphone_recording(call_id: str) -> tuple[bytes, str] | LinkResult:
+    """`GET /api/openphone-mirror/recordings/{id}` on owen-main.
+
+    Returns `(audio_bytes, content_type)` on success, or a `LinkResult` carrying
+    the reason. Two shapes rather than one because the caller has to distinguish
+    "there is no recording" (404 — ordinary for a missed call) from "we could not
+    ask" (a timeout), and an empty byte string would collapse them.
+
+    The audio is read fully rather than streamed through. It is one call
+    recording over an internal Docker network, and `httpx.stream` would mean
+    holding a connection to owen-main open for as long as the browser takes to
+    play it — a worker tied up by a paused audio player.
+    """
+    cfg = current()
+    if not cfg.configured:
+        return LinkResult(False, 0, "the phone link is not configured")
+
+    url = f"{cfg.base_url}{OPENPHONE_RECORDING_PATH}/{call_id}"
+    try:
+        resp = httpx.get(url, timeout=cfg.timeout_seconds,
+                         headers={"X-OWEN-Key": cfg.api_key})
+    except Exception as exc:  # noqa: BLE001 - any transport failure is one outcome
+        log.warning("crm-link: recording GET failed: %r", exc)
+        return LinkResult(False, 0, "could not reach the phone system")
+
+    if resp.status_code >= 400:
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = {}
+        raw = _detail_text(payload, resp.status_code)
+        log.info("crm-link: recording %s unavailable (%d): %s",
+                 call_id, resp.status_code, raw)
+        return LinkResult(False, resp.status_code, _human(raw))
+    return resp.content, resp.headers.get("content-type", "audio/mpeg")

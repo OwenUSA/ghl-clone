@@ -18,6 +18,7 @@ import {
   unreadTabCount, type InboxScope, type RailKey,
 } from '../lib/inbox'
 import { sendSentence } from '../lib/sendOutcome'
+import { formatPhone } from '../lib/phone'
 
 /**
  * Rebuilt from capture/spec.py geometry (captures/conversations, 1440x900).
@@ -279,6 +280,51 @@ const DELIVERY: Record<string, { label: string; color: string }> = {
   PENDING: { label: 'pending', color: 'rgb(102,112,133)' },
 }
 
+/**
+ * Which phone system and which line carried this event.
+ *
+ * A thread can now hold events from TWO phone systems at once: the BulkVS number
+ * this CRM sends from, and the OpenPhone line the company is migrating away from,
+ * mirrored read-only by owen-main. An operator who cannot tell them apart cannot
+ * answer the question that actually matters -- which number does this customer
+ * know us by? -- and might reply on a line the customer has never seen.
+ *
+ * Renders NOTHING when the source was not recorded. Every event written before the
+ * mirror existed has no observed source, and defaulting those to "BulkVS" would put
+ * a guess on a customer's record to make the UI look tidier.
+ *
+ * OpenPhone is tinted (amber) and BulkVS is not. The asymmetry is deliberate rather
+ * than decorative: BulkVS is the normal case and needs no attention, while an
+ * OpenPhone row is the one that changes what a reply means.
+ */
+const SOURCE_TONE: Record<string, { fg: string; bg: string }> = {
+  OpenPhone: { fg: 'rgb(181,71,8)', bg: 'rgb(254,240,199)' },
+  BulkVS: { fg: 'rgb(71,84,103)', bg: 'rgb(242,244,247)' },
+}
+
+export function SourceChip({ e }: { e: ThreadEvent }) {
+  if (!e.source_system && !e.source_number) return null
+  const system = e.source_system ?? ''
+  const tone = SOURCE_TONE[system] ?? SOURCE_TONE.BulkVS
+  const line = e.source_number ? formatPhone(e.source_number) : ''
+  // Both facts, in one chip: the system names WHICH app owns it, the number names
+  // the line the customer actually dialled or was texted from.
+  const label = [system, line].filter(Boolean).join(' · ')
+  return (
+    <span
+      title={system === 'OpenPhone'
+        ? `Mirrored from OpenPhone ${line} — read-only. A reply from here goes out on the BulkVS number.`
+        : `Sent and received on ${line || 'the BulkVS line'}.`}
+      style={{
+        marginLeft: 6, padding: '1px 6px', borderRadius: 10, fontSize: 11,
+        color: tone.fg, backgroundColor: tone.bg, whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </span>
+  )
+}
+
 function DeliveryNote({ e }: { e: ThreadEvent }) {
   // Inbound messages and internal notes are delivered to nobody, so they carry no
   // status and get no line.
@@ -312,6 +358,7 @@ function EventBubble({ e }: { e: ThreadEvent }) {
           backgroundColor: 'rgb(242,244,247)', borderRadius: 16, padding: '4px 12px',
         }}>
           {e.body} · {timeLabel(e.occurred_at)}
+          <SourceChip e={e} />
         </div>
       </div>
     )
@@ -365,6 +412,7 @@ function EventBubble({ e }: { e: ThreadEvent }) {
         </div>
         <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
           {timeLabel(e.occurred_at)}
+          <SourceChip e={e} />
           <DeliveryNote e={e} />
         </div>
       </div>
@@ -653,6 +701,28 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     return null
   }
   const blocked = sendBlocked()
+
+  /**
+   * THE REPLY WARNING.
+   *
+   * A thread can hold mirrored OpenPhone events. The composer does not, cannot and
+   * will never send through OpenPhone -- there is no OpenPhone send path anywhere in
+   * this product, not even a disabled one -- so a reply typed under a text that
+   * arrived on the OpenPhone line goes out on the BulkVS number instead.
+   *
+   * From the customer's side that is a text from a number they have never seen, in
+   * the middle of a conversation they were having with a different one. The operator
+   * has to know that BEFORE they type, which is why this is a banner above the box
+   * and not a note beside the sent message.
+   *
+   * Only shown when the thread actually contains an OpenPhone event. On an ordinary
+   * BulkVS thread there is nothing to warn about, and a banner that is always there
+   * is a banner nobody reads.
+   */
+  const mirrored = events.data?.find((e) => e.source_system === 'OpenPhone')
+  const replyLine = events.data?.find(
+    (e) => e.direction === 'OUTBOUND' && e.source_system && e.source_system !== 'OpenPhone',
+  )?.source_number
 
   const onSend = async () => {
     const text = draft.trim()
@@ -1118,6 +1188,23 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   }}
                 >
                   {note.text}
+                </div>
+              )}
+              {mirrored && composerType === 'SMS' && (
+                <div
+                  role="note"
+                  style={{
+                    marginBottom: 6, padding: '6px 10px', borderRadius: 4, fontSize: 13,
+                    color: 'rgb(181,71,8)', backgroundColor: 'rgb(255,250,235)',
+                    border: '1px solid rgb(254,240,199)',
+                  }}
+                >
+                  This thread includes messages mirrored from OpenPhone
+                  {mirrored.source_number ? ` (${formatPhone(mirrored.source_number)})` : ''},
+                  which is read&#8209;only here. Your reply sends from
+                  {' '}{replyLine ? formatPhone(replyLine) : 'the Dream Team Roofing number'}
+                  {' '}— a different number from the one the customer used. To reply on the
+                  OpenPhone line, use the OpenPhone app.
                 </div>
               )}
               {blocked && composerType === 'SMS' && (
