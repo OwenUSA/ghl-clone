@@ -265,7 +265,11 @@ def test_contact_delete_keeps_the_opportunities_and_drops_the_conversations(clie
 
     r = client.delete(f"/api/contacts/{cid}?force=true")
     assert r.status_code == 200
-    assert r.json() == {"deleted": cid, "detached_opportunities": opp_ids}
+    # `detached_appointments` joined this payload when the endpoint learned about
+    # appointments at all — this contact has none, and an empty list is still the
+    # honest answer to "what did the delete sever?".
+    assert r.json() == {"deleted": cid, "detached_opportunities": opp_ids,
+                        "detached_appointments": [], "reminders_cancelled": 0}
 
     # The contact is gone, and gone from the list the UI renders.
     assert client.get(f"/api/contacts/{cid}").status_code == 404

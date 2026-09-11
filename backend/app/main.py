@@ -2260,41 +2260,90 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
 
 # ---------- deletes ----------
 
+
+def _held_clause(ids: list[int], singular: str, plural: str) -> str:
+    """Render a blocker as `2 opportunities (3, 7)`. Empty list, empty string.
+
+    The ids are in the sentence because the confirmation the user actually sees is
+    built from them: the Contact Details panel turns this 409 into "these will be
+    detached", and the CLI prints it verbatim.
+    """
+    if not ids:
+        return ""
+    return "%d %s (%s)" % (len(ids), singular if len(ids) == 1 else plural,
+                           ", ".join(str(i) for i in ids))
+
+
 @app.delete("/api/contacts/{contact_id}")
 def delete_contact(contact_id: int, force: bool = False,
                    db: Session = Depends(get_db),
                    _: auth.Principal = auth.ADMIN):
     """Delete a contact and its conversation history.
 
-    Opportunities are DETACHED, never deleted: their `custom_fields` carry
-    `owen_call_id`, documented in DECISIONS.md as the join key to the telephony
-    project's attribution history. Deleting them to tidy up a contact would break
-    reporting that has nothing to do with this record.
+    Nothing that carries meaning of its own is destroyed here. Two kinds of row
+    hang off a contact, and both OUTLIVE it, detached rather than deleted:
+
+    * Opportunities — their `custom_fields` carry `owen_call_id`, documented in
+      DECISIONS.md as the join key to the telephony project's attribution
+      history. Deleting them to tidy up a contact would break reporting that has
+      nothing to do with this record.
+    * Appointments — a booking is the record that a slot was taken, which is the
+      same reason `DELETE /api/appointments/{id}` cancels instead of deleting.
+      This one is also not optional: `appointments.contact_id` is a real foreign
+      key, so a contact left with an appointment pointing at it does not delete
+      at all. Postgres raises ForeignKeyViolation and the caller gets a raw 500
+      — reproduced on production while clearing demo data, and the bug this
+      shape fixes.
+
+    Conversations ARE deleted: nothing outside this record joins to them,
+    `conversations.contact_id` is NOT NULL, and nothing cascades them, so it has
+    to be explicit. Their events cascade.
+
+    Both detaches need `force=true`, and the refusal names every row in the way.
+    An appointment is a commitment to a customer — somebody may still be driving
+    out to it — so severing one as a side effect of tidying a contact is a
+    deliberate act, not a default.
     """
     c = db.get(Contact, contact_id)
     if not c:
         raise HTTPException(404, "contact not found")
 
-    opp_ids = [o.id for o in db.scalars(
-        select(Opportunity).where(Opportunity.contact_id == contact_id)).all()]
-    if opp_ids and not force:
-        raise HTTPException(409, "contact has %d opportunit%s (%s) — pass "
-                                 "force=true to detach them and delete anyway"
-                            % (len(opp_ids), "y" if len(opp_ids) == 1 else "ies",
-                               ", ".join(str(i) for i in opp_ids)))
+    opps = db.scalars(select(Opportunity).where(
+        Opportunity.contact_id == contact_id)).all()
+    appts = db.scalars(select(Appointment).where(
+        Appointment.contact_id == contact_id)).all()
+    opp_ids = [o.id for o in opps]
+    appt_ids = [a.id for a in appts]
 
-    for opp in db.scalars(select(Opportunity).where(
-            Opportunity.contact_id == contact_id)).all():
+    if (opp_ids or appt_ids) and not force:
+        # One refusal naming both, rather than one per kind: an admin who clears
+        # the opportunities only to be refused again over the appointments has
+        # been made to play whack-a-mole with a confirmation dialog.
+        held = [clause for clause in (
+            _held_clause(opp_ids, "opportunity", "opportunities"),
+            _held_clause(appt_ids, "appointment", "appointments")) if clause]
+        raise HTTPException(409, "contact has %s — pass force=true to detach "
+                                 "them and delete anyway" % " and ".join(held))
+
+    for opp in opps:
         opp.contact_id = None
-    # Conversations are not cascade-deleted from Contact, and conversations.
-    # contact_id is NOT NULL, so this has to be explicit. Their events cascade.
+    reminders = 0
+    for appt in appts:
+        appt.contact_id = None
+        # The reminder handler already skips an appointment whose contact has
+        # gone (`_can_message(None)`), so nothing could be sent — but a job that
+        # can never run has no business sitting in `ghl jobs list --status
+        # pending`. Same distinction `cancel_appointment` draws.
+        reminders += _drop_pending_reminders(db, appt.id)
     for conv in db.scalars(select(Conversation).where(
             Conversation.contact_id == contact_id)).all():
         db.delete(conv)
     db.flush()
     db.delete(c)            # ContactTag rows cascade
     db.commit()
-    return {"deleted": contact_id, "detached_opportunities": opp_ids}
+    return {"deleted": contact_id, "detached_opportunities": opp_ids,
+            "detached_appointments": appt_ids,
+            "reminders_cancelled": reminders}
 
 
 @app.delete("/api/opportunities/{opp_id}")
