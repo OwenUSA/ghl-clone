@@ -23,7 +23,7 @@ unaffected. That is what makes this safe to apply to a live database with the ol
 code still running — the old code does not know these columns exist.
 
 Revision ID: b7e3f1a8c204
-Revises: a1f4c7d92b30
+Revises: c2d2cc47e4ff
 Create Date: 2026-09-11
 """
 from collections.abc import Sequence
@@ -32,7 +32,12 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = 'b7e3f1a8c204'
-down_revision: str | Sequence[str] | None = 'a1f4c7d92b30'
+# Rebased onto c2d2cc47e4ff (job questions + appointments.opportunity_id), which is
+# the head ALREADY APPLIED IN PRODUCTION. Pointing at the older a1f4c7d92b30 would
+# leave Alembic with TWO heads, and a two-head tree makes the production deploy fail
+# outright -- that happened on 2026-09-11 and cost an outage on /api/custom-fields.
+# `uv run alembic heads` must print exactly one line.
+down_revision: str | Sequence[str] | None = 'c2d2cc47e4ff'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
