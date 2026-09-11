@@ -165,6 +165,10 @@ class EventOut(BaseModel):
     subject: str | None
     duration_seconds: int | None
     recording_url: str | None
+    # CALL only, and nullable: an outbound call we placed has no outcome yet, and
+    # the feed does not always send one. The thread renders a null as "Call" rather
+    # than claiming it completed.
+    call_status: str | None = None
     delivery_status: str | None
     # Why the message is in that state, as a sentence. Null when the status speaks
     # for itself; set for a refusal or a carrier failure, which are exactly the
@@ -1478,9 +1482,14 @@ def list_conversations(
     col = Conversation.last_event_at
     stmt = stmt.order_by(col.asc() if oldest else col.desc())
     rows = db.scalars(stmt).all()
+    # `contact_dnd` is here so the composer can disable Send with a reason rather
+    # than let the operator type a message and discover it was suppressed. Same
+    # precedent as the disabled Internal Comment row: never offer an enabled
+    # control that cannot work.
     return [{"id": c.id, "contact_id": c.contact_id,
              "contact_name": c.contact.name if c.contact else None,
              "contact_phone": c.contact.phone if c.contact else None,
+             "contact_dnd": bool(c.contact.dnd) if c.contact else False,
              "last_event_at": c.last_event_at, "unread_count": c.unread_count,
              "starred": c.starred} for c in rows]
 
@@ -1525,6 +1534,7 @@ def conversation_events(
                      occurred_at=e.occurred_at, body=e.body, subject=e.subject,
                      duration_seconds=e.duration_seconds,
                      recording_url=e.recording_url,
+                     call_status=e.call_status,
                      delivery_status=e.delivery_status.value
                      if e.delivery_status else None,
                      delivery_detail=e.delivery_detail) for e in rows]
@@ -2787,6 +2797,7 @@ def update_conversation(conv_id: int, body: ConversationPatch,
     return {"id": conv.id, "contact_id": conv.contact_id,
             "contact_name": contact.name if contact else None,
             "contact_phone": contact.phone if contact else None,
+            "contact_dnd": bool(contact.dnd) if contact else False,
             "last_event_at": conv.last_event_at,
             "unread_count": conv.unread_count, "starred": conv.starred}
 
