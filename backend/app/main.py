@@ -1463,6 +1463,25 @@ def delete_saved_view(view_id: int, db: Session = Depends(get_db),
 
 # ---------- conversations ----------
 
+def _event_counts(db: Session, conv_id: int | None = None) -> dict[int, int]:
+    """How many entries each thread holds, in ONE grouped query.
+
+    The delete confirmation has to name what it is about to destroy — "Jane Doe
+    and 12 messages" rather than a bare "are you sure" — so the number has to be
+    on the row before anyone clicks. Counting per row would be a query per
+    conversation on every poll of the inbox.
+
+    It counts the WHOLE thread, deliberately, and is not narrowed by the thread
+    view's `filter` or by the STAFF-only internal-note rule: a delete removes
+    every event, so a count that quietly excluded the notes a TECH cannot see
+    would under-report exactly what is being lost.
+    """
+    stmt = select(ConversationEvent.conversation_id, func.count())
+    if conv_id is not None:
+        stmt = stmt.where(ConversationEvent.conversation_id == conv_id)
+    return dict(db.execute(stmt.group_by(ConversationEvent.conversation_id)).all())
+
+
 @app.get("/api/conversations")
 def list_conversations(
     db: Session = Depends(get_db),
@@ -1488,6 +1507,7 @@ def list_conversations(
     col = Conversation.last_event_at
     stmt = stmt.order_by(col.asc() if oldest else col.desc())
     rows = db.scalars(stmt).all()
+    counts = _event_counts(db)
     # `contact_dnd` is here so the composer can disable Send with a reason rather
     # than let the operator type a message and discover it was suppressed. Same
     # precedent as the disabled Internal Comment row: never offer an enabled
@@ -1497,6 +1517,7 @@ def list_conversations(
              "contact_phone": c.contact.phone if c.contact else None,
              "contact_dnd": bool(c.contact.dnd) if c.contact else False,
              "last_event_at": c.last_event_at, "unread_count": c.unread_count,
+             "event_count": counts.get(c.id, 0),
              "starred": c.starred} for c in rows]
 
 
@@ -2285,6 +2306,39 @@ def delete_contact(contact_id: int, force: bool = False,
     return {"deleted": contact_id, "detached_opportunities": opp_ids}
 
 
+@app.delete("/api/conversations/{conv_id}")
+def delete_conversation(conv_id: int, db: Session = Depends(get_db),
+                        _: auth.Principal = auth.ADMIN):
+    """Delete one conversation and its own events. NOTHING else.
+
+    ADMIN only, like the other two deletes. This is customer correspondence —
+    texts, calls, recordings and the crew's internal notes — and there is no soft
+    delete anywhere in this codebase (see "Why Restore stays dead" in
+    DECISIONS.md), so it is gone the moment this returns.
+
+    The contact stays, and so does everything hanging off it. `delete_contact`
+    above has to delete conversations explicitly because they are deliberately NOT
+    cascaded from Contact; the same care applies in reverse, and more so — an
+    opportunity carries `custom_fields.owen_call_id`, the telephony project's live
+    join key, and an appointment is a slot somebody booked. Removing a thread is
+    tidying a mailbox, not erasing a customer.
+
+    Only `ConversationEvent` cascades, through `Conversation.events`'
+    delete-orphan, and nothing else in the schema references a conversation.
+    """
+    conv = db.get(Conversation, conv_id)
+    if not conv:
+        raise HTTPException(404, "conversation not found")
+    contact_id = conv.contact_id
+    # Counted before the delete, because afterwards there is nothing to count and
+    # the caller still needs to be told what it lost.
+    events = _event_counts(db, conv_id).get(conv_id, 0)
+    db.delete(conv)
+    db.commit()
+    return {"deleted": conv_id, "contact_id": contact_id,
+            "events_deleted": events}
+
+
 @app.delete("/api/opportunities/{opp_id}")
 def delete_opportunity(opp_id: int, db: Session = Depends(get_db),
                        _: auth.Principal = auth.ADMIN):
@@ -2805,7 +2859,12 @@ def update_conversation(conv_id: int, body: ConversationPatch,
             "contact_phone": contact.phone if contact else None,
             "contact_dnd": bool(contact.dnd) if contact else False,
             "last_event_at": conv.last_event_at,
-            "unread_count": conv.unread_count, "starred": conv.starred}
+            "unread_count": conv.unread_count,
+            # Same shape as a row from GET /api/conversations, so the browser can
+            # drop this straight into the cached list without the row it patches
+            # losing a field the list had.
+            "event_count": _event_counts(db, conv.id).get(conv.id, 0),
+            "starred": conv.starred}
 
 
 # ---------- tags ----------
