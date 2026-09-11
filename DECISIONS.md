@@ -2380,3 +2380,144 @@ Alembic migration of its own**, so `alembic upgrade head` does not create
 `workiz_import.preflight()` refuses to run and names what is missing rather than failing
 half-way through writing 800 contacts. That migration is owed by that branch, and is the
 first thing to check before running this for real.
+
+## Custom fields are the owner's own job questions (2026-09-11)
+
+The opportunity detail carries questions the owner creates, edits and archives
+himself — "How many stories?", "Where is the leak located?", "How old is the
+roof?", "What type of roof?". `Opportunity.custom_fields` had been a free-form
+JSON blob since the beginning with **no definition table anywhere**: nothing said
+a field existed, what type it was, or what its options were, and the four `owen_*`
+keys were visible only because the telephony project writes them into that blob.
+
+**The definitions describe; the blob still stores.** `custom_field_defs` says a
+field exists; the answers stay exactly where they already were. There is no
+answers table and no data migration, which is why nothing in this work can lose
+an answer that already existed.
+
+### The owner's decisions, implemented as given
+
+- **Attached to OPPORTUNITIES, not contacts.** "How old is the roof" is a fact
+  about this job; the same customer calling back next year gets their own
+  answers. `CustomFieldDef.entity` exists so contact-level fields could be added
+  later without a second table. **Nothing writes anything but `"opportunity"`**,
+  and contact-level fields were deliberately not built.
+- **Five types: text, number, dropdown (pick one), date, yes/no.** No
+  multi-select — deferred by the owner, and not to be added without asking.
+- **One definition attaches to SEVERAL pipelines** (`custom_field_pipelines`).
+  Defining "Roof type" once is what keeps answers comparable across boards;
+  "AHS claim number" stays on the warranty pipeline alone.
+- **There is no `required` flag, and there is no column for one.** An inbound
+  call at 2am must still become a deal; a required field would mean a missed
+  lead.
+- **Defining, editing and archiving is ADMIN**, matching the pipeline structure
+  endpoints. The tab stays open to every role and the panel disables what a role
+  cannot use, with a title saying why — never a form that 403s on submit
+  (`d1f7c50`, `b943f4b`).
+- **Deleting a field ARCHIVES it.** `DELETE /api/custom-fields/{id}` sets
+  `archived_at` and returns `{"archived": id}`. **There is no endpoint anywhere
+  in this app that destroys a recorded answer**, and none should be added: those
+  values are things a customer told somebody on the phone.
+
+### Judgement calls, all overrulable
+
+- **An empty attachment set means NOWHERE, not everywhere.** The alternative
+  reading is tempting — "Roof type is useful everywhere" — and was rejected:
+  detaching the last pipeline would then silently turn a narrow question into a
+  global one. The panel warns on screen when a field is attached to nothing.
+- **`merge_answers` MERGES rather than replaces.** A key the client did not send
+  keeps its value; clearing is explicit (send the key empty). This is what makes
+  "a client posting a shorter object deletes nothing" structural rather than
+  per-case. An undefined, non-reserved key is still stored verbatim — the column
+  was free-form before this and stays that way — and `null` removes one, which is
+  the only deletion path this module has.
+- **An unchanged echo is never re-validated.** The form posts the whole object
+  back on every save, so re-validating an echo would mean that retiring a
+  dropdown option locked every deal already holding that option out of being
+  saved at all.
+- **The key is derived from the label ONCE and then frozen**, and the type cannot
+  be changed at all. Both are what answers are filed under or against. The panel
+  shows them as fixed text rather than as controls that do nothing.
+- **Answers are on the detail form and the Add opportunity dialog, and NOT on the
+  board card**, by the owner's instruction: the board is dense and has to stay
+  scannable.
+
+### The `owen_` namespace is now read-only in the form, not just guarded
+
+`owen_call_id` keeps its 400 on a change — unchanged, and still the join key. The
+other three (`owen_campaign`, `owen_tracking_number`, `owen_is_new_caller`) were
+plain editable inputs in the detail form, and **any client posting a shorter
+`custom_fields` object deleted them outright**, which would have broken call
+attribution silently. Now:
+
+- no definition may claim a key under a reserved prefix, and the check is on the
+  DERIVED key, so labelling a field "Owen campaign" is refused too;
+- **no write through `merge_answers` can drop a reserved key**, whatever it sends;
+- all four render read-only in the form, in their own "From OWEN" block.
+
+The guard is on the PREFIX, not on a list, so the three further `owen_*` fields
+measured on the live account later — `owen_call_signal`, `owen_lead_trigger`,
+`owen_signal_at`, recorded under "Measurement corrections" above — are covered
+without being enumerated anywhere.
+
+**They remain settable through the API** (`owen_call_id` excepted). That is
+deliberate and is the one place this is looser than it could be: the telephony
+project is the writer of those keys and must be able to correct attribution, and
+`test_the_telephony_join_key_cannot_be_rewritten_through_the_detail_form` already
+pins that the guard is not over-broad. **If the owner wants them frozen at the API
+too, it is the same loop `workiz_*` already uses at the top of `merge_answers`,
+pointed at `RESERVED_PREFIX` instead — and it is his decision**, not a cleanup.
+(The Workiz import added `workiz_*` to the same tuple and took exactly that
+stricter line: read-only in every direction.)
+
+### Appointments are linked to opportunities, and a delete never cancels a visit
+
+One nullable `appointments.opportunity_id`, readable from both ends: the deal
+lists the visits booked for it, the visit names its deal.
+
+- **Deleting an opportunity DETACHES its appointments.** Not a cascade, and not
+  an accident of a nullable column — the endpoint nulls them deliberately and
+  returns `detached_appointments`. A booked visit is a promise to a customer;
+  tidying a deal record must not quietly cancel it. Same call `delete_contact`
+  already makes about opportunities. It is also load-bearing: the column is a
+  real foreign key, so on PostgreSQL the delete would raise rather than cascade.
+- **The EXISTING create dialog is reused from both directions** rather than a
+  second one being written. It already validates the times and schedules the
+  reminders. From a deal the opportunity is locked and the contact and title
+  arrive prefilled; from the calendar it is an optional picker of OPEN deals.
+- **Reminder rescheduling was not touched.** Only `starts_at` and the status
+  reach the queue; binding a deal is not a change to when the visit happens, and
+  `test_linking_a_booking_does_not_touch_the_reminder_queue` compares the `jobs`
+  rows before and after rather than reading the code.
+- **Only open deals are OFFERED**, but the backend accepts any existing one: a
+  booking already bound to a deal that is later won must keep its link, and the
+  panel keeps the stored deal as an option so opening a booking cannot silently
+  unbind it.
+
+### The Custom fields tab is OURS
+
+`components/CustomFieldsPanel.tsx` joins the Opportunities tab row beside
+Pipelines, which is itself OUR design.
+
+GHL's `/settings/fields` screen HAS been driven on the live account — the
+CompanyCam checklist migration created 25 opportunity fields through
+`capture/build/`, and that screen's own widget mechanics are recorded under "UI
+mechanics worth keeping (`capture/build/panel.py`)" above. But **it was driven,
+not captured**: there is no HTML, no screenshot and no computed style for it to
+compare against, and this panel was not built from one. It is built from the
+Pipelines tab's primitives, which is the in-repo idiom. So **nothing on this tab
+may be cited as parity**, exactly like the four screens listed under "Which of
+these screens are OURS", and if a live session is ever opened again that screen is
+worth capturing properly. `components/CustomFieldAnswers.tsx` — used by BOTH the
+detail form and the Add dialog, so the two cannot drift — is ours too.
+
+### CORRECTION to "It depends on `feature/opportunity-fields`" above
+
+That section says the branch **"carries no Alembic migration of its own"** and
+that one is "owed by that branch". **It was delivered**: revision
+`c2d2cc47e4ff`, "job questions on opportunities, and a booking's deal", which
+creates `custom_field_defs` and `custom_field_pipelines` and adds
+`appointments.opportunity_id`. It is chained after `e7a3d1c05f84` (the Workiz
+address columns) and `alembic heads` prints exactly one head. So
+`alembic upgrade head` now does create all three, and `workiz_import.preflight()`
+no longer has anything to refuse on that account.
