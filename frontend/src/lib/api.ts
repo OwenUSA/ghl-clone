@@ -267,6 +267,18 @@ export type ThreadEvent = {
   delivery_status: string | null
   /** The reason, as a sentence, when the status alone does not explain itself. */
   delivery_detail: string | null
+  /**
+   * WHICH phone system carried this event -- "BulkVS" for anything this CRM sent or
+   * owen-main relayed, "OpenPhone" for an event mirrored from the account the company
+   * is migrating away from.
+   *
+   * Null means "not recorded", and renders NO chip. Every row written before the
+   * mirror existed has no observed source; labelling those "BulkVS" would be a guess
+   * dressed up as a fact on a customer's record.
+   */
+  source_system: string | null
+  /** The LINE it came through, e.g. "+19417247244". Null renders no chip. */
+  source_number: string | null
 }
 
 /**
