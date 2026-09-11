@@ -103,7 +103,8 @@ function remoteAudio(): HTMLAudioElement {
 }
 
 /**
- * Ask for the microphone BEFORE registering, not when the phone is already ringing.
+ * Ask for the microphone BEFORE registering, not when the phone is already ringing --
+ * but AFTER the credentials, so a deployment with no phone system never prompts at all.
  *
  * A blocked microphone does not stop a registration, so without this the failure surfaces
  * at the worst possible moment: the card appears, the user hits Answer, and SIP.js turns
@@ -209,17 +210,10 @@ export function useSoftphone() {
     let abandoned = false
     patch({ status: 'connecting', error: null })
     try {
-      const micProblem = await microphoneIsUsable()
-      if (stale()) {
-        abandoned = true
-        return
-      }
-      if (micProblem) {
-        // Registering anyway would put "ready" on screen for a browser that cannot answer.
-        patch({ status: 'failed', error: micProblem })
-        return
-      }
-
+      // CREDENTIALS FIRST, MICROPHONE SECOND. The order is not arbitrary: asking for the
+      // microphone raises a browser permission prompt, and a deployment with no phone
+      // system configured must never raise one. Find out whether this browser can be a
+      // phone at all -- one cheap request -- before asking the user for anything.
       let creds: SoftphoneCredentials
       try {
         creds = await fetchSoftphoneCredentials()
@@ -241,6 +235,17 @@ export function useSoftphone() {
 
       if (stale()) {
         abandoned = true
+        return
+      }
+
+      const micProblem = await microphoneIsUsable()
+      if (stale()) {
+        abandoned = true
+        return
+      }
+      if (micProblem) {
+        // Registering anyway would put "ready" on screen for a browser that cannot answer.
+        patch({ status: 'failed', error: micProblem })
         return
       }
 
