@@ -124,11 +124,15 @@ def delete(
     ref: str = typer.Argument(...),
     yes: YesOpt = False,
     force: bool = typer.Option(False, "--force",
-                               help="Detach opportunities and delete anyway."),
+                               help="Detach opportunities and appointments, "
+                                    "and delete anyway."),
 ):
     """Delete a client and their conversation history. Admin only.
 
     Opportunities are detached, never deleted — they carry the telephony join key.
+    Appointments are detached too: a booking is the record that a slot was taken,
+    and `appointments.contact_id` is a real foreign key, so one left pointing at a
+    deleted contact is a database error rather than a delete.
     """
     def body():
         c = client()
@@ -137,9 +141,14 @@ def delete(
                        yes)
         data = c.delete("/api/contacts/%d" % found["id"],
                         params={"force": "true" if force else None})
-        output.emit(data, render=lambda d: output.note(
-            "Deleted. Detached opportunities: %s"
-            % (d["detached_opportunities"] or "none")))
+
+        def said(d):
+            return output.note(
+                "Deleted. Detached opportunities: %s. Detached appointments: %s."
+                % (d["detached_opportunities"] or "none",
+                   d.get("detached_appointments") or "none"))
+
+        output.emit(data, render=said)
     run(body)
 
 
