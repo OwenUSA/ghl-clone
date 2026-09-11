@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from './components/Sidebar'
 import { SearchPalette } from './components/SearchPalette'
+import { Softphone } from './components/Softphone'
+import { SoftphoneProvider } from './lib/softphoneContext'
 import { ContactsPage } from './pages/ContactsPage'
 import { ConversationsPage } from './pages/ConversationsPage'
 import { OpportunitiesPage } from './pages/OpportunitiesPage'
@@ -101,8 +103,15 @@ export default function App() {
 
   const user = session.data.user
 
+  // The softphone is mounted HERE, around the whole shell, for two reasons: a
+  // registration is scarce (the operator AOR holds one contact, so the hook must
+  // exist exactly once), and a call rings the browser rather than a screen -- the
+  // incoming card has to appear whatever page is open. Nothing about it belongs to
+  // Conversations. See components/Softphone.tsx.
   return (
+    <SoftphoneProvider>
     <div className="flex h-screen w-screen overflow-hidden">
+      <Softphone />
       <Sidebar
         active={active}
         onNavigate={setActive}
@@ -138,5 +147,6 @@ export default function App() {
         <DashboardPage />
       )}
     </div>
+    </SoftphoneProvider>
   )
 }

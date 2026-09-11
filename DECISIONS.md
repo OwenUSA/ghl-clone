@@ -1850,3 +1850,74 @@ on file the dialog names the contact and offers to select it instead — and the
 button stays live. Two people genuinely share one number: a couple, or a property manager
 who is the contact for a dozen addresses. A guard that refuses would be wrong more often
 than it would be right, and the dispatcher is the one who knows which case this is.
+
+## The browser softphone is OURS — no GHL capture exists (2026-09-11)
+
+**GHL's softphone was never captured on the live account.** Placing or answering a call
+there is forbidden by the safety contract, the power-dialer is a separate micro-frontend
+nobody opened, and nothing under `captures/` describes an incoming-call card, a dial pad
+or a registration indicator. Everything in `frontend/src/components/Softphone.tsx` and
+`frontend/src/lib/softphone*.ts` is therefore **our own design**, and must never be cited
+as parity. `capture/diff.py` and `diff_panel.py` do not cover it and should not be
+extended to; there is nothing on the other side to compare it against.
+
+The requirement it serves is the owner's, in his words: *"i should be able to answer from
+the crm or the other 2 phones, the one that picks up first, takes the call."*
+
+### What was already true, and was not rebuilt
+
+`+19544829099` is bound to the CRM in the telephony project, and OWEN's
+`integrations/crm/ring.py` already rings both mobiles **and** every
+`PJSIP/operator-<slug>` browser softphone in parallel, hangs up every losing leg *before*
+it bridges the winner, and records the bridge. First-answer-wins is implemented, tested
+(`test_first_to_answer_is_bridged_and_the_rest_are_torn_down`) and live.
+
+So the CRM needed to become one of those `operator-<slug>` endpoints — nothing more.
+**Answering in the browser does not cancel the mobiles from this end**, and no code here
+tries to: that would be a second, competing answer to a question already settled in the
+place that owns the call.
+
+### The decisions taken, and what each rejects
+
+- **A CRM user maps to an OWEN operator BY EMAIL**, through OWEN's own `operator_slug`.
+  The owner's call. The alternative — a mapping table in this database — was rejected
+  because the slug already names a `pjsip.conf` section and an ARI dial string, so a
+  second source of truth could only ever disagree with the phone system.
+- **The operator must be provisioned; we never invent one.** OWEN refuses an email that
+  is not on `CRM_LINK_SOFTPHONE_OPERATORS` (empty grants nobody). Minting off the slug
+  rule alone would hand a browser a well-formed credential for an endpoint that exists
+  nowhere: it would register into a SIP 401 and could never be rung, while the UI said
+  it was ready.
+- **The CRM-link machine key never reaches the browser.** `POST
+  /api/softphone/credentials` in this app is a proxy that holds the key; the browser
+  authenticates with its ordinary session cookie. The key can also place calls and send
+  texts on a bound DID.
+- **The identity is the session's email and is never a parameter.** An operator endpoint
+  is a ring destination, so "register as another user" would mean "answer their calls".
+- **Registration state is only ever reported from a SIP registration callback.** Not from
+  "we called `register()` and it did not throw". This browser is one leg of a ring group
+  whose other legs are two mobiles: if it silently stops being registered, the call still
+  rings the mobiles and nobody discovers the desk was dead. The dock is always on screen
+  and says which of eight states it is in.
+- **One tab at a time, elected between the tabs.** The operator AOR is `max_contacts = 1`,
+  `remove_existing = yes`, so a second tab *silently evicts* the first — which would leave
+  a tab showing "Ready for calls" that can never ring again. A BroadcastChannel lease makes
+  the eviction visible and deliberate ("Open in another tab" + "Use this tab").
+- **The microphone is asked for before registering, not when the phone is ringing.** A
+  blocked microphone does not stop a registration, so without the probe the failure lands
+  as a rejected call that reads like a dropped one.
+- **Default ON, remembered per browser.** A phone somebody has to switch on every morning
+  is a phone that is off when the call comes in. Switching it *off* is the deliberate act.
+- **In-call controls are hang up and mute, and nothing else.** Hold, transfer and DTMF are
+  all backend/ARI operations in the telephony project; the browser never talks to ARI, and
+  a v1 that shipped buttons driving a seam this app does not own would be a promise we
+  cannot keep.
+
+### Not verified, and cannot be from here
+
+**No real call has been placed.** Everything above is proven by unit tests, fakes and a
+type-checked build. What remains unproven until a human dials `+19544829099` with
+`CRM_LINK_ENABLED=true` and a provisioned operator: that the browser registers against the
+live Asterisk, that the INVITE's caller-ID parses into the name the card shows, that media
+flows through coturn, and that answering in the browser really does stop the two mobiles.
+The full list is in `.qa/state/softphone-done`.

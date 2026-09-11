@@ -109,6 +109,37 @@ uv run ghl opps move 42 --stage "Inspection"
 uv run ghl jobs list --status pending         # did the automation fire?
 ```
 
+## Answering a call in the browser (the softphone)
+
+The CRM can be a ring destination. `+19544829099` already rings two mobiles in parallel
+and the first to answer takes the call; a signed-in browser now rings alongside them.
+
+**It is off unless the deployment is told where the phone system is:**
+
+```bash
+OWEN_BASE_URL=http://callmon_app:8000      # OWEN, on the internal docker network
+OWEN_SOFTPHONE_KEY=owen_sk_...             # an OWEN API key with the `crm_link` scope
+```
+
+With either unset, `POST /api/softphone/credentials` answers 503 without making a
+request and the dock hides itself. That is the default in tests and in a fresh checkout,
+so nothing here can reach a live telephony service by accident.
+
+On the OWEN side the user's email must also be listed in `CRM_LINK_SOFTPHONE_OPERATORS`
+**and** have an `[operator-<slug>]` trio in `asterisk/pjsip.conf`. An email that is not
+provisioned gets a 403 saying so — we never invent an operator.
+
+- `frontend/src/lib/softphone.ts` — the SIP.js hook. Registration state comes only from
+  a SIP registration callback, never from "register() did not throw".
+- `frontend/src/components/Softphone.tsx` — the dock, incoming card and in-call bar.
+  Mounted once in `App.tsx`; it is deliberately not part of any page.
+- **Only one tab can be the phone.** The operator AOR holds one contact, so a second tab
+  evicts the first. The tabs elect a holder over a BroadcastChannel and the others say so.
+- Answering does **not** cancel the mobiles from here — OWEN's ring group already hangs
+  up every losing leg before it bridges. Do not add a second mechanism.
+- **No real call has ever been placed through it.** See the 2026-09-11 entry in
+  `DECISIONS.md` and `.qa/state/softphone-done` for exactly what is unverified.
+
 ## It is deployed
 
 Live at **https://crm.dreamteamroofingfl.com** on the `owen-main` VPS, behind the shared
@@ -154,7 +185,7 @@ against existing rows.
 ## Tests
 
 ```bash
-uv run pytest                        # backend + CLI, 616 tests
+uv run pytest                        # backend + CLI, 640 tests
 uv run ruff check .                  # must pass clean
 uv run python capture/capture_ours.py contacts Contacts            # regenerate OUR side
 uv run python capture/capture_ours.py conversations Conversations
