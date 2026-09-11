@@ -2012,3 +2012,83 @@ type-checked build. What remains unproven until a human dials `+19544829099` wit
 live Asterisk, that the INVITE's caller-ID parses into the name the card shows, that media
 flows through coturn, and that answering in the browser really does stop the two mobiles.
 The full list is in `.qa/state/softphone-done`.
+
+## The Conversations inbox: unread, and a thread can now be deleted (2026-09-11)
+
+Three loose ends the owner reported, and the product decisions taken while
+closing them. None of these overturns a locked decision; the third adds a
+destructive capability that did not exist, which is why it is written down.
+
+### "Unread" now means a CONVERSATION, wherever it is counted
+
+The badge on the Unread **tab** was the sum of `unread_count` across every
+conversation, while the tab it labels filters conversations. One thread holding
+two unread texts therefore showed "2" above a list of one row. It is now a count
+of rows — `unreadTabCount` in `frontend/src/lib/inbox.ts`, the same predicate
+`GET /api/conversations?tab=unread` applies on the server (`unread_count > 0`),
+so the badge and the list it labels cannot be computed from different rules.
+
+**The per-row badge keeps the message total, deliberately.** There it labels one
+conversation, and "2" means two unread texts — which is what the operator needs
+before opening it. That is the one place the sum is the right number.
+
+### Opening a thread marks it read, and so does a message ARRIVING on an open one
+
+`PATCH /api/conversations/{id}` has accepted `{"read": true}` since the inbox was
+built and `ghl convos read` has always used it. Nothing in the browser ever
+called it, which is the whole of the reported bug.
+
+The judgement call is the second half, and it is **overrulable**: when a new
+inbound message lands on a thread that is already open, the badge does **not**
+come back. "Unread" has to mean nobody has seen it, and somebody has — the
+message is on screen beside them, within the ten-second poll. Letting the badge
+reappear on the thread being read is the owner's original complaint arriving by a
+different route.
+
+The guard that makes that safe is **tab visibility**: a thread left open on a
+background tab keeps its badge and clears it when the tab comes forward. Nobody
+is reading a background tab. `shouldMarkRead(openId, unread, visible)` is the
+whole rule, and it is one testable function rather than an inline `&&`.
+
+**The mark-read is not optimistic.** The server is asked first and the badge is
+cleared only if it agreed; a failed PATCH leaves the badge exactly where it was
+and says why. An optimistic clear that silently rolls back is indistinguishable
+from a badge that works, right up until somebody misses a customer's text.
+
+**The auto-selected first row counts as opening.** Its thread is rendered in full
+beside the list, so a badge on it would claim nobody had seen messages that are
+on screen. There is no hover handler and no keyboard navigation in this list, so
+"selected" and "opened" are the same event and nothing else can trigger it.
+
+**The measured "New" divider is now drawn from a snapshot** taken when the thread
+was opened, not from the live unread count — otherwise clearing the count would
+have deleted a measured element from the screen by a side door.
+
+### `DELETE /api/conversations/{id}` — ADMIN, and it deletes ONE thing
+
+There was no supported way to remove a thread; the trash icon was labelled
+`Delete Conversation (not implemented in v1)`, and demo threads had to be removed
+straight from the production database. That is what this closes.
+
+- **ADMIN only**, like the other two deletes. This is customer correspondence,
+  and there is **no soft delete anywhere in this codebase** — see "Why Restore
+  stays dead" — so it is gone when the call returns. A DISPATCHER and a TECH get
+  the control **disabled with a title saying why**, never a form that 403s on
+  submit (`d1f7c50` / `b943f4b`).
+- **It deletes the conversation and its own events. Nothing else.** The contact
+  stays, their opportunities stay attached — `custom_fields.owen_call_id` is the
+  telephony project's live join key — and their appointments stay. `delete_contact`
+  has to remove conversations explicitly because they are deliberately not
+  cascaded from `Contact`; this is the same care in reverse. Only
+  `ConversationEvent` cascades, and nothing else in the schema references a
+  conversation.
+- **The confirmation names the contact and the size of the thread**, because "are
+  you sure" tells nobody anything about what they are about to lose. The row now
+  carries `event_count` — the WHOLE timeline, not narrowed by the thread filter
+  and not narrowed by the STAFF-only internal-note rule, because a delete removes
+  every event and a count that hid the notes would under-report what is going.
+- **There is no bulk delete and no `ghl convos delete`.** The first is the same
+  call already made for contacts and opportunities ("a checkbox column is the
+  fastest way ever invented to lose real customer records in one click"). The
+  second is simply not built; the endpoint is reachable with a PAT if it is ever
+  wanted.
