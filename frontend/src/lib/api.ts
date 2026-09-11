@@ -454,6 +454,8 @@ export const patchAppointment = (id: number, body: AppointmentPatch) =>
 export type AppointmentCancelled = {
   id: number
   status: string
+  /** Always false. The route is a DELETE; the outcome is a status change. */
+  deleted: false
   reminders_cancelled: number
 }
 

@@ -2232,6 +2232,12 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
     cancelled booking is a record, and throwing it away would lose the fact that
     the slot was ever taken.
 
+    The verb and the route say "delete" and the outcome is a status change, so the
+    body says so out loud: `deleted: false` alongside `status: "cancelled"`. A
+    caller reading a 200 off a DELETE should not have to know this docstring
+    exists to find out the row is still there. Nothing here hard-deletes an
+    appointment — there is no endpoint that does, deliberately.
+
     The reminders do NOT survive. `_h_appointment_reminder` re-checks the status
     at run time, so a leftover job could never send — but "could never send" and
     "is not queued" are different things to the dispatcher reading
@@ -2243,7 +2249,8 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
     a.status = "cancelled"
     dropped = _drop_pending_reminders(db, a.id)
     db.commit()
-    return {"id": a.id, "status": a.status, "reminders_cancelled": dropped}
+    return {"id": a.id, "status": a.status, "deleted": False,
+            "reminders_cancelled": dropped}
 
 
 # ---------- deletes ----------
