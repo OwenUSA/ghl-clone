@@ -135,7 +135,11 @@ RETAIL_STAGES = [
 # Invoice" are two spellings of one step, the CLI resolves both without complaining,
 # and nothing but a human can know they mean the same thing. This list is that human
 # judgement written down, and removing an entry from it is a one-line veto.
-NEAR_DUPLICATE_STAGES = [("Submit Invoices", "Submit The Invoice")]
+# VETOED by the owner, 2026-09-11, reading the dry run: "Submit Invoices" is a
+# distinct step in his workflow, not a second spelling of "Submit The Invoice".
+# The mechanism below is unchanged and still covered by its tests -- this list is
+# empty because the only candidate was rejected, not because the feature was cut.
+NEAR_DUPLICATE_STAGES: list[tuple[str, str]] = []
 
 # ---------------------------------------------------------------- statuses
 

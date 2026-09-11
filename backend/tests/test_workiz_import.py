@@ -685,14 +685,21 @@ def test_the_duplicate_call_back_column_is_removed_so_names_are_unique(
         select(Stage).where(Stage.pipeline_id == pipeline.id)).all()]
     assert names.count("Call Back") == 1
     assert len(names) == len(set(names)), "every stage name is now unique"
-    assert "Submit Invoices" not in names       # the near-duplicate, collapsed
-    assert "Submit The Invoice" in names        # the one it collapsed into
+    assert "Submit Invoices" in names, (
+        "the owner vetoed this collapse on 2026-09-11 after reading the dry run: "
+        "Submit Invoices is a distinct step, not a second spelling")
+    assert "Submit The Invoice" in names
 
 
 def test_a_duplicate_stage_holding_deals_is_renamed_never_emptied(
-        ahs_board, tmp_path):
+        ahs_board, tmp_path, monkeypatch):
     """Nothing in this importer moves or deletes a deal. `owen_call_id` is a live
     join key into the telephony project (CLAUDE.md)."""
+    # NEAR_DUPLICATE_STAGES is empty in production (the owner vetoed its only
+    # entry), so populate it here: this test exists to prove the MECHANISM never
+    # empties a column that holds a deal, and an empty list would prove nothing.
+    monkeypatch.setattr(wi, "NEAR_DUPLICATE_STAGES",
+                        [("Submit Invoices", "Submit The Invoice")])
     db, pipeline, stages = ahs_board
     person = Contact(first_name="Real", last_name="Customer", phone="+19415550001")
     db.add(person)
