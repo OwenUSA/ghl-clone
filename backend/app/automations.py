@@ -48,9 +48,66 @@ STAGE_TEXT = "Update on your job: it's now at the '{stage}' stage."
 # A call shorter than this with no answer is treated as missed.
 MISSED_CALL_MAX_SECONDS = 15
 
-
 def _utcnow():
     return datetime.now(UTC)
+
+
+# How recent an event has to be for us to act on it as though it just happened.
+#
+# THIS EXISTS BECAUSE A BACKFILL CAN NOW BACK-DATE AN EVENT (2026-09-11). Until the
+# OpenPhone mirror, every ingested event WAS "just now": `ConversationEvent.occurred_at`
+# defaulted to the ingest clock and nothing could set it to the past. So rule 1 never
+# needed to ask how old a call was.
+#
+# A 30-day mirror breaks that assumption completely. Every short or unanswered OpenPhone
+# call in the window is an INBOUND CALL with a duration under 15 seconds — so without
+# this guard, switching the mirror on would queue ONE AUTO TEXT-BACK PER MISSED CALL, to
+# real customers, about calls up to a month old, from a BulkVS number those customers
+# have never seen. Today `LoggingTransport` would record them instead of sending them;
+# CLAUDE.md is explicit that the day two env vars are set, every send becomes a real
+# text. That is a live misfire waiting for a config change, not a hypothetical.
+#
+# One hour, not one minute: a legitimately delayed relay — a queue backlog on owen-main,
+# a job retried with backoff, a worker restarted mid-drain — must still fire. A real
+# missed call reaches us seconds after it ends, so an hour of slack costs nothing and
+# leaves no plausible live call on the wrong side of the line.
+#
+# This guard can only ever STOP a text nobody wanted. It cannot stop one that fires
+# correctly today, because a live call is seconds old when it lands.
+FRESH_EVENT_SECONDS = 3600
+
+
+def as_utc(value: datetime | None) -> datetime | None:
+    """An aware-UTC datetime, whatever storage handed back.
+
+    SQLite has no timezone type, so a `DateTime(timezone=True)` column round-trips
+    as NAIVE there while Postgres returns it aware. Every writer in this app stores
+    UTC, so assuming UTC for a naive value is correct rather than a guess — and it
+    keeps a storage detail out of code that is comparing two moments in time.
+
+    Without this, comparing a back-dated event against a stored `last_event_at`
+    raises `TypeError: can't compare offset-naive and offset-aware datetimes` on
+    SQLite and silently works on Postgres, which is the worst possible split.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def is_fresh(occurred_at: datetime | None, *, now: datetime | None = None) -> bool:
+    """Did this event happen recently enough to act on as news?
+
+    A missing timestamp is treated as fresh: that is what every caller before the mirror
+    effectively was, and the failure mode of guessing "old" would be to silently stop
+    firing rule 1 on a live call.
+
+    A FUTURE timestamp is fresh too. Clock skew between two hosts is real and small, and
+    "the far side's clock is 30 seconds ahead" must not look like history.
+    """
+    if occurred_at is None:
+        return True
+    now = now or _utcnow()
+    return (now - as_utc(occurred_at)).total_seconds() <= FRESH_EVENT_SECONDS
 
 
 def _can_message(contact: Contact | None) -> tuple[bool, str]:
@@ -105,7 +162,8 @@ def _record_outbound(db: Session, contact: Contact, body: str,
         occurred_at=_utcnow(), body=body,
         delivery_status=ref.status,
         delivery_detail=ref.detail or None,
-        provider_ref=ref.provider_ref or None)
+        provider_ref=ref.provider_ref or None,
+        source_system=SENT_SOURCE_SYSTEM, source_number=_sent_source_number())
     db.add(ev)
     conv.last_event_at = ev.occurred_at
     db.flush()
@@ -115,6 +173,28 @@ def _record_outbound(db: Session, contact: Contact, body: str,
 # Internal thread entries: recorded for the team, never transmitted, and never
 # suppressed. DND is a promise to the customer, not a mute on our own notes.
 INTERNAL_TYPES = {EventType.NOTE, EventType.INTERNAL_COMMENT}
+
+# Which line an outbound text from this CRM goes out on. Every one of them, always:
+# this CRM sends over the BulkVS DID and nothing else. Mirrored OpenPhone events
+# now share these threads, so an operator needs to be able to see at a glance that
+# a reply leaves on a DIFFERENT number from the one the customer just used — which
+# is the entire reason the composer says so on screen too.
+#
+# Stamped only on rows written from here onward. Rows that predate the column keep
+# NULL and render no chip: they were almost certainly BulkVS, but "almost certainly"
+# is not something to write into a customer's record as fact.
+SENT_SOURCE_SYSTEM = "BulkVS"
+
+
+def _sent_source_number() -> str:
+    """The DID an outbound text actually leaves on, read at send time.
+
+    Deliberately not a constant: `crmlink.current()` reads the environment on every
+    call so a redeployment that rebinds the number is reflected without a code
+    change, and freezing it here would make the chip lie the day that happens.
+    """
+    from .crmlink import current
+    return current().from_number
 
 
 def send_outbound(db: Session, contact: Contact, body: str, *,
@@ -159,7 +239,8 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
         occurred_at=_utcnow(), body=body, subject=subject,
         delivery_status=ref.status,
         delivery_detail=ref.detail or None,
-        provider_ref=ref.provider_ref or None)
+        provider_ref=ref.provider_ref or None,
+        source_system=SENT_SOURCE_SYSTEM, source_number=_sent_source_number())
     db.add(ev)
     conv.last_event_at = ev.occurred_at
     db.flush()
@@ -181,6 +262,11 @@ def on_inbound_call(db: Session, event: ConversationEvent) -> str:
         return "not an inbound call"
     if (event.duration_seconds or 0) > MISSED_CALL_MAX_SECONDS:
         return "call was answered"
+    # A mirrored call from three weeks ago is history, not a missed call to answer now.
+    # See FRESH_EVENT_SECONDS: without this, enabling the OpenPhone mirror would text a
+    # month of past callers from a number they do not recognise.
+    if not is_fresh(event.occurred_at):
+        return "call is too old to text back"
 
     conv = db.get(Conversation, event.conversation_id)
     contact = db.get(Contact, conv.contact_id) if conv else None

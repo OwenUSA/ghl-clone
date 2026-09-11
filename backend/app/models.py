@@ -413,7 +413,33 @@ class ConversationEvent(Base):
     # The far side's id for this message — owen-main's `message_id`. This is the
     # join key a delivery receipt arrives with, which is why it is indexed:
     # POST /api/events/delivery looks a row up by it on every receipt.
+    #
+    # NOT unique, and it must not become so: the BulkVS call path deliberately
+    # sends the SAME provider_ref on all three lifecycle phases ("calls.id, on
+    # EVERY phase — the join key must not depend on which event survived",
+    # owen-main integrations/crm/events.py). Deduplicating on it would collapse
+    # started/answered/ended into one row and break the live path.
     provider_ref: Mapped[str | None] = mapped_column(String(120), index=True)
+
+    # --- mirrored feeds (2026-09-11) ------------------------------------------
+    # An OPT-IN idempotency key. UNIQUE, so a feed that may deliver the same
+    # object twice — a poll that re-reads its window, or a job retried after the
+    # response to a successful POST was lost — lands on ONE row.
+    #
+    # Separate from `provider_ref` precisely because that column cannot carry
+    # this meaning (see above). NULL for everything that does not opt in, which
+    # is every row written before this column existed and every row the BulkVS
+    # path writes today; Postgres and SQLite both allow many NULLs in a unique
+    # index, so the constraint costs those rows nothing.
+    dedupe_key: Mapped[str | None] = mapped_column(String(200), unique=True)
+
+    # WHICH system and WHICH line carried this event: "OpenPhone" / "+19417247244".
+    # A thread can now hold events from two phone systems at once, and an operator
+    # who cannot tell them apart cannot tell which number the customer knows them
+    # by. NULL means "not recorded" and renders no chip — never a guess, because
+    # every row that predates this column has no observed source.
+    source_system: Mapped[str | None] = mapped_column(String(40))
+    source_number: Mapped[str | None] = mapped_column(String(40))
 
     conversation: Mapped[Conversation] = relationship(back_populates="events")
 

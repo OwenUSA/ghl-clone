@@ -16,7 +16,8 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations, crmlink, custom_fields, models, phone_match, softphone
+from . import (auth, automations, crmlink, custom_fields, models, openphone,
+               phone_match, softphone)
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
@@ -66,6 +67,11 @@ app.add_middleware(
 # that does so. One router, mounted here, so the app-level auth gate covers it like
 # everything else -- see app/softphone.py.
 app.include_router(softphone.router)
+# The OpenPhone mirror's one CRM-side route: it streams a mirrored call's audio
+# through owen-main so the OpenPhone key never reaches the browser. Ingest needs
+# no code here -- owen-main posts mirrored events to /api/events like any other
+# telephony feed. See app/openphone.py.
+app.include_router(openphone.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
@@ -182,6 +188,16 @@ class EventOut(BaseModel):
     # for itself; set for a refusal or a carrier failure, which are exactly the
     # cases where the status alone does not tell the operator what to do next.
     delivery_detail: str | None = None
+    # WHICH phone system and WHICH line carried this event. A thread can hold both
+    # BulkVS and mirrored OpenPhone events, and an operator who cannot tell them
+    # apart cannot tell which number the customer knows them by — which is the
+    # whole question when deciding whether to reply here or call back.
+    #
+    # Null renders NO chip rather than a default. Every row written before the
+    # mirror existed has no observed source, and labelling them "BulkVS" would be
+    # inventing a fact to make the UI tidier.
+    source_system: str | None = None
+    source_number: str | None = None
 
 
 # ---------- contacts ----------
@@ -1036,6 +1052,31 @@ class EventIngest(BaseModel):
     recording_url: str | None = None
     provider_ref: str | None = None
 
+    # --- mirrored feeds (2026-09-11) ----------------------------------------
+    # All optional, all defaulting to None, so a body that omits them is exactly
+    # the body owen-main's BulkVS path has always sent.
+    #
+    # WHEN IT HAPPENED, as opposed to when we heard about it. Until the OpenPhone
+    # mirror every ingested event WAS "just now" and this was safe to leave to the
+    # column default. A 30-day backfill is the first feed that can legitimately
+    # report the past, and without this it would land as a month of history all
+    # dated today, in poll order — the opposite of the one-timeline-per-customer
+    # the mirror exists to produce. Back-dating also feeds `automations.is_fresh`,
+    # which is what stops rule 1 texting a month of past callers.
+    occurred_at: datetime | None = None
+    # OPT-IN idempotency. Unique; a second ingest carrying a key we already hold
+    # returns the row that exists instead of writing another. Deliberately NOT
+    # `provider_ref`, which the call path sends identically on all three lifecycle
+    # phases and so cannot be unique. See the model and the migration.
+    dedupe_key: str | None = None
+    # Which system and which line carried this event, for a thread that now holds
+    # two phone systems at once.
+    source_system: str | None = None
+    source_number: str | None = None
+    # OpenPhone has already transcribed its calls, so carrying the text costs a
+    # field and no STT spend. The column has existed since the baseline.
+    transcript: str | None = None
+
     # owen-main's job payloads carry more than this (linkedid, outcome, winning
     # destination...) and are explicitly documented as forward-compatible. Ignoring
     # unknown keys rather than 422-ing on them means a newer owen-main deploy cannot
@@ -1116,6 +1157,35 @@ def _resolve_ingest_contact(db: Session, body: EventIngest) -> Contact:
 @app.post("/api/events", status_code=201)
 def ingest_event(body: EventIngest, db: Session = Depends(get_db),
                  _: auth.Principal = auth.EVENTS_INGEST):
+    # IDEMPOTENCY, and it comes first — before the contact is resolved or created.
+    #
+    # A feed that may deliver the same object twice sends a `dedupe_key`. Two
+    # things produce that here and neither is exotic: the OpenPhone mirror's poll
+    # re-reads its whole window every tick, and owen-main's `crm_report` job is
+    # retried on a timeout — including a timeout that happened AFTER this endpoint
+    # committed and before its 201 got home. The second case is why the check
+    # cannot live on the far side: owen-main genuinely does not know whether the
+    # first attempt landed.
+    #
+    # Returning the EXISTING row rather than 409-ing is deliberate. To the caller a
+    # repeat delivery succeeded — the event is on the thread, which is all it
+    # wanted — and a 4xx would dead-letter a `crm_report` job after five attempts
+    # for having done its job correctly.
+    #
+    # Resolving the contact first would be worse than wasteful: `_resolve_ingest_
+    # contact` CREATES a contact for an unrecognised number and fires the new-lead
+    # automation, so a duplicate delivery would notify the crew about a lead that
+    # was already on file.
+    key = (body.dedupe_key or "").strip()
+    if key:
+        seen = db.scalar(select(ConversationEvent)
+                         .where(ConversationEvent.dedupe_key == key))
+        if seen is not None:
+            conv_existing = db.get(Conversation, seen.conversation_id)
+            return {"id": seen.id, "conversation_id": seen.conversation_id,
+                    "contact_id": conv_existing.contact_id if conv_existing else None,
+                    "automation": "duplicate: already ingested"}
+
     contact = _resolve_ingest_contact(db, body)
     if body.call_status is not None:
         if body.type != "CALL":
@@ -1140,11 +1210,36 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
         call_status=body.call_status,
         recording_url=body.recording_url,
         provider_ref=body.provider_ref,
+        dedupe_key=key or None,
+        source_system=body.source_system,
+        source_number=body.source_number,
+        transcript=body.transcript,
     )
+    # Omitted means "now", which is what every caller before the mirror meant and
+    # what the column default already does. Set means the feed observed the real
+    # time, and the thread must show it there.
+    if body.occurred_at is not None:
+        ev.occurred_at = body.occurred_at
     db.add(ev)
     db.flush()
-    conv.last_event_at = ev.occurred_at
-    if body.direction == "INBOUND":
+
+    # FORWARD-ONLY, for the same reason the delivery ladder is. `last_event_at`
+    # orders the inbox, so a backfilled three-week-old call must not drag a thread
+    # that was active this morning back down the list. A live event is newer than
+    # whatever is there and still wins.
+    fresh = automations.is_fresh(ev.occurred_at)
+    # Both sides normalised to aware UTC before comparing: SQLite round-trips a
+    # timezone-aware column as NAIVE and Postgres does not, so an un-normalised
+    # comparison raises on the tests and silently works in production.
+    previous = automations.as_utc(conv.last_event_at)
+    occurred = automations.as_utc(ev.occurred_at)
+    if previous is None or occurred > previous:
+        conv.last_event_at = ev.occurred_at
+    # "Unread" means something arrived that nobody has seen. A mirrored text from
+    # three weeks ago was seen — in OpenPhone, which is where it was answered — so
+    # counting it would hand the operator a badge of 200 for correspondence that is
+    # already handled, and train them to clear the badge without reading it.
+    if body.direction == "INBOUND" and fresh:
         conv.unread_count += 1
 
     # Rule 1: missed call -> auto text back.
@@ -1861,7 +1956,9 @@ def conversation_events(
                      call_status=e.call_status,
                      delivery_status=e.delivery_status.value
                      if e.delivery_status else None,
-                     delivery_detail=e.delivery_detail) for e in rows]
+                     delivery_detail=e.delivery_detail,
+                     source_system=e.source_system,
+                     source_number=e.source_number) for e in rows]
 
 
 # ---------- appointments ----------
