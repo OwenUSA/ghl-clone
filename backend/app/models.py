@@ -383,8 +383,28 @@ class ConversationEvent(Base):
     # The global call/message search (GET /api/calls, /api/messages) filters on type
     # and orders by recency across every thread at once, which the per-conversation
     # indexes cannot serve.
-    __table_args__ = (Index("ix_conversation_events_type_occurred",
-                            "type", "occurred_at"),)
+    __table_args__ = (
+        Index("ix_conversation_events_type_occurred", "type", "occurred_at"),
+        # The idempotency guarantee for mirrored feeds, declared as a UNIQUE INDEX and
+        # NOT as `unique=True` on the column.
+        #
+        # Both enforce the same thing on both backends, but they are different OBJECTS to
+        # Alembic: `unique=True` on a column renders a UniqueConstraint, while the
+        # migration adds a unique Index. Declaring one and creating the other makes
+        # `uv run alembic check` — the drift gate CLAUDE.md documents — report a phantom
+        # drop-and-recreate forever, and hands the next `--autogenerate` a spurious
+        # constraint change inside some unrelated migration.
+        #
+        # The INDEX is the side that moved to match, because the migration ADDs this
+        # column to an existing table: `ALTER TABLE ... ADD CONSTRAINT` needs batch mode
+        # on SQLite, while a `CREATE UNIQUE INDEX` works unchanged on SQLite and Postgres
+        # alike. `Job.dedupe_key` next door keeps `unique=True` and is right to — it is
+        # created inside its CREATE TABLE, where a UniqueConstraint costs nothing.
+        #
+        # Named `uq_` rather than `ix_` deliberately: it is an index, but what a reader
+        # needs to know first is that it makes the column unique.
+        Index("uq_conversation_events_dedupe_key", "dedupe_key", unique=True),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("conversations.id"), index=True)
@@ -431,7 +451,10 @@ class ConversationEvent(Base):
     # is every row written before this column existed and every row the BulkVS
     # path writes today; Postgres and SQLite both allow many NULLs in a unique
     # index, so the constraint costs those rows nothing.
-    dedupe_key: Mapped[str | None] = mapped_column(String(200), unique=True)
+    #
+    # The uniqueness lives in `__table_args__` as a unique Index, not here as
+    # `unique=True` — see the note there for why the two are not interchangeable.
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
 
     # WHICH system and WHICH line carried this event: "OpenPhone" / "+19417247244".
     # A thread can now hold events from two phone systems at once, and an operator
