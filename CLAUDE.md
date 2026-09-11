@@ -250,7 +250,12 @@ found while building this.
   first key and the customer silently gets nothing. See the 2026-09-10 amendment in
   `DECISIONS.md`. `_drop_pending_reminders()` in `main.py` is the one place that does
   this; use it rather than writing the loop again.
-- `Conversation` and `Opportunity` are **not** cascade-deleted from `Contact`, and
-  `conversations.contact_id` is NOT NULL. Deleting a contact has to be explicit.
+- `Conversation`, `Opportunity` and `Appointment` are **not** cascade-deleted from
+  `Contact`, and `conversations.contact_id` is NOT NULL. Deleting a contact has to be
+  explicit about all three: conversations are deleted, opportunities and appointments are
+  **detached** (`contact_id = None`), and the delete is refused with a 409 naming them
+  until `force=true`. Missing the appointments is what returned a raw 500 on production —
+  see the 2026-09-11 amendment in `DECISIONS.md`. `DELETE /api/appointments/{id}` is a
+  cancel, not a delete: the row survives and the body says `deleted: false`.
 - `Opportunity.custom_fields.owen_call_id` is a live join key to the telephony project.
   Never delete opportunities as a side effect of tidying something else.
