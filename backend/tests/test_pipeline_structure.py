@@ -416,9 +416,13 @@ def test_an_empty_pipeline_deletes_and_detaches_what_pointed_at_it(client):
 
     r = client.delete("/api/pipelines/%d" % client.ids["empty"])
     assert r.status_code == 200, r.text
+    # `detached_custom_fields` joined this list on 2026-09-11: a custom field
+    # attached to the pipeline loses the attachment, never the definition and
+    # never an answer, and the response names that too.
     assert r.json() == {"deleted": client.ids["empty"],
                         "detached_saved_views": [view_id],
-                        "detached_calendars": [cal_id]}
+                        "detached_calendars": [cal_id],
+                        "detached_custom_fields": []}
 
     assert [p["id"] for p in client.get("/api/pipelines").json()] == [
         client.ids["pipeline"]]

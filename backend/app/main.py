@@ -16,7 +16,7 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations, crmlink, models, phone_match, softphone
+from . import auth, automations, crmlink, custom_fields, models, phone_match, softphone
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
@@ -28,6 +28,8 @@ from .models import (
     ContactTag,
     Conversation,
     ConversationEvent,
+    CustomFieldDef,
+    CustomFieldPipeline,
     DeliveryStatus,
     Direction,
     EventType,
@@ -568,12 +570,21 @@ def delete_pipeline(pipeline_id: int, db: Session = Depends(get_db),
         v.pipeline_id = None
     for c in calendars:
         c.pipeline_id = None
+    # A custom field attached to this pipeline loses the ATTACHMENT, never the
+    # definition and never an answer: the field goes on existing elsewhere, and a
+    # deal that was in this pipeline keeps everything recorded on it.
+    links = db.scalars(select(CustomFieldPipeline).where(
+        CustomFieldPipeline.pipeline_id == p.id)).all()
+    detached_fields = sorted({link.field_id for link in links})
+    for link in links:
+        db.delete(link)
 
     db.delete(p)
     db.commit()
     return {"deleted": pipeline_id,
             "detached_saved_views": [v.id for v in views],
-            "detached_calendars": [c.id for c in calendars]}
+            "detached_calendars": [c.id for c in calendars],
+            "detached_custom_fields": detached_fields}
 
 
 @app.post("/api/pipelines/{pipeline_id}/stages", status_code=201)
@@ -676,17 +687,196 @@ def reorder_stages(pipeline_id: int, body: StageReorder,
                         "position": current[i].position} for i in wanted]}
 
 
+# ---------- custom field definitions ----------
+#
+# The owner defines the job questions himself: "How many stories?", "Where is the
+# leak located?", "How old is the roof?". Five types, no multi-select (deferred on
+# purpose), and NO required flag — an inbound call at 2am must still become a deal,
+# and a required field would mean a missed lead.
+#
+# Definitions live here; the ANSWERS live where they always have, in the existing
+# `Opportunity.custom_fields` JSON blob. There is no answers table and no data
+# migration: this feature describes a blob that was already there.
+#
+# Everything that writes is ADMIN, matching the pipeline structure endpoints above
+# — a field definition is configuration four people then have to answer. Reading is
+# ANY_USER, because the opportunity form has to render the questions for whoever
+# opens it, and the panel disables what a role may not use rather than 403ing on
+# submit (d1f7c50, b943f4b).
+#
+# DELETE ARCHIVES. It never removes the row and never touches the blob, so the
+# answers already recorded survive and stay readable on the deals that hold them.
+# `POST .../restore` brings the field back.
+
+
+class CustomFieldCreate(BaseModel):
+    label: str = Field(max_length=custom_fields.LABEL_MAX)
+    field_type: str
+    options: list[str] | None = None
+    pipeline_ids: list[int] = Field(default_factory=list)
+
+
+class CustomFieldPatch(BaseModel):
+    """No `field_type`, and no `key`, deliberately.
+
+    Retyping a dropdown as a number would leave every answer already recorded
+    failing its own field's validation, and the key is what those answers are
+    filed under. Both are fixed at creation; the label, the options, the pipelines
+    and the order are not.
+    """
+    label: str | None = Field(None, max_length=custom_fields.LABEL_MAX)
+    options: list[str] | None = None
+    pipeline_ids: list[int] | None = None
+
+
+class CustomFieldReorder(BaseModel):
+    """Every live field exactly once — the same permutation contract as stages."""
+    field_ids: list[int] = Field(min_length=1)
+
+
+def _check_pipelines(db: Session, ids: list[int] | None) -> list[int]:
+    unique = sorted(set(ids or []))
+    for pipeline_id in unique:
+        if not db.get(Pipeline, pipeline_id):
+            raise HTTPException(400, "unknown pipeline_id %d" % pipeline_id)
+    return unique
+
+
+def _get_field(db: Session, field_id: int) -> CustomFieldDef:
+    d = db.get(CustomFieldDef, field_id)
+    if not d:
+        raise HTTPException(404, "custom field not found")
+    return d
+
+
+@app.get("/api/custom-fields")
+def list_custom_fields(db: Session = Depends(get_db),
+                       include_archived: bool = True,
+                       pipeline_id: int | None = None,
+                       _: auth.Principal = auth.ANY_USER):
+    """Every definition, in display order.
+
+    Archived ones are included by default because the opportunity form needs them:
+    a deal holding an answer to an archived field still has to be able to LABEL it,
+    and a list that hid them would render "roof_age: 14" as a bare key.
+    """
+    out = [custom_fields.describe(d)
+           for d in custom_fields.load_defs(db, include_archived=include_archived)]
+    if pipeline_id is not None:
+        out = [d for d in out if pipeline_id in d["pipeline_ids"] and not d["archived"]]
+    return out
+
+
+@app.post("/api/custom-fields", status_code=201)
+def create_custom_field(body: CustomFieldCreate, db: Session = Depends(get_db),
+                        _: auth.Principal = auth.ADMIN):
+    label = custom_fields.clean_label(body.label)
+    field_type = custom_fields.clean_type(body.field_type)
+    options = custom_fields.clean_options(field_type, body.options)
+    # Refuses the `owen_` namespace and a key another field already holds. The
+    # check is on the DERIVED key, so "Owen campaign" is refused too.
+    key = custom_fields.claim_key(db, label)
+    pipelines = _check_pipelines(db, body.pipeline_ids)
+
+    n = db.scalar(select(func.count(CustomFieldDef.id))) or 0
+    d = CustomFieldDef(key=key, label=label, field_type=field_type,
+                       options=options, position=n, entity="opportunity")
+    db.add(d)
+    db.flush()
+    custom_fields.attach(db, d, pipelines)
+    db.commit()
+    db.refresh(d)
+    return custom_fields.describe(d)
+
+
+@app.patch("/api/custom-fields/{field_id}")
+def update_custom_field(field_id: int, body: CustomFieldPatch,
+                        db: Session = Depends(get_db),
+                        _: auth.Principal = auth.ADMIN):
+    """Reword the question, change the choices, move it between pipelines.
+
+    The key never moves with the label, so answers stay attached to the field they
+    were given for. Detaching a pipeline HIDES the field on that pipeline's deals;
+    it does not delete a single answer — see custom_fields.merge_answers.
+    """
+    d = _get_field(db, field_id)
+    data = body.model_dump(exclude_unset=True)
+    if "label" in data:
+        d.label = custom_fields.clean_label(data["label"])
+    if "options" in data:
+        d.options = custom_fields.clean_options(d.field_type, data["options"])
+    if "pipeline_ids" in data:
+        custom_fields.attach(db, d, _check_pipelines(db, data["pipeline_ids"]))
+    db.commit()
+    db.refresh(d)
+    return custom_fields.describe(d)
+
+
+@app.delete("/api/custom-fields/{field_id}")
+def archive_custom_field(field_id: int, db: Session = Depends(get_db),
+                         _: auth.Principal = auth.ADMIN):
+    """DELETE archives. It is not a soft delete waiting for a hard one.
+
+    The answers in `Opportunity.custom_fields` are customer information somebody
+    typed, and there is no endpoint anywhere that destroys them. Archiving takes
+    the question off new deals and leaves every recorded answer readable on the
+    deals that hold it; restore puts the question back.
+    """
+    d = _get_field(db, field_id)
+    if d.archived_at is None:
+        d.archived_at = models.utcnow()
+        db.commit()
+    return {"archived": d.id, "key": d.key,
+            "note": "answers already recorded are kept and stay visible"}
+
+
+@app.post("/api/custom-fields/{field_id}/restore")
+def restore_custom_field(field_id: int, db: Session = Depends(get_db),
+                         _: auth.Principal = auth.ADMIN):
+    d = _get_field(db, field_id)
+    d.archived_at = None
+    db.commit()
+    db.refresh(d)
+    return custom_fields.describe(d)
+
+
+@app.post("/api/custom-fields/reorder")
+def reorder_custom_fields(body: CustomFieldReorder, db: Session = Depends(get_db),
+                          _: auth.Principal = auth.ADMIN):
+    """The whole live list as a permutation, for the reason the stage reorder is:
+    a list that changed underneath the user is refused outright rather than
+    half-applied. Archived fields keep the position they had."""
+    live = custom_fields.load_defs(db, include_archived=False)
+    if sorted(body.field_ids) != sorted(d.id for d in live):
+        raise HTTPException(400, (
+            "reorder takes every live custom field exactly once — expected %d "
+            "ids, got %d" % (len(live), len(set(body.field_ids)))))
+    by_id = {d.id: d for d in live}
+    for position, field_id in enumerate(body.field_ids):
+        by_id[field_id].position = position
+    db.commit()
+    return [custom_fields.describe(d)
+            for d in custom_fields.load_defs(db, include_archived=False)]
+
+
 @app.get("/api/opportunities")
 def list_opportunities(
-    pipeline_id: int,
     db: Session = Depends(get_db),
+    pipeline_id: int | None = None,
     q: str | None = None,
     status: str = "open",
     _: auth.Principal = auth.ANY_USER):
-    """`status` mirrors GHL's measured default advanced filter: Status is any of Open."""
+    """`status` mirrors GHL's measured default advanced filter: Status is any of Open.
+
+    `pipeline_id` was required and is now optional. The board always sends one;
+    omitting it lists across every pipeline, which is what the appointment dialog
+    needs to offer "bind this booking to an open deal" without knowing, or caring,
+    which board the deal is filed on.
+    """
     stmt = (select(Opportunity)
-            .options(selectinload(Opportunity.contact))
-            .where(Opportunity.pipeline_id == pipeline_id))
+            .options(selectinload(Opportunity.contact)))
+    if pipeline_id is not None:
+        stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
     if status != "all":
         stmt = stmt.where(Opportunity.status == status)
     if q:
@@ -697,7 +887,8 @@ def list_opportunities(
     # then read as the server disagreeing with it.
     rows = db.scalars(stmt.order_by(Opportunity.position, Opportunity.id)).all()
     return [{"id": o.id, "title": o.title, "value_cents": o.value_cents,
-             "stage_id": o.stage_id, "status": o.status, "position": o.position,
+             "stage_id": o.stage_id, "pipeline_id": o.pipeline_id,
+             "status": o.status, "position": o.position,
              "contact_name": o.contact.name if o.contact else None,
              "business_name": o.contact.business_name if o.contact else None,
              "source": o.contact.source if o.contact else None,
@@ -1047,6 +1238,11 @@ class AppointmentCreate(BaseModel):
     # Was missing, so every appointment created through the API landed on no
     # calendar at all and never appeared under a calendar filter.
     calendar_id: int | None = None
+    # The deal this visit is for. Optional in both directions: a booking made from
+    # an opportunity arrives with it filled in, one made on the calendar can pick
+    # an open deal or none at all. Never required — a call at 2am becomes a visit
+    # before anybody has filed a deal for it.
+    opportunity_id: int | None = None
     notes: str | None = None
 
 
@@ -1068,6 +1264,10 @@ def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
     title = _clean_appointment_title(body.title)
     if body.ends_at <= body.starts_at:
         raise HTTPException(400, "ends_at must be after starts_at")
+    # A dangling id would be an IntegrityError rendered as a 500 in the dialog, the
+    # same reason PATCH resolves its ids before writing.
+    if body.opportunity_id is not None and not db.get(Opportunity, body.opportunity_id):
+        raise HTTPException(404, "opportunity %s not found" % body.opportunity_id)
     a = Appointment(**{**body.model_dump(), "title": title})
     db.add(a)
     db.flush()
@@ -1076,11 +1276,28 @@ def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
     db.commit()
     db.refresh(a)
     return {"id": a.id, "title": a.title, "starts_at": a.starts_at,
-            "ends_at": a.ends_at, "automation": outcome}
+            "ends_at": a.ends_at, "opportunity_id": a.opportunity_id,
+            "automation": outcome}
 
 
-def _opp_detail(o: Opportunity) -> dict:
-    """Shape mirrors GHL's measured opportunity detail screen."""
+def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
+    """Shape mirrors GHL's measured opportunity detail screen.
+
+    `db` is optional only so the callers that already hold one do not have to be
+    rewritten; without it the linked appointments come back empty rather than
+    wrong, and every caller in this file passes it.
+    """
+    appointments = []
+    if db is not None:
+        appointments = [
+            {"id": a.id, "title": a.title, "starts_at": a.starts_at,
+             "ends_at": a.ends_at, "status": a.status,
+             "calendar_name": a.calendar.name if a.calendar else None}
+            for a in db.scalars(
+                select(Appointment)
+                .options(selectinload(Appointment.calendar))
+                .where(Appointment.opportunity_id == o.id)
+                .order_by(Appointment.starts_at)).all()]
     return {
         "id": o.id,
         "title": o.title,
@@ -1100,6 +1317,10 @@ def _opp_detail(o: Opportunity) -> dict:
         "contact_name": o.contact.name if o.contact else None,
         "contact_email": o.contact.email if o.contact else None,
         "contact_phone": o.contact.phone if o.contact else None,
+        # The visits booked for this deal, soonest first. A list rather than one
+        # booking: a roof job is an inspection and then a repair, and hiding the
+        # second one behind the first would be a lie about what is scheduled.
+        "appointments": appointments,
     }
 
 
@@ -1109,7 +1330,7 @@ def get_opportunity(opp_id: int, db: Session = Depends(get_db),
     o = db.get(Opportunity, opp_id)
     if not o:
         raise HTTPException(404, "opportunity not found")
-    return _opp_detail(o)
+    return _opp_detail(o, db)
 
 
 # An opportunity name longer than this is refused before the database is touched,
@@ -1182,17 +1403,20 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     if "value_cents" in data:
         _check_opportunity_value(data["value_cents"])
     if data.get("custom_fields") is not None:
-        # `owen_call_id` is the join key to the telephony project (DECISIONS.md);
-        # rewriting it breaks attribution history for calls this form knows nothing
-        # about. Nothing legitimate sets it here — telephony ingests through
-        # POST /api/events. The detail form posts the whole custom_fields object
-        # back on every save, so an unchanged echo is fine and only a real change
-        # is refused. Setting it where there was none is still allowed.
-        was = (o.custom_fields or {}).get("owen_call_id")
-        now = data["custom_fields"].get("owen_call_id")
-        if was is not None and now != was:
-            raise HTTPException(
-                400, "owen_call_id is the telephony join key and cannot be changed here")
+        # One place decides what the blob becomes, shared with the create path.
+        # It keeps the `owen_call_id` guard this endpoint has always had (the
+        # detail form posts the whole object back on every save, so an unchanged
+        # echo is fine and only a real change is refused), validates every answer
+        # against its definition's type, and — new — can no longer DROP a key:
+        # not a reserved `owen_*` one, not an answer to a field this pipeline does
+        # not ask, not an answer to an archived field.
+        #
+        # Which questions this deal is asked follows its PIPELINE, and no endpoint
+        # moves a deal between pipelines (a cross-pipeline stage is refused above),
+        # so `o.pipeline_id` is both the before and the after here.
+        o.custom_fields = custom_fields.merge_answers(
+            db, pipeline_id=o.pipeline_id,
+            existing=o.custom_fields, incoming=data.pop("custom_fields"))
 
     old_stage_id = o.stage_id
     for k, v in data.items():
@@ -1201,7 +1425,7 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     outcome = automations.on_opportunity_stage_changed(db, o, old_stage_id)
     db.commit()
     db.refresh(o)
-    return {**_opp_detail(o), "automation": outcome}
+    return {**_opp_detail(o, db), "automation": outcome}
 
 
 class OpportunityCreate(BaseModel):
@@ -1211,6 +1435,10 @@ class OpportunityCreate(BaseModel):
     stage_id: int
     contact_id: int | None = None
     value_cents: int = 0
+    # The job questions, answered in the Add opportunity dialog. Validated by the
+    # same code the detail form goes through, so a dropdown cannot be talked into
+    # an answer it does not offer by using the other door.
+    custom_fields: dict | None = None
 
 
 @app.post("/api/opportunities", status_code=201)
@@ -1222,11 +1450,14 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
     stage = db.get(Stage, body.stage_id)
     if not stage or stage.pipeline_id != body.pipeline_id:
         raise HTTPException(400, "stage is not in that pipeline")
+    answers = custom_fields.merge_answers(
+        db, pipeline_id=body.pipeline_id, existing={}, incoming=body.custom_fields)
     n = db.scalar(select(func.count(Opportunity.id))
                   .where(Opportunity.stage_id == body.stage_id)) or 0
     o = Opportunity(title=title, pipeline_id=body.pipeline_id,
                     stage_id=body.stage_id, contact_id=body.contact_id,
-                    value_cents=body.value_cents, position=n)
+                    value_cents=body.value_cents, position=n,
+                    custom_fields=answers)
     db.add(o)
     db.commit()
     db.refresh(o)
@@ -1874,7 +2105,8 @@ def list_appointments(
     """Range + filters mirror GHL's measured "Manage view" panel:
     View by type (All / Appointments / Blocked slots) and per-user filtering."""
     stmt = select(Appointment).options(selectinload(Appointment.contact),
-                                selectinload(Appointment.calendar))
+                                selectinload(Appointment.calendar),
+                                selectinload(Appointment.opportunity))
     if start:
         stmt = stmt.where(Appointment.ends_at >= start)
     if end:
@@ -1902,6 +2134,8 @@ def list_appointments(
              "calendar_id": a.calendar_id,
              "calendar_name": a.calendar.name if a.calendar else None,
              "color": a.calendar.color if a.calendar else "#004eeb",
+             "opportunity_id": a.opportunity_id,
+             "opportunity_title": a.opportunity.title if a.opportunity else None,
              "contact_name": a.contact.name if a.contact else None} for a in rows]
 
 
@@ -2102,6 +2336,10 @@ def _appointment_detail(a: Appointment) -> dict:
             "contact_name": a.contact.name if a.contact else None,
             "calendar_id": a.calendar_id,
             "calendar_name": a.calendar.name if a.calendar else None,
+            # Both directions of the link are readable: the deal lists its visits,
+            # and the visit names its deal.
+            "opportunity_id": a.opportunity_id,
+            "opportunity_title": a.opportunity.title if a.opportunity else None,
             "assigned_user_id": a.assigned_user_id}
 
 
@@ -2122,6 +2360,10 @@ class AppointmentPatch(BaseModel):
     contact_id: int | None = None
     calendar_id: int | None = None
     assigned_user_id: int | None = None
+    # Bind or unbind the deal. Deliberately NOT part of what reschedules anything:
+    # only `starts_at` and the status touch the reminder queue (see below), and
+    # linking a booking to a deal is not a change to when it happens.
+    opportunity_id: int | None = None
     notes: str | None = None
 
 
@@ -2193,6 +2435,7 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
     # this is really the CLI's and the telephony feed's answer.
     for field, model, what in (("contact_id", Contact, "contact"),
                                ("calendar_id", Calendar, "calendar"),
+                               ("opportunity_id", Opportunity, "opportunity"),
                                ("assigned_user_id", User, "user")):
         if data.get(field) is not None and not db.get(model, data[field]):
             raise HTTPException(404, "%s %s not found" % (what, data[field]))
@@ -2288,12 +2531,28 @@ def delete_contact(contact_id: int, force: bool = False,
 @app.delete("/api/opportunities/{opp_id}")
 def delete_opportunity(opp_id: int, db: Session = Depends(get_db),
                        _: auth.Principal = auth.ADMIN):
+    """Delete a deal. Its APPOINTMENTS are detached, never deleted.
+
+    A booked visit is a promise to a customer: somebody is expecting a van on
+    Tuesday, and tidying up a deal record must not quietly cancel it. This is the
+    same call `delete_contact` already makes about opportunities, for the same
+    reason — the relationship is a weak one and the column is nullable.
+
+    It is also not optional. `appointments.opportunity_id` is a real foreign key,
+    so on PostgreSQL deleting the row underneath it would raise rather than
+    cascade; detaching first is what makes the delete work at all.
+    """
     o = db.get(Opportunity, opp_id)
     if not o:
         raise HTTPException(404, "opportunity not found")
+    booked = db.scalars(select(Appointment).where(
+        Appointment.opportunity_id == opp_id)).all()
+    for a in booked:
+        a.opportunity_id = None
+    db.flush()
     db.delete(o)
     db.commit()
-    return {"deleted": opp_id}
+    return {"deleted": opp_id, "detached_appointments": [a.id for a in booked]}
 
 
 # ---------- global event search ----------
