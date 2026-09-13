@@ -569,9 +569,12 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
         </div>
       </div>
 
-      {/* pipeline row — not on the Pipelines tab, which has its own header (refs/opps/02) */}
-      <div className="flex shrink-0 items-center gap-3 px-4"
-        style={{ height: 60, display: tab === 'Pipelines' ? 'none' : undefined }}>
+      {/* pipeline row */}
+      <div className="flex shrink-0 items-center gap-3 px-4" style={{
+        height: 60,
+        // Not on the Pipelines tab, which has its own header (refs/opps/02).
+        display: tab === 'Pipelines' ? 'none' : undefined,
+      }}>
         <select
           value={pipeline?.id ?? ''}
           onChange={(e) => setPipelineId(Number(e.target.value))}

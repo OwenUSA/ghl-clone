@@ -253,6 +253,10 @@ export type DraftProblems = {
  *
  * The uniqueness check runs against the names the browser can see; the server
  * checks against every pipeline and has the last word (409).
+ *
+ * STAGE names are deliberately NOT checked for uniqueness: the measured pipeline
+ * holds two distinct "Call Back" stages and the `ghl` CLI exits 5 rather than
+ * guess between them. Only the PIPELINE name must be unique.
  */
 export function validateDraft(
   d: PipelineDraft, otherNames: string[],
