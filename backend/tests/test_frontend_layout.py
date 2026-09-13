@@ -132,11 +132,14 @@ def test_the_pipeline_select_actually_selects_a_pipeline():
     chosen = source.split("const pipeline =", 1)[1].splitlines()[0]
     assert "p.id === pipelineId" in chosen, (
         "the board still takes the first pipeline unconditionally")
-    select = source.split("{/* pipeline row */}", 1)[1].split("</select>", 1)[0]
-    assert "onChange=" in select, "the pipeline select ignores the choice"
-    assert "value={pipeline?.id" in select, "the select does not show the chosen pipeline"
-    assert "<option key={p.id} value={p.id}>" in select, (
-        "the options carry no value, so onChange has nothing to read")
+    # The native select became GHL's dropdown (2026-09-13); its rows are executed
+    # in test_page_tabs.py. What is left to pin is that the page wires it.
+    picker = source.split("{/* pipeline row */}", 1)[1].split("/>", 1)[0]
+    assert "<PipelinePicker" in picker
+    assert "onSelect={(id) => setPipelineId(id)}" in picker, (
+        "the pipeline dropdown ignores the choice")
+    assert "selectedId={pipeline?.id}" in picker, (
+        "the dropdown does not show the chosen pipeline")
 
 
 def test_reporting_shows_only_the_three_tabs_that_can_work():

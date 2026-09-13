@@ -2925,3 +2925,26 @@ their own task (every task write is STAFF). Notifications for tasks, by design.
   the previous head with representative rows: every pre-existing table hashed
   byte-identical before and after, the new tables empty, `alembic check` clean, one
   head, and a downgrade/upgrade round trip clean.
+
+## 2026-09-13 amendment — one tab bar on every module, and GHL's pipeline dropdown
+
+**Owner's decision, overriding the per-page tab-row measurements above** (including
+the 36px Contacts tab-row gap): Opportunities, Contacts, Conversations and Calendars
+draw ONE header, `components/PageTabs.tsx`, extracted verbatim from the Opportunities
+bar rebuilt earlier today (refs/round3/23). Title 18px/500; tabs 14px/500, inactive
+rgb(71,84,103), active rgb(56,160,219) with a 2px underline flush with the bar.
+
+- **Restyle only.** Every page keeps exactly the tabs it had and what each did.
+  Contacts' five and Conversations' six were inert labels and still are (rendered as
+  `<span role="tab">`, no pointer, not buttons); Calendars keeps its two live views and
+  the inert "Calendar settings"; Opportunities keeps its four, Forecast dimmed for a TECH.
+  Wiring those labels is other branches' work, not this one's.
+- **The pipeline picker is GHL's dropdown** (refs/round3/31), `components/PipelinePicker.tsx`,
+  replacing the native `<select>`. Its list is the board's own `GET /api/pipelines`
+  answer, so per-pipeline access needs no second check here. "All pipelines" is a grey
+  label that cannot be highlighted or chosen — a board of every pipeline at once is not
+  something this app draws. "+ New pipeline" (DISPATCHER, ADMIN) opens the existing
+  Create pipeline modal; Create selects the new pipeline, Cancel changes nothing.
+  Selecting sets the same `pipelineId` state the select did, so filters, saved views and
+  `?pipeline=` deep links are untouched. Logic lives import-free in `lib/pageTabs.ts`
+  and is executed by `tests/test_page_tabs.py`.

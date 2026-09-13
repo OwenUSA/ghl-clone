@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { Me } from '../lib/auth'
+import { PageTabs } from '../components/PageTabs'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
 import {
   IconCalendar, IconChat, IconChevronDown, IconClock, IconEye, IconFilter,
@@ -788,17 +789,9 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
 
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
-      <div className="flex shrink-0 items-center gap-6 bg-white px-4"
-        style={{ height: 90, borderBottom: '1px solid rgb(234,236,240)' }}>
-        <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)' }}>Conversations</div>
-        {['Conversations', 'Manual Actions', 'Snippets', 'Trigger Links', 'Analytics', 'Settings']
-          .map((t, i) => (
-            <div key={t} style={{
-              fontSize: 14, fontWeight: 500, lineHeight: '25.6px',
-              color: i === 0 ? 'rgb(56,160,219)' : 'rgb(75,85,99)',
-            }}>{t}</div>
-          ))}
-      </div>
+      <PageTabs title="Conversations" label="Conversations views" active="Conversations"
+        tabs={['Conversations', 'Manual Actions', 'Snippets', 'Trigger Links', 'Analytics', 'Settings']
+          .map((t) => ({ key: t, label: t }))} />
 
       <div className="flex min-h-0 flex-1">
         {/* icon rail — measured 36x36 buttons at x=232, 20x20 icons, 48px pitch */}
