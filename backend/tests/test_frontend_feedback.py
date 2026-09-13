@@ -421,8 +421,11 @@ def test_the_appointment_dialog_shows_a_refused_create_and_stays_open():
     source = _read("components", "NewAppointmentDialog.tsx")
     assert 'role="alert"' in source, "the dialog has no error surface"
     mutation = source.split("const create = useMutation({", 1)[1].split("\n  })", 1)[0]
-    assert "onError: (e: Error) => setError(e.message)" in mutation, (
-        "a refused create is dropped on the floor")
+    on_error = mutation.split("onError: (e: Error) =>", 1)[1]
+    assert "setError(e.message)" in on_error, "a refused create is dropped on the floor"
+    # 2026-09-13: a 409 is the blocked-off-time question, asked in place.
+    assert "e.status === 409) setOverlap(e.message)" in on_error, (
+        "a booking over blocked off time is refused with no way to confirm it")
     assert "onClose" not in mutation, (
         "the dialog closes on failure, discarding what the user typed")
     # `e.message` is a sentence only because api.ts made it one.
@@ -431,27 +434,34 @@ def test_the_appointment_dialog_shows_a_refused_create_and_stays_open():
 
 def test_the_appointment_dialog_offers_only_fields_the_backend_accepts():
     """`AppointmentCreate` in backend/app/main.py is the contract. A control the
-    server ignores is worse than no control: `status` in particular would look
-    like a choice and always land on `confirmed`."""
+    server ignores is worse than no control.
+
+    2026-09-13: `status` JOINED the contract with GoHighLevel's Book appointment
+    modal, whose footer books with a status — so the Status control is live now,
+    not shown disabled. The accepted set is read off the model itself, so the two
+    cannot drift."""
+    from app.main import AppointmentCreate
+
     api = _read("lib", "api.ts")
     body = api.split("export const createAppointment = (body: {", 1)[1].split("}", 1)[0]
     sent = {line.split(":")[0].strip("? ").strip() for line in body.splitlines()
-            if ":" in line}
-    # `opportunity_id` joined the contract on 2026-09-11: a booking can be bound
-    # to a deal from either end. `status` is still NOT here — the POST model does
-    # not accept it, which is why the dialog shows it disabled.
-    accepted = {"title", "starts_at", "ends_at", "contact_id", "assigned_user_id",
-                "calendar_id", "opportunity_id", "notes"}
+            if ":" in line and not line.strip().startswith(("/**", "*"))}
+    accepted = set(AppointmentCreate.model_fields)
     assert sent == accepted, (
         f"createAppointment sends {sorted(sent)}; POST /api/appointments accepts "
         f"{sorted(accepted)}")
+    assert "status" in accepted
 
     dialog = _read("components", "NewAppointmentDialog.tsx")
-    status = dialog.split('<Field label="Status">', 1)[1].split("</Field>", 1)[0]
-    assert "disabled" in status and "title=" in status, (
-        "the Status control is either live (and ignored by the server) or hidden "
-        "(and the default it lands on is invisible); it must be shown disabled "
-        "with a title saying why")
+    label = "<span style={{ fontSize: 14, fontWeight: 500, color: BODY }}>Status :</span>"
+    footer = dialog.split(label, 1)[1].split("</select>", 1)[0]
+    assert 'aria-label="Status"' in footer and "disabled" not in footer, (
+        "the footer's Status control is not a live choice")
+    statuses = dialog.split("const STATUSES = [", 1)[1].split("] as const", 1)[0]
+    assert "'blocked'" not in statuses, (
+        "a booking can be made as a blocked slot — that is the Blocked off time tab")
+    sent_body = dialog.split("createAppointment({", 1)[1].split("})", 1)[0]
+    assert "\n        status,\n" in sent_body, "the chosen status is never sent"
 
 
 def test_the_appointment_dialog_picks_a_contact_by_searching_for_one():
@@ -621,9 +631,12 @@ def test_the_panel_draws_the_appointment_it_was_asked_for():
     assert "queryKey: ['appointment', appointmentId]" in dialog, (
         "the panel's query is not keyed on which appointment it is showing")
     # Everything the owner asked the panel to show.
+    # "Notes" became the STAFF-only "Internal notes", and Description and Meeting
+    # location joined it, with GoHighLevel's Book appointment modal (2026-09-13).
     for field in ('label="Title"', 'label="Contact"', 'label="Calendar"',
                   'label="Starts"', 'label="Ends"', 'label="Status"',
-                  'label="Notes"'):
+                  'label="Internal notes"', 'label="Description"',
+                  'label="Meeting location"'):
         assert field in dialog, "the panel does not show %s" % field
     page = _read("pages", "CalendarsPage.tsx")
     assert "key={openAppt}" in page, (

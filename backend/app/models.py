@@ -586,10 +586,41 @@ class Appointment(Base):
     # a customer and must survive a deal record being tidied up.
     opportunity_id: Mapped[int | None] = mapped_column(
         ForeignKey("opportunities.id"), index=True)
+    # GoHighLevel's "Add description" (2026-09-13). Visible to every role, unlike
+    # `notes`, which is the modal's STAFF-only "Internal notes".
+    description: Mapped[str | None] = mapped_column(Text)
+    # "Meeting location", stored as the RESOLVED text: "Calendar default" is the
+    # contact's property address at the moment of booking, "Custom" is what was
+    # typed. Resolved rather than referenced, so editing the contact's address
+    # later does not move a visit that was already booked somewhere.
+    location: Mapped[str | None] = mapped_column(Text)
 
     contact: Mapped[Contact | None] = relationship(back_populates="appointments")
     calendar: Mapped["Calendar | None"] = relationship()
     opportunity: Mapped["Opportunity | None"] = relationship()
+
+
+class BlockedTime(Base):
+    """GoHighLevel's "Blocked off time" (2026-09-13): a range on a calendar that is
+    not an appointment — a crew day off, a supplier run.
+
+    It is its own table rather than an appointment with `status = "blocked"`,
+    because it has no contact, no reminders and no report tile. It never sends
+    anything and enqueues no job. Booking an appointment over one is allowed, but
+    only after the booker has been told and confirms.
+    """
+    __tablename__ = "blocked_times"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+    calendar_id: Mapped[int] = mapped_column(ForeignKey("calendars.id"), index=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+    calendar: Mapped["Calendar"] = relationship()
 
 
 class CustomFieldDef(Base):

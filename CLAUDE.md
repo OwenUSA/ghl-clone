@@ -75,6 +75,9 @@ STAFF-only** as of 2026-09-10, on every path — the thread view, `/api/messages
 is just narrower. See `DECISIONS.md`. The same rule, through the same predicate
 (`auth.sees_internal`), covers an opportunity's own notes (2026-09-13): the modal's Notes
 tab, `/api/opportunities/{id}/notes` and the board card's note count.
+An appointment's `notes` are the Book appointment modal's "Internal notes" and follow
+the same rule (2026-09-13): a TECH gets `notes: null, notes_visible: false` and reads
+`description` / `location` instead.
 
 Machine tokens can be scoped (`events:write` for the telephony feed) — a scoped token
 can never exceed its owner's role.
@@ -299,5 +302,14 @@ found while building this.
   until `force=true`. Missing the appointments is what returned a raw 500 on production —
   see the 2026-09-11 amendment in `DECISIONS.md`. `DELETE /api/appointments/{id}` is a
   cancel, not a delete: the row survives and the body says `deleted: false`.
+- **Appointment times are picked in the ACCOUNT's timezone** (America/New_York), not the
+  browser's — `frontend/src/lib/accountTime.ts`, executed under node in
+  `test_account_time.py`. Never format or build a booking's time with
+  `toLocaleString()` / `new Date(y, m, d, h)`: that is the laptop's zone. Incoming
+  times are normalised to UTC before storage, because SQLite drops an offset.
+- **Blocked off time** (`/api/blocked-times`) is its own table, sends nothing, and makes
+  `POST`/`PATCH /api/appointments` answer **409** until `allow_blocked_time: true` is sent.
+  A booking's `{{contact.name}}` title and "Calendar default" location are resolved on
+  save and stored as text. See the 2026-09-13 Book appointment amendment in `DECISIONS.md`.
 - `Opportunity.custom_fields.owen_call_id` is a live join key to the telephony project.
   Never delete opportunities as a side effect of tidying something else.
