@@ -135,6 +135,8 @@ def describe(d: CustomFieldDef) -> dict:
         "archived": d.archived_at is not None,
         "archived_at": d.archived_at,
         "pipeline_ids": pipeline_ids(d),
+        # The modal tab; None = Opportunity details (2026-09-13).
+        "group_id": d.group_id,
     }
 
 

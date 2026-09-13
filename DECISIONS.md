@@ -2825,3 +2825,103 @@ permissions, Move to position, Delete, and Delete stage in the modal) is our sha
 the modal's style; the empty-list, search-miss and error states are ours; rows per page
 offers 10/20/50; Copy link falls back to a copyable prompt when the clipboard is
 unavailable; the tab bar's active blue and underline are read off 05-08.
+
+## AMENDMENT (2026-09-13): the opportunity card and modal are rebuilt from the owner's GHL screenshots
+
+The owner, in his words: the Opportunities module must "look like the original one"
+and "work with same ui and same functions", and "in ours we cant add tasks or
+stuff". He supplied screenshots of his live GoHighLevel card (10, 15-21) and modal
+(11, 12, 22). **Those screenshots are the specification**: there is still no live GHL
+session on this server and nothing was captured. So, like the Calendars Month view
+and the other "OURS" screens, **nothing here is measured parity** — it is built to
+match screenshots by eye, and every reading taken from them is listed in
+`.qa/state/oppmodal-done`. Re-measure if a live session is ever opened.
+
+### What this AMENDS, explicitly
+
+- **"Answers are … NOT on the board card" (2026-09-11) stands** — the card shows no
+  custom field. What changed is the card's ICON ROW: it now carries real counts
+  (tags, notes, open tasks) and every icon works. The "Call and SMS are stubbed, so
+  they are shown but inert" comment is gone with the emoji it described.
+- **"The `owen_` namespace is now read-only in the form" (2026-09-11) is superseded
+  for the SCREEN, not for the data.** The owner does not want his old account's
+  `owen_*` / `workiz_*` fields rendered at all (screenshot 12 shows them in GHL; he
+  said ignore them). The read-only "From OWEN" block and the "Recorded earlier" box
+  (screenshot 13) are removed. Every rule on the DATA is unchanged: `merge_answers`
+  still keeps every reserved key, `owen_call_id` is still refused a change,
+  `workiz_*` is still read-only in every direction, no definition may claim either
+  prefix. The modal now sends only answers that CHANGED (`changedAnswers`, which
+  skips reserved keys), and a test proves both blobs are byte-identical after an
+  Update. An answer to an archived field or a field another pipeline asks is no
+  longer shown read-only in the modal; it is still kept on the deal untouched and
+  reappears the moment the field is asked again.
+- **"Not built: … opportunity tags, Followers" (Automations section) is closed for
+  Followers** (`opportunity_followers`) and answered for tags as below.
+- **"Deliberate deviation: clicking a card navigates in GHL" stands** — still a dialog,
+  still no router.
+
+### Decisions taken, all overrulable
+
+- **Tags on the card and in the modal are the PRIMARY CONTACT's tags.** Opportunities
+  have no tags of their own, and the migration the brief allowed adds no
+  `opportunity_tags` table. Editing Tags in the modal adds/removes the contact's tag
+  immediately, through the existing STAFF endpoints. If the owner wants deal-level
+  tags separate from the customer's, that is a new table and a separate decision.
+- **Notes are per opportunity (`opportunity_notes`), STAFF-only on every path**, the
+  2026-09-10 rule through the same predicate, now `auth.sees_internal`. Under a deal's
+  notes the contact's thread `NOTE` events (the Workiz merge notes included) are
+  shown read-only. The card's note count is both: what the Notes tab lists.
+- **Tasks (`opportunity_tasks`) notify nobody.** No reminder, no text, no assignee
+  notification; the tests count the jobs table. Read ANY_USER, every write STAFF —
+  including delete, which departs from "admin deletes": a task is the team's own
+  to-do, not a customer record.
+- **An assignee or follower is any active user account**, TECH included — a site task
+  usually goes to a tech.
+- **Custom-field groups (`custom_field_groups`, `custom_field_defs.group_id`)** are the
+  modal's custom tabs. A group applies to every pipeline; a field belongs to at most
+  one; removing a group moves its fields to Opportunity details and touches no
+  answer. ADMIN writes, like the rest of the field structure. None are seeded.
+- **Changing the Pipeline in the modal requires choosing a stage in the new one**;
+  the API refuses a move without one. The deal is filed at the bottom of the new
+  column and the old column is re-packed. It fires the stage-change rule exactly
+  as a stage move does.
+- **Primary contact is required on an edit** (GHL's red *): the API refuses
+  `contact_id: null`. A deal that already has no contact still opens; Update asks
+  for one. Primary email and phone edit the CONTACT, through the contact PATCH.
+- **Additional contacts: at most 10, never the primary**, refused whole by the API.
+- **Deleting a deal deletes its own notes, tasks and link rows** and returns the
+  counts; the confirmation says so. Appointments stay detached, as before.
+- **The card's "View conversations" and Associated objects' links** need the shell to
+  switch pages. App.tsx gained exactly two lines (operator's fence exception,
+  2026-09-13) registering `openRecord` with `lib/openRecord.ts`; without them those
+  controls are not drawn. Opening a thread for a contact with none creates the empty
+  thread (`POST /api/contacts/{id}/conversation`) and sends nothing.
+- **"⚙ Manage fields" links to Settings → Custom Fields** (`/settings/custom-fields`,
+  from `SETTINGS_SECTIONS`). It is a real navigation to the deep link App.tsx already
+  honours on load, so no fenced file changed. That reloads the app, so an unsaved
+  edit in the modal is confirmed before it is discarded. (Until feature/ghl-pipelines
+  merged it opened the panel over the modal instead; that overlay is gone.)
+
+### Not built
+
+Payments tab (out of the product). An audit log and its footer id (no audit log
+exists). GHL's association chip on a note card (nothing counts note associations).
+A `ghl` CLI for tasks, notes or groups. A TECH completing
+their own task (every task write is STAFF). Notifications for tasks, by design.
+
+### After `feature/ghl-pipelines` merged (same day)
+
+- **Probability** is drawn in Opportunity details only when the deal's pipeline has
+  "Use opportunity-level probability" on — including the pipeline it is being moved
+  TO in the same edit. Off, the field is not drawn and Update sends no probability,
+  so a stored value is left alone rather than cleared.
+- **The modal's Pipeline dropdown lists only pipelines the user can access**: it is
+  fed by `GET /api/pipelines`, which omits the rest. The server is the gate, not the
+  list: a move into an inaccessible pipeline is refused with the same
+  `400 unknown pipeline_id` a nonexistent one gets, and a deal's tasks and notes in a
+  hidden pipeline answer the same 404 as the deal (`pipeline_access.py`).
+- **Migration `f3c8e2a61d97`**, on `d4a9c1e7b352`: five CREATE TABLEs and one nullable
+  ADD COLUMN (`custom_field_defs.group_id`). Proven on a throwaway SQLite stood up at
+  the previous head with representative rows: every pre-existing table hashed
+  byte-identical before and after, the new tables empty, `alembic check` clean, one
+  head, and a downgrade/upgrade round trip clean.

@@ -3,11 +3,17 @@ import { useState } from 'react'
 import {
   archiveCustomField,
   createCustomField,
+  createFieldGroup,
+  deleteFieldGroup,
   listCustomFields,
+  listFieldGroups,
   listPipelines,
   patchCustomField,
+  renameFieldGroup,
   reorderCustomFields,
+  reorderFieldGroups,
   restoreCustomField,
+  type FieldGroup,
 } from '../lib/api'
 import type { FieldDef } from '../lib/customFields'
 import type { Me } from '../lib/auth'
@@ -32,6 +38,12 @@ import type { Me } from '../lib/auth'
  *     as fixed text rather than as a control that does nothing.
  *   * Reorder sends the whole live list as a permutation, arrows not drag, the
  *     same contract as the stage reorder.
+ *   * TABS (2026-09-13): a field can sit in one named tab of the opportunity
+ *     modal — GoHighLevel's "Roof Inspection", "Photo Checklist" — or in none,
+ *     which draws it under Opportunity details. Tabs are created, renamed,
+ *     reordered and removed here; removing one moves its fields back to
+ *     Opportunity details and touches no answer. Nothing is seeded: the owner
+ *     makes his own.
  */
 
 const TYPES: { value: FieldDef['field_type']; label: string }[] = [
@@ -56,11 +68,18 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
   const qc = useQueryClient()
   const fields = useQuery({ queryKey: ['custom-fields'], queryFn: listCustomFields })
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
+  const groups = useQuery({ queryKey: ['custom-field-groups'], queryFn: listFieldGroups })
 
   const [label, setLabel] = useState('')
   const [type, setType] = useState<FieldDef['field_type']>('text')
   const [options, setOptions] = useState('')
   const [attach, setAttach] = useState<number[]>([])
+  const [groupId, setGroupId] = useState('')
+  const [draftGroup, setDraftGroup] = useState('')
+  const [newGroup, setNewGroup] = useState('')
+  const [renaming, setRenaming] = useState<number | null>(null)
+  const [groupName, setGroupName] = useState('')
+  const [removingGroup, setRemovingGroup] = useState<number | null>(null)
   const [editing, setEditing] = useState<number | null>(null)
   const [draftLabel, setDraftLabel] = useState('')
   const [draftOptions, setDraftOptions] = useState('')
@@ -79,7 +98,10 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
     setError(null)
     setEditing(null)
     setConfirming(null)
+    setRenaming(null)
+    setRemovingGroup(null)
     qc.invalidateQueries({ queryKey: ['custom-fields'] })
+    qc.invalidateQueries({ queryKey: ['custom-field-groups'] })
     // The opportunity detail and the Add dialog both render these questions.
     qc.invalidateQueries({ queryKey: ['opportunity'] })
   }
@@ -91,9 +113,10 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
       field_type: type,
       options: splitOptions(options),
       pipeline_ids: attach,
+      group_id: groupId ? Number(groupId) : null,
     }),
     onSuccess: () => {
-      setLabel(''); setOptions(''); setAttach([]); refresh()
+      setLabel(''); setOptions(''); setAttach([]); setGroupId(''); refresh()
     },
     onError: failed,
   })
@@ -103,6 +126,7 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
       label: draftLabel.trim(),
       options: splitOptions(draftOptions),
       pipeline_ids: draftPipelines,
+      group_id: draftGroup ? Number(draftGroup) : null,
     }),
     onSuccess: refresh,
     onError: failed,
@@ -126,8 +150,42 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
     onError: failed,
   })
 
+  const addGroup = useMutation({
+    mutationFn: () => createFieldGroup(newGroup.trim()),
+    onSuccess: () => { setNewGroup(''); refresh() },
+    onError: failed,
+  })
+  const renameGroup = useMutation({
+    mutationFn: (id: number) => renameFieldGroup(id, groupName.trim()),
+    onSuccess: refresh,
+    onError: failed,
+  })
+  const reorderGroups = useMutation({
+    mutationFn: (ids: number[]) => reorderFieldGroups(ids),
+    onSuccess: refresh,
+    onError: failed,
+  })
+  const removeGroup = useMutation({
+    mutationFn: (id: number) => deleteFieldGroup(id),
+    onSuccess: refresh,
+    onError: failed,
+  })
+
   const busy = add.isPending || save.isPending || archive.isPending
-    || restore.isPending || reorder.isPending
+    || restore.isPending || reorder.isPending || addGroup.isPending
+    || renameGroup.isPending || reorderGroups.isPending || removeGroup.isPending
+
+  const tabs: FieldGroup[] = groups.data ?? []
+  const tabName = (id: number | null | undefined) =>
+    tabs.find((g) => g.id === id)?.name ?? 'Opportunity details'
+  const swapGroup = (index: number, delta: number) => {
+    const ids = tabs.map((g) => g.id)
+    const to = index + delta
+    if (to < 0 || to >= ids.length) return
+    ;[ids[index], ids[to]] = [ids[to], ids[index]]
+    setError(null)
+    reorderGroups.mutate(ids)
+  }
 
   /** Swap two rows and send the whole list, never a single "move" instruction. */
   const swap = (index: number, delta: number) => {
@@ -144,6 +202,7 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
     setDraftLabel(f.label)
     setDraftOptions(f.options.join('\n'))
     setDraftPipelines(f.pipeline_ids)
+    setDraftGroup(f.group_id != null ? String(f.group_id) : '')
     setError(null)
   }
 
@@ -188,6 +247,121 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
           {(fields.error as Error).message}
         </div>
       )}
+
+      {/* ---- the modal's tabs ---- */}
+      <div className="mt-4 bg-white" style={{
+        borderRadius: 8, border: '1px solid rgb(234,236,240)', padding: 12,
+      }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: 'rgb(16,24,40)' }}>
+          Tabs
+        </div>
+        <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 2 }}>
+          Each tab is its own section in the opportunity window, in this order, on
+          every pipeline. A field with no tab shows under Opportunity details.
+          Removing a tab moves its fields there — no field and no answer is lost.
+        </div>
+        {tabs.length === 0 && (
+          <div style={{ fontSize: 13, color: 'rgb(152,162,179)', marginTop: 10 }}>
+            No tabs yet. Nothing is guessed for you.
+          </div>
+        )}
+        {tabs.map((g, i) => (
+          <div key={g.id} className="flex items-center gap-3"
+            style={{ padding: '8px 0', borderBottom: '1px solid rgb(242,244,247)' }}>
+            <div className="min-w-0 flex-1">
+              {renaming === g.id ? (
+                <input
+                  autoFocus
+                  value={groupName}
+                  maxLength={80}
+                  aria-label={'Rename ' + g.name}
+                  onChange={(e) => setGroupName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && groupName.trim()) renameGroup.mutate(g.id)
+                    if (e.key === 'Escape') setRenaming(null)
+                  }}
+                  style={{ ...input, height: 30, width: 260 }}
+                />
+              ) : (
+                <>
+                  <span style={{ fontSize: 14, color: 'rgb(52,64,84)' }}>{g.name}</span>
+                  <span style={{ fontSize: 12, color: 'rgb(152,162,179)', marginLeft: 8 }}>
+                    {g.field_ids.length} field{g.field_ids.length === 1 ? '' : 's'}
+                  </span>
+                </>
+              )}
+            </div>
+            <button onClick={() => swapGroup(i, -1)}
+              disabled={!canManage || i === 0 || busy}
+              aria-label={'Move tab ' + g.name + ' up'}
+              title={canManage ? 'Move up' : why}
+              style={link(canManage && i > 0 && !busy, 'rgb(102,112,133)')}>↑</button>
+            <button onClick={() => swapGroup(i, 1)}
+              disabled={!canManage || i === tabs.length - 1 || busy}
+              aria-label={'Move tab ' + g.name + ' down'}
+              title={canManage ? 'Move down' : why}
+              style={link(canManage && i < tabs.length - 1 && !busy, 'rgb(102,112,133)')}>↓</button>
+            {renaming === g.id ? (
+              <>
+                <button onClick={() => renameGroup.mutate(g.id)}
+                  disabled={!groupName.trim() || busy}
+                  style={link(!!groupName.trim() && !busy)}>Save</button>
+                <button onClick={() => setRenaming(null)}
+                  style={{ fontSize: 13, color: 'rgb(102,112,133)' }}>Cancel</button>
+              </>
+            ) : (
+              <button
+                onClick={() => { setError(null); setRenaming(g.id); setGroupName(g.name) }}
+                disabled={!canManage || busy}
+                title={canManage ? undefined : why}
+                style={link(canManage && !busy)}>Rename</button>
+            )}
+            {removingGroup === g.id ? (
+              <button onClick={() => removeGroup.mutate(g.id)} disabled={busy}
+                title="Its fields move to Opportunity details, answers and all"
+                style={{ ...link(!busy, 'rgb(180,35,24)'), fontWeight: 600 }}>
+                Really remove
+              </button>
+            ) : (
+              <button
+                onClick={() => { setError(null); setRemovingGroup(g.id) }}
+                disabled={!canManage || busy}
+                title={canManage
+                  ? 'Remove this tab. Its fields move to Opportunity details, answers and all.'
+                  : why}
+                style={link(canManage && !busy, 'rgb(180,35,24)')}>Remove</button>
+            )}
+          </div>
+        ))}
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            value={newGroup}
+            maxLength={80}
+            disabled={!canManage}
+            title={canManage ? undefined : why}
+            aria-label="New tab name"
+            placeholder="Roof Inspection"
+            onChange={(e) => setNewGroup(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newGroup.trim() && canManage) addGroup.mutate()
+            }}
+            style={{ ...input, width: 260, ...(canManage ? {} : { opacity: 0.5 }) }}
+          />
+          <button
+            onClick={() => { setError(null); addGroup.mutate() }}
+            disabled={!canManage || !newGroup.trim() || busy}
+            title={canManage ? undefined : why}
+            style={{
+              height: 34, padding: '0 12px', borderRadius: 6, fontSize: 13,
+              fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)',
+              ...(canManage && newGroup.trim() && !busy
+                ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
+            }}
+          >
+            Add tab
+          </button>
+        </div>
+      </div>
 
       <div className="mt-4 grid gap-4"
         style={{ gridTemplateColumns: 'minmax(260px, 340px) 1fr' }}>
@@ -254,6 +428,24 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
 
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 13, color: 'rgb(102,112,133)' }}>
+              Tab in the opportunity window
+            </div>
+            <select
+              value={groupId}
+              disabled={!canManage}
+              title={canManage ? undefined : why}
+              aria-label="Tab for the new field"
+              onChange={(e) => setGroupId(e.target.value)}
+              style={{ ...input, width: '100%', marginTop: 4,
+                ...(canManage ? {} : { opacity: 0.5 }) }}
+            >
+              <option value="">Opportunity details</option>
+              {tabs.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 13, color: 'rgb(102,112,133)' }}>
               Asked on these pipelines
             </div>
             <PipelineChecks
@@ -286,8 +478,8 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
             Add field
           </button>
           <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 6 }}>
-            A field starting <code>owen_</code> is refused: that namespace belongs
-            to the telephony project.
+            A field starting <code>owen_</code> or <code>workiz_</code> is refused:
+            those belong to the telephony project and the Workiz import.
           </div>
         </div>
 
@@ -305,7 +497,7 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
           <table className="mt-3 w-full">
             <thead>
               <tr>
-                {['Question', 'Type', 'Pipelines', 'Order', ''].map((h) => (
+                {['Question', 'Type', 'Tab', 'Pipelines', 'Order', ''].map((h) => (
                   <th key={h} className="text-left" style={{
                     height: 36, fontSize: 12, fontWeight: 700,
                     color: 'rgb(71,84,103)',
@@ -342,6 +534,18 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
                               padding: 6, marginTop: 6, display: 'block' }}
                           />
                         )}
+                        <select
+                          value={draftGroup}
+                          aria-label={'Tab for ' + f.label}
+                          onChange={(e) => setDraftGroup(e.target.value)}
+                          style={{ ...input, height: 30, width: 240, marginTop: 6,
+                            display: 'block' }}
+                        >
+                          <option value="">Opportunity details</option>
+                          {tabs.map((g) => (
+                            <option key={g.id} value={g.id}>{g.name}</option>
+                          ))}
+                        </select>
                         <PipelineChecks
                           all={pipelines.data ?? []}
                           chosen={draftPipelines}
@@ -381,6 +585,10 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
                     borderBottom: '1px solid rgb(242,244,247)' }}>
                     {TYPES.find((t) => t.value === f.field_type)?.label
                       ?? f.field_type}
+                  </td>
+                  <td style={{ fontSize: 13, color: 'rgb(52,64,84)',
+                    borderBottom: '1px solid rgb(242,244,247)' }}>
+                    {tabName(f.group_id)}
                   </td>
                   <td style={{ fontSize: 13, color: 'rgb(52,64,84)',
                     borderBottom: '1px solid rgb(242,244,247)' }}>
@@ -448,7 +656,7 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
               ))}
               {live.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: '12px 0', fontSize: 13,
+                  <td colSpan={6} style={{ padding: '12px 0', fontSize: 13,
                     color: 'rgb(152,162,179)' }}>
                     No job questions yet. Nothing is guessed for you.
                   </td>

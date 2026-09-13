@@ -410,6 +410,16 @@ def require_events_ingest(
 
 # Convenience dependencies, so a route gains authorization by adding one parameter
 # rather than changing its decorator.
+def sees_internal(principal: Principal) -> bool:
+    """May this principal read or write internal notes? STAFF only, 2026-09-10.
+
+    The ONE predicate behind every door to a note — the thread view, the message
+    search, the palette, the composer, and (2026-09-13) an opportunity's own notes
+    and the board card's note count. See DECISIONS.md.
+    """
+    return principal.role in (Role.ADMIN, Role.DISPATCHER)
+
+
 ADMIN = Depends(require_role(Role.ADMIN))
 STAFF = Depends(require_role(Role.ADMIN, Role.DISPATCHER))
 ANY_USER = Depends(require_role(Role.ADMIN, Role.DISPATCHER, Role.TECH))

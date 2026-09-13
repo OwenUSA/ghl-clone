@@ -23,6 +23,7 @@ from . import (
     custom_fields,
     models,
     openphone,
+    opportunity_workspace,
     phone_match,
     pipeline_access,
     softphone,
@@ -82,6 +83,9 @@ app.include_router(softphone.router)
 # no code here -- owen-main posts mirrored events to /api/events like any other
 # telephony feed. See app/openphone.py.
 app.include_router(openphone.router)
+# The opportunity modal's tasks, notes and custom-field tabs (2026-09-13). One
+# router, under the same app-level gate — see app/opportunity_workspace.py.
+app.include_router(opportunity_workspace.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
@@ -120,8 +124,9 @@ def contains(q: str) -> str:
 INTERNAL_TYPES = automations.INTERNAL_TYPES
 
 
-def _sees_internal(principal: auth.Principal) -> bool:
-    return principal.role in (Role.ADMIN, Role.DISPATCHER)
+# The predicate itself lives in auth.py since 2026-09-13, so the opportunity
+# notes in app/opportunity_workspace.py answer to the very same function.
+_sees_internal = auth.sees_internal
 
 
 def _refuse_internal(principal: auth.Principal, verb: str) -> None:
@@ -1132,6 +1137,8 @@ class CustomFieldCreate(BaseModel):
     field_type: str
     options: list[str] | None = None
     pipeline_ids: list[int] = Field(default_factory=list)
+    # The modal tab it is drawn under; None = Opportunity details.
+    group_id: int | None = None
 
 
 class CustomFieldPatch(BaseModel):
@@ -1145,6 +1152,9 @@ class CustomFieldPatch(BaseModel):
     label: str | None = Field(None, max_length=custom_fields.LABEL_MAX)
     options: list[str] | None = None
     pipeline_ids: list[int] | None = None
+    # Moving a field between tabs. Send null to put it back under Opportunity
+    # details. Moves no answer: the key, and so every value, stays where it was.
+    group_id: int | None = None
 
 
 class CustomFieldReorder(BaseModel):
@@ -1203,10 +1213,12 @@ def create_custom_field(body: CustomFieldCreate, db: Session = Depends(get_db),
     # check is on the DERIVED key, so "Owen campaign" is refused too.
     key = custom_fields.claim_key(db, label)
     pipelines = _check_pipelines(db, body.pipeline_ids)
+    group_id = opportunity_workspace.check_group(db, body.group_id)
 
     n = db.scalar(select(func.count(CustomFieldDef.id))) or 0
     d = CustomFieldDef(key=key, label=label, field_type=field_type,
-                       options=options, position=n, entity="opportunity")
+                       options=options, position=n, entity="opportunity",
+                       group_id=group_id)
     db.add(d)
     db.flush()
     custom_fields.attach(db, d, pipelines)
@@ -1233,6 +1245,8 @@ def update_custom_field(field_id: int, body: CustomFieldPatch,
         d.options = custom_fields.clean_options(d.field_type, data["options"])
     if "pipeline_ids" in data:
         custom_fields.attach(db, d, _check_pipelines(db, data["pipeline_ids"]))
+    if "group_id" in data:
+        d.group_id = opportunity_workspace.check_group(db, data["group_id"])
     db.commit()
     db.refresh(d)
     return custom_fields.describe(d)
@@ -1303,7 +1317,8 @@ def list_opportunities(
     pipeline returns `[]`, exactly what naming one that does not exist returns.
     """
     stmt = pipeline_access.visible_opportunities(
-        select(Opportunity).options(selectinload(Opportunity.contact)),
+        select(Opportunity).options(selectinload(Opportunity.contact),
+                                    selectinload(Opportunity.owner)),
         pipeline_access.hidden_pipeline_ids(db, principal))
     if pipeline_id is not None:
         stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
@@ -1316,14 +1331,21 @@ def list_opportunities(
     # changes between two identical refetches — which the optimistic drag would
     # then read as the server disagreeing with it.
     rows = db.scalars(stmt.order_by(Opportunity.position, Opportunity.id)).all()
+    # The board card's icon row (2026-09-13): tag names, open tasks and — for
+    # STAFF only — the note count and first lines. A TECH's rows carry no note
+    # key at all; see opportunity_workspace.card_extras.
+    extras = opportunity_workspace.card_extras(db, list(rows), principal)
     return [{"id": o.id, "title": o.title, "value_cents": o.value_cents,
              "stage_id": o.stage_id, "pipeline_id": o.pipeline_id,
              "status": o.status, "position": o.position,
+             "contact_id": o.contact_id,
              "contact_name": o.contact.name if o.contact else None,
              "business_name": o.contact.business_name if o.contact else None,
              "source": o.contact.source if o.contact else None,
              "probability": o.probability,
-             "updated_at": o.updated_at} for o in rows]
+             "owner_id": o.owner_id,
+             "owner_name": o.owner.name if o.owner else None,
+             "updated_at": o.updated_at, **extras[o.id]} for o in rows]
 
 
 class OpportunityMove(BaseModel):
@@ -1843,6 +1865,19 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
         # booking: a roof job is an inspection and then a repair, and hiding the
         # second one behind the first would be a lie about what is scheduled.
         "appointments": appointments,
+        # The modal (2026-09-13). Followers are user accounts; additional contacts
+        # are the deal's other people, never the primary one; tags are the PRIMARY
+        # CONTACT's, because an opportunity has none of its own (DECISIONS.md).
+        "followers": (opportunity_workspace.followers_of(db, o.id)
+                      if db is not None else []),
+        "additional_contacts": (opportunity_workspace.additional_contacts_of(db, o.id)
+                                if db is not None else []),
+        "contact_tags": ([{"id": t.tag.id, "name": t.tag.name, "color": t.tag.color}
+                          for t in sorted(o.contact.tags, key=lambda t: t.tag.name)]
+                         if o.contact else []),
+        "conversation_id": (db.scalar(select(Conversation.id).where(
+            Conversation.contact_id == o.contact_id)) if db is not None
+            and o.contact_id is not None else None),
     }
 
 
@@ -1888,8 +1923,17 @@ def _check_opportunity_contact(db: Session, contact_id: int | None) -> None:
 
 
 class OpportunityPatch(BaseModel):
-    """Measured GHL statuses: Open / Won / Lost / Abandoned."""
+    """Measured GHL statuses: Open / Won / Lost / Abandoned.
+
+    2026-09-13, for the modal: the primary contact, the PIPELINE (a move must name
+    a stage in the new pipeline), followers and additional contacts. The two lists
+    REPLACE the set they name, and are left alone when not sent.
+    """
     title: str | None = Field(None, max_length=OPPORTUNITY_TITLE_MAX)
+    contact_id: int | None = None
+    pipeline_id: int | None = None
+    follower_ids: list[int] | None = None
+    additional_contact_ids: list[int] | None = None
     stage_id: int | None = None
     status: Literal["open", "won", "lost", "abandoned"] | None = None
     value_cents: int | None = None
@@ -1914,16 +1958,50 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     if "title" in data:
         data["title"] = _clean_opportunity_title(data["title"])
     if "contact_id" in data:
+        # GoHighLevel marks the primary contact required. A deal that already has
+        # none keeps working (nothing here asks for one), but an edit cannot take
+        # the contact away.
+        if data["contact_id"] is None:
+            raise HTTPException(400, "primary contact is required")
         _check_opportunity_contact(db, data["contact_id"])
+    old_pipeline_id = o.pipeline_id
+    new_pipeline_id = data.pop("pipeline_id", None) or o.pipeline_id
+    if new_pipeline_id != o.pipeline_id:
+        # A pipeline the caller cannot access answers exactly as one that does not
+        # exist (pipeline_access.py): the move is refused and existence not leaked.
+        if (not db.get(Pipeline, new_pipeline_id)
+                or not pipeline_access.can_see(db, principal, new_pipeline_id)):
+            raise HTTPException(400, "unknown pipeline_id")
+        # Every stage belongs to one pipeline, so a deal moved without a stage
+        # would sit in a column of the board it just left.
+        if "stage_id" not in data:
+            raise HTTPException(400, "moving to another pipeline needs a stage in "
+                                     "that pipeline")
     if "stage_id" in data:
         stage = db.get(Stage, data["stage_id"])
-        if not stage or stage.pipeline_id != o.pipeline_id:
+        if not stage or stage.pipeline_id != new_pipeline_id:
             raise HTTPException(400, "stage is not in this opportunity's pipeline")
     if ("owner_id" in data and data["owner_id"] is not None
             and not db.get(User, data["owner_id"])):
         raise HTTPException(400, "unknown owner_id")
     if "value_cents" in data:
         _check_opportunity_value(data["value_cents"])
+    follower_ids = data.pop("follower_ids", None)
+    additional_ids = data.pop("additional_contact_ids", None)
+    if additional_ids is not None:
+        # Validated BEFORE anything is written, so an 11th contact refuses the
+        # whole save rather than landing half of it.
+        opportunity_workspace.set_additional_contacts(
+            db, o, additional_ids, data.get("contact_id", o.contact_id))
+    elif "contact_id" in data and data["contact_id"] is not None:
+        # The new primary contact may already be one of the additional ones; it
+        # cannot be both.
+        for link in db.scalars(select(models.OpportunityContact).where(
+                models.OpportunityContact.opportunity_id == o.id,
+                models.OpportunityContact.contact_id == data["contact_id"])).all():
+            db.delete(link)
+    if follower_ids is not None:
+        opportunity_workspace.set_followers(db, o, follower_ids)
     if data.get("custom_fields") is not None:
         # One place decides what the blob becomes, shared with the create path.
         # It keeps the `owen_call_id` guard this endpoint has always had (the
@@ -1933,16 +2011,28 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
         # not a reserved `owen_*` one, not an answer to a field this pipeline does
         # not ask, not an answer to an archived field.
         #
-        # Which questions this deal is asked follows its PIPELINE, and no endpoint
-        # moves a deal between pipelines (a cross-pipeline stage is refused above),
-        # so `o.pipeline_id` is both the before and the after here.
+        # Which questions this deal is asked follows its PIPELINE — the one it is
+        # moving TO when this save moves it. An answer to a question the new
+        # pipeline does not ask is kept untouched by merge_answers, as always.
         o.custom_fields = custom_fields.merge_answers(
-            db, pipeline_id=o.pipeline_id,
+            db, pipeline_id=new_pipeline_id,
             existing=o.custom_fields, incoming=data.pop("custom_fields"))
+    data.pop("custom_fields", None)
 
     old_stage_id = o.stage_id
     for k, v in data.items():
         setattr(o, k, v)
+    if new_pipeline_id != old_pipeline_id:
+        o.pipeline_id = new_pipeline_id
+        # Filed at the bottom of its new column, and the column it left re-packed,
+        # the same contiguity the board's drag relies on.
+        o.position = db.scalar(select(func.count(Opportunity.id)).where(
+            Opportunity.stage_id == o.stage_id, Opportunity.id != o.id)) or 0
+        for i, left in enumerate(db.scalars(
+                select(Opportunity)
+                .where(Opportunity.stage_id == old_stage_id, Opportunity.id != o.id)
+                .order_by(Opportunity.position, Opportunity.id)).all()):
+            left.position = i
     db.flush()
     outcome = automations.on_opportunity_stage_changed(db, o, old_stage_id)
     db.commit()
@@ -3262,11 +3352,15 @@ def delete_contact(contact_id: int, force: bool = False,
     for conv in db.scalars(select(Conversation).where(
             Conversation.contact_id == contact_id)).all():
         db.delete(conv)
+    # Off every deal it was an ADDITIONAL contact on (a link row, nothing else),
+    # and its tasks detached rather than deleted — they belong to their deal.
+    removed_from = opportunity_workspace.release_contact(db, contact_id)
     db.flush()
     db.delete(c)            # ContactTag rows cascade
     db.commit()
     return {"deleted": contact_id, "detached_opportunities": opp_ids,
             "detached_appointments": appt_ids,
+            "removed_from_opportunities": removed_from,
             "reminders_cancelled": reminders}
 
 
@@ -3325,9 +3419,14 @@ def delete_opportunity(opp_id: int, db: Session = Depends(get_db),
     for a in booked:
         a.opportunity_id = None
     db.flush()
+    # The deal's OWN notes and tasks go with it, and its follower and
+    # additional-contact links; the counts are returned so nothing goes silently.
+    # Nothing on the contact's thread is touched.
+    gone = opportunity_workspace.remove_opportunity_records(db, opp_id)
     db.delete(o)
     db.commit()
-    return {"deleted": opp_id, "detached_appointments": [a.id for a in booked]}
+    return {"deleted": opp_id, "detached_appointments": [a.id for a in booked],
+            **gone}
 
 
 # ---------- global event search ----------

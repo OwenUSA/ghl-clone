@@ -335,7 +335,8 @@ def test_a_contact_with_nothing_attached_still_deletes_without_force(world):
     r = world.delete("/api/contacts/%d" % cid)
     assert r.status_code == 200
     assert r.json() == {"deleted": cid, "detached_opportunities": [],
-                        "detached_appointments": [], "reminders_cancelled": 0}
+                        "detached_appointments": [], "reminders_cancelled": 0,
+                        "removed_from_opportunities": []}
     assert world.get("/api/contacts/%d" % cid).status_code == 404
 
 

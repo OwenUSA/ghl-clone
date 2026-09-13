@@ -15,6 +15,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { me } from './lib/auth'
 import { viewFromPath } from './lib/settingsSections'
 import type { Focus } from './lib/focus'
+import { registerOpenRecord } from './lib/openRecord'
 
 // Paths that used to mean something and still turn up in bookmarks and pasted
 // links. Launchpad was removed from the product on 2026-09-09 and Payments on
@@ -71,6 +72,7 @@ export default function App() {
     setFocus({ view, id, n: seq.current })
   }, [])
   const focusFor = (view: string) => (focus?.view === view ? focus : null)
+  useEffect(() => registerOpenRecord(openRecord), [openRecord])
 
   // ctrl+K, and cmd+K on a Mac. Bound on the window so it works from anywhere,
   // including with the caret inside a page's own filter box -- which is exactly

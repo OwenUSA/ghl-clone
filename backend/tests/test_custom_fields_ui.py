@@ -97,63 +97,77 @@ def test_an_archived_field_is_asked_nowhere():
     assert "old_question" not in got, "an archived field is still being asked"
 
 
+# The three tests that stood here asserted the "Recorded earlier" and "From OWEN"
+# blocks. The owner removed both on 2026-09-13 (DECISIONS.md): the `owen_*` and
+# `workiz_*` keys are his old account's fields and must never render, and the kept
+# box is gone from the modal. What replaces them pins the new rule — nothing
+# reserved is ever drawn or sent — and the grouping the modal's tabs are built from.
+
 @node
-def test_an_answer_the_pipeline_does_not_ask_is_kept_and_labelled():
-    """The visible half of "moving a deal never discards anything". A deal in
-    Retail holding an AHS claim number must still SHOW it, read-only, with the
-    reason — an answer nobody can see is an answer nobody knows they have."""
+def test_a_reserved_key_is_never_asked_even_if_a_definition_claims_one():
+    """The server refuses to create such a definition. This is the second fence:
+    if one ever existed, the modal still would not draw it."""
     got = run_js(DEFS + """
-        const answers = {
-          how_old_is_the_roof: 14,
-          ahs_claim_number: 'AHS-99887',
-          old_question: 'still here',
-          owen_call_id: 'call-abc-123',
-        }
+        const bad = [...defs,
+          { id: 9, key: 'owen_call_id', label: 'owen_call_id', field_type: 'text',
+            options: [], position: 0, entity: 'opportunity', archived: false,
+            pipeline_ids: [1] },
+          { id: 10, key: 'workiz_job_number', label: 'Workiz job', field_type: 'text',
+            options: [], position: 0, entity: 'opportunity', archived: false,
+            pipeline_ids: [1] }]
+        out({ asked: f.askedOn(bad, 1).map((d) => d.key),
+              reserved: ['owen_campaign', 'workiz_id', 'owenish', 'roof'].map(f.isReserved) })
+    """)
+    assert got["asked"] == ["ahs_claim_number", "how_old_is_the_roof"]
+    assert got["reserved"] == [True, True, False, False]
+
+
+@node
+def test_an_update_sends_only_changed_answers_and_never_a_reserved_key():
+    got = run_js("""
+        const stored = { owen_call_id: 'call-1', workiz_id: '4OES29', roof: 'Tile',
+                         age: 14, note: '' }
         out({
-          retail: f.keptButNotAsked(defs, answers, 2)
-                   .map((r) => [r.key, r.value, r.why]),
-          ahs: f.keptButNotAsked(defs, answers, 1)
-                .map((r) => [r.key, r.value, r.why]),
+          untouched: f.changedAnswers(stored, { ...stored }),
+          edited: f.changedAnswers(stored, { ...stored, roof: 'Metal', age: 15 }),
+          // Even a client that somehow changed a reserved value does not send it.
+          tampered: f.changedAnswers(stored, { ...stored, owen_call_id: 'x',
+                                               workiz_id: 'y' }),
+          blankStaysBlank: f.changedAnswers(stored, { ...stored, note: '', fresh: '' }),
+          cleared: f.changedAnswers(stored, { ...stored, roof: '' }),
         })
     """)
-    assert got["retail"] == [
-        ["ahs_claim_number", "AHS-99887", "Not asked on this pipeline"],
-        ["old_question", "still here", "This field is archived"],
-    ], got["retail"]
-    # On AHS the claim number is a live control, so only the archived one is kept.
-    assert [row[0] for row in got["ahs"]] == ["old_question"]
-    # owen_* never appears here: it has its own block and its own rules.
-    for rows in got.values():
-        assert all(not key.startswith("owen_") for key, _v, _w in rows)
+    assert got["untouched"] == {}
+    assert got["edited"] == {"roof": "Metal", "age": 15}
+    assert got["tampered"] == {}
+    assert got["blankStaysBlank"] == {}
+    assert got["cleared"] == {"roof": ""}, "clearing an answer is a real change"
 
 
 @node
-def test_an_answer_under_no_definition_at_all_is_still_shown():
-    """A key written by something other than this UI — the CLI, an old import —
-    is displayed rather than hidden. Dropping it from the form is how it would
-    then be dropped from the record."""
-    got = run_js(DEFS + """
-        out(f.keptButNotAsked(defs, { legacy_note: 'from the old system' }, 1)
-             .map((r) => [r.key, r.value, r.why, r.def]))
-    """)
-    assert got == [["legacy_note", "from the old system",
-                    "Recorded against no field definition", None]]
-
-
-@node
-def test_the_telephony_block_holds_every_reserved_key_and_nothing_else():
+def test_fields_are_sorted_into_the_modal_tabs_in_group_order():
     got = run_js("""
-        out(f.telephonyAnswers({
-          how_old_is_the_roof: 14,
-          owen_tracking_number: '(941) 555-9999',
-          owen_call_id: 'call-abc-123',
-          owen_campaign: 'Spring',
-          owen_is_new_caller: true,
-        }))
+        const d = (id, key, group_id, pipeline_ids = [1], position = id) => ({
+          id, key, label: key, field_type: 'text', options: [], position,
+          entity: 'opportunity', archived: false, pipeline_ids, group_id })
+        const defs = [d(1, 'loose', null), d(2, 'shingles', 20), d(3, 'photo_front', 10),
+                      d(4, 'other_board', 10, [2]), d(5, 'orphan', 99),
+                      d(6, 'photo_back', 10, [1], 0)]
+        const groups = [{ id: 10, name: 'Photo Checklist', position: 1 },
+                        { id: 20, name: 'Roof Inspection', position: 0 },
+                        { id: 30, name: 'Customer Journey', position: 2 }]
+        const s = f.modalSections(defs, groups, 1)
+        out({ ungrouped: s.ungrouped.map((x) => x.key),
+              tabs: s.groups.map((g) => [g.group.name, g.fields.map((x) => x.key)]) })
     """)
-    assert [key for key, _v in got] == [
-        "owen_call_id", "owen_campaign", "owen_is_new_caller",
-        "owen_tracking_number"]
+    # A field whose group no longer exists falls back to Opportunity details.
+    assert got["ungrouped"] == ["loose", "orphan"]
+    assert got["tabs"] == [
+        ["Roof Inspection", ["shingles"]],
+        ["Photo Checklist", ["photo_back", "photo_front"]],
+        # A group applies to every pipeline: an empty tab is still a tab.
+        ["Customer Journey", []],
+    ]
 
 
 # ---------------- executed: one answer in and out of a control ----------------
@@ -239,8 +253,8 @@ def test_one_component_asks_the_questions_on_both_forms():
 def test_the_board_card_does_not_render_custom_fields():
     """The owner was explicit: not on the board card. It is already dense and has
     to stay scannable."""
-    source = _read("pages", "OpportunitiesPage.tsx")
-    card = source.split("function CardFace(", 1)[1].split("\nfunction ", 1)[0]
+    source = _read("components", "OpportunityCard.tsx")
+    card = source.split("function CardFace(", 1)[1].split("\nexport function ", 1)[0]
     for leak in ("CustomFieldAnswers", "custom_fields", "customFields"):
         assert leak not in card, (
             "the board card renders custom fields (%s)" % leak)

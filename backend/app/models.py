@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    func,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -643,6 +644,11 @@ class CustomFieldDef(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow)
+    # The modal tab this field is drawn under (2026-09-13). NULL = no group, which
+    # draws it under "Opportunity details". A field belongs to AT MOST one group;
+    # deleting a group sets this back to NULL and touches no answer.
+    group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("custom_field_groups.id"), index=True)
 
     pipelines: Mapped[list["CustomFieldPipeline"]] = relationship(
         back_populates="field", cascade="all, delete-orphan")
@@ -666,3 +672,97 @@ class CustomFieldPipeline(Base):
         ForeignKey("pipelines.id"), index=True)
 
     field: Mapped[CustomFieldDef] = relationship(back_populates="pipelines")
+
+
+class CustomFieldGroup(Base):
+    """A named tab of custom fields in the opportunity modal (2026-09-13).
+
+    GoHighLevel's "Roof Inspection", "Photo Checklist" and "Customer Journey
+    Checklist" tabs are groups the owner made himself. A group is a name and a
+    position and nothing else: it applies to EVERY pipeline, while the fields in
+    it keep their own per-pipeline attachment. It holds no answer, so deleting one
+    cannot lose an answer — its fields simply fall back to Opportunity details.
+    """
+    __tablename__ = "custom_field_groups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow,
+        server_default=func.now())
+
+
+class OpportunityTask(Base):
+    """A to-do on a deal (2026-09-13). Attached to the opportunity AND to its
+    contact, so a customer's tasks stay findable if the deal is later detached.
+
+    A task notifies NOBODY. It enqueues no job and sends nothing — there is no
+    reminder, no due-date text and no assignee notification, by the owner's rule.
+    `completed_at` set means done; clearing it reopens the task.
+    """
+    __tablename__ = "opportunity_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunities.id"), index=True)
+    contact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contacts.id"), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow,
+        server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow,
+        server_default=func.now())
+
+    assignee: Mapped["User | None"] = relationship(foreign_keys=[assigned_user_id])
+
+
+class OpportunityNote(Base):
+    """A staff note on ONE deal (2026-09-13). A customer with three jobs has three
+    note lists. STAFF-only on every path, exactly like a NOTE event on a thread
+    (DECISIONS.md, 2026-09-10): a TECH cannot read, count or write one."""
+    __tablename__ = "opportunity_notes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunities.id"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow,
+        server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow,
+        server_default=func.now())
+
+    author: Mapped["User | None"] = relationship()
+
+
+class OpportunityFollower(Base):
+    """A staff user following a deal. A link row and nothing else."""
+    __tablename__ = "opportunity_followers"
+    __table_args__ = (UniqueConstraint("opportunity_id", "user_id",
+                                       name="uq_opportunity_follower"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunities.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+
+
+class OpportunityContact(Base):
+    """An ADDITIONAL contact on a deal — the spouse, the property manager. The
+    primary contact stays `opportunities.contact_id`. At most ten per deal
+    (GoHighLevel's "Additional contacts (Max: 10)"), enforced by the API."""
+    __tablename__ = "opportunity_contacts"
+    __table_args__ = (UniqueConstraint("opportunity_id", "contact_id",
+                                       name="uq_opportunity_contact"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunities.id"), index=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
+
+    contact: Mapped["Contact"] = relationship()
