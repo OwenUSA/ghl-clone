@@ -5,6 +5,7 @@ import {
 import { useEffect, useState } from 'react'
 import { AddContactDialog } from '../components/AddContactDialog'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
+import { PageTabs } from '../components/PageTabs'
 import { listContacts } from '../lib/api'
 import type { Me } from '../lib/auth'
 import { IconChevronDown } from '../components/Icon'
@@ -102,27 +103,8 @@ export function ContactsPage({ user, focus }: { user: Me; focus?: Focus | null }
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
       {/* tab row */}
-      <div
-        className="flex shrink-0 items-center gap-6 bg-white px-4"
-        style={{ height: 90, borderBottom: '1px solid rgb(234,236,240)' }}
-      >
-        <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)' }}>
-          Contacts
-        </div>
-        {TABS.map((t, i) => (
-          <div
-            key={t}
-            style={{
-              fontSize: 14,
-              fontWeight: 500,
-              lineHeight: '25.6px',
-              color: i === 0 ? 'rgb(56,160,219)' : 'rgb(102,112,133)',
-            }}
-          >
-            {t}
-          </div>
-        ))}
-      </div>
+      <PageTabs title="Contacts" label="Contacts views" active={TABS[0]}
+        tabs={TABS.map((t) => ({ key: t, label: t }))} />
 
       {/* title + count */}
       <div className="flex shrink-0 items-center gap-4 px-4" style={{ height: 60 }}>

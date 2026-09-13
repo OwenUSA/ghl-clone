@@ -8,6 +8,7 @@ import {
   type Appointment,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
+import { PageTabs } from '../components/PageTabs'
 import {
   DEFAULT_SLOT_HOUR, MONTH_CELL_CHIPS, bucketByDay, defaultSlot, isSameDay,
   queryWindow, rangeLabel, shiftAnchor, slotAt, visibleDays,
@@ -137,30 +138,12 @@ export function CalendarsPage({ user }: { user: Me }) {
 
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
-      <div
-        className="flex shrink-0 items-center gap-6 bg-white px-4"
-        style={{ height: 90, borderBottom: '1px solid rgb(234,236,240)' }}
-      >
-        <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)' }}>Calendars</div>
-        {([['calendar', 'Calendar view'], ['list', 'Appointment list view']] as const).map(
-          ([k, label]) => (
-            <button
-              key={k}
-              onClick={() => setTab(k)}
-              style={{
-                fontSize: 14,
-                fontWeight: 500,
-                color: tab === k ? 'rgb(56,160,219)' : 'rgb(102,112,133)',
-              }}
-            >
-              {label}
-            </button>
-          ),
-        )}
-        <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(102,112,133)' }}>
-          Calendar settings
-        </div>
-      </div>
+      <PageTabs title="Calendars" label="Calendars views" active={tab}
+        tabs={[
+          ...([['calendar', 'Calendar view'], ['list', 'Appointment list view']] as const).map(
+            ([k, label]) => ({ key: k, label, onSelect: () => setTab(k) })),
+          { key: 'settings', label: 'Calendar settings' },
+        ]} />
 
       {/* toolbar */}
       <div className="flex shrink-0 items-center gap-2 px-4" style={{ height: 60 }}>

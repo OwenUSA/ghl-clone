@@ -16,6 +16,9 @@ import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
 import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
 import { PipelinesPanel } from '../components/PipelinesPanel'
+import { PageTabs } from '../components/PageTabs'
+import { PipelinePicker } from '../components/PipelinePicker'
+import { PipelineModal } from '../components/PipelineModal'
 import { CustomFieldAnswers } from '../components/CustomFieldAnswers'
 import { ContactPicker, type PickedContact } from '../components/ContactPicker'
 import { OpportunityDetail } from '../components/OpportunityDetail'
@@ -215,6 +218,9 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
   const [showOverflow, setShowOverflow] = useState(false)
   const [showLists, setShowLists] = useState(false)
   const [openOpp, setOpenOpp] = useState<number | null>(null)
+  // The pipeline dropdown's "+ New pipeline" opens the same Create pipeline modal
+  // as the Pipelines tab (refs/round3/32).
+  const [creatingPipeline, setCreatingPipeline] = useState(false)
 
   // The ctrl+K palette asked for one record. Opening it here, rather than
   // teaching the palette how each page's detail panel works, keeps a searched
@@ -377,47 +383,13 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
 
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
-      <div
-        className="flex shrink-0 items-end gap-6 bg-white px-4"
-        style={{ height: 90, borderBottom: '1px solid rgb(234,236,240)' }}
-      >
-        <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)', paddingBottom: 10,
-          lineHeight: '24px' }}>
-          Opportunities
-        </div>
-        {/* Measured from refs/opps/05-08: 14px/500, inactive rgb(71,84,103),
-            active rgb(56,160,219) with a 2px underline in the same blue that runs
-            the full width of the label plus its padding, flush with the bar. */}
-        <div role="tablist" aria-label="Opportunities views" className="flex items-stretch"
-          style={{ height: 44, gap: 6, marginLeft: -2 }}>
-        {TABS.map((t) => {
-          const live = !(t === 'Forecast' && !canForecast)
-          return (
-            <button
-              key={t}
-              role="tab"
-              aria-selected={tab === t}
-              onClick={() => live && setTab(t)}
-              disabled={!live}
-              title={live ? undefined : 'Your role cannot view the forecast'}
-              style={{
-                fontSize: 14,
-                fontWeight: 500,
-                padding: '0 7px',
-                color: tab === t
-                  ? 'rgb(56,160,219)'
-                  : live ? 'rgb(71,84,103)' : 'rgb(152,162,179)',
-                borderBottom: '2px solid ' + (tab === t ? 'rgb(56,160,219)' : 'transparent'),
-                borderTop: '2px solid transparent',
-                cursor: live ? 'pointer' : 'not-allowed',
-              }}
-            >
-              {t}
-            </button>
-          )
-        })}
-        </div>
-      </div>
+      <PageTabs title="Opportunities" label="Opportunities views" active={tab}
+        tabs={TABS.map((t) => ({
+          key: t,
+          label: t,
+          onSelect: () => setTab(t),
+          blocked: t === 'Forecast' && !canForecast ? 'Your role cannot view the forecast' : undefined,
+        }))} />
 
       {/* pipeline row */}
       <div className="flex shrink-0 items-center gap-3 px-4" style={{
@@ -425,25 +397,13 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
         // Not on the Pipelines tab, which has its own header (refs/opps/02).
         display: tab === 'Pipelines' ? 'none' : undefined,
       }}>
-        <select
-          value={pipeline?.id ?? ''}
-          onChange={(e) => setPipelineId(Number(e.target.value))}
-          style={{
-            height: 36,
-            borderRadius: 6,
-            border: 'none',
-            padding: '0 10px',
-            // measured: pipeline name renders as plain 16px/400 text, not a bordered control
-            fontSize: 16,
-            fontWeight: 400,
-            color: 'rgb(52,64,84)',
-            backgroundColor: '#fff',
-          }}
-        >
-          {pipelines.data?.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
+        <PipelinePicker
+          pipelines={pipelines.data ?? []}
+          selectedId={pipeline?.id}
+          role={user.role}
+          onSelect={(id) => setPipelineId(id)}
+          onNew={() => setCreatingPipeline(true)}
+        />
         <div
           style={{
             fontSize: 14,
@@ -831,6 +791,21 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
             qc.invalidateQueries({ queryKey: ['pipelines'] })
           }}
         />
+      )}
+
+      {creatingPipeline && (
+        <PipelineModal user={user} pipeline={null}
+          otherNames={(pipelines.data ?? []).map((p) => p.name)}
+          onClose={() => setCreatingPipeline(false)}
+          onSaved={(p) => {
+            // The modal has already invalidated ['pipelines']; seed the new row so the
+            // board lands on it now rather than on the first pipeline until the
+            // refetch arrives.
+            qc.setQueryData<Pipeline[]>(['pipelines'], (old) =>
+              old && !old.some((x) => x.id === p.id) ? [...old, p as unknown as Pipeline] : old)
+            setPipelineId(p.id)
+            setCreatingPipeline(false)
+          }} />
       )}
 
       {showLists && (

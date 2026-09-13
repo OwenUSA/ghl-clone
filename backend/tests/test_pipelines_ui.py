@@ -280,17 +280,19 @@ def test_the_tab_bar_is_exactly_ghls_four():
 
 
 def test_the_active_tab_is_blue_and_underlined_like_ghl():
+    # The bar is the shared PageTabs since 2026-09-13; the colours themselves are
+    # executed in test_page_tabs.py.
     page = _read("pages", "OpportunitiesPage.tsx")
-    row = page.split("{TABS.map((t) => {", 1)[1].split("})}", 1)[0]
-    assert 'role="tab"' in row and "aria-selected={tab === t}" in row
-    assert "borderBottom: '2px solid ' + (tab === t ? 'rgb(56,160,219)' : 'transparent')" in row
-    assert "? 'rgb(56,160,219)'" in row and "'rgb(71,84,103)'" in row
+    assert '<PageTabs title="Opportunities" label="Opportunities views" active={tab}' in page
+    row = _read("components", "PageTabs.tsx")
+    assert 'role="tab"' in row and "aria-selected={on}" in row
+    assert "...tabLook(on, !!t.blocked)" in row
     assert "fontSize: 14" in row and "fontWeight: 500" in row
 
 
 def test_the_pipelines_tab_has_its_own_header_instead_of_the_board_row():
     page = _read("pages", "OpportunitiesPage.tsx")
-    row = page.split("{/* pipeline row */}", 1)[1].split("<select", 1)[0]
+    row = page.split("{/* pipeline row */}", 1)[1].split("<PipelinePicker", 1)[0]
     assert "display: tab === 'Pipelines' ? 'none' : undefined" in row
     panel = _read("components", "PipelinesPanel.tsx")
     for text in ("Pipelines</div>",

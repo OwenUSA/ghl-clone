@@ -855,9 +855,9 @@ def test_the_forecast_tab_is_a_tab_and_not_a_label():
     source = _read("pages", "OpportunitiesPage.tsx")
     assert "i === 0 ? 'rgb(56,160,219)'" not in source, (
         "the active tab is still hardcoded to the first one")
-    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
-    assert "setTab(t)" in header, "clicking a tab does nothing"
-    assert "tab === t" in header, "the header cannot show which tab is open"
+    header = source.split('<PageTabs title="Opportunities"', 1)[1].split("/>", 1)[0]
+    assert "onSelect: () => setTab(t)" in header, "clicking a tab does nothing"
+    assert "active={tab}" in header, "the header cannot show which tab is open"
     assert "<ForecastPanel" in source, "the Forecast tab renders nothing"
 
 
@@ -870,8 +870,10 @@ def test_every_tab_goes_somewhere():
                        ("Bulk Actions", "<BulkActionsBar")):
         assert "tab === '%s'" % tab in source or "selecting" in source, tab
         assert panel in source, "the %s tab renders nothing" % tab
-    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
-    assert "disabled={!live}" in header, "a tab a role cannot open still looks live"
+    header = source.split('<PageTabs title="Opportunities"', 1)[1].split("/>", 1)[0]
+    assert "blocked: t === 'Forecast' && !canForecast" in header
+    assert "disabled={!!t.blocked}" in _read("components", "PageTabs.tsx"), (
+        "a tab a role cannot open still looks live")
 
 
 def test_the_forecast_tab_is_hidden_from_a_role_that_cannot_read_it():
@@ -880,7 +882,7 @@ def test_the_forecast_tab_is_hidden_from_a_role_that_cannot_read_it():
     source = _read("pages", "OpportunitiesPage.tsx")
     assert "const canForecast = user.role !== 'TECH'" in source, (
         "the page never asks whether this role can read a forecast")
-    header = source.split("{TABS.map(", 1)[1].split("})}", 1)[0]
+    header = source.split('<PageTabs title="Opportunities"', 1)[1].split("/>", 1)[0]
     assert "!canForecast" in header, "the Forecast tab ignores the role"
     assert "Your role cannot view the forecast" in header, (
         "nothing tells the user why the tab is dead")
@@ -1102,7 +1104,7 @@ def test_the_pipelines_tab_stays_open_to_everyone_who_works_the_board():
     people who work it every day would be worse."""
     page = _read("pages", "OpportunitiesPage.tsx")
     assert "tab === 'Pipelines' && <PipelinesPanel user={user} />" in page
-    live = page.split("const live =", 1)[1].splitlines()[0]
+    live = page.split("blocked: ", 1)[1].splitlines()[0]
     assert "Pipelines" not in live, "the Pipelines tab was gated on a role"
 
 
