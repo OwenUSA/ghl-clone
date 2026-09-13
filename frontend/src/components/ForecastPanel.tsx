@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { getForecast, money, type Pipeline } from '../lib/api'
+import { getForecast, money, type ForecastWithProbability, type Pipeline } from '../lib/api'
 
 /**
  * The Opportunities > Forecast tab: projected revenue by stage.
@@ -16,7 +16,10 @@ import { getForecast, money, type Pipeline } from '../lib/api'
  * pipeline is the failure this tab is most likely to cause.
  *
  * The projection rule is stated on the screen rather than left implicit, because
- * a weighted figure whose weighting is invisible reads as a promise.
+ * a weighted figure whose weighting is invisible reads as a promise. Since
+ * 2026-09-13 each stage says which probability weighted it — the deal's own, the
+ * stage's (both set in the pipeline modal), or the conversion rate where neither
+ * is set — and the server decides; this panel only labels it.
  */
 export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) {
   const forecast = useQuery({
@@ -25,7 +28,7 @@ export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) 
     enabled: !!pipeline,
   })
 
-  const f = forecast.data
+  const f = forecast.data as ForecastWithProbability | undefined
 
   const cell = {
     padding: '0 12px',
@@ -77,7 +80,9 @@ export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) 
                 f.totals.open_count === 1 ? 'y' : 'ies'}`} />
             <Tile label="Weighted forecast"
               value={money(f.totals.weighted_value_cents)}
-              note={`open value at ${f.conversion_rate.toFixed(2)}%`} />
+              note={f.use_opportunity_probability
+                ? 'each open deal at its own probability'
+                : 'open value at each stage’s probability'} />
             <Tile label="Won so far" value={money(f.totals.won_value_cents)}
               note={`${f.totals.won_count} won`} />
             <Tile label="Projected revenue"
@@ -86,14 +91,16 @@ export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) 
           </div>
 
           <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 10 }}>
-            Weighted at this pipeline&apos;s conversion rate —{' '}
-            {f.status.won ?? 0} won of {(f.status.won ?? 0) + (f.status.lost ?? 0)}{' '}
+            {f.use_opportunity_probability
+              ? 'This pipeline uses opportunity-level probability: each open deal is weighted at its own probability, or its stage’s when it has none. '
+              : 'Each stage is weighted at the probability set for it in the pipeline. '}
+            A stage with no probability set is weighted at this pipeline&apos;s conversion
+            rate — {f.status.won ?? 0} won of {(f.status.won ?? 0) + (f.status.lost ?? 0)}{' '}
             decided ={' '}
             <span style={{ fontWeight: 600, color: 'rgb(52,64,84)' }}>
               {f.conversion_rate.toFixed(2)}%
             </span>
-            . The same rate the Dashboard shows. Stage history is not recorded, so
-            there is no per-stage win rate to weight with.
+            , the same rate the Dashboard shows.
           </div>
 
           <div
@@ -108,6 +115,7 @@ export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) 
                   <th className="text-right" style={head}>Stage value</th>
                   <th className="text-right" style={head}>Open</th>
                   <th className="text-right" style={head}>Open value</th>
+                  <th className="text-right" style={head}>Probability</th>
                   <th className="text-right" style={head}>Weighted</th>
                   <th className="text-right" style={head}>Won</th>
                   <th className="text-right" style={head}>Projected</th>
@@ -124,6 +132,13 @@ export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) 
                     <td className="text-right" style={cell}>{s.open_count}</td>
                     <td className="text-right" style={cell}>
                       {money(s.open_value_cents)}
+                    </td>
+                    <td className="text-right" style={cell} title={WEIGHTING[s.weighting]}>
+                      {s.weighting === 'opportunity'
+                        ? 'Per deal'
+                        : s.weighting === 'stage'
+                          ? `${s.probability}%`
+                          : `${f.conversion_rate.toFixed(2)}% rate`}
                     </td>
                     <td className="text-right" style={cell}>
                       {money(s.weighted_value_cents)}
@@ -151,6 +166,7 @@ export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) 
                   <td className="text-right" style={{ ...cell, fontWeight: 700 }}>
                     {money(f.totals.open_value_cents)}
                   </td>
+                  <td style={cell} />
                   <td className="text-right" style={{ ...cell, fontWeight: 700 }}>
                     {money(f.totals.weighted_value_cents)}
                   </td>
@@ -170,6 +186,12 @@ export function ForecastPanel({ pipeline }: { pipeline: Pipeline | undefined }) 
     </div>
   )
 }
+
+const WEIGHTING = {
+  opportunity: 'Each open deal at its own probability (its stage’s when it has none)',
+  stage: 'The stage’s probability, set in the pipeline',
+  conversion_rate: 'No probability is set for this stage, so the pipeline’s conversion rate applies',
+} as const
 
 function Tile({ label, value, note, highlight }: {
   label: string; value: string; note: string; highlight?: boolean

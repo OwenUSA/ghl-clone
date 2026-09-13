@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Donut } from '../components/Donut'
 import { IconCalendar, IconChevronDown, IconSettings } from '../components/Icon'
 import {
+  type DashboardDistribution,
   type DashboardFunnel,
   type DashboardStats,
   getDashboard,
@@ -493,7 +494,11 @@ export function DashboardPage() {
   // right name before the pipeline list has even arrived.
   const funnelPid = funnelPipe ?? funnel.data?.pipeline_id ?? undefined
 
-  const slices = (dist.data?.stages ?? []).filter((x) => x.count > 0)
+  // The pie draws `distribution`, not the funnel's `stages`: each stage's
+  // "Show in reports" pie switch decides whether it is a slice at all, and the
+  // server says so rather than this card filtering for itself.
+  const distData = dist.data as DashboardDistribution | undefined
+  const slices = (distData?.distribution ?? []).filter((x) => x.count > 0)
   const ordered = cards.distribution.sort === 'largest'
     ? [...slices].sort((a, b) => b.count - a.count)
     : slices
@@ -805,7 +810,7 @@ export function DashboardPage() {
                     n: st.count,
                     color: STAGE_COLORS[i % STAGE_COLORS.length],
                   }))}
-                  center={String(dist.data?.total ?? 0)}
+                  center={String(distData?.distribution_total ?? 0)}
                 />
                 <div>
                   {ordered.map((st, i) => (

@@ -13,10 +13,20 @@ from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations, crmlink, custom_fields, models, openphone, phone_match, softphone
+from . import (
+    auth,
+    automations,
+    crmlink,
+    custom_fields,
+    models,
+    openphone,
+    phone_match,
+    pipeline_access,
+    softphone,
+)
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
@@ -36,6 +46,7 @@ from .models import (
     Job,
     Opportunity,
     Pipeline,
+    PipelinePermission,
     Role,
     SavedView,
     Stage,
@@ -285,8 +296,13 @@ def list_contacts(
     )
 
 
-def _contact_detail(c: Contact) -> dict:
-    """Shape mirrors the measured Contact Details panel."""
+def _contact_detail(c: Contact, hidden: set[int]) -> dict:
+    """Shape mirrors the measured Contact Details panel.
+
+    `hidden` is REQUIRED, with no default, on purpose: this payload lists the
+    contact's opportunities, and a caller that forgot to pass the pipelines the
+    reader cannot access would leak those deals' titles. See pipeline_access.py.
+    """
     return {
         "id": c.id,
         "name": c.name,
@@ -321,7 +337,8 @@ def _contact_detail(c: Contact) -> dict:
         # list is non-empty, and the Actions tab has to say *which* opportunities
         # are about to be detached before anyone confirms. Reading them back out of
         # the 409's prose would tie the panel to the wording of an error message.
-        "opportunities": [{"id": o.id, "title": o.title} for o in c.opportunities],
+        "opportunities": [{"id": o.id, "title": o.title} for o in c.opportunities
+                          if o.pipeline_id not in hidden],
         # Same reason, added 2026-09-11: the delete refuses over appointments too,
         # and the panel has to say which bookings are about to lose their customer
         # before anyone confirms.
@@ -333,11 +350,11 @@ def _contact_detail(c: Contact) -> dict:
 
 @app.get("/api/contacts/{contact_id}")
 def get_contact(contact_id: int, db: Session = Depends(get_db),
-                _: auth.Principal = auth.ANY_USER):
+                principal: auth.Principal = auth.ANY_USER):
     c = db.get(Contact, contact_id)
     if not c:
         raise HTTPException(404, "contact not found")
-    return _contact_detail(c)
+    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
 
 
 # Deliberately loose: one @, something either side, a dot in the domain. Enough to
@@ -406,7 +423,7 @@ class ContactPatch(BaseModel):
 @app.patch("/api/contacts/{contact_id}")
 def update_contact(contact_id: int, body: ContactPatch,
                    db: Session = Depends(get_db),
-                   _: auth.Principal = auth.STAFF):
+                   principal: auth.Principal = auth.STAFF):
     c = db.get(Contact, contact_id)
     if not c:
         raise HTTPException(404, "contact not found")
@@ -417,7 +434,7 @@ def update_contact(contact_id: int, body: ContactPatch,
         setattr(c, k, v)
     db.commit()
     db.refresh(c)
-    return _contact_detail(c)
+    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
 
 
 class TagBody(BaseModel):
@@ -426,7 +443,7 @@ class TagBody(BaseModel):
 
 @app.post("/api/contacts/{contact_id}/tags", status_code=201)
 def add_tag(contact_id: int, body: TagBody, db: Session = Depends(get_db),
-            _: auth.Principal = auth.STAFF):
+            principal: auth.Principal = auth.STAFF):
     c = db.get(Contact, contact_id)
     if not c:
         raise HTTPException(404, "contact not found")
@@ -442,12 +459,12 @@ def add_tag(contact_id: int, body: TagBody, db: Session = Depends(get_db),
         db.add(ContactTag(contact_id=c.id, tag_id=tag.id))
     db.commit()
     db.refresh(c)
-    return _contact_detail(c)
+    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
 
 
 @app.delete("/api/contacts/{contact_id}/tags/{tag_id}")
 def remove_tag(contact_id: int, tag_id: int, db: Session = Depends(get_db),
-               _: auth.Principal = auth.STAFF):
+               principal: auth.Principal = auth.STAFF):
     c = db.get(Contact, contact_id)
     if not c:
         raise HTTPException(404, "contact not found")
@@ -457,66 +474,150 @@ def remove_tag(contact_id: int, tag_id: int, db: Session = Depends(get_db),
         db.delete(link)
         db.commit()
         db.refresh(c)
-    return _contact_detail(c)
+    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
 
 
 # ---------- opportunities ----------
 
+def _pipeline_public(db: Session, p: Pipeline) -> dict:
+    """One pipeline as every screen reads it: the board, the Pipelines list, the
+    modal, the Dashboard selectors and the `ghl` CLI.
+
+    `count`/`value_cents` per stage are every deal in the stage, every status —
+    the figures the Dashboard funnel and the Forecast have always quoted.
+    """
+    totals = {
+        stage_id: (n, int(v)) for stage_id, n, v in db.execute(
+            select(Opportunity.stage_id, func.count(Opportunity.id),
+                   func.coalesce(func.sum(Opportunity.value_cents), 0))
+            .where(Opportunity.pipeline_id == p.id)
+            .group_by(Opportunity.stage_id)).all()}
+    stages = []
+    for s in sorted(p.stages, key=lambda s: (s.position, s.id)):
+        n, v = totals.get(s.id, (0, 0))
+        stages.append({"id": s.id, "name": s.name, "position": s.position,
+                       "count": n, "value_cents": v,
+                       "color": s.color, "probability": s.probability,
+                       "show_in_funnel": s.show_in_funnel,
+                       "show_in_pie": s.show_in_pie})
+    return {"id": p.id, "name": p.name, "position": p.position,
+            "color_mode": p.color_mode,
+            "use_opportunity_probability": p.use_opportunity_probability,
+            "updated_at": p.updated_at,
+            "stages": stages}
+
+
+def _ordered_pipelines(db: Session) -> list[Pipeline]:
+    """Every pipeline in display order. `id` breaks ties, because every pipeline
+    written before positions were maintained may share position 0."""
+    return list(db.scalars(
+        select(Pipeline).options(selectinload(Pipeline.stages))
+        .order_by(Pipeline.position, Pipeline.id)).all())
+
+
 @app.get("/api/pipelines")
 def list_pipelines(db: Session = Depends(get_db),
-                   _: auth.Principal = auth.ANY_USER):
-    pipelines = db.scalars(
-        select(Pipeline).options(selectinload(Pipeline.stages))).all()
-    out = []
-    for p in pipelines:
-        stages = []
-        for s in p.stages:
-            rows = db.execute(
-                select(func.count(Opportunity.id), func.coalesce(
-                    func.sum(Opportunity.value_cents), 0))
-                .where(Opportunity.stage_id == s.id)).one()
-            stages.append({"id": s.id, "name": s.name, "position": s.position,
-                           "count": rows[0], "value_cents": int(rows[1])})
-        out.append({"id": p.id, "name": p.name, "stages": stages})
-    return out
+                   principal: auth.Principal = auth.ANY_USER):
+    """In `position` order, which the Pipelines tab's drag sets and the board's
+    selector follows. A pipeline the caller may not access is simply absent."""
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
+    return [_pipeline_public(db, p) for p in _ordered_pipelines(db)
+            if p.id not in hidden]
 
 
-# ---------- pipeline structure (create / rename / reorder / delete) ----------
+# ---------- pipeline structure ----------
 #
-# There were no write endpoints for pipelines or stages at all until 2026-09-10;
-# the structure came from the seed and was otherwise fixed. It is now editable,
-# which is a deliberate divergence from the measured GHL capture — see the dated
-# amendment in DECISIONS.md.
+# Editable since 2026-09-10; rebuilt on 2026-09-13 as GoHighLevel's Pipelines tab,
+# its Create/Edit modal and its row menu (DECISIONS.md, both dated notes).
 #
-# Everything here is ADMIN. Renaming a stage changes a label four people navigate
-# by and that the `ghl` CLI resolves against; deleting one removes a column of the
-# board. That is not a dispatcher's call.
+# ROLES. DISPATCHER may create, edit, duplicate and reorder. ADMIN alone may
+# delete a stage or a pipeline and manage who can access one. TECH changes
+# nothing here. A pipeline a user cannot access answers 404 on every route below
+# (pipeline_access.py) — never 403, which would confirm it exists.
 #
-# Two rules do the safety work:
+# DELETING, by the owner's override of 2026-09-13. A stage or pipeline that holds
+# deals CAN now be deleted, GoHighLevel's way — BUT NO DEAL IS EVER DELETED:
 #
-#   1. DELETE ONLY WHAT IS EMPTY. A stage holding opportunities cannot be deleted,
-#      and the refusal says how many are in the way. There is no `force`. Cascading
-#      would take real customer deals with it, and `custom_fields.owen_call_id` is
-#      the telephony project's join key — CLAUDE.md warns specifically against
-#      deleting opportunities as a side effect of tidying something else.
-#   2. REORDERING MOVES COLUMNS, NEVER DEALS. Reorder writes `Stage.position` and
-#      nothing else; no opportunity's `stage_id` is touched. The endpoint takes the
-#      full stage list as a permutation, so "move this one left" cannot be
-#      misapplied to a board that changed underneath the user.
+#   * the caller names where the deals go (a stage of the same pipeline for a
+#     stage; a stage of another pipeline for a pipeline) and they are MOVED there
+#     first. Without a destination the delete is refused 409 and names the count.
+#   * a structural move writes `pipeline_id`, `stage_id` and the in-column rank
+#     and NOTHING else: `custom_fields` — including `owen_call_id`, the telephony
+#     project's live join key — and `updated_at` are left byte-identical.
+#   * a structural move FIRES NO AUTOMATION. The drag path texts the customer
+#     through rule 4; emptying a 255-deal stage must not queue 255 of those.
+#   * it is ONE transaction. Nothing is committed until the end, so a failure
+#     part-way moves nothing and deletes nothing.
 #
-# Names are NOT made unique. The measured pipeline has two distinct stages both
-# called "Call Back" (DECISIONS.md), the `ghl` CLI exits 5 rather than guess
-# between them, and quietly de-duplicating names here would break that.
+# Reordering still moves columns, never deals. Stage names are still NOT unique
+# (the measured pipeline has two "Call Back" stages and the CLI exits 5 between
+# them); PIPELINE names are unique, case-insensitively, which is what the modal's
+# helper text promises.
 
 PIPELINE_NAME_MAX = 160
+HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+# The palette a new stage is painted from, by position. Distinct at a glance,
+# readable as a dot and as a 12%-alpha tint, and in the Untitled UI family the
+# rest of the app's colours come from.
+STAGE_PALETTE = ("#2E90FA", "#12B76A", "#F79009", "#7A5AF8", "#F04438",
+                 "#06AED4", "#EE46BC", "#667085", "#EAAA08", "#15B79E")
+
+
+def default_stage_color(position: int) -> str:
+    return STAGE_PALETTE[position % len(STAGE_PALETTE)]
+
+
+def _check_color(v: str | None) -> str | None:
+    if v is not None and not HEX_COLOR.match(v):
+        raise ValueError("a stage colour is #RRGGBB")
+    return v.upper() if v else v
+
+
+class StageFields(BaseModel):
+    """The per-stage settings the modal edits. All optional on a PATCH."""
+    color: str | None = None
+    probability: int | None = Field(None, ge=0, le=100)
+    show_in_funnel: bool | None = None
+    show_in_pie: bool | None = None
+
+    _color = field_validator("color", mode="after")(_check_color)
+
+
+class StageBody(StageFields):
+    name: str = Field(max_length=PIPELINE_NAME_MAX)
+
+
+class StagePatch(StageFields):
+    """No `pipeline_id`, on purpose: moving a stage to another pipeline would carry
+    every deal in it across, which a deal PATCH refuses as a cross-pipeline move."""
+    name: str | None = Field(None, max_length=PIPELINE_NAME_MAX)
+
+
+class StageIn(StageFields):
+    """One row of the modal's stage list. `id` names an existing stage; without
+    one it is a new stage."""
+    id: int | None = None
+    name: str = Field(max_length=PIPELINE_NAME_MAX)
 
 
 class PipelineBody(BaseModel):
     name: str = Field(max_length=PIPELINE_NAME_MAX)
+    use_opportunity_probability: bool = False
+    color_mode: Literal["none", "dot", "tint"] = "none"
+    # Optional so `ghl`/curl can still create an empty pipeline by name alone.
+    stages: list[StageIn] = Field(default_factory=list)
 
 
-class StageBody(BaseModel):
-    name: str = Field(max_length=PIPELINE_NAME_MAX)
+class PipelinePatch(BaseModel):
+    name: str | None = Field(None, max_length=PIPELINE_NAME_MAX)
+    use_opportunity_probability: bool | None = None
+    color_mode: Literal["none", "dot", "tint"] | None = None
+    # The WHOLE stage list in its new order, when present. An existing stage left
+    # out is deleted — ADMIN only — and if it holds deals `stage_moves` must name
+    # the stage (kept, in this pipeline) that receives them.
+    stages: list[StageIn] | None = None
+    stage_moves: dict[int, int] = Field(default_factory=dict)
 
 
 class StageReorder(BaseModel):
@@ -524,10 +625,34 @@ class StageReorder(BaseModel):
     stage_ids: list[int] = Field(min_length=1)
 
 
+class PipelineReorder(BaseModel):
+    """Every pipeline the caller can see, exactly once, in the new order."""
+    pipeline_ids: list[int] = Field(min_length=1)
+
+
+class PipelinePermissions(BaseModel):
+    """Nobody listed = everyone may access the pipeline."""
+    user_ids: list[int] = Field(default_factory=list)
+
+
 def _clean_structure_name(name: str | None, kind: str) -> str:
     cleaned = (name or "").strip()
     if not cleaned:
         raise HTTPException(400, "a %s needs a name" % kind)
+    return cleaned
+
+
+def _unique_pipeline_name(db: Session, name: str, exclude_id: int | None = None) -> str:
+    """Pipeline names are unique, case-insensitively — the modal says "use a
+    unique, descriptive name". Checked across EVERY pipeline, including ones the
+    caller cannot see: two boards called "Retail" is the ambiguity this prevents."""
+    cleaned = _clean_structure_name(name, "pipeline")
+    clash = select(Pipeline.id).where(func.lower(Pipeline.name) == cleaned.lower())
+    if exclude_id is not None:
+        clash = clash.where(Pipeline.id != exclude_id)
+    if db.scalar(clash) is not None:
+        raise HTTPException(409, "a pipeline called %r already exists — pipeline "
+                                 "names must be unique" % cleaned)
     return cleaned
 
 
@@ -538,60 +663,319 @@ def _opportunity_count(db: Session, **where) -> int:
     return db.scalar(stmt) or 0
 
 
+def _touch(p: Pipeline) -> None:
+    p.updated_at = datetime.now(UTC)
+
+
+def _apply_stage_fields(s: Stage, fields: dict) -> None:
+    for key in ("color", "probability", "show_in_funnel", "show_in_pie"):
+        if key in fields and (fields[key] is not None or key in ("color", "probability")):
+            setattr(s, key, fields[key])
+
+
+def _new_stage(pipeline_id: int, position: int, body: StageFields, name: str) -> Stage:
+    data = body.model_dump(exclude_unset=True)
+    s = Stage(pipeline_id=pipeline_id, name=_clean_structure_name(name, "stage"),
+              position=position, show_in_funnel=True, show_in_pie=True,
+              color=default_stage_color(position))
+    _apply_stage_fields(s, data)
+    if s.color is None:
+        s.color = default_stage_color(position)
+    return s
+
+
+def _structural_move(db: Session, where, destination: Stage) -> list[int]:
+    """Move every deal matching `where` into `destination`. NO automation.
+
+    Deliberately NOT `move_opportunity` in a loop, and deliberately a Core UPDATE
+    rather than ORM attribute writes:
+
+    * `move_opportunity` calls `automations.on_opportunity_stage_changed`, which
+      queues a customer text per deal. A column being deleted is not news to the
+      customer.
+    * the UPDATE names exactly the columns that change. `updated_at` is set to
+      itself, which suppresses the column's `onupdate`, so the deal's own
+      last-changed time — and `custom_fields`, which is never mentioned — come out
+      byte-identical.
+
+    Arrivals keep their relative order and land after whatever the destination
+    already holds, so no two cards in the column share a rank.
+    """
+    moving = db.execute(
+        select(Opportunity.id).join(Stage, Stage.id == Opportunity.stage_id,
+                                    isouter=True)
+        .where(where)
+        .order_by(Stage.position, Opportunity.position, Opportunity.id)).scalars().all()
+    if not moving:
+        return []
+    start = db.scalar(select(func.max(Opportunity.position))
+                      .where(Opportunity.stage_id == destination.id,
+                             Opportunity.id.not_in(moving)))
+    start = 0 if start is None else start + 1
+    for rank, opp_id in enumerate(moving):
+        db.execute(
+            update(Opportunity).where(Opportunity.id == opp_id)
+            .values(pipeline_id=destination.pipeline_id, stage_id=destination.id,
+                    position=start + rank, updated_at=Opportunity.updated_at)
+            .execution_options(synchronize_session=False))
+    return list(moving)
+
+
+def _repack_stages(db: Session, pipeline_id: int) -> None:
+    db.flush()
+    for i, remaining in enumerate(db.scalars(
+            select(Stage).where(Stage.pipeline_id == pipeline_id)
+            .order_by(Stage.position, Stage.id)).all()):
+        remaining.position = i
+
+
+def _delete_stage_moving_deals(db: Session, principal: auth.Principal, s: Stage,
+                               move_to_stage_id: int | None) -> list[int]:
+    """Delete one stage, moving its deals first. Does NOT commit."""
+    held = _opportunity_count(db, stage_id=s.id)
+    if held and move_to_stage_id is None:
+        raise HTTPException(409, (
+            "%r still holds %d opportunit%s. Choose a stage of this pipeline to "
+            "move %s to — deleting a stage never deletes the deals in it." % (
+                s.name, held, "y" if held == 1 else "ies",
+                "it" if held == 1 else "them")))
+    moved: list[int] = []
+    if held:
+        dest = db.get(Stage, move_to_stage_id)
+        if (dest is None or dest.pipeline_id != s.pipeline_id or dest.id == s.id):
+            raise HTTPException(400, "the deals must move to another stage of the "
+                                     "same pipeline")
+        moved = _structural_move(db, Opportunity.stage_id == s.id, dest)
+    db.delete(s)
+    return moved
+
+
 @app.post("/api/pipelines", status_code=201)
 def create_pipeline(body: PipelineBody, db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ADMIN):
-    """A new pipeline starts with no stages, so nothing can be filed in it yet.
+                    _: auth.Principal = auth.STAFF):
+    """Create a pipeline with every setting the modal shows, in one request.
 
-    Deliberately not seeded with a default set of stages: guessing at a roofing
-    pipeline's shape is exactly the kind of invention this project avoids, and an
-    empty pipeline is honest about needing its columns named.
+    Without `stages` a pipeline still starts EMPTY — the API does not guess at a
+    roofing pipeline's shape. The browser's modal is what pre-fills GoHighLevel's
+    four starter rows, visibly and editably, before anything is sent.
     """
-    n = db.scalar(select(func.count(Pipeline.id))) or 0
-    p = Pipeline(name=_clean_structure_name(body.name, "pipeline"), position=n)
+    name = _unique_pipeline_name(db, body.name)
+    if any(st.id is not None for st in body.stages):
+        raise HTTPException(400, "a new pipeline's stages cannot carry ids")
+    last = db.scalar(select(func.max(Pipeline.position)))
+    p = Pipeline(name=name, position=0 if last is None else last + 1,
+                 color_mode=body.color_mode,
+                 use_opportunity_probability=body.use_opportunity_probability)
+    _touch(p)
     db.add(p)
+    db.flush()
+    for i, st in enumerate(body.stages):
+        db.add(_new_stage(p.id, i, st, st.name))
     db.commit()
     db.refresh(p)
-    return {"id": p.id, "name": p.name, "position": p.position, "stages": []}
+    return _pipeline_public(db, p)
 
 
 @app.patch("/api/pipelines/{pipeline_id}")
-def rename_pipeline(pipeline_id: int, body: PipelineBody,
+def update_pipeline(pipeline_id: int, body: PipelinePatch,
                     db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ADMIN):
-    p = db.get(Pipeline, pipeline_id)
-    if not p:
-        raise HTTPException(404, "pipeline not found")
-    p.name = _clean_structure_name(body.name, "pipeline")
+                    principal: auth.Principal = auth.STAFF):
+    """Edit a pipeline: the modal's Update. Every change lands, or none does.
+
+    Everything is validated before anything is written, and nothing is committed
+    until the end, so a stage list that fails half-way leaves the pipeline as it
+    was — including the deals of any stage it was about to delete.
+    """
+    p = pipeline_access.get_pipeline(db, principal, pipeline_id)
+    data = body.model_dump(exclude_unset=True)
+
+    if "name" in data:
+        p.name = _unique_pipeline_name(db, data["name"], exclude_id=p.id)
+    if data.get("color_mode") is not None:
+        p.color_mode = data["color_mode"]
+    if data.get("use_opportunity_probability") is not None:
+        p.use_opportunity_probability = data["use_opportunity_probability"]
+
+    moved: dict[str, list[int]] = {}
+    if body.stages is not None:
+        current = {s.id: s for s in p.stages}
+        named = [st.id for st in body.stages if st.id is not None]
+        if len(set(named)) != len(named):
+            raise HTTPException(400, "a stage appears twice in the new list")
+        foreign = [i for i in named if i not in current]
+        if foreign:
+            raise HTTPException(400, "stage %s is not in this pipeline" % foreign[0])
+        if not body.stages:
+            raise HTTPException(400, "a pipeline keeps at least one stage — delete "
+                                     "the pipeline instead")
+        removed = [s for sid, s in current.items() if sid not in set(named)]
+        if removed and principal.role is not Role.ADMIN:
+            raise HTTPException(403, "only an admin can delete a stage")
+        for s in removed:
+            dest = body.stage_moves.get(s.id)
+            if dest is not None and dest not in set(named):
+                raise HTTPException(400, "the deals of %r must move to a stage "
+                                         "this pipeline keeps" % s.name)
+        # Validate every name before writing anything.
+        for st in body.stages:
+            _clean_structure_name(st.name, "stage")
+
+        for s in removed:
+            moved[str(s.id)] = _delete_stage_moving_deals(
+                db, principal, s, body.stage_moves.get(s.id))
+        db.flush()
+        for position, st in enumerate(body.stages):
+            if st.id is None:
+                db.add(_new_stage(p.id, position, st, st.name))
+                continue
+            s = current[st.id]
+            s.name = _clean_structure_name(st.name, "stage")
+            s.position = position
+            _apply_stage_fields(s, st.model_dump(exclude_unset=True))
+
+    _touch(p)
     db.commit()
-    return {"id": p.id, "name": p.name}
+    db.refresh(p)
+    return {**_pipeline_public(db, p), "moved": moved}
+
+
+@app.post("/api/pipelines/reorder")
+def reorder_pipelines(body: PipelineReorder, db: Session = Depends(get_db),
+                      principal: auth.Principal = auth.STAFF):
+    """The Pipelines table's drag and "Move to position". The board's selector
+    follows this order.
+
+    The body is every pipeline the CALLER CAN SEE, exactly once. Pipelines they
+    cannot see keep the slots they hold, so a dispatcher can reorder their own
+    list without being told — by a refusal naming ids — that others exist.
+    """
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
+    everything = _ordered_pipelines(db)
+    visible = [p.id for p in everything if p.id not in hidden]
+    wanted = body.pipeline_ids
+    if len(set(wanted)) != len(wanted) or set(wanted) != set(visible):
+        raise HTTPException(400, "the new order must name every pipeline exactly "
+                                 "once (%d pipelines)" % len(visible))
+    slots = [i for i, p in enumerate(everything) if p.id not in hidden]
+    order = [p.id for p in everything]
+    for slot, pid in zip(slots, wanted, strict=True):
+        order[slot] = pid
+    by_id = {p.id: p for p in everything}
+    for i, pid in enumerate(order):
+        by_id[pid].position = i
+    db.commit()
+    return [_pipeline_public(db, by_id[pid]) for pid in order if pid not in hidden]
+
+
+@app.post("/api/pipelines/{pipeline_id}/duplicate", status_code=201)
+def duplicate_pipeline(pipeline_id: int, db: Session = Depends(get_db),
+                       principal: auth.Principal = auth.STAFF):
+    """"<name> (copy)": every setting and every stage, NEVER a deal.
+
+    Copied: the name (suffixed), both settings, each stage's name, order,
+    probability, report flags and colour, the custom-field attachments — so the
+    job questions follow — and the access list. The access list is copied
+    because leaving it out would turn a duplicate of a restricted pipeline into
+    one everybody can open.
+    """
+    src = pipeline_access.get_pipeline(db, principal, pipeline_id)
+    base = "%s (copy)" % src.name
+    name, n = base, 1
+    while db.scalar(select(Pipeline.id).where(func.lower(Pipeline.name) == name.lower())):
+        n += 1
+        name = "%s (copy %d)" % (src.name, n)
+    name = name[:PIPELINE_NAME_MAX]
+    last = db.scalar(select(func.max(Pipeline.position)))
+    copy = Pipeline(name=name, position=0 if last is None else last + 1,
+                    color_mode=src.color_mode,
+                    use_opportunity_probability=src.use_opportunity_probability)
+    _touch(copy)
+    db.add(copy)
+    db.flush()
+    for s in sorted(src.stages, key=lambda s: (s.position, s.id)):
+        db.add(Stage(pipeline_id=copy.id, name=s.name, position=s.position,
+                     color=s.color, probability=s.probability,
+                     show_in_funnel=s.show_in_funnel, show_in_pie=s.show_in_pie))
+    for link in db.scalars(select(CustomFieldPipeline).where(
+            CustomFieldPipeline.pipeline_id == src.id)).all():
+        db.add(CustomFieldPipeline(field_id=link.field_id, pipeline_id=copy.id))
+    for grant in db.scalars(select(PipelinePermission).where(
+            PipelinePermission.pipeline_id == src.id)).all():
+        db.add(PipelinePermission(pipeline_id=copy.id, user_id=grant.user_id))
+    db.commit()
+    db.refresh(copy)
+    return _pipeline_public(db, copy)
+
+
+@app.get("/api/pipelines/{pipeline_id}/permissions")
+def get_pipeline_permissions(pipeline_id: int, db: Session = Depends(get_db),
+                             principal: auth.Principal = auth.ADMIN):
+    p = pipeline_access.get_pipeline(db, principal, pipeline_id)
+    ids = sorted(db.scalars(select(PipelinePermission.user_id).where(
+        PipelinePermission.pipeline_id == p.id)).all())
+    return {"pipeline_id": p.id, "user_ids": ids, "everyone": not ids}
+
+
+@app.put("/api/pipelines/{pipeline_id}/permissions")
+def set_pipeline_permissions(pipeline_id: int, body: PipelinePermissions,
+                             db: Session = Depends(get_db),
+                             principal: auth.Principal = auth.ADMIN):
+    """Replace the access list. ADMIN. An empty list opens the pipeline to all."""
+    p = pipeline_access.get_pipeline(db, principal, pipeline_id)
+    wanted = sorted(set(body.user_ids))
+    for user_id in wanted:
+        if db.get(User, user_id) is None:
+            raise HTTPException(400, "unknown user_id %d" % user_id)
+    for grant in db.scalars(select(PipelinePermission).where(
+            PipelinePermission.pipeline_id == p.id)).all():
+        db.delete(grant)
+    db.flush()
+    for user_id in wanted:
+        db.add(PipelinePermission(pipeline_id=p.id, user_id=user_id))
+    _touch(p)
+    db.commit()
+    return {"pipeline_id": p.id, "user_ids": wanted, "everyone": not wanted}
 
 
 @app.delete("/api/pipelines/{pipeline_id}")
-def delete_pipeline(pipeline_id: int, db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ADMIN):
-    """Only an EMPTY pipeline. No force, at any role.
+def delete_pipeline(pipeline_id: int, move_to_stage_id: int | None = None,
+                    db: Session = Depends(get_db),
+                    principal: auth.Principal = auth.ADMIN):
+    """Delete a pipeline. Its deals MOVE to `move_to_stage_id`; none is deleted.
 
-    `Pipeline.stages` cascades delete-orphan, so allowing this while stages
-    existed would silently take the columns — and every deal in them — with it.
-    The refusal names what is in the way, the way the contact delete's 409 does.
+    A pipeline holding no deals deletes outright, stages and all — the browser
+    asks first. One holding deals needs a destination stage in ANOTHER pipeline
+    the caller can access, and is refused 409, naming the count, without one.
+
+    What pointed at the pipeline:
+      * saved views and calendars are DETACHED (`pipeline_id = NULL`), as they
+        always were for an empty pipeline. A view with no pipeline re-filters
+        whichever board is open, so the board does not break — and a view named
+        "Open AHS" silently re-pointed at Retail would be a list that lies.
+      * custom-field attachments are removed; the definitions and every recorded
+        answer stay.
+      * the access list goes with it.
     """
-    p = db.get(Pipeline, pipeline_id)
-    if not p:
-        raise HTTPException(404, "pipeline not found")
-
+    p = pipeline_access.get_pipeline(db, principal, pipeline_id)
     stages = len(p.stages)
     opps = _opportunity_count(db, pipeline_id=p.id)
-    if stages or opps:
+    if opps and move_to_stage_id is None:
         raise HTTPException(409, (
-            "%r still has %d stage%s and %d opportunit%s. Empty it first — a "
-            "pipeline is never deleted with deals in it." % (
+            "%r still has %d stage%s and %d opportunit%s. Choose a pipeline and "
+            "stage to move them to — a pipeline is never deleted with its deals." % (
                 p.name, stages, "" if stages == 1 else "s",
                 opps, "y" if opps == 1 else "ies")))
 
-    # Weak references: both columns are nullable and neither carries data of its
-    # own. Detached rather than blocking the delete, and named in the response so
-    # it is not a silent side effect.
+    moved: list[int] = []
+    if opps:
+        dest = db.get(Stage, move_to_stage_id)
+        if (dest is None or dest.pipeline_id == p.id
+                or not pipeline_access.can_see(db, principal, dest.pipeline_id)):
+            raise HTTPException(400, "the deals must move to a stage of another "
+                                     "pipeline")
+        moved = _structural_move(db, Opportunity.pipeline_id == p.id, dest)
+        _touch(db.get(Pipeline, dest.pipeline_id))
+
     views = db.scalars(
         select(SavedView).where(SavedView.pipeline_id == p.id)).all()
     calendars = db.scalars(
@@ -600,96 +984,101 @@ def delete_pipeline(pipeline_id: int, db: Session = Depends(get_db),
         v.pipeline_id = None
     for c in calendars:
         c.pipeline_id = None
-    # A custom field attached to this pipeline loses the ATTACHMENT, never the
-    # definition and never an answer: the field goes on existing elsewhere, and a
-    # deal that was in this pipeline keeps everything recorded on it.
     links = db.scalars(select(CustomFieldPipeline).where(
         CustomFieldPipeline.pipeline_id == p.id)).all()
     detached_fields = sorted({link.field_id for link in links})
     for link in links:
         db.delete(link)
-
-    db.delete(p)
+    for grant in db.scalars(select(PipelinePermission).where(
+            PipelinePermission.pipeline_id == p.id)).all():
+        db.delete(grant)
+    db.flush()
+    _finish_pipeline_delete(db, p)
     db.commit()
     return {"deleted": pipeline_id,
+            "moved_opportunities": moved,
             "detached_saved_views": [v.id for v in views],
             "detached_calendars": [c.id for c in calendars],
             "detached_custom_fields": detached_fields}
 
 
+def _finish_pipeline_delete(db: Session, p: Pipeline) -> None:
+    """The last step, and a guard: if a single deal is still filed here, stop.
+
+    `Pipeline.stages` cascades delete-orphan, so reaching the delete with a deal
+    still in one of its stages would orphan it. Raising here rolls back the whole
+    request, moves included.
+    """
+    if _opportunity_count(db, pipeline_id=p.id):
+        raise RuntimeError("refusing to delete pipeline %d: deals are still filed "
+                           "in it" % p.id)
+    db.delete(p)
+    db.flush()
+
+
 @app.post("/api/pipelines/{pipeline_id}/stages", status_code=201)
 def create_stage(pipeline_id: int, body: StageBody, db: Session = Depends(get_db),
-                 _: auth.Principal = auth.ADMIN):
+                 principal: auth.Principal = auth.STAFF):
     """Appended at the end. A new stage is empty, so nothing moves."""
-    p = db.get(Pipeline, pipeline_id)
-    if not p:
-        raise HTTPException(404, "pipeline not found")
+    p = pipeline_access.get_pipeline(db, principal, pipeline_id)
     n = db.scalar(select(func.count(Stage.id))
                   .where(Stage.pipeline_id == p.id)) or 0
-    s = Stage(pipeline_id=p.id, name=_clean_structure_name(body.name, "stage"),
-              position=n)
+    s = _new_stage(p.id, n, body, body.name)
     db.add(s)
+    _touch(p)
     db.commit()
     db.refresh(s)
     return {"id": s.id, "pipeline_id": s.pipeline_id, "name": s.name,
-            "position": s.position, "count": 0, "value_cents": 0}
+            "position": s.position, "count": 0, "value_cents": 0,
+            "color": s.color, "probability": s.probability,
+            "show_in_funnel": s.show_in_funnel, "show_in_pie": s.show_in_pie}
 
 
 @app.patch("/api/stages/{stage_id}")
-def rename_stage(stage_id: int, body: StageBody, db: Session = Depends(get_db),
-                 _: auth.Principal = auth.ADMIN):
-    """A rename, and ONLY a rename.
+def update_stage(stage_id: int, body: StagePatch, db: Session = Depends(get_db),
+                 principal: auth.Principal = auth.STAFF):
+    """Rename a stage or change its settings. Never its pipeline.
 
-    There is no `pipeline_id` here on purpose: moving a stage to another pipeline
-    would carry every opportunity in it across, and `PATCH /api/opportunities/{id}`
-    refuses a cross-pipeline move for that reason. Names stay non-unique — two
-    "Call Back" stages are the measured shape, and the CLI's exit 5 depends on it.
+    Names stay non-unique — two "Call Back" stages are the measured shape, and the
+    CLI's exit 5 depends on it.
     """
-    s = db.get(Stage, stage_id)
-    if not s:
-        raise HTTPException(404, "stage not found")
-    s.name = _clean_structure_name(body.name, "stage")
+    s = pipeline_access.get_stage(db, principal, stage_id)
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data:
+        s.name = _clean_structure_name(data["name"], "stage")
+    _apply_stage_fields(s, data)
+    _touch(s.pipeline)
     db.commit()
     return {"id": s.id, "pipeline_id": s.pipeline_id, "name": s.name,
-            "position": s.position}
+            "position": s.position, "color": s.color,
+            "probability": s.probability, "show_in_funnel": s.show_in_funnel,
+            "show_in_pie": s.show_in_pie}
 
 
 @app.delete("/api/stages/{stage_id}")
-def delete_stage(stage_id: int, db: Session = Depends(get_db),
-                 _: auth.Principal = auth.ADMIN):
-    """Only an EMPTY stage. No force.
+def delete_stage(stage_id: int, move_to_stage_id: int | None = None,
+                 db: Session = Depends(get_db),
+                 principal: auth.Principal = auth.ADMIN):
+    """Delete a stage. Its deals MOVE to `move_to_stage_id` first; none is deleted.
 
-    A populated stage is refused with the count in the message, so the admin knows
-    what to move where before trying again. The remaining stages are re-packed so
-    positions stay 0..n-1 with no hole.
+    An empty stage deletes outright (the browser confirms first). A populated one
+    without a destination is refused 409 with the count. The destination must be
+    another stage of the SAME pipeline. The rest are re-packed 0..n-1.
     """
-    s = db.get(Stage, stage_id)
-    if not s:
-        raise HTTPException(404, "stage not found")
-
-    held = _opportunity_count(db, stage_id=s.id)
-    if held:
-        raise HTTPException(409, (
-            "%r still holds %d opportunit%s. Move %s to another stage first — "
-            "deleting a stage never deletes the deals in it." % (
-                s.name, held, "y" if held == 1 else "ies",
-                "it" if held == 1 else "them")))
-
+    s = pipeline_access.get_stage(db, principal, stage_id)
     pipeline_id = s.pipeline_id
-    db.delete(s)
-    db.flush()
-    for i, remaining in enumerate(db.scalars(
-            select(Stage).where(Stage.pipeline_id == pipeline_id)
-            .order_by(Stage.position)).all()):
-        remaining.position = i
+    moved = _delete_stage_moving_deals(db, principal, s, move_to_stage_id)
+    _repack_stages(db, pipeline_id)
+    _touch(db.get(Pipeline, pipeline_id))
     db.commit()
-    return {"deleted": stage_id, "pipeline_id": pipeline_id}
+    return {"deleted": stage_id, "pipeline_id": pipeline_id,
+            "moved_opportunities": moved}
 
 
 @app.post("/api/pipelines/{pipeline_id}/stages/reorder")
 def reorder_stages(pipeline_id: int, body: StageReorder,
                    db: Session = Depends(get_db),
-                   _: auth.Principal = auth.ADMIN):
+                   principal: auth.Principal = auth.STAFF):
     """Re-order the columns. NO OPPORTUNITY MOVES.
 
     Only `Stage.position` is written; nothing touches `Opportunity.stage_id`. The
@@ -697,9 +1086,7 @@ def reorder_stages(pipeline_id: int, body: StageReorder,
     changed underneath the user is refused outright rather than half-applied — and
     a stage from another pipeline cannot be smuggled in.
     """
-    p = db.get(Pipeline, pipeline_id)
-    if not p:
-        raise HTTPException(404, "pipeline not found")
+    p = pipeline_access.get_pipeline(db, principal, pipeline_id)
 
     current = {s.id: s for s in p.stages}
     wanted = body.stage_ids
@@ -711,6 +1098,7 @@ def reorder_stages(pipeline_id: int, body: StageReorder,
 
     for i, stage_id in enumerate(wanted):
         current[stage_id].position = i
+    _touch(p)
     db.commit()
     return {"pipeline_id": p.id,
             "stages": [{"id": current[i].id, "name": current[i].name,
@@ -783,15 +1171,23 @@ def _get_field(db: Session, field_id: int) -> CustomFieldDef:
 def list_custom_fields(db: Session = Depends(get_db),
                        include_archived: bool = True,
                        pipeline_id: int | None = None,
-                       _: auth.Principal = auth.ANY_USER):
+                       principal: auth.Principal = auth.ANY_USER):
     """Every definition, in display order.
 
     Archived ones are included by default because the opportunity form needs them:
     a deal holding an answer to an archived field still has to be able to LABEL it,
     and a list that hid them would render "roof_age: 14" as a bare key.
+
+    A pipeline the caller cannot access is left out of every `pipeline_ids`, so the
+    list does not name it. Only an ADMIN can write a definition, and an ADMIN sees
+    every pipeline, so nothing here can save a narrowed list back over a full one.
     """
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     out = [custom_fields.describe(d)
            for d in custom_fields.load_defs(db, include_archived=include_archived)]
+    if hidden:
+        out = [{**d, "pipeline_ids": [i for i in d["pipeline_ids"] if i not in hidden]}
+               for d in out]
     if pipeline_id is not None:
         out = [d for d in out if pipeline_id in d["pipeline_ids"] and not d["archived"]]
     return out
@@ -895,16 +1291,20 @@ def list_opportunities(
     pipeline_id: int | None = None,
     q: str | None = None,
     status: str = "open",
-    _: auth.Principal = auth.ANY_USER):
+    principal: auth.Principal = auth.ANY_USER):
     """`status` mirrors GHL's measured default advanced filter: Status is any of Open.
 
     `pipeline_id` was required and is now optional. The board always sends one;
     omitting it lists across every pipeline, which is what the appointment dialog
     needs to offer "bind this booking to an open deal" without knowing, or caring,
     which board the deal is filed on.
+
+    Deals in a pipeline the caller cannot access are never listed. Naming such a
+    pipeline returns `[]`, exactly what naming one that does not exist returns.
     """
-    stmt = (select(Opportunity)
-            .options(selectinload(Opportunity.contact)))
+    stmt = pipeline_access.visible_opportunities(
+        select(Opportunity).options(selectinload(Opportunity.contact)),
+        pipeline_access.hidden_pipeline_ids(db, principal))
     if pipeline_id is not None:
         stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
     if status != "all":
@@ -922,6 +1322,7 @@ def list_opportunities(
              "contact_name": o.contact.name if o.contact else None,
              "business_name": o.contact.business_name if o.contact else None,
              "source": o.contact.source if o.contact else None,
+             "probability": o.probability,
              "updated_at": o.updated_at} for o in rows]
 
 
@@ -936,11 +1337,9 @@ class OpportunityMove(BaseModel):
 @app.patch("/api/opportunities/{opp_id}")
 def move_opportunity(opp_id: int, body: OpportunityMove,
                      db: Session = Depends(get_db),
-                     _: auth.Principal = auth.ANY_USER):
+                     principal: auth.Principal = auth.ANY_USER):
     """Drag a card between stages. Mutates OUR database only."""
-    o = db.get(Opportunity, opp_id)
-    if not o:
-        raise HTTPException(404, "opportunity not found")
+    o = pipeline_access.get_opportunity(db, principal, opp_id)
     stage = db.get(Stage, body.stage_id)
     if not stage or stage.pipeline_id != o.pipeline_id:
         raise HTTPException(400, "stage is not in this opportunity's pipeline")
@@ -998,7 +1397,7 @@ class ContactCreate(BaseModel):
 
 @app.post("/api/contacts", status_code=201)
 def create_contact(body: ContactCreate, db: Session = Depends(get_db),
-                   _: auth.Principal = auth.STAFF):
+                   principal: auth.Principal = auth.STAFF):
     if not (body.phone or body.email):
         raise HTTPException(400, "a contact needs at least a phone or an email")
     c = Contact(**body.model_dump(), created_by="Manual")
@@ -1008,7 +1407,8 @@ def create_contact(body: ContactCreate, db: Session = Depends(get_db),
     outcome = automations.on_contact_created(db, c)
     db.commit()
     db.refresh(c)
-    return {**_contact_detail(c), "automation": outcome}
+    return {**_contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal)),
+            "automation": outcome}
 
 
 # The measured Call report groups calls by these five statuses (DECISIONS.md).
@@ -1355,6 +1755,17 @@ class AppointmentCreate(BaseModel):
     notes: str | None = None
 
 
+def _check_appointment_opportunity(db: Session, principal: auth.Principal,
+                                   opp_id: int | None) -> None:
+    """A deal the caller cannot access is answered exactly like one that does not
+    exist — a booking must not be a way to probe for a hidden deal's id."""
+    if opp_id is None:
+        return
+    o = db.get(Opportunity, opp_id)
+    if o is None or not pipeline_access.can_see(db, principal, o.pipeline_id):
+        raise HTTPException(404, "opportunity %s not found" % opp_id)
+
+
 def _clean_appointment_title(title: str) -> str:
     """`title: str` accepts "" and "   ", so an untitled booking used to be created
     happily and then rendered as an empty chip on the calendar — indistinguishable
@@ -1369,14 +1780,13 @@ def _clean_appointment_title(title: str) -> str:
 
 @app.post("/api/appointments", status_code=201)
 def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
-                       _: auth.Principal = auth.STAFF):
+                       principal: auth.Principal = auth.STAFF):
     title = _clean_appointment_title(body.title)
     if body.ends_at <= body.starts_at:
         raise HTTPException(400, "ends_at must be after starts_at")
     # A dangling id would be an IntegrityError rendered as a 500 in the dialog, the
     # same reason PATCH resolves its ids before writing.
-    if body.opportunity_id is not None and not db.get(Opportunity, body.opportunity_id):
-        raise HTTPException(404, "opportunity %s not found" % body.opportunity_id)
+    _check_appointment_opportunity(db, principal, body.opportunity_id)
     a = Appointment(**{**body.model_dump(), "title": title})
     db.add(a)
     db.flush()
@@ -1419,6 +1829,9 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
         "business_name": o.business_name,
         "source": o.source,
         "expected_close_date": o.expected_close_date,
+        # 0-100 or null. Read by the Forecast only when the pipeline uses
+        # opportunity-level probability.
+        "probability": o.probability,
         "created_by": o.created_by,
         "created_at": o.created_at,
         "custom_fields": o.custom_fields or {},
@@ -1435,11 +1848,9 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
 
 @app.get("/api/opportunities/{opp_id}")
 def get_opportunity(opp_id: int, db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ANY_USER):
-    o = db.get(Opportunity, opp_id)
-    if not o:
-        raise HTTPException(404, "opportunity not found")
-    return _opp_detail(o, db)
+                    principal: auth.Principal = auth.ANY_USER):
+    # 404, not 403, for a deal in a pipeline the caller cannot access.
+    return _opp_detail(pipeline_access.get_opportunity(db, principal, opp_id), db)
 
 
 # An opportunity name longer than this is refused before the database is touched,
@@ -1486,16 +1897,18 @@ class OpportunityPatch(BaseModel):
     business_name: str | None = None
     source: str | None = None
     expected_close_date: str | None = None
+    # The deal's own win probability, 0-100, or null to clear it. Stored whatever
+    # the pipeline's setting; the Forecast only reads it when the pipeline uses
+    # opportunity-level probability.
+    probability: int | None = Field(None, ge=0, le=100)
     custom_fields: dict | None = None
 
 
 @app.patch("/api/opportunities/{opp_id}/detail")
 def update_opportunity(opp_id: int, body: OpportunityPatch,
                        db: Session = Depends(get_db),
-                       _: auth.Principal = auth.STAFF):
-    o = db.get(Opportunity, opp_id)
-    if not o:
-        raise HTTPException(404, "opportunity not found")
+                       principal: auth.Principal = auth.STAFF):
+    o = pipeline_access.get_opportunity(db, principal, opp_id)
 
     data = body.model_dump(exclude_unset=True)
     if "title" in data:
@@ -1544,6 +1957,7 @@ class OpportunityCreate(BaseModel):
     stage_id: int
     contact_id: int | None = None
     value_cents: int = 0
+    probability: int | None = Field(None, ge=0, le=100)
     # The job questions, answered in the Add opportunity dialog. Validated by the
     # same code the detail form goes through, so a dropdown cannot be talked into
     # an answer it does not offer by using the other door.
@@ -1552,12 +1966,14 @@ class OpportunityCreate(BaseModel):
 
 @app.post("/api/opportunities", status_code=201)
 def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
-                       _: auth.Principal = auth.STAFF):
+                       principal: auth.Principal = auth.STAFF):
     title = _clean_opportunity_title(body.title)
     _check_opportunity_value(body.value_cents)
     _check_opportunity_contact(db, body.contact_id)
     stage = db.get(Stage, body.stage_id)
-    if not stage or stage.pipeline_id != body.pipeline_id:
+    # A pipeline the caller cannot access gets the same answer as a wrong pair.
+    if (not stage or stage.pipeline_id != body.pipeline_id
+            or not pipeline_access.can_see(db, principal, body.pipeline_id)):
         raise HTTPException(400, "stage is not in that pipeline")
     answers = custom_fields.merge_answers(
         db, pipeline_id=body.pipeline_id, existing={}, incoming=body.custom_fields)
@@ -1566,7 +1982,7 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
     o = Opportunity(title=title, pipeline_id=body.pipeline_id,
                     stage_id=body.stage_id, contact_id=body.contact_id,
                     value_cents=body.value_cents, position=n,
-                    custom_fields=answers)
+                    probability=body.probability, custom_fields=answers)
     db.add(o)
     db.commit()
     db.refresh(o)
@@ -1605,15 +2021,21 @@ class BulkOwnerAssign(BulkIds):
     owner_id: int | None = None
 
 
-def _bulk_load(db: Session, ids: list[int]) -> list[Opportunity]:
+def _bulk_load(db: Session, principal: auth.Principal,
+               ids: list[int]) -> list[Opportunity]:
     """Resolve every id, or refuse the whole request having written nothing.
 
     Partially applying a bulk action is the worst of the three outcomes: the user
     cannot tell which half landed, and re-running it is not safe. Duplicates in
     the selection collapse rather than being applied twice.
+
+    A deal in a pipeline the caller cannot access resolves as MISSING, in the same
+    404 sentence, so a selection cannot be used to probe for one.
     """
     unique = list(dict.fromkeys(ids))
-    rows = db.scalars(select(Opportunity).where(Opportunity.id.in_(unique))).all()
+    rows = db.scalars(pipeline_access.visible_opportunities(
+        select(Opportunity).where(Opportunity.id.in_(unique)),
+        pipeline_access.hidden_pipeline_ids(db, principal))).all()
     found = {o.id: o for o in rows}
     missing = [str(i) for i in unique if i not in found]
     if missing:
@@ -1623,7 +2045,7 @@ def _bulk_load(db: Session, ids: list[int]) -> list[Opportunity]:
 
 @app.post("/api/opportunities/bulk/stage")
 def bulk_move_stage(body: BulkStageMove, db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ANY_USER):
+                    principal: auth.Principal = auth.ANY_USER):
     """Move a selection into one stage.
 
     ANY_USER, matching `PATCH /api/opportunities/{id}` — a TECH may move a deal
@@ -1636,10 +2058,10 @@ def bulk_move_stage(body: BulkStageMove, db: Session = Depends(get_db),
     message the customer should never have received.
     """
     stage = db.get(Stage, body.stage_id)
-    if not stage:
+    if not stage or not pipeline_access.can_see(db, principal, stage.pipeline_id):
         raise HTTPException(400, "unknown stage_id")
 
-    opps = _bulk_load(db, body.ids)
+    opps = _bulk_load(db, principal, body.ids)
     wrong = [str(o.id) for o in opps if o.pipeline_id != stage.pipeline_id]
     if wrong:
         raise HTTPException(
@@ -1672,7 +2094,7 @@ def bulk_move_stage(body: BulkStageMove, db: Session = Depends(get_db),
 
 @app.post("/api/opportunities/bulk/owner")
 def bulk_assign_owner(body: BulkOwnerAssign, db: Session = Depends(get_db),
-                      _: auth.Principal = auth.STAFF):
+                      principal: auth.Principal = auth.STAFF):
     """Assign a selection an owner, or `owner_id: null` to unassign.
 
     STAFF, matching `PATCH /api/opportunities/{id}/detail`, which is where a single
@@ -1681,7 +2103,7 @@ def bulk_assign_owner(body: BulkOwnerAssign, db: Session = Depends(get_db),
     """
     if body.owner_id is not None and not db.get(User, body.owner_id):
         raise HTTPException(400, "unknown owner_id")
-    opps = _bulk_load(db, body.ids)
+    opps = _bulk_load(db, principal, body.ids)
     for o in opps:
         o.owner_id = body.owner_id
     db.commit()
@@ -1712,8 +2134,12 @@ def _clean_view_name(name: str | None) -> str:
     return cleaned
 
 
-def _check_view_pipeline(db: Session, pipeline_id: int | None) -> None:
-    if pipeline_id is not None and not db.get(Pipeline, pipeline_id):
+def _check_view_pipeline(db: Session, principal: auth.Principal,
+                         pipeline_id: int | None) -> None:
+    # A pipeline the caller cannot access is as unknown as one that does not exist.
+    if pipeline_id is not None and (
+            not db.get(Pipeline, pipeline_id)
+            or not pipeline_access.can_see(db, principal, pipeline_id)):
         raise HTTPException(400, "unknown pipeline_id")
 
 
@@ -1734,13 +2160,18 @@ class SavedViewPatch(BaseModel):
 
 @app.get("/api/saved-views")
 def list_saved_views(db: Session = Depends(get_db),
-                     _: auth.Principal = auth.ANY_USER):
+                     principal: auth.Principal = auth.ANY_USER):
     """Shared, not per-user: four people in one company, and "the list Owen made"
-    is the useful thing. Everyone reads them."""
+    is the useful thing. Everyone reads them.
+
+    Except a view filed on a pipeline the reader cannot access: it would name that
+    pipeline, and applying it would open a board they may not see. It is left out.
+    """
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     rows = db.scalars(
         select(SavedView).options(selectinload(SavedView.pipeline))
         .order_by(SavedView.position, SavedView.id)).all()
-    return [_saved_view_public(v) for v in rows]
+    return [_saved_view_public(v) for v in rows if v.pipeline_id not in hidden]
 
 
 @app.post("/api/saved-views", status_code=201)
@@ -1753,7 +2184,7 @@ def create_saved_view(body: SavedViewCreate, db: Session = Depends(get_db),
     codebase resolves by id rather than deduplicating names; a uniqueness rule
     here would be the only place that disagreed.
     """
-    _check_view_pipeline(db, body.pipeline_id)
+    _check_view_pipeline(db, principal, body.pipeline_id)
     n = db.scalar(select(func.count(SavedView.id))) or 0
     v = SavedView(name=_clean_view_name(body.name), pipeline_id=body.pipeline_id,
                   status=body.status, q=body.q.strip(), position=n,
@@ -1767,15 +2198,15 @@ def create_saved_view(body: SavedViewCreate, db: Session = Depends(get_db),
 @app.patch("/api/saved-views/{view_id}")
 def update_saved_view(view_id: int, body: SavedViewPatch,
                       db: Session = Depends(get_db),
-                      _: auth.Principal = auth.STAFF):
+                      principal: auth.Principal = auth.STAFF):
     v = db.get(SavedView, view_id)
-    if not v:
+    if not v or not pipeline_access.can_see(db, principal, v.pipeline_id):
         raise HTTPException(404, "saved view not found")
     data = body.model_dump(exclude_unset=True)
     if "name" in data:
         data["name"] = _clean_view_name(data["name"])
     if "pipeline_id" in data:
-        _check_view_pipeline(db, data["pipeline_id"])
+        _check_view_pipeline(db, principal, data["pipeline_id"])
     if "q" in data and data["q"] is not None:
         data["q"] = data["q"].strip()
     for k, value in data.items():
@@ -1982,17 +2413,23 @@ def list_users(db: Session = Depends(get_db),
 
 @app.get("/api/calendars")
 def list_calendars(db: Session = Depends(get_db),
-                   _: auth.Principal = auth.ANY_USER):
+                   principal: auth.Principal = auth.ANY_USER):
     """Filter groups measured on GHL: Users and Calendars.
-    `pipeline` is our addition — GHL has no pipeline filter here."""
+    `pipeline` is our addition — GHL has no pipeline filter here.
+
+    The calendar itself is not a pipeline's and stays listed; only the link to a
+    pipeline the caller cannot access is blanked, so it is not named.
+    """
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     rows = db.scalars(
         select(Calendar).options(selectinload(Calendar.user),
                                  selectinload(Calendar.pipeline))
         .order_by(Calendar.id)).all()
     return [{"id": c.id, "name": c.name, "color": c.color,
              "user_id": c.user_id, "user_name": c.user.name if c.user else None,
-             "pipeline_id": c.pipeline_id,
-             "pipeline_name": c.pipeline.name if c.pipeline else None}
+             "pipeline_id": None if c.pipeline_id in hidden else c.pipeline_id,
+             "pipeline_name": (c.pipeline.name if c.pipeline
+                               and c.pipeline_id not in hidden else None)}
             for c in rows]
 
 
@@ -2011,7 +2448,8 @@ def _range_utc(dt: datetime | None) -> datetime | None:
 
 
 def _opportunities_in_range(db: Session, pipeline_id: int | None,
-                            start: datetime | None, end: datetime | None):
+                            start: datetime | None, end: datetime | None,
+                            hidden: set[int]):
     """Every opportunity the dashboard is allowed to count.
 
     The range filters on **creation date** — the owner's decision (2026-09-10).
@@ -2022,8 +2460,11 @@ def _opportunities_in_range(db: Session, pipeline_id: int | None,
     No range means ALL TIME, deliberately. Defaulting to 30 days would empty this
     screen for a company whose deals were created in one August week, and a fix
     that reads as a regression is worse than the bug it fixes.
+
+    `hidden` is required: deals in a pipeline the reader cannot access are never
+    counted, so no figure on the Dashboard is computed over them.
     """
-    stmt = select(Opportunity)
+    stmt = pipeline_access.visible_opportunities(select(Opportunity), hidden)
     if pipeline_id:
         stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
     if start is not None:
@@ -2083,7 +2524,7 @@ def _status_rollup(opps) -> dict:
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
               start: datetime | None = None, end: datetime | None = None,
-              _: auth.Principal = auth.STAFF):
+              principal: auth.Principal = auth.STAFF):
     """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
     Opportunity value (Total vs Won revenue), Conversion rate.
 
@@ -2095,7 +2536,9 @@ def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
     uses, so the forecast cannot publish a conversion rate the Dashboard disagrees
     with.
     """
-    return _status_rollup(_opportunities_in_range(db, pipeline_id, start, end)) | {
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
+    return _status_rollup(
+            _opportunities_in_range(db, pipeline_id, start, end, hidden)) | {
         # Echoed so the browser and the CLI can show which window produced these
         # numbers rather than trusting the control that was last clicked.
         "range": {"start": _range_utc(start), "end": _range_utc(end)},
@@ -2105,7 +2548,7 @@ def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
 @app.get("/api/dashboard/funnel")
 def dashboard_funnel(db: Session = Depends(get_db), pipeline_id: int | None = None,
                      start: datetime | None = None, end: datetime | None = None,
-                     _: auth.Principal = auth.ANY_USER):
+                     principal: auth.Principal = auth.ANY_USER):
     """The Funnel and Stage distribution cards: one pipeline, stage by stage.
 
     Both cards used to be fed by `GET /api/pipelines`, which counts every
@@ -2136,25 +2579,42 @@ def dashboard_funnel(db: Session = Depends(get_db), pipeline_id: int | None = No
     `null` where a figure has no meaning: the last stage has no next step, and a
     stage nothing reached has no denominator. The card renders those as `--`,
     matching the measured empty-field dash used elsewhere.
+
+    **"Show in reports"** (the pipeline modal, 2026-09-13) decides which stages
+    each card draws, and the two switches are independent:
+
+    * `stages` — the FUNNEL — holds only stages with `show_in_funnel`. A hidden
+      stage is left out of the walk entirely, its deals with it, so `reached`,
+      `total` and both percentages are the funnel of the stages that are shown.
+    * `distribution` — the PIE — holds only stages with `show_in_pie`, and
+      `distribution_total` is the sum of exactly those slices, so the number in
+      the middle of the donut is the donut.
+
+    A pipeline the caller cannot access is answered like one that does not exist.
     """
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     stmt = select(Pipeline).options(selectinload(Pipeline.stages))
     if pipeline_id:
         stmt = stmt.where(Pipeline.id == pipeline_id)
+    if hidden:
+        stmt = stmt.where(Pipeline.id.not_in(hidden))
     pipeline = db.scalars(stmt.order_by(Pipeline.position, Pipeline.id)).first()
     if pipeline is None:
         # An unknown pipeline_id is a 404; an empty database simply has no funnel.
         if pipeline_id:
             raise HTTPException(404, "no pipeline %d" % pipeline_id)
-        return {"pipeline_id": None, "pipeline_name": None, "total": 0, "stages": []}
+        return {"pipeline_id": None, "pipeline_name": None, "total": 0, "stages": [],
+                "distribution": [], "distribution_total": 0}
 
-    opps = _opportunities_in_range(db, pipeline.id, start, end)
+    opps = _opportunities_in_range(db, pipeline.id, start, end, hidden)
     counts: dict[int, int] = {}
     values: dict[int, int] = {}
     for o in opps:
         counts[o.stage_id] = counts.get(o.stage_id, 0) + 1
         values[o.stage_id] = values.get(o.stage_id, 0) + o.value_cents
 
-    ordered = sorted(pipeline.stages, key=lambda s: (s.position, s.id))
+    in_order = sorted(pipeline.stages, key=lambda s: (s.position, s.id))
+    ordered = [s for s in in_order if s.show_in_funnel]
     tail = [counts.get(s.id, 0) for s in ordered]
     # reached[i] = everyone at stage i or beyond, walked backwards so it is one pass.
     reached = [0] * len(ordered)
@@ -2175,8 +2635,14 @@ def dashboard_funnel(db: Session = Depends(get_db), pipeline_id: int | None = No
             "next_step_pct": (round(nxt / reached[i] * 100, 2)
                               if nxt is not None and reached[i] else None),
         })
+    distribution = [{"id": s.id, "name": s.name, "position": s.position,
+                     "color": s.color, "count": counts.get(s.id, 0),
+                     "value_cents": values.get(s.id, 0)}
+                    for s in in_order if s.show_in_pie]
     return {"pipeline_id": pipeline.id, "pipeline_name": pipeline.name,
             "total": total, "stages": stages,
+            "distribution": distribution,
+            "distribution_total": sum(d["count"] for d in distribution),
             "range": {"start": _range_utc(start), "end": _range_utc(end)}}
 
 
@@ -2195,7 +2661,7 @@ def _weighted(open_value_cents: int, conversion_rate: float) -> int:
 
 @app.get("/api/forecast")
 def forecast(pipeline_id: int, db: Session = Depends(get_db),
-             _: auth.Principal = auth.STAFF):
+             principal: auth.Principal = auth.STAFF):
     """Projected revenue by stage for one pipeline.
 
     OUR design — GHL's own Forecast tab was never opened on the live account, so
@@ -2205,22 +2671,28 @@ def forecast(pipeline_id: int, db: Session = Depends(get_db),
     open), and the rollup and `conversion_rate` come from `_status_rollup`, which
     is what `GET /api/dashboard` returns.
 
-    The projection itself is deliberately one rule, applied uniformly:
-
-        weighted = open value in the stage x the pipeline's conversion rate
+        weighted  = open value x the probability that applies
         projected = money already won in the stage + weighted
 
-    Per-stage win probabilities would be the richer model and this app cannot
-    honestly compute them — nothing records stage history, so a won deal sits in
-    whatever stage it was won in, and "the win rate of Inspection" would really be
-    measuring where deals get marked won. One published rate that the user can see
-    on the Dashboard beats a curve nobody can check.
+    WHICH probability applies — the owner's pipeline modal, 2026-09-13, which
+    supersedes the single-rate rule recorded on 2026-09-10:
 
-    STAFF, matching `/api/dashboard`, whose aggregates this repeats.
+    1. The pipeline uses opportunity-level probability: each OPEN deal is weighted
+       at its own `probability`, falling back to its stage's when it has none.
+    2. Otherwise: the stage's `probability`, applied to the stage's open value.
+    3. Whatever is still unset — every stage that existed before probabilities did
+       — is weighted at the pipeline's conversion rate, which is exactly what this
+       endpoint did before. A pipeline nobody has edited forecasts as it always has.
+
+    Each stage row says which applied (`weighting`: "opportunity", "stage" or
+    "conversion_rate") and quotes the stage's probability, so every weighted figure
+    can be re-derived by hand from the response. Integer cents, half up, per deal
+    in case 1 and per stage otherwise.
+
+    STAFF, matching `/api/dashboard`, whose aggregates this repeats. A pipeline
+    the caller cannot access is a 404 like one that does not exist.
     """
-    p = db.get(Pipeline, pipeline_id)
-    if not p:
-        raise HTTPException(404, "pipeline not found")
+    p = pipeline_access.get_pipeline(db, principal, pipeline_id)
 
     opps = list(db.scalars(
         select(Opportunity).where(Opportunity.pipeline_id == pipeline_id)).all())
@@ -2234,9 +2706,23 @@ def forecast(pipeline_id: int, db: Session = Depends(get_db),
     stages = []
     for s in p.stages:                      # relationship is ordered by position
         rows = by_stage.get(s.id, [])
-        open_value = sum(o.value_cents for o in rows if o.status == "open")
+        open_rows = [o for o in rows if o.status == "open"]
+        open_value = sum(o.value_cents for o in open_rows)
         won_value = sum(o.value_cents for o in rows if o.status == "won")
-        weighted = _weighted(open_value, rate)
+        if p.use_opportunity_probability:
+            weighting = "opportunity"
+            weighted = sum(
+                _weighted(o.value_cents,
+                          o.probability if o.probability is not None
+                          else s.probability if s.probability is not None
+                          else rate)
+                for o in open_rows)
+        elif s.probability is not None:
+            weighting = "stage"
+            weighted = _weighted(open_value, s.probability)
+        else:
+            weighting = "conversion_rate"
+            weighted = _weighted(open_value, rate)
         stages.append({
             "stage_id": s.id,
             "name": s.name,
@@ -2244,10 +2730,12 @@ def forecast(pipeline_id: int, db: Session = Depends(get_db),
             # These two are exactly what /api/pipelines reports for the stage.
             "count": len(rows),
             "value_cents": sum(o.value_cents for o in rows),
-            "open_count": sum(1 for o in rows if o.status == "open"),
+            "open_count": len(open_rows),
             "open_value_cents": open_value,
             "won_count": sum(1 for o in rows if o.status == "won"),
             "won_value_cents": won_value,
+            "probability": s.probability,
+            "weighting": weighting,
             "weighted_value_cents": weighted,
             "projected_value_cents": won_value + weighted,
         })
@@ -2260,6 +2748,7 @@ def forecast(pipeline_id: int, db: Session = Depends(get_db),
         "pipeline_id": p.id,
         "pipeline_name": p.name,
         "conversion_rate": rate,
+        "use_opportunity_probability": p.use_opportunity_probability,
         "status": roll["status"],
         "stages": stages,
         "totals": {
@@ -2284,7 +2773,7 @@ def list_appointments(
     calendar_ids: str | None = None,
     pipeline_ids: str | None = None,
     kind: Literal["all", "appointments", "blocked"] = "all",
-    _: auth.Principal = auth.ANY_USER):
+    principal: auth.Principal = auth.ANY_USER):
     """Range + filters mirror GHL's measured "Manage view" panel:
     View by type (All / Appointments / Blocked slots) and per-user filtering."""
     stmt = select(Appointment).options(selectinload(Appointment.contact),
@@ -2311,14 +2800,17 @@ def list_appointments(
             select(Calendar.id).where(Calendar.pipeline_id.in_(_ids(pipeline_ids)))))
 
     rows = db.scalars(stmt.order_by(Appointment.starts_at)).all()
+    # A booking stays on the calendar whatever deal it is for — it is a visit, not
+    # a deal. Only the link to a deal in a pipeline the reader cannot access is
+    # blanked, so the deal's title does not leak through the calendar.
+    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     return [{"id": a.id, "title": a.title, "starts_at": a.starts_at,
              "ends_at": a.ends_at, "status": a.status,
              "assigned_user_id": a.assigned_user_id,
              "calendar_id": a.calendar_id,
              "calendar_name": a.calendar.name if a.calendar else None,
              "color": a.calendar.color if a.calendar else "#004eeb",
-             "opportunity_id": a.opportunity_id,
-             "opportunity_title": a.opportunity.title if a.opportunity else None,
+             **_appointment_deal(a, hidden),
              "contact_name": a.contact.name if a.contact else None} for a in rows]
 
 
@@ -2335,7 +2827,7 @@ def report_calls(
     start: datetime | None = None,
     end: datetime | None = None,
     direction: Literal["all", "INBOUND", "OUTBOUND"] = "INBOUND",
-    _: auth.Principal = auth.STAFF):
+    principal: auth.Principal = auth.STAFF):
     """Measured Call report: Incoming/Outgoing toggle, "Call by status",
     "First-time calls by status", avg + total duration, "Top call sources"
     (Source | Total calls | Won deals | Avg duration).
@@ -2378,9 +2870,11 @@ def report_calls(
     # bucket them below under the source that contact's calls are bucketed under.
     # Grouped in the database; the result is one row per contact with a win, which
     # for a single-tenant account is a handful of rows.
-    won_by_contact = dict(db.execute(
+    # A won deal in a pipeline the reader cannot access is not counted.
+    won_by_contact = dict(db.execute(pipeline_access.visible_opportunities(
         select(Opportunity.contact_id, func.count(Opportunity.id))
-        .where(Opportunity.status == "won", Opportunity.contact_id.is_not(None))
+        .where(Opportunity.status == "won", Opportunity.contact_id.is_not(None)),
+        pipeline_access.hidden_pipeline_ids(db, principal))
         .group_by(Opportunity.contact_id)).all())
 
     by_status: dict[str, int] = {}
@@ -2512,7 +3006,15 @@ def _aware(dt: datetime | None) -> datetime | None:
     return None if dt is None else auth.as_aware(dt)
 
 
-def _appointment_detail(a: Appointment) -> dict:
+def _appointment_deal(a: Appointment, hidden: set[int]) -> dict:
+    """The deal a booking is for, or nothing if the reader may not see that deal."""
+    if a.opportunity is None or a.opportunity.pipeline_id in hidden:
+        return {"opportunity_id": None, "opportunity_title": None}
+    return {"opportunity_id": a.opportunity_id,
+            "opportunity_title": a.opportunity.title}
+
+
+def _appointment_detail(a: Appointment, hidden: set[int]) -> dict:
     return {"id": a.id, "title": a.title, "starts_at": a.starts_at,
             "ends_at": a.ends_at, "status": a.status, "notes": a.notes,
             "contact_id": a.contact_id,
@@ -2520,19 +3022,18 @@ def _appointment_detail(a: Appointment) -> dict:
             "calendar_id": a.calendar_id,
             "calendar_name": a.calendar.name if a.calendar else None,
             # Both directions of the link are readable: the deal lists its visits,
-            # and the visit names its deal.
-            "opportunity_id": a.opportunity_id,
-            "opportunity_title": a.opportunity.title if a.opportunity else None,
+            # and the visit names its deal — when the reader may see the deal.
+            **_appointment_deal(a, hidden),
             "assigned_user_id": a.assigned_user_id}
 
 
 @app.get("/api/appointments/{appointment_id}")
 def get_appointment(appointment_id: int, db: Session = Depends(get_db),
-                    _: auth.Principal = auth.ANY_USER):
+                    principal: auth.Principal = auth.ANY_USER):
     a = db.get(Appointment, appointment_id)
     if not a:
         raise HTTPException(404, "appointment not found")
-    return _appointment_detail(a)
+    return _appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal))
 
 
 class AppointmentPatch(BaseModel):
@@ -2587,7 +3088,7 @@ def _drop_pending_reminders(db: Session, appointment_id: int) -> int:
 @app.patch("/api/appointments/{appointment_id}")
 def update_appointment(appointment_id: int, body: AppointmentPatch,
                        db: Session = Depends(get_db),
-                       _: auth.Principal = auth.STAFF):
+                       principal: auth.Principal = auth.STAFF):
     """Edit a booking. Moving it, or switching it off and on, reschedules the
     reminders.
 
@@ -2622,6 +3123,7 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
                                ("assigned_user_id", User, "user")):
         if data.get(field) is not None and not db.get(model, data[field]):
             raise HTTPException(404, "%s %s not found" % (what, data[field]))
+    _check_appointment_opportunity(db, principal, data.get("opportunity_id"))
 
     old_start = _aware(a.starts_at)
     was_off = a.status in automations.NO_REMINDER_STATUSES
@@ -2646,7 +3148,8 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
 
     db.commit()
     db.refresh(a)
-    return {**_appointment_detail(a), "automation": outcome}
+    return {**_appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal)),
+            "automation": outcome}
 
 
 @app.delete("/api/appointments/{appointment_id}")
@@ -2802,7 +3305,7 @@ def delete_conversation(conv_id: int, db: Session = Depends(get_db),
 
 @app.delete("/api/opportunities/{opp_id}")
 def delete_opportunity(opp_id: int, db: Session = Depends(get_db),
-                       _: auth.Principal = auth.ADMIN):
+                       principal: auth.Principal = auth.ADMIN):
     """Delete a deal. Its APPOINTMENTS are detached, never deleted.
 
     A booked visit is a promise to a customer: somebody is expecting a van on
@@ -2814,9 +3317,9 @@ def delete_opportunity(opp_id: int, db: Session = Depends(get_db),
     so on PostgreSQL deleting the row underneath it would raise rather than
     cascade; detaching first is what makes the delete work at all.
     """
-    o = db.get(Opportunity, opp_id)
-    if not o:
-        raise HTTPException(404, "opportunity not found")
+    # An ADMIN sees every pipeline today; asked anyway, so this route is on the
+    # same path as every other read-by-id should that rule ever change.
+    o = pipeline_access.get_opportunity(db, principal, opp_id)
     booked = db.scalars(select(Appointment).where(
         Appointment.opportunity_id == opp_id)).all()
     for a in booked:
@@ -3062,14 +3565,19 @@ def _search_contacts(db: Session, term: str, limit: int) -> tuple[list, int]:
             for c in rows], total
 
 
-def _search_opportunities(db: Session, term: str, limit: int) -> tuple[list, int]:
+def _search_opportunities(db: Session, term: str, limit: int,
+                          hidden: set[int]) -> tuple[list, int]:
     """Title only, per the owner. Every status, not just open: a palette is how
     you go back to a deal you already won or lost, so `status` rides along and the
-    row says which."""
-    stmt = (select(Opportunity)
-            .options(selectinload(Opportunity.stage),
-                     selectinload(Opportunity.contact))
-            .where(Opportunity.title.ilike(contains(term), escape=LIKE_ESCAPE)))
+    row says which.
+
+    Deals in a pipeline the reader cannot access are neither listed nor counted in
+    `total` — a total of 3 above two rows would say a third exists."""
+    stmt = pipeline_access.visible_opportunities(
+        select(Opportunity)
+        .options(selectinload(Opportunity.stage),
+                 selectinload(Opportunity.contact))
+        .where(Opportunity.title.ilike(contains(term), escape=LIKE_ESCAPE)), hidden)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
         stmt.order_by(Opportunity.updated_at.desc(), Opportunity.id.desc())
@@ -3140,7 +3648,9 @@ def search(
     if term:
         found = [("contacts", "Contacts", _search_contacts(db, term, limit)),
                  ("opportunities", "Opportunities",
-                  _search_opportunities(db, term, limit)),
+                  _search_opportunities(
+                      db, term, limit,
+                      pipeline_access.hidden_pipeline_ids(db, principal))),
                  ("messages", "Messages",
                   _search_messages(db, term, limit, types))]
     else:
