@@ -24,14 +24,23 @@ export type FieldDef = {
   entity: string
   archived: boolean
   pipeline_ids: number[]
+  /** The modal tab it is drawn under; null = Opportunity details. Optional only
+      so fixtures written before groups existed still type-check. */
+  group_id?: number | null
 }
 
-/** The telephony project's namespace. Never editable, never archivable, never ours. */
-export const RESERVED_PREFIX = 'owen_'
+/**
+ * Namespaces this app does not own: `owen_*` (the telephony project) and `workiz_*`
+ * (the Workiz import). The values stay on every deal untouched — `owen_call_id` is
+ * a live join key and `workiz_id` the import's idempotency key — but the owner
+ * does not want them on the screen (2026-09-13), so NOTHING in the modal renders
+ * one. Mirrors `RESERVED_PREFIXES` in backend/app/custom_fields.py.
+ */
+export const RESERVED_PREFIXES = ['owen_', 'workiz_'] as const
 export const JOIN_KEY = 'owen_call_id'
 
 export function isReserved(key: string): boolean {
-  return key.startsWith(RESERVED_PREFIX)
+  return RESERVED_PREFIXES.some((p) => key.startsWith(p))
 }
 
 /**
@@ -39,55 +48,69 @@ export function isReserved(key: string): boolean {
  *
  * Attachment is explicit: a field attached to no pipeline is asked nowhere. An
  * empty list never means "everywhere", so detaching the last pipeline cannot turn
- * a narrow question into a global one by accident.
+ * a narrow question into a global one by accident. A reserved key is never asked,
+ * even if a definition somehow claimed one — the server refuses to create it.
  */
 export function askedOn(defs: FieldDef[], pipelineId: number | null | undefined):
   FieldDef[] {
   if (pipelineId == null) return []
   return defs
     .filter((d) => !d.archived && d.pipeline_ids.includes(pipelineId))
+    .filter((d) => !isReserved(d.key))
     .sort((a, b) => a.position - b.position || a.id - b.id)
 }
 
+export type GroupLike = { id: number; name: string; position: number }
+
 /**
- * Answers the deal holds that the form is NOT going to draw as a live control:
- * a field this pipeline does not ask, and an archived one.
+ * The modal's left nav, as data: the fields with no group (drawn under
+ * Opportunity details) and one entry per group, IN GROUP ORDER, each holding the
+ * fields of that group this pipeline asks.
  *
- * They are rendered read-only rather than dropped, because an answer nobody can
- * see is an answer nobody knows they still have. `owen_*` is excluded — it has
- * its own section and its own rules.
+ * Every group appears whatever the pipeline, because a group applies to all of
+ * them; one whose fields are all on other pipelines is an empty tab, not a
+ * missing one. A field pointing at a group that no longer exists falls back to
+ * Opportunity details rather than vanishing — the same place the server puts it.
  */
-export function keptButNotAsked(
-  defs: FieldDef[],
-  answers: Record<string, unknown>,
-  pipelineId: number | null | undefined,
-): { def: FieldDef | null; key: string; value: unknown; why: string }[] {
-  const asked = new Set(askedOn(defs, pipelineId).map((d) => d.key))
-  const byKey = new Map(defs.map((d) => [d.key, d]))
-  return Object.keys(answers)
-    .filter((key) => !asked.has(key) && !isReserved(key))
-    .filter((key) => answers[key] !== null && answers[key] !== '')
-    .map((key) => {
-      const def = byKey.get(key) ?? null
-      return {
-        def,
-        key,
-        value: answers[key],
-        why: def == null
-          ? 'Recorded against no field definition'
-          : def.archived
-            ? 'This field is archived'
-            : 'Not asked on this pipeline',
-      }
-    })
-    .sort((a, b) => a.key.localeCompare(b.key))
+export function modalSections(
+  defs: FieldDef[], groups: GroupLike[], pipelineId: number | null | undefined,
+): { ungrouped: FieldDef[]; groups: { group: GroupLike; fields: FieldDef[] }[] } {
+  const asked = askedOn(defs, pipelineId)
+  const known = new Set(groups.map((g) => g.id))
+  const ordered = [...groups].sort((a, b) => a.position - b.position || a.id - b.id)
+  return {
+    ungrouped: asked.filter((d) => d.group_id == null || !known.has(d.group_id)),
+    groups: ordered.map((group) => ({
+      group, fields: asked.filter((d) => d.group_id === group.id),
+    })),
+  }
 }
 
-/** The `owen_*` answers, in a stable order, for the read-only telephony block. */
-export function telephonyAnswers(answers: Record<string, unknown>):
-  [string, unknown][] {
-  return Object.keys(answers).filter(isReserved).sort()
-    .map((key) => [key, answers[key]])
+/** Is an answer blank, for "Hide empty fields"? `false` is an answer; `''` is not. */
+export function isEmptyAnswer(value: unknown): boolean {
+  return value === undefined || value === null
+    || (typeof value === 'string' && value.trim() === '')
+}
+
+/**
+ * The answers an Update should send: only the ones that CHANGED, and never a
+ * reserved key. The modal holds the whole blob so its controls can read it, but
+ * posting that blob back would put `owen_*` and `workiz_*` values on the wire on
+ * every save for no reason. The server keeps them either way; this keeps the
+ * request honest about what the user did. A blank where nothing was stored is not
+ * a change.
+ */
+export function changedAnswers(
+  stored: Record<string, unknown>, current: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(current)) {
+    if (isReserved(key)) continue
+    if (value === stored[key]) continue
+    if (isEmptyAnswer(value) && isEmptyAnswer(stored[key])) continue
+    out[key] = value
+  }
+  return out
 }
 
 /** What goes in the input for one field. Booleans become the select's values. */

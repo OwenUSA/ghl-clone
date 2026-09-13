@@ -72,8 +72,12 @@ deletes and manages users. A TECH can move an opportunity between stages and sen
 message, but cannot edit records. **Internal notes (`NOTE`, `INTERNAL_COMMENT`) are
 STAFF-only** as of 2026-09-10, on every path — the thread view, `/api/messages`,
 `/api/search` and the composer. Asking for them by name gets 403; an unfiltered read
-is just narrower. See `DECISIONS.md`. Machine tokens can be scoped (`events:write` for the
-telephony feed) — a scoped token can never exceed its owner's role.
+is just narrower. See `DECISIONS.md`. The same rule, through the same predicate
+(`auth.sees_internal`), covers an opportunity's own notes (2026-09-13): the modal's Notes
+tab, `/api/opportunities/{id}/notes` and the board card's note count.
+
+Machine tokens can be scoped (`events:write` for the telephony feed) — a scoped token
+can never exceed its owner's role.
 
 **Pipelines can be restricted to named users** (Opportunities → Pipelines → ⋮ → Manage
 permissions; nobody selected = everyone, ADMIN always). A user without access must not

@@ -193,6 +193,17 @@ export type Opportunity = {
   updated_at: string
   /** Which board it is filed on. Only interesting when listing across pipelines. */
   pipeline_id: number
+  // ---- the card's icon row (2026-09-13) ----
+  contact_id: number | null
+  owner_id: number | null
+  owner_name: string | null
+  /** The PRIMARY CONTACT's tag names — an opportunity has no tags of its own. */
+  tags: string[]
+  open_tasks_count: number
+  /** STAFF only. The server leaves both keys OUT for a TECH, so `undefined`
+      means "this role may not see notes", never "no notes". */
+  notes_count?: number
+  note_previews?: string[]
 }
 
 export const listOpportunities = (pipelineId: number, q = '', status = 'open') => {
@@ -366,6 +377,16 @@ export type CallPlaced = {
  */
 export const placeCall = (convId: number) =>
   send<CallPlaced>(`/api/conversations/${convId}/call`, 'POST')
+
+/** Ring a contact from the bound DID — the same click-to-call path as the thread
+    header, addressed by contact rather than by conversation (the board card). */
+export const callContact = (contactId: number) =>
+  send<CallPlaced>(`/api/contacts/${contactId}/call`, 'POST')
+
+/** The contact's thread, created empty if there is none. Sends nothing. */
+export const openContactConversation = (contactId: number) =>
+  send<{ conversation_id: number; created: boolean }>(
+    `/api/contacts/${contactId}/conversation`, 'POST')
 
 export const money = (cents: number) =>
   (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
@@ -656,7 +677,110 @@ export type OpportunityDetail = {
   contact_phone: string | null
   /** The visits booked for this deal, soonest first. */
   appointments: LinkedAppointment[]
+  followers: { id: number; name: string }[]
+  additional_contacts: {
+    id: number; name: string; email: string | null; phone: string | null
+  }[]
+  /** The primary contact's tags. */
+  contact_tags: ContactTag[]
+  /** The primary contact's thread, or null when there is none yet. */
+  conversation_id: number | null
 }
+
+/** What the modal's Update sends. The two id lists REPLACE the set they name. */
+export type OpportunityPatch = {
+  title?: string
+  contact_id?: number
+  pipeline_id?: number
+  stage_id?: number
+  status?: string
+  value_cents?: number
+  owner_id?: number | null
+  follower_ids?: number[]
+  additional_contact_ids?: number[]
+  business_name?: string | null
+  source?: string | null
+  expected_close_date?: string | null
+  custom_fields?: Record<string, unknown>
+}
+
+export type OpportunityDeleted = {
+  deleted: number
+  detached_appointments: number[]
+  notes_deleted: number
+  tasks_deleted: number
+  followers_removed: number
+  additional_contacts_removed: number
+}
+
+/** ADMIN. Appointments are detached, never deleted; the deal's own notes and
+    tasks go with it, and the response counts them. */
+export const deleteOpportunity = (id: number) =>
+  send<OpportunityDeleted>(`/api/opportunities/${id}`, 'DELETE')
+
+// ---- tasks (2026-09-13). A task notifies nobody: no reminder, no text. ----
+
+export type OpportunityTask = {
+  id: number
+  opportunity_id: number
+  contact_id: number | null
+  title: string
+  description: string | null
+  due_at: string | null
+  assigned_user_id: number | null
+  assigned_user_name: string | null
+  done: boolean
+  completed_at: string | null
+  created_by_id: number | null
+  created_at: string
+}
+
+export type TaskInput = {
+  title?: string
+  description?: string | null
+  due_at?: string | null
+  assigned_user_id?: number | null
+  done?: boolean
+}
+
+export const listTasks = (oppId: number) =>
+  get<OpportunityTask[]>(`/api/opportunities/${oppId}/tasks`)
+export const createTask = (oppId: number, body: TaskInput) =>
+  send<OpportunityTask>(`/api/opportunities/${oppId}/tasks`, 'POST', body)
+export const patchTask = (id: number, body: TaskInput) =>
+  send<OpportunityTask>(`/api/tasks/${id}`, 'PATCH', body)
+export const deleteTask = (id: number) =>
+  send<{ deleted: number }>(`/api/tasks/${id}`, 'DELETE')
+
+// ---- notes (2026-09-13). STAFF only on every path; a TECH gets 403. ----
+
+export type OpportunityNote = {
+  id: number
+  opportunity_id: number
+  body: string
+  created_by_id: number | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** A NOTE event on the contact's thread, shown read-only under the deal's notes. */
+export type ContactThreadNote = {
+  id: number
+  conversation_id: number
+  body: string
+  occurred_at: string
+}
+
+export const listNotes = (oppId: number) =>
+  get<{ notes: OpportunityNote[]; contact_notes: ContactThreadNote[] }>(
+    `/api/opportunities/${oppId}/notes`)
+export const createNote = (oppId: number, body: string) =>
+  send<OpportunityNote>(`/api/opportunities/${oppId}/notes`, 'POST', { body })
+export const patchNote = (id: number, body: string) =>
+  send<OpportunityNote>(`/api/opportunity-notes/${id}`, 'PATCH', { body })
+export const deleteNote = (id: number) =>
+  send<{ deleted: number }>(`/api/opportunity-notes/${id}`, 'DELETE')
 
 export type LinkedAppointment = {
   id: number
@@ -670,7 +794,7 @@ export type LinkedAppointment = {
 export const getOpportunity = (id: number) =>
   get<OpportunityDetail>(`/api/opportunities/${id}`)
 
-export const patchOpportunity = (id: number, body: Partial<OpportunityDetail>) =>
+export const patchOpportunity = (id: number, body: OpportunityPatch) =>
   send<OpportunityDetail>(`/api/opportunities/${id}/detail`, 'PATCH', body)
 
 export const createOpportunity = (body: {
@@ -993,12 +1117,15 @@ export const createCustomField = (body: {
   field_type: string
   options?: string[]
   pipeline_ids: number[]
+  group_id?: number | null
 }) => send<import('./customFields').FieldDef>('/api/custom-fields', 'POST', body)
 
 export const patchCustomField = (id: number, body: {
   label?: string
   options?: string[]
   pipeline_ids?: number[]
+  /** null moves the field back under Opportunity details. */
+  group_id?: number | null
 }) => send<import('./customFields').FieldDef>(`/api/custom-fields/${id}`, 'PATCH', body)
 
 /** Archives. The name says what it does to the DEFINITION; the answers stay. */
@@ -1089,3 +1216,26 @@ export type ForecastWithProbability = Omit<Forecast, 'stages'> & {
   use_opportunity_probability: boolean
   stages: (ForecastStage & { probability: number | null; weighting: ForecastWeighting })[]
 }
+
+/**
+ * Custom field GROUPS — the modal's custom tabs ("Roof Inspection", "Photo
+ * Checklist"), 2026-09-13. A group applies to every pipeline and holds no answer:
+ * deleting one moves its fields back to Opportunity details. Writes are ADMIN.
+ */
+export type FieldGroup = {
+  id: number
+  name: string
+  position: number
+  field_ids: number[]
+}
+
+export const listFieldGroups = () => get<FieldGroup[]>('/api/custom-field-groups')
+export const createFieldGroup = (name: string) =>
+  send<FieldGroup>('/api/custom-field-groups', 'POST', { name })
+export const renameFieldGroup = (id: number, name: string) =>
+  send<FieldGroup>(`/api/custom-field-groups/${id}`, 'PATCH', { name })
+export const reorderFieldGroups = (groupIds: number[]) =>
+  send<FieldGroup[]>('/api/custom-field-groups/reorder', 'POST', { group_ids: groupIds })
+export const deleteFieldGroup = (id: number) =>
+  send<{ deleted: number; moved_field_ids: number[] }>(
+    `/api/custom-field-groups/${id}`, 'DELETE')

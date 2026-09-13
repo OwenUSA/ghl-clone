@@ -40,27 +40,27 @@ def test_contact_panel_clears_the_tag_input_only_once_the_add_lands():
     assert "setNewTag('')" in tag_add, "the input is never cleared on a successful add"
 
 
-def test_the_telephony_namespace_is_not_editable_in_the_detail_form():
-    """`owen_call_id` sat in the detail form as a plain text input, directly above
-    the footnote warning that it is the join key. The form already has the readOnly
-    precedent -- Pipeline, Followers and Tags all use it.
-
-    Retargeted 2026-09-11: the loop moved out of OpportunityDetail.tsx into
-    CustomFieldAnswers.tsx, which the Add opportunity dialog shares, and the rule
-    widened from the join key alone to the WHOLE `owen_` namespace. The other
-    three were editable, and deleting `owen_campaign` would silently break call
-    attribution.
+def test_the_telephony_and_workiz_namespaces_never_render_in_the_modal():
+    """`owen_call_id` once sat in the detail form as a plain text input; then all
+    four `owen_*` keys sat in a read-only "From OWEN" block. Retargeted 2026-09-13:
+    the owner removed that block and the "Recorded earlier" box outright — neither
+    namespace is drawn at all, editable or not. The VALUES are untouched on every
+    deal; test_opportunity_workspace.py pins that they survive an Update byte for
+    byte, and test_custom_fields_ui.py that no reserved key is ever sent.
     """
-    source = _read("components", "CustomFieldAnswers.tsx")
-    # The telephony block, up to the footnote that closes the section.
-    owen = source.split("{owen.map(", 1)[1].split("owen_* fields are", 1)[0]
-    assert "owen_call_id" in owen, "the telephony block no longer names the join key"
-    assert "readOnly" in owen, "an owen_* value is a freely editable input again"
-    assert "onChange" not in owen, (
-        "an owen_* input has a change handler, so the namespace is writable here")
-    # And the detail form no longer renders them itself, or the old hole is back.
-    assert "{custom.map(" not in _read("components", "OpportunityDetail.tsx"), (
+    answers = _read("components", "CustomFieldAnswers.tsx")
+    body = answers.split("export function CustomFieldAnswers", 1)[1]
+    for gone in ("owen.map(", "telephonyAnswers", "keptButNotAsked", "Recorded earlier",
+                 "From OWEN"):
+        assert gone not in body, "the modal draws the old %r block again" % gone
+    modal = _read("components", "OpportunityDetail.tsx")
+    assert "{custom.map(" not in modal, (
         "the old per-key custom-field loop is back in the detail form")
+    assert "Recorded earlier" not in modal and "owen_" not in modal.split(
+        "export function OpportunityDetail", 1)[1], (
+        "the modal names a reserved key or the kept box again")
+    assert "changedAnswers(" in modal, (
+        "Update posts the whole blob back instead of only what changed")
 
 
 def test_dashboard_cards_show_a_refusal_instead_of_zeros():
