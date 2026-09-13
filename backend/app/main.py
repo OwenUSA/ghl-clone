@@ -348,7 +348,7 @@ def _contact_detail(c: Contact, hidden: set[int]) -> dict:
         # Same reason, added 2026-09-11: the delete refuses over appointments too,
         # and the panel has to say which bookings are about to lose their customer
         # before anyone confirms.
-        "appointments": [{"id": a.id, "title": a.title, "starts_at": a.starts_at,
+        "appointments": [{"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
                           "status": a.status, "location": a.location}
                          for a in c.appointments],
         "custom_fields": c.custom_fields or {},
@@ -1954,8 +1954,8 @@ def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
     outcome = automations.on_appointment_booked(db, a)
     db.commit()
     db.refresh(a)
-    return {"id": a.id, "title": a.title, "starts_at": a.starts_at,
-            "ends_at": a.ends_at, "opportunity_id": a.opportunity_id,
+    return {"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
+            "ends_at": _aware(a.ends_at), "opportunity_id": a.opportunity_id,
             "assigned_user_id": a.assigned_user_id, "status": a.status,
             "description": a.description, "location": a.location,
             "automation": outcome}
@@ -1971,8 +1971,8 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
     appointments = []
     if db is not None:
         appointments = [
-            {"id": a.id, "title": a.title, "starts_at": a.starts_at,
-             "ends_at": a.ends_at, "status": a.status,
+            {"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
+             "ends_at": _aware(a.ends_at), "status": a.status,
              "calendar_name": a.calendar.name if a.calendar else None,
              "location": a.location}
             for a in db.scalars(
@@ -3035,8 +3035,8 @@ def list_appointments(
     # a deal. Only the link to a deal in a pipeline the reader cannot access is
     # blanked, so the deal's title does not leak through the calendar.
     hidden = pipeline_access.hidden_pipeline_ids(db, principal)
-    return [{"id": a.id, "title": a.title, "starts_at": a.starts_at,
-             "ends_at": a.ends_at, "status": a.status,
+    return [{"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
+             "ends_at": _aware(a.ends_at), "status": a.status,
              "assigned_user_id": a.assigned_user_id,
              "calendar_id": a.calendar_id,
              "calendar_name": a.calendar.name if a.calendar else None,
@@ -3249,8 +3249,8 @@ def _appointment_deal(a: Appointment, hidden: set[int]) -> dict:
 def _appointment_detail(a: Appointment, hidden: set[int],
                         principal: auth.Principal) -> dict:
     sees_notes = auth.sees_internal(principal)
-    return {"id": a.id, "title": a.title, "starts_at": a.starts_at,
-            "ends_at": a.ends_at, "status": a.status,
+    return {"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
+            "ends_at": _aware(a.ends_at), "status": a.status,
             # `notes` is the Book appointment modal's "Internal notes" — STAFF-only
             # like every internal note in this app (2026-09-10), through the same
             # predicate. A TECH reads `description` and `location` instead.
@@ -3491,7 +3491,7 @@ def _blocked_row(b: BlockedTime) -> dict:
     return {"id": b.id, "title": b.title, "calendar_id": b.calendar_id,
             "calendar_name": b.calendar.name if b.calendar else None,
             "color": b.calendar.color if b.calendar else "#004eeb",
-            "starts_at": b.starts_at, "ends_at": b.ends_at, "notes": b.notes}
+            "starts_at": _aware(b.starts_at), "ends_at": _aware(b.ends_at), "notes": b.notes}
 
 
 def _clean_blocked_title(title: str) -> str:

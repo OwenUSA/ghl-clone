@@ -2948,3 +2948,114 @@ rgb(71,84,103), active rgb(56,160,219) with a 2px underline flush with the bar.
   Selecting sets the same `pipelineId` state the select did, so filters, saved views and
   `?pipeline=` deep links are untouched. Logic lives import-free in `lib/pageTabs.ts`
   and is executed by `tests/test_page_tabs.py`.
+
+## AMENDMENT (2026-09-13): the Book appointment modal is GoHighLevel's, and blocked off time exists
+
+The owner supplied a screenshot of GoHighLevel's "Book appointment" modal
+(`refs/round3/29`) beside ours (`28`) and said: make it match GoHighLevel **exactly**.
+Like the opportunity modal the same day, **the screenshot is the specification and
+nothing here is measured parity** — no live GHL session exists on the server, and
+every reading taken off the image, and every assumption where it shows nothing, is
+listed in `.qa/state/appt-done`. Branch `feature/ghl-book-appointment`, migration
+`a5d2c8e4f917` on `f3c8e2a61d97`.
+
+### What this overrides, item by item
+
+1. **"The dialog shows Status disabled … adding `status` to the POST model would be a
+   contract change and is a separate decision" (2026-09-09) — OVERRIDDEN.** GoHighLevel's
+   footer books with a status, so `AppointmentCreate` accepts `status` (validated against
+   `APPOINTMENT_STATUSES`) and the footer control is live. `blocked` is still not offered
+   in the browser. A booking made `cancelled` queues no reminder, as before.
+2. **"A TECH can open a booking and read the notes" (2026-09-10) — NARROWED.** The modal's
+   right column is **Internal notes**, and the owner's brief says staff-only like every
+   internal note in this system. `appointments.notes` IS that field, so
+   `GET /api/appointments/{id}` returns `notes: null, notes_visible: false` to a TECH,
+   through the same `auth.sees_internal`. A TECH now reads the new **Description** and
+   **Meeting location** on the job they are driving to instead. This removes access a
+   TECH had; a Workiz-imported appointment carries no notes, so nothing a TECH read on
+   production today disappears.
+3. **"From the calendar it is an optional picker of OPEN deals" (2026-09-11) — OVERRIDDEN
+   for the create dialog.** GoHighLevel's modal has no Opportunity field and no Assigned to
+   field, and neither is drawn. Consequences kept on purpose:
+   * **The assignee is the selected calendar's user** (`Calendar.user_id`). An explicit
+     `assigned_user_id` still wins, so `ghl appts create --user` is unchanged; a PATCH
+     that moves a booking to another calendar hands it to that calendar's user unless
+     an assignee is sent with it.
+   * **The opportunity modal's "Book or update appointment" tab still links the visit.**
+     It opens this same dialog with `lockedOpportunity`, which is sent and not drawn.
+     Binding an existing booking to a deal from the calendar side is done in the
+     appointment panel, which keeps its Opportunity field.
+4. **"The appointment dialog is OURS" (2026-09-09) — superseded for the CREATE dialog.** It
+   is now built to the owner's screenshot. The appointment detail panel is still ours.
+5. **"Nothing in the UI can create a blocked slot" (2026-09-10 audit) — CLOSED**, by a real
+   feature rather than by offering `status = blocked`: see below.
+6. **The 2026-09-10 "known gap" that SQLite emits naive timestamps — FIXED for appointments
+   and blocked times.** Incoming times are normalised to UTC before they are stored (SQLite
+   keeps a datetime's digits and drops its offset, so `13:30-04:00` read back as 13:30 UTC),
+   and every appointment payload emits them aware. PostgreSQL was already right; this is
+   what made a DST test on SQLite honest.
+
+### The modal, as built
+
+Calendar (first calendar chosen) · Appointment title prefilled `{{contact.name}}` · Add
+description · Date & time (the account timezone, Start time / End time) · Meeting location
+(Calendar default / Custom) | Select Contact (required) · Internal notes | Status : ·
+Cancel · Book appointment. The owner's removals: **no Default/Custom toggle** (no working
+hours or slots; the user always picks the times), **no Recurring event**.
+
+- **The title is resolved on save and the resolved text is stored.** `{{contact.name}}`,
+  `{{contact.first_name}}`, `{{contact.last_name}}`, `{{contact.email}}`,
+  `{{contact.phone}}`. An unknown variable is **refused 400**, never stored — braces on a
+  calendar chip read as a bug — and a contact variable with no contact is refused with the
+  reason. Renaming the contact later does not rename a visit already booked.
+- **The Select Contact requirement is the modal's, not the API's.** The CLI and the
+  telephony feed may still book without one.
+- **Location is stored RESOLVED, as text** (`appointments.location`). Calendar default is
+  the contact's `address_*` columns on one line at the moment of booking; editing the
+  contact's address later does not move a visit already booked. A contact with no address
+  books with no location, and the modal says so before it is sent. It is shown on the
+  appointment panel, the deal's appointment tab, the contact payload and the grid rows.
+- **Times are in the ACCOUNT's zone, America/New_York, whatever the browser's zone is.**
+  `frontend/src/lib/accountTime.ts` computes every offset from the platform zone database
+  (EDT GMT-04:00 in summer, EST GMT-05:00 in winter — nothing hardcoded) and is executed
+  under node with the process zone set to Berlin, Caracas and Tokyo. A time that does not
+  exist (2:30 AM on the spring-forward day) lands at 3:30 AM; one that happens twice is the
+  first. The timezone control lists the account zone first plus the US zones (and the
+  browser's own), and changes only how times are picked, never what is stored.
+- **The time list is the whole day in 15-minute rows**, 12:00 AM to 11:45 PM, which covers
+  the owner's "at least 5 AM to 11 PM" without cutting off a 2 AM emergency tarp.
+- **Reminders are exactly as before.** The modal posts to the same endpoint; nothing in the
+  reminder path changed and the tests count `jobs` rows for create, reschedule away and
+  back, and edits of description/location (which churn nothing).
+
+### Blocked off time — a table of its own
+
+`blocked_times` (title, calendar, start, end, optional note, created_by). CRUD at
+`/api/blocked-times`. **It sends nothing and enqueues nothing** — no route touches the queue
+or an automation, and a test compares the whole `jobs` table around create, edit and delete.
+
+- **Its own table, not `appointments.status = 'blocked'`.** A block has no contact, no
+  reminder and no report tile; filing it as an appointment would put it in the Appointment
+  report and in every appointment query that forgot to exclude it. The old `blocked` status
+  and the Manage view's `kind=blocked` filter are left exactly as they were.
+- **Roles: read ANY_USER, create/edit/delete STAFF.** Delete is a real delete and is STAFF,
+  not ADMIN — a block is the team's own schedule, not a customer record; the same call made
+  for an opportunity's tasks. Overrulable.
+- **Booking over blocked time on the same calendar is refused 409 until confirmed** with
+  `allow_blocked_time: true`; the refusal writes nothing and names the block. The modal
+  shows the sentence with "Book anyway"; the appointment panel does the same for a
+  reschedule or a calendar change ("Save anyway"). Touching ends do not overlap; a booking
+  with no calendar, or a cancelled one, is never asked.
+- **Drawn grey and hatched on the Day/Week grid and as hatched chips in Month view**, never in
+  a calendar's colour; a click opens it on the modal's Blocked off time tab to edit or
+  delete. "View by type: Appointments" hides blocks; All and Blocked slots show them. The
+  Users filter selects the blocks on those users' calendars.
+
+### The grid hours
+
+The Day/Week grid already drew all 24 hours; it now **opens scrolled to 5 AM** and still runs
+to 11 PM. **Known gap, not fixed:** the grid positions bookings in the BROWSER's zone
+(`calendarGrid.ts` is local-time day arithmetic), while the modal and the panel use the
+account's. For staff in Florida the two are the same; a laptop set to another zone draws the
+grid shifted while the modal reads correctly. Moving the grid onto the account zone is a
+change to `calendarGrid.ts` and to the measured Week view, and is its own task.

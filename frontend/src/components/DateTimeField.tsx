@@ -40,6 +40,11 @@ export function DateTimeField({ label, value, onChange, timeZone = ACCOUNT_TIME_
   const wall = wallOf(value, timeZone)
   const [shown, setShown] = useState({ year: wall.year, month: wall.month })
   const list = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLButtonElement>(null)
+  // The popover is FIXED to the viewport, placed from the box's own rect: the
+  // modal's columns scroll, and an absolutely placed popover inside one would be
+  // clipped by it. It opens upward when there is no room below.
+  const [at, setAt] = useState<{ left: number; top: number }>({ left: 0, top: 0 })
   const minutes = wall.hour * 60 + wall.minute
 
   // Opening scrolls the time list to the chosen time, not to midnight.
@@ -64,24 +69,33 @@ export function DateTimeField({ label, value, onChange, timeZone = ACCOUNT_TIME_
         aria-haspopup="dialog"
         disabled={disabled}
         title={title}
+        ref={box}
         onClick={() => {
           setShown({ year: wall.year, month: wall.month })
+          const r = box.current?.getBoundingClientRect()
+          if (r) {
+            const height = 330
+            const below = r.bottom + 4 + height <= window.innerHeight
+            setAt({ left: Math.max(8, Math.min(r.left, window.innerWidth - 380)),
+                    top: below ? r.bottom + 4 : Math.max(8, r.top - 4 - height) })
+          }
           setOpen((v) => !v)
         }}
-        className="flex items-center justify-between text-left"
-        style={{ ...INPUT, height: 36, ...(disabled
+        className="flex items-center justify-between gap-4 text-left"
+        style={{ ...INPUT, height: 36, padding: '0 8px 0 10px', ...(disabled
           ? { backgroundColor: 'rgb(249,250,251)', cursor: 'not-allowed' } : {}) }}
       >
         <span className="truncate" style={{ color: TEXT }}>{pickerLabel(value, timeZone)}</span>
-        <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke={PLACEHOLDER}
+        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={PLACEHOLDER} className="shrink-0"
           strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" />
         </svg>
       </button>
 
       {open && (
-        <div role="dialog" aria-label={label + ' picker'} className="absolute z-30 flex bg-white"
-          style={{ top: 66, left: 0, borderRadius: 8, border: '1px solid ' + DIVIDER,
+        <div role="dialog" aria-label={label + ' picker'} className="flex bg-white"
+          style={{ position: 'fixed', zIndex: 60, top: at.top, left: at.left, borderRadius: 8,
+            border: '1px solid ' + DIVIDER,
             boxShadow: '0 12px 16px -4px rgba(16,24,40,0.08), 0 4px 6px -2px rgba(16,24,40,0.03)' }}>
           <div style={{ padding: 12, width: 252 }}>
             <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>

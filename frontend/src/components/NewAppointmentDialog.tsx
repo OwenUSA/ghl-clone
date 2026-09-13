@@ -266,7 +266,7 @@ export function NewAppointmentDialog({
             <option key={z} value={z}>{zoneLabel(starts, z)}</option>
           ))}
         </Select>
-        <div className="flex gap-3" style={{ marginTop: 16 }}>
+        <div className="flex gap-12" style={{ marginTop: 16 }}>
           <DateTimeField label="Start time" value={starts} onChange={moveStart} timeZone={zone}
             disabled={tab === 'blocked' && !canWrite} />
           <DateTimeField label="End time" value={ends} onChange={setEnds} timeZone={zone}
@@ -306,7 +306,7 @@ export function NewAppointmentDialog({
 
         {/* The two tabs. Opening an existing block goes straight to its tab and
             draws no tab row: there is nothing to switch to while editing one. */}
-        <div role="tablist" className="flex shrink-0 gap-8"
+        <div role="tablist" className="flex shrink-0 gap-32"
           style={{ margin: '20px 24px 0', borderBottom: '1px solid ' + DIVIDER }}>
           {(editingBlock ? [['blocked', 'Blocked off time']] as const
             : [['appointment', 'Appointment'], ['blocked', 'Blocked off time']] as const)
@@ -356,7 +356,7 @@ export function NewAppointmentDialog({
                     style={{ marginTop: 14, gap: 60 }}>
                     {([['calendar_default', 'Calendar default'], ['custom', 'Custom']] as const)
                       .map(([key, label]) => (
-                        <label key={key} className="flex items-center gap-2"
+                        <label key={key} className="flex items-center gap-8"
                           style={{ fontSize: 14, color: BODY, cursor: 'pointer' }}>
                           <input type="radio" name="meeting-location" checked={locationKind === key}
                             onChange={() => setLocationKind(key)}
@@ -383,7 +383,7 @@ export function NewAppointmentDialog({
                 paddingBottom: 16 }}>
                 <div style={{ border: '1px solid ' + DIVIDER, borderRadius: 8, padding: 10,
                   backgroundColor: 'rgb(252,252,253)' }}>
-                  <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+                  <div className="flex items-center gap-8" style={{ marginBottom: 10 }}>
                     <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={FAINT}
                       strokeWidth={1.6} strokeLinecap="round" aria-hidden="true">
                       <circle cx="12" cy="8" r="4" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" />
@@ -406,7 +406,7 @@ export function NewAppointmentDialog({
                       style={{ ...INPUT, height: 'auto', padding: '8px 12px' }} />
                   ) : (
                     <button type="button" onClick={() => setNoting(true)}
-                      className="flex items-center gap-1"
+                      className="flex items-center gap-4"
                       style={{ ...BUTTON, height: 32, padding: '0 12px', marginTop: 8,
                         fontSize: 14, borderRadius: 6 }}>
                       <span aria-hidden="true" style={{ fontSize: 16 }}>+</span>Add internal note
@@ -453,7 +453,7 @@ export function NewAppointmentDialog({
                   border: '1px solid rgb(254,223,137)' }
               : { color: DANGER }) }}>
             {overlap ? (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-12">
                 <span className="flex-1">{overlap}</span>
                 <button type="button" onClick={() => setOverlap(null)}
                   style={{ ...BUTTON, height: 32, fontSize: 13 }}>Change time</button>
@@ -470,24 +470,24 @@ export function NewAppointmentDialog({
         <div className="flex shrink-0 items-center"
           style={{ marginTop: 12, padding: '16px 24px', borderTop: '1px solid ' + DIVIDER }}>
           {tab === 'appointment' && (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-12">
               <span style={{ fontSize: 14, fontWeight: 500, color: BODY }}>Status :</span>
               <div className="relative" style={{ width: 146 }}>
-                <svg className="pointer-events-none absolute" style={{ left: 11, top: 18 }}
+                <svg className="pointer-events-none absolute" style={{ left: 11, top: 10 }}
                   width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={BODY}
                   strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <circle cx="12" cy="12" r="9" /><path d="m8.5 12 2.5 2.5 4.5-5" />
                 </svg>
                 <select value={status} onChange={(e) => setStatus(e.target.value)}
                   aria-label="Status"
-                  style={{ ...INPUT, marginTop: 8, height: 38, appearance: 'none',
+                  style={{ ...INPUT, marginTop: 0, height: 38, appearance: 'none',
                     paddingLeft: 36, paddingRight: 28, fontWeight: 500, color: BODY,
                     borderColor: BORDER }}>
                   {STATUSES.map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
                   ))}
                 </select>
-                <svg className="pointer-events-none absolute" style={{ right: 10, top: 19 }}
+                <svg className="pointer-events-none absolute" style={{ right: 10, top: 11 }}
                   width={16} height={16} viewBox="0 0 24 24" fill="none" stroke={BODY}
                   strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="m6 9 6 6 6-6" />
@@ -496,7 +496,7 @@ export function NewAppointmentDialog({
             </div>
           )}
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-12">
             {editingBlock && (confirmDelete ? (
               <>
                 <span style={{ fontSize: 13, color: DANGER }}>
