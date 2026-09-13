@@ -75,6 +75,15 @@ STAFF-only** as of 2026-09-10, on every path — the thread view, `/api/messages
 is just narrower. See `DECISIONS.md`. Machine tokens can be scoped (`events:write` for the
 telephony feed) — a scoped token can never exceed its owner's role.
 
+**Pipelines can be restricted to named users** (Opportunities → Pipelines → ⋮ → Manage
+permissions; nobody selected = everyone, ADMIN always). A user without access must not
+see that pipeline or any deal in it anywhere, so **every route that reads opportunities
+or pipelines goes through `app/pipeline_access.py`** and answers 404, never 403, for a
+hidden id. `test_pipeline_permissions.py` enumerates the routes: add one that touches
+deals without recording how it enforces access and that test fails. See the
+2026-09-13 amendment in `DECISIONS.md`, which also records that deleting a stage or
+pipeline now MOVES its deals (no automation, one transaction) instead of refusing.
+
 **Locked out?** `uv run python -m app.bootstrap set-password --email you@example.com`
 (from `backend/`), then `list-users` to check who can sign in.
 

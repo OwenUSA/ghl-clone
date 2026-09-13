@@ -1070,72 +1070,98 @@ def test_the_built_in_open_opportunities_list_is_not_deletable():
 # ---------------- Opportunities > Pipelines ----------------
 
 def test_managing_pipelines_is_disabled_rather_than_403_on_submit():
-    """Every endpoint behind this panel is auth.ADMIN. The precedent set by
-    d1f7c50 and b943f4b is a dead control with a title, never a form that refuses
-    at the end."""
+    """AMENDED 2026-09-13: DISPATCHER creates, edits, duplicates and reorders; ADMIN
+    alone deletes and manages permissions. The precedent set by d1f7c50 and b943f4b
+    still holds — a dead control with a title, never a form that refuses at the end."""
     source = _read("components", "PipelinesPanel.tsx")
-    assert "const canManage = user.role === 'ADMIN'" in source
-    assert "Only an admin can manage pipelines and stages" in source
-    # Every write control consults it: add pipeline, add stage, rename, reorder,
-    # and both deletes.
-    assert source.count("!canManage") >= 6, (
-        "a control on this panel does not ask whether the role may use it")
+    assert "const canEdit = user.role !== 'TECH'" in source
+    assert "const canAdmin = user.role === 'ADMIN'" in source
+    create = source.split("Create pipeline\n", 1)[0].rsplit("<button", 1)[1]
+    assert "disabled={!canEdit}" in create and "noEdit" in create
+    menu = source.split("actions={[", 1)[1].split("]} />", 1)[0]
+    for label, gate in (("Edit", "canEdit"), ("Duplicate", "canEdit"),
+                        ("Manage permissions", "canAdmin"), ("Move to position", "canEdit"),
+                        ("Delete", "canAdmin")):
+        item = menu.split("label: '%s'" % label, 1)[1].split("run:", 1)[0]
+        assert "blocked: %s ? null" % gate in item, "%s ignores the role" % label
+    assert "blocked: null, run: () => { void copyLink(p) }" in menu, (
+        "Copy link is harmless and should be offered to every role")
+    assert "disabled={!!a.blocked} title={a.blocked ?? undefined}" in source, (
+        "a blocked menu item still looks and acts live")
+    modal = _read("components", "PipelineModal.tsx")
+    assert "const canDeleteStored = user.role === 'ADMIN'" in modal
+    assert "'Only an admin can delete a stage'" in modal
 
 
 def test_the_pipelines_tab_stays_open_to_everyone_who_works_the_board():
-    """The panel disables what a non-admin cannot do; hiding the structure from
-    the people who work it every day would be worse."""
+    """The panel disables what a role cannot do; hiding the structure from the
+    people who work it every day would be worse."""
     page = _read("pages", "OpportunitiesPage.tsx")
     assert "tab === 'Pipelines' && <PipelinesPanel user={user} />" in page
     live = page.split("const live =", 1)[1].splitlines()[0]
     assert "Pipelines" not in live, "the Pipelines tab was gated on a role"
 
 
-def test_deleting_a_populated_stage_is_not_offered_and_says_what_is_in_the_way():
-    """The server answers 409 either way; this is so the admin knows before
-    clicking, and knows what to move."""
+def test_deleting_a_populated_stage_asks_which_stage_receives_its_deals():
+    """The owner's override (2026-09-13): like GoHighLevel, but no deal is deleted.
+    A stage holding deals asks for a destination in THIS pipeline; an empty one asks
+    to confirm. Nothing is written until Update."""
+    source = _read("components", "PipelineModal.tsx")
+    dialog = source.split("function DeleteStageDialog", 1)[1]
+    assert "const holds = stage.count > 0" in dialog
+    assert "Move opportunities to" in dialog and "<select" in dialog
+    assert "no opportunity is deleted" in dialog
+    assert "s.id != null && s.key !== stage.key" in dialog, (
+        "the destination list offers a stage that is not saved, or the stage itself")
+    assert "It is removed when you click Update" in dialog
+    assert "removeStage(d, deleting.key, moveTo)" in source
+    assert "deleteStage" not in source, "the modal deletes a stage before Update"
+
+
+def test_deleting_a_pipeline_with_deals_asks_for_a_pipeline_and_a_stage():
     source = _read("components", "PipelinesPanel.tsx")
-    assert "const removable = s.count === 0" in source, (
-        "the Delete control ignores whether the stage holds anything")
-    assert "holds ${s.count} opportunit" in source, (
-        "the blocked title does not say how many are in the way")
-    assert "Move ${" in source, "the message does not say what to do about it"
+    dialog = source.split("function DeletePipelineDialog", 1)[1]
+    assert "Move opportunities to pipeline" in dialog and "Stage" in dialog
+    assert "p.id !== pipeline.id && p.stages.length > 0" in dialog, (
+        "the destination list offers the pipeline being deleted, or one with no stage")
+    assert "deletePipelineMovingDeals(pipeline.id, deals ? Number(toStage) : undefined)" in dialog
+    assert "no opportunity is deleted" in dialog
 
 
-def test_deleting_a_pipeline_needs_it_to_be_completely_empty():
-    """`Pipeline.stages` cascades delete-orphan, so this guard stands between a
-    mis-click and every deal on the board."""
-    source = _read("components", "PipelinesPanel.tsx")
-    assert "p.stages.length === 0 && deals === 0" in source, (
-        "a pipeline with stages can still be deleted from the browser")
-    assert "Empty it first" in source
-
-
-def test_a_structural_delete_always_asks_twice():
-    source = _read("components", "PipelinesPanel.tsx")
-    assert source.count("Really delete") == 2, (
-        "a stage or a pipeline is deleted on a single click")
-    assert "setConfirming('stage:'" in source and "setConfirming('pipeline:'" in source
+def test_a_structural_delete_always_asks_first():
+    """Neither the menu's Delete nor a stage's trash deletes on the click itself."""
+    panel = _read("components", "PipelinesPanel.tsx")
+    menu_delete = panel.split("label: 'Delete'", 1)[1].split("},", 1)[0]
+    assert "setDialog({ kind: 'delete', pipeline: p })" in menu_delete
+    modal = _read("components", "PipelineModal.tsx")
+    trash = modal.split("const trash = (s: StageDraft) =>", 1)[1].split("\n  }", 1)[0]
+    assert "setDeleting(s)" in trash, "a saved stage is removed without asking"
+    assert "if (s.id == null)" in trash, "only an unsaved row may go without asking"
 
 
 def test_reordering_sends_the_whole_order_and_never_a_deal():
-    """The endpoint takes a permutation, so a board that changed underneath is
-    refused rather than half-applied. Nothing here touches an opportunity."""
+    """The endpoint takes a permutation of every visible pipeline, so a list that
+    changed underneath is refused rather than half-applied. Nothing on the Pipelines
+    tab touches an opportunity."""
     source = _read("components", "PipelinesPanel.tsx")
-    swap = source.split("const swap =", 1)[1].split("\n  }", 1)[0]
-    assert "stages.map((s) => s.id)" in swap, (
-        "the reorder sends something other than the full stage list")
-    assert "reorder.mutate(ids)" in swap
-    assert "moveOpportunity" not in source and "stage_id" not in source, (
-        "the pipelines panel touches an opportunity's stage")
+    drop = source.split("const onDragEnd =", 1)[1].split("\n  }", 1)[0]
+    assert "orderAfterDrag(ids," in drop and "reorder.mutate(order)" in drop
+    assert "orderForPosition(ids, pipeline.id, n)" in source
+    for f in ("PipelinesPanel.tsx", "PipelineModal.tsx"):
+        body = _read("components", f)
+        assert "moveOpportunity" not in body and "stage_id:" not in body, (
+            "%s touches an opportunity's stage" % f)
 
 
-def test_the_panel_says_names_may_repeat_rather_than_tidying_them_up():
+def test_the_modal_does_not_tidy_up_duplicate_stage_names():
     """Two distinct stages called "Call Back" are the measured shape, and the
-    `ghl` CLI exits 5 rather than guess between them."""
-    source = _read("components", "PipelinesPanel.tsx")
-    assert "Two stages may share a name" in source
-    assert "Call Back" in source, "nothing records why duplicate names are kept"
+    `ghl` CLI exits 5 rather than guess between them. Only PIPELINE names are unique."""
+    source = _read("lib", "pipelines.ts")
+    validate = source.split("export function validateDraft", 1)[0].rsplit("/**", 1)[1]
+    assert "Call Back" in validate and "NOT checked for uniqueness" in validate
+    body = source.split("export function validateDraft", 1)[1].split("\n}\n", 1)[0]
+    assert "already exists" in body and body.count("toLowerCase()") == 2, (
+        "the uniqueness check is not the pipeline name's alone")
 
 
 def test_the_panel_reports_a_refusal_instead_of_swallowing_it():

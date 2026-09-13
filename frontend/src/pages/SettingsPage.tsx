@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CustomFieldsPanel } from '../components/CustomFieldsPanel'
+import { SETTINGS_SECTIONS, sectionFromPath, type SettingsSection } from '../lib/settingsSections'
 import {
   changePassword,
   createToken,
@@ -25,12 +27,62 @@ function status(t: ApiToken) {
 }
 
 /**
+ * Settings, in two sections.
+ *
+ * **Custom Fields** — the owner's job questions. The panel is `CustomFieldsPanel`,
+ * mounted here unchanged; until 2026-09-13 it was a tab on Opportunities, which
+ * GoHighLevel does not have. Reachable by clicking the section or by loading
+ * /settings/custom-fields.
+ */
+export function SettingsPage({ user }: { user: Me }) {
+  const [section, setSection] = useState<SettingsSection>(
+    () => sectionFromPath(window.location.pathname))
+
+  const choose = (key: SettingsSection) => {
+    setSection(key)
+    const path = SETTINGS_SECTIONS.find((s) => s.key === key)?.path ?? '/settings'
+    // Replace, not push: a section switch is not a page the Back button should replay.
+    if (window.location.pathname.startsWith('/settings')) window.history.replaceState(null, '', path)
+  }
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col" style={{ height: '100vh', overflow: 'hidden' }}>
+      <div className="shrink-0" style={{ padding: '32px 32px 0' }}>
+        <div style={{ fontSize: 20, fontWeight: 600, color: INK }}>Settings</div>
+        <div style={{ fontSize: 14, color: MUTED, marginTop: 4 }}>
+          {user.name} · {user.role}
+        </div>
+        <div role="tablist" aria-label="Settings sections" className="flex gap-6"
+          style={{ marginTop: 20, borderBottom: `1px solid ${LINE}` }}>
+          {SETTINGS_SECTIONS.map((s) => (
+            <button key={s.key} role="tab" aria-selected={section === s.key}
+              onClick={() => choose(s.key)}
+              style={{
+                height: 38, fontSize: 14, fontWeight: 500,
+                color: section === s.key ? 'rgb(56,160,219)' : 'rgb(71,84,103)',
+                borderBottom: '2px solid ' + (section === s.key ? 'rgb(56,160,219)' : 'transparent'),
+              }}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {section === 'custom-fields'
+        ? <div className="flex min-h-0 flex-1 flex-col" style={{ padding: '16px 16px 0' }}>
+            <CustomFieldsPanel user={user} />
+          </div>
+        : <AccountSettings />}
+    </div>
+  )
+}
+
+/**
  * Account settings: API tokens and password.
  *
  * The token panel is how the `ghl` CLI gets its credential without anyone
  * pasting a password into a terminal — and how a leaked one is revoked.
  */
-export function SettingsPage({ user }: { user: Me }) {
+function AccountSettings() {
   const qc = useQueryClient()
   const [name, setName] = useState('')
   // The plaintext is kept with its id so revoking that token can clear the
@@ -64,12 +116,7 @@ export function SettingsPage({ user }: { user: Me }) {
 
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 32 }}>
-      <div style={{ fontSize: 20, fontWeight: 600, color: INK }}>Settings</div>
-      <div style={{ fontSize: 14, color: MUTED, marginTop: 4 }}>
-        {user.name} · {user.role}
-      </div>
-
-      <section style={{ marginTop: 32, maxWidth: 860 }}>
+      <section style={{ maxWidth: 860 }}>
         <div style={{ fontSize: 16, fontWeight: 600, color: INK }}>API tokens</div>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
           Used by the <code>ghl</code> command-line tool. A token carries your role,

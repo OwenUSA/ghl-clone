@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -274,9 +275,28 @@ class ContactTag(Base):
 
 class Pipeline(Base):
     __tablename__ = "pipelines"
+    # The three display modes GoHighLevel's "Set pipeline display colors" offers.
+    COLOR_NONE = "none"
+    COLOR_DOT = "dot"
+    COLOR_TINT = "tint"
+    COLOR_MODES = (COLOR_NONE, COLOR_DOT, COLOR_TINT)
+
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(160))
     position: Mapped[int] = mapped_column(Integer, default=0)
+    # --- the pipeline modal (2026-09-13) --------------------------------------
+    # How the board draws a stage's colour in its column header. "none" is what
+    # every pipeline did before this column existed, and is its server default.
+    color_mode: Mapped[str] = mapped_column(String(20), default=COLOR_NONE,
+                                            server_default=COLOR_NONE)
+    # Off: a deal's probability is its stage's. On: each deal carries its own
+    # (`Opportunity.probability`). Only the Forecast reads it.
+    use_opportunity_probability: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false())
+    # NULL for every pipeline that predates the column: nothing recorded when it
+    # was last changed, and the list says "—" rather than inventing a date.
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     stages: Mapped[list["Stage"]] = relationship(
         back_populates="pipeline", cascade="all, delete-orphan",
         order_by="Stage.position")
@@ -288,7 +308,39 @@ class Stage(Base):
     pipeline_id: Mapped[int] = mapped_column(ForeignKey("pipelines.id"), index=True)
     name: Mapped[str] = mapped_column(String(160))
     position: Mapped[int] = mapped_column(Integer, default=0)
+    # --- the pipeline modal (2026-09-13) --------------------------------------
+    # "#RRGGBB", or NULL for a stage created before stages had colours. Only drawn
+    # when the pipeline's `color_mode` is dot or tint.
+    color: Mapped[str | None] = mapped_column(String(20))
+    # 0-100, or NULL = "no probability set", which the Forecast weights at the
+    # pipeline's conversion rate exactly as it did before this column existed.
+    probability: Mapped[int | None] = mapped_column(Integer)
+    # GoHighLevel's "Show in reports": the funnel icon and the pie icon, two
+    # independent switches. A hidden stage still holds its deals and still shows
+    # on the board; it only drops out of that report.
+    show_in_funnel: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true())
+    show_in_pie: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true())
     pipeline: Mapped[Pipeline] = relationship(back_populates="stages")
+
+
+class PipelinePermission(Base):
+    """Who may access a pipeline — GoHighLevel's "Manage permissions".
+
+    One row per (pipeline, user) that is ALLOWED. A pipeline with NO rows is open
+    to everyone, which is what every pipeline was before this table existed. An
+    ADMIN always has access whatever the rows say. This decides whether a user
+    can SEE the pipeline and its deals at all; their role still decides what they
+    may do with them. Enforced in `app/pipeline_access.py`.
+    """
+    __tablename__ = "pipeline_permissions"
+    __table_args__ = (UniqueConstraint("pipeline_id", "user_id",
+                                       name="uq_pipeline_permission"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pipeline_id: Mapped[int] = mapped_column(ForeignKey("pipelines.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
 
 
 class Opportunity(Base):
@@ -310,6 +362,9 @@ class Opportunity(Base):
     source: Mapped[str | None] = mapped_column(String(120))
     expected_close_date: Mapped[str | None] = mapped_column(String(40))
     created_by: Mapped[str | None] = mapped_column(String(80))
+    # 0-100, or NULL. Read by the Forecast ONLY when the pipeline has "Use
+    # opportunity-level probability" switched on; otherwise the stage's applies.
+    probability: Mapped[int | None] = mapped_column(Integer)
 
     # The live account already carries owen_* custom fields written by the
     # telephony project ("from OWEN"), with owen_call_id documented as the

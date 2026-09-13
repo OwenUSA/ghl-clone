@@ -1014,3 +1014,78 @@ export const restoreCustomField = (id: number) =>
 export const reorderCustomFields = (fieldIds: number[]) =>
   send<import('./customFields').FieldDef[]>(
     '/api/custom-fields/reorder', 'POST', { field_ids: fieldIds })
+
+// ---------------------------------------------------------------------------
+// The Pipelines tab, its Create/Edit modal and its row menu (2026-09-13).
+//
+// Appended rather than folded into the helpers above so a branch working on the
+// opportunity card and modal merges without touching the same lines. The shapes
+// live in lib/pipelines.ts, which is import-free so node can run it in tests.
+//
+// Roles, enforced by the server and mirrored by the screen: DISPATCHER may create,
+// edit, duplicate and reorder; ADMIN alone deletes and manages permissions.
+// ---------------------------------------------------------------------------
+
+export type { ColorMode, PipelineRow, StageRow } from './pipelines'
+
+type PipelineRowT = import('./pipelines').PipelineRow
+
+/** GET /api/pipelines, with every setting the modal edits. Same request as `listPipelines`. */
+export const listPipelineRows = () => get<PipelineRowT[]>('/api/pipelines')
+
+export const createPipelineWithSettings = (body: ReturnType<typeof import('./pipelines').createBody>) =>
+  send<PipelineRowT>('/api/pipelines', 'POST', body)
+
+export type PipelineUpdated = PipelineRowT & {
+  /** Stage id -> the deals moved out of it before it was deleted. */
+  moved: Record<string, number[]>
+}
+
+export const updatePipeline = (id: number, body: ReturnType<typeof import('./pipelines').updateBody>) =>
+  send<PipelineUpdated>(`/api/pipelines/${id}`, 'PATCH', body)
+
+/** "<name> (copy)" with every setting and stage. Never a deal. */
+export const duplicatePipeline = (id: number) =>
+  send<PipelineRowT>(`/api/pipelines/${id}/duplicate`, 'POST')
+
+/** Every pipeline the caller can see, in the new order. */
+export const reorderPipelines = (ids: number[]) =>
+  send<PipelineRowT[]>('/api/pipelines/reorder', 'POST', { pipeline_ids: ids })
+
+export type PipelineAccess = { pipeline_id: number; user_ids: number[]; everyone: boolean }
+
+export const getPipelinePermissions = (id: number) =>
+  get<PipelineAccess>(`/api/pipelines/${id}/permissions`)
+
+/** Nobody selected = everyone can access it. ADMIN always can. */
+export const setPipelinePermissions = (id: number, userIds: number[]) =>
+  send<PipelineAccess>(`/api/pipelines/${id}/permissions`, 'PUT', { user_ids: userIds })
+
+export type PipelineDeletedMoving = PipelineDeleted & { moved_opportunities: number[] }
+
+/**
+ * Delete a pipeline. With deals in it, `moveToStageId` (a stage of ANOTHER
+ * pipeline) is where every one of them goes first — nothing is ever deleted but
+ * the pipeline and its columns. Without deals, pass nothing.
+ */
+export const deletePipelineMovingDeals = (id: number, moveToStageId?: number) => {
+  const sp = new URLSearchParams()
+  if (moveToStageId != null) sp.set('move_to_stage_id', String(moveToStageId))
+  const qs = sp.toString()
+  return send<PipelineDeletedMoving>(`/api/pipelines/${id}${qs ? '?' + qs : ''}`, 'DELETE')
+}
+
+/** The Stage distribution card's slices: only stages with "Show in reports" pie on. */
+export type DashboardDistribution = DashboardFunnel & {
+  distribution: { id: number; name: string; position: number; color: string | null;
+    count: number; value_cents: number }[]
+  distribution_total: number
+}
+
+/** Which probability weighted a forecast row — see GET /api/forecast. */
+export type ForecastWeighting = 'opportunity' | 'stage' | 'conversion_rate'
+
+export type ForecastWithProbability = Omit<Forecast, 'stages'> & {
+  use_opportunity_probability: boolean
+  stages: (ForecastStage & { probability: number | null; weighting: ForecastWeighting })[]
+}

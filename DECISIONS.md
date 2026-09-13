@@ -2679,3 +2679,149 @@ the gate went from 88 cases to 91.
   mirrored event — so in a capture of existing data neither renders and the measured
   geometry is unchanged. That is an argument, not a measurement, and it is recorded
   as such.
+
+## AMENDMENT (2026-09-13): the Pipelines tab, its modal and its menu are GoHighLevel's — and a stage or pipeline holding deals CAN be deleted
+
+The owner's goal, in his words: the Opportunities module must "look like the original
+one" and "work with same ui and same functions" as GoHighLevel. He supplied
+screenshots of the live account (`refs/opps/02-08, 10-12`, taken on his laptop — no
+live session exists on the server and nothing was driven there). **The screenshots
+are the specification** for the tab bar, the Pipelines list, its ⋮ menu and the
+Create/Edit pipeline modal. They are not computed-style captures, so pixel values are
+read off an image, not measured by `capture/extract.js`; where GHL wins on structure
+below, that is why. Forecast and Bulk Actions stay OURS, as recorded on 2026-09-10.
+
+Branch `feature/ghl-pipelines`, migration `d4a9c1e7b352` (on `b7e3f1a8c204`).
+
+### What this overrides, item by item
+
+1. **"A stage or a pipeline can only be deleted once it is empty" (2026-09-10) — OVERRIDDEN.**
+   It now works like GoHighLevel, **but no deal is ever deleted**:
+   * a stage holding deals asks which stage *of the same pipeline* receives them; a
+     pipeline holding deals asks for a destination *pipeline and stage*. They are
+     moved, then the stage or pipeline is deleted. Without a destination the API still
+     answers **409 naming the count**, and no `force` flag skips that at any role;
+   * an empty stage, and a pipeline holding no deals (stages and all), delete after a
+     confirm. "Empty means empty — the columns are somebody's configuration too" is
+     retired: GHL deletes such a pipeline and there is no deal in it to protect;
+   * a **structural move writes `pipeline_id`, `stage_id` and the in-column rank and
+     nothing else.** It is a Core `UPDATE` that sets `updated_at` to itself, so the
+     column's `onupdate` does not fire; `custom_fields` — including `owen_call_id` —
+     is never mentioned and comes out byte-identical. The rank is written because
+     arrivals would otherwise share positions with the destination's own cards; they
+     keep their relative order and land after them;
+   * **a structural move fires NO automation.** The drag path calls
+     `on_opportunity_stage_changed` (rule 4, a customer text per deal); this path
+     does not, and a test asserts the `jobs` table is unchanged while proving the same
+     contact WOULD have been queued by an ordinary move. Jobs already pending are left
+     untouched: a `stage_change_notify` queued earlier for a stage that is then
+     deleted still runs, and the handler already words a missing stage as "updated";
+   * **one transaction.** Nothing commits until the end; a failure part-way moves
+     nothing and deletes nothing (tested by making the last step raise). The final
+     step refuses to delete a pipeline that still has a deal filed in it;
+   * what pointed at a deleted pipeline: **saved views and calendars are DETACHED**
+     (`pipeline_id = NULL`), exactly as they already were for an empty pipeline. A
+     view with no pipeline re-filters whichever board is open, so the board does not
+     break. Re-pointing them at the destination was rejected: a list called "Open AHS"
+     silently showing Retail is a list that lies. `custom_field_pipelines` rows go, the
+     definitions and every answer stay; the pipeline's permission rows go.
+   * In the modal a stage deletion is **pending until Update**: Cancel discards it.
+
+2. **"Role: ADMIN for all seven endpoints" — AMENDED.** DISPATCHER may create, edit,
+   duplicate and reorder pipelines and stages. **ADMIN alone** deletes a stage or a
+   pipeline (including removing a stored stage through the modal's stage list) and
+   manages permissions. TECH changes nothing. The screen disables, with the reason, what
+   a role cannot do.
+
+3. **Pipeline names are now UNIQUE, case-insensitively** — the modal's own helper text
+   ("Use a unique, descriptive name"). Checked on create, rename and duplicate
+   ("<name> (copy)", then "(copy 2)"…). **Stage names are still NOT unique** — the two
+   "Call Back" stages and the CLI's exit 5 are untouched. The check runs across every
+   pipeline, including ones the caller cannot access, so a 409 can reveal that *a
+   name* is taken; accepted, because two boards with one name is the ambiguity the
+   rule exists for.
+
+4. **"A new pipeline starts with no stages" — kept at the API, not in the modal.**
+   `POST /api/pipelines` with no `stages` still creates an empty pipeline. The Create
+   modal pre-fills GHL's four starter rows (New Lead 20 · Contacted 40 · Proposal Sent
+   60 · Closed 80), visibly and editably, before anything is sent.
+
+5. **"Per-stage win probabilities were rejected deliberately" (Forecast) — OVERRIDDEN
+   for probabilities a person types.** The 2026-09-10 objection was to a rate
+   *inferred* from stage history this schema does not keep. These are entered by hand
+   in the modal, so nobody is being shown an unverifiable curve. Rule:
+   `use_opportunity_probability` on → each open deal at its own `probability`, else
+   its stage's; off → the stage's `probability`; still unset → the pipeline's
+   conversion rate, **which is exactly what every existing pipeline does**, since
+   every existing stage's probability is NULL. Each forecast row reports `weighting`
+   (`opportunity` | `stage` | `conversion_rate`) and the stage's probability.
+
+6. **The Custom fields tab is gone from Opportunities** — GHL has four tabs. The same
+   `CustomFieldsPanel`, unedited, is mounted at **Settings → Custom Fields**
+   (`/settings/custom-fields` also opens it). Everything it did still works there.
+
+### "Show in reports" — what each switch does, and does not
+
+Two independent flags per stage. `show_in_funnel = false` removes the stage **and its
+deals** from the Dashboard Funnel's walk, so `total`, `reached` and both percentages
+are the funnel of the shown stages. `show_in_pie = false` removes it from the Stage
+distribution donut (`distribution` / `distribution_total` in
+`GET /api/dashboard/funnel`; the card no longer draws the funnel's list). Neither
+touches the board, the Forecast or `/api/pipelines`. Those two cards are the only
+stage-level funnel and pie consumers in the app; Reporting's donuts are calls and
+appointments.
+
+### Display colours
+
+`pipelines.color_mode`: `none` (default, what every existing pipeline is) · `dot` · `tint`.
+The board's stage column header draws a coloured dot, or a 12%-alpha fill with a
+35%-alpha border, from `stages.color`. A new stage is painted from a fixed palette by
+position (`STAGE_PALETTE`, mirrored in `lib/pipelines.ts` and pinned equal by a test);
+a stage created before colours existed (NULL) borrows the palette colour for its
+column, so switching an old pipeline to Colored dot never draws a column without one.
+
+### Per-pipeline permissions — "Manage permissions"
+
+`pipeline_permissions` holds one row per ALLOWED (pipeline, user). **No rows = everyone.
+ADMIN always.** Roles still decide what a user may do with what they can see.
+
+A user without access sees neither the pipeline nor any deal in it, anywhere. Every
+read goes through `app/pipeline_access.py`, which computes the set of HIDDEN pipeline
+ids (empty for ADMIN and for the common no-restriction case, so every query is exactly
+what it was). A lookup by id answers what a nonexistent id answers — 404, or the same
+400 a wrong pair gets — never 403. Per surface: the board and `/api/opportunities`;
+fetch, drag, edit and delete by id; create into a pipeline; both bulk actions;
+`/api/search` (items *and* `total`); Forecast; `/api/dashboard` figures and the funnel
+(including which pipeline it defaults to); the Call report's won-deal credit; the
+contact panel's opportunity list on all five routes that return it; appointment list,
+detail, create and edit (the visit stays, the link to the hidden deal is blanked);
+saved views (hidden if filed on a hidden pipeline); calendars (link blanked);
+custom-field `pipeline_ids`; every structure route; and the `ghl` CLI, which only
+reaches data through the API (tested by driving the real CLI against the app).
+`test_pipeline_permissions.py` has one test per surface, and
+`test_every_route_that_reads_a_deal_is_on_the_audited_list` fails the day a route that
+touches opportunities or pipelines is added without being recorded there.
+
+Reordering takes a permutation of the pipelines the CALLER can see; hidden ones keep
+their slots, so a refusal never lists ids the caller should not know. Duplicate copies
+the access list, or a copy of a restricted pipeline would open it to everyone.
+
+### Smaller decisions, overrulable
+
+* `pipelines.updated_at` is NULL for every pipeline that predates it and the list shows
+  "—" rather than inventing a date; it is set by every structure write from now on.
+* Copy link hands out `/opportunities?pipeline=<id>`; nginx already serves `index.html`
+  for any path, and the app keeps that path in the address bar until the user
+  navigates away. A link to a pipeline the reader cannot access opens the first one
+  they can.
+* Pipelines are listed in `position`, then `id` (the list had no order at all before).
+
+### Screenshot assumptions (what the screenshots do not show)
+
+The stage row's chevron opens the stage's colour (palette + custom picker) — the
+screenshot shows a chevron beside the report icons and nothing else; a funnel/pie
+switched off is drawn dimmed with a slash; every dialog behind the ⋮ menu (Manage
+permissions, Move to position, Delete, and Delete stage in the modal) is our shape in
+the modal's style; the empty-list, search-miss and error states are ours; rows per page
+offers 10/20/50; Copy link falls back to a copyable prompt when the clipboard is
+unavailable; the tab bar's active blue and underline are read off 05-08.

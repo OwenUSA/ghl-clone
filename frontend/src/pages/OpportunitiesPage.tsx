@@ -16,7 +16,6 @@ import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
 import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
 import { PipelinesPanel } from '../components/PipelinesPanel'
-import { CustomFieldsPanel } from '../components/CustomFieldsPanel'
 import { CustomFieldAnswers } from '../components/CustomFieldAnswers'
 import { ContactPicker, type PickedContact } from '../components/ContactPicker'
 import { OpportunityDetail } from '../components/OpportunityDetail'
@@ -46,6 +45,7 @@ import { csvFilename, opportunitiesCsv } from '../lib/csv'
 import { downloadCsv } from '../lib/download'
 import type { Me } from '../lib/auth'
 import type { Focus } from '../lib/focus'
+import { pipelineFromSearch, stageHeader, type ColorMode } from '../lib/pipelines'
 
 /**
  * Measured from captures/opportunities/ and menus.json:
@@ -63,11 +63,10 @@ import type { Focus } from '../lib/focus'
  * 10 stages, measured by scrolling the board horizontally — the first capture saw
  * only 5. Board scrolls sideways; the document does not scroll.
  */
-// "Custom fields" joined the measured four on 2026-09-11: the job questions the
-// owner defines himself attach to pipelines, so they live beside the Pipelines
-// tab. The tab row is OURS (DECISIONS.md, 2026-09-10) — nothing here is parity.
-const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Custom fields',
-              'Bulk Actions']
+// Exactly GoHighLevel's four (refs/opps/05-08). "Custom fields" sat here from
+// 2026-09-11 until 2026-09-13, when it moved to Settings > Custom Fields — the
+// same panel, relocated, so the tab row matches the original again.
+const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']
 const OVERFLOW = ['Export', 'Restore opportunities', 'Manage smart lists', 'Dashboard insights']
 
 /**
@@ -236,6 +235,8 @@ function Card({
 
 function StageColumn({
   stage,
+  index,
+  colorMode,
   opps,
   layout,
   onOpen,
@@ -244,7 +245,11 @@ function StageColumn({
   selected,
   onToggle,
 }: {
-  stage: { id: number; name: string; count: number; value_cents: number }
+  stage: { id: number; name: string; count: number; value_cents: number; color?: string | null }
+  /** Column order — picks the palette colour for a stage that has none stored. */
+  index: number
+  /** The pipeline's "Set pipeline display colors" — see lib/pipelines.ts stageHeader. */
+  colorMode: ColorMode | undefined
   opps: Opportunity[]
   layout: Layout
   onOpen: (id: number) => void
@@ -258,6 +263,7 @@ function StageColumn({
   // sortable in it to drop onto.
   const { setNodeRef, isOver } = useDroppable({ id: stageDropId(stage.id) })
   const total = opps.reduce((s, o) => s + o.value_cents, 0)
+  const look = stageHeader(colorMode, stage.color, index)
   return (
     // 240px pitch measured from GHL's stage-collapse buttons.
     // Only the card list scrolls (vertically). Nesting another scroll container
@@ -265,16 +271,23 @@ function StageColumn({
     <div className="flex h-full shrink-0 flex-col" style={{ width: 240, paddingRight: 10 }}>
       <div
         className="shrink-0"
+        data-color-mode={colorMode ?? 'none'}
         style={{
-          backgroundColor: '#fff',
+          backgroundColor: look.background,
           borderRadius: 6,
           padding: '10px 12px',
-          border: '1px solid rgb(234,236,240)',
+          border: '1px solid ' + look.border,
         }}
       >
         {/* Measured: name 14px/**700** rgb(16,24,40); count 12px/400
             rgb(102,112,133); total a SEPARATE 12px/500 rgb(0,0,0) element. */}
         <div className="flex items-center gap-1">
+          {look.dot && (
+            <span aria-hidden style={{
+              width: 8, height: 8, borderRadius: 4, flexShrink: 0, marginRight: 2,
+              backgroundColor: look.dot,
+            }} />
+          )}
           <div
             className="min-w-0 flex-1 truncate"
             title={stage.name}
@@ -363,7 +376,11 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
   // Falling back to the first pipeline covers both "nothing picked yet" and "the
   // picked one is gone", without an effect that would fight the user's choice.
-  const [pipelineId, setPipelineId] = useState<number | null>(null)
+  // Copy link on the Pipelines tab hands out /opportunities?pipeline=<id>; a fresh
+  // load of that URL lands here and opens the board on it. A pipeline the user
+  // cannot access is simply not in the list, so it falls back to the first.
+  const [pipelineId, setPipelineId] = useState<number | null>(
+    () => pipelineFromSearch(window.location.search))
   const pipeline = pipelines.data?.find((p) => p.id === pipelineId) ?? pipelines.data?.[0]
 
   // A menu closes on Escape. Bound only while it is open, so the page is not
@@ -511,26 +528,37 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
       <div
-        className="flex shrink-0 items-center gap-6 bg-white px-4"
+        className="flex shrink-0 items-end gap-6 bg-white px-4"
         style={{ height: 90, borderBottom: '1px solid rgb(234,236,240)' }}
       >
-        <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)' }}>
+        <div style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)', paddingBottom: 10,
+          lineHeight: '24px' }}>
           Opportunities
         </div>
+        {/* Measured from refs/opps/05-08: 14px/500, inactive rgb(71,84,103),
+            active rgb(56,160,219) with a 2px underline in the same blue that runs
+            the full width of the label plus its padding, flush with the bar. */}
+        <div role="tablist" aria-label="Opportunities views" className="flex items-stretch"
+          style={{ height: 44, gap: 6, marginLeft: -2 }}>
         {TABS.map((t) => {
           const live = !(t === 'Forecast' && !canForecast)
           return (
             <button
               key={t}
+              role="tab"
+              aria-selected={tab === t}
               onClick={() => live && setTab(t)}
               disabled={!live}
               title={live ? undefined : 'Your role cannot view the forecast'}
               style={{
                 fontSize: 14,
                 fontWeight: 500,
+                padding: '0 7px',
                 color: tab === t
                   ? 'rgb(56,160,219)'
-                  : live ? 'rgb(102,112,133)' : 'rgb(152,162,179)',
+                  : live ? 'rgb(71,84,103)' : 'rgb(152,162,179)',
+                borderBottom: '2px solid ' + (tab === t ? 'rgb(56,160,219)' : 'transparent'),
+                borderTop: '2px solid transparent',
                 cursor: live ? 'pointer' : 'not-allowed',
               }}
             >
@@ -538,10 +566,15 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
             </button>
           )
         })}
+        </div>
       </div>
 
       {/* pipeline row */}
-      <div className="flex shrink-0 items-center gap-3 px-4" style={{ height: 60 }}>
+      <div className="flex shrink-0 items-center gap-3 px-4" style={{
+        height: 60,
+        // Not on the Pipelines tab, which has its own header (refs/opps/02).
+        display: tab === 'Pipelines' ? 'none' : undefined,
+      }}>
         <select
           value={pipeline?.id ?? ''}
           onChange={(e) => setPipelineId(Number(e.target.value))}
@@ -701,11 +734,6 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
           above stays and everything below it is replaced. */}
       {tab === 'Pipelines' && <PipelinesPanel user={user} />}
 
-      {/* Defining a field is ADMIN; the tab stays open to every role and the
-          panel disables what they cannot use, with a title saying why. Hiding
-          the questions from the people who answer them daily would be worse. */}
-      {tab === 'Custom fields' && <CustomFieldsPanel user={user} />}
-
       {/* Bulk Actions keeps the board and the filters; only the bar is added, so
           the selection is made against the set the user is already looking at. */}
       {(tab === 'Opportunities' || selecting) && (
@@ -821,10 +849,12 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
         >
           <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden px-4 pb-4">
             <div className="flex h-full">
-              {pipeline?.stages.map((s) => (
+              {pipeline?.stages.map((s, i) => (
                 <StageColumn
                   key={s.id}
                   stage={s}
+                  index={i}
+                  colorMode={(pipeline as { color_mode?: ColorMode }).color_mode}
                   opps={stageCards(opps.data ?? [], s.id)}
                   layout={layout}
                   onOpen={setOpenOpp}

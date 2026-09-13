@@ -13,6 +13,7 @@ import { ReportingPage } from './pages/ReportingPage'
 import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { me } from './lib/auth'
+import { viewFromPath } from './lib/settingsSections'
 import type { Focus } from './lib/focus'
 
 // Paths that used to mean something and still turn up in bookmarks and pasted
@@ -40,11 +41,22 @@ function initialView(): string {
     window.history.replaceState(null, '', '/')
     return retired
   }
-  return DEFAULT_VIEW
+  // Two paths are real links now, kept in the address bar so a reload stays put:
+  // /opportunities?pipeline=<id> (the Pipelines tab's Copy link) and
+  // /settings/custom-fields (where Custom Fields moved to on 2026-09-13).
+  return viewFromPath(path) ?? DEFAULT_VIEW
 }
 
 export default function App() {
   const [active, setActive] = useState(initialView)
+
+  // Leaving the view a deep link opened drops the link from the address bar, so a
+  // reload after navigating elsewhere does not jump back to it.
+  useEffect(() => {
+    if (viewFromPath(window.location.pathname) && viewFromPath(window.location.pathname) !== active) {
+      window.history.replaceState(null, '', '/')
+    }
+  }, [active])
   const [searchOpen, setSearchOpen] = useState(false)
   const qc = useQueryClient()
 
