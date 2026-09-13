@@ -173,7 +173,15 @@ export type Stage = {
   count: number
   value_cents: number
 }
-export type Pipeline = { id: number; name: string; stages: Stage[] }
+export type Pipeline = {
+  id: number
+  name: string
+  stages: Stage[]
+  /** On: each deal carries its own probability (the modal shows the field). Sent
+      by GET /api/pipelines since feature/ghl-pipelines; optional so fixtures that
+      predate it still type-check. */
+  use_opportunity_probability?: boolean
+}
 
 export const listPipelines = () => get<Pipeline[]>('/api/pipelines')
 
@@ -677,6 +685,9 @@ export type OpportunityDetail = {
   contact_phone: string | null
   /** The visits booked for this deal, soonest first. */
   appointments: LinkedAppointment[]
+  /** The deal's own win probability, 0-100; only meaningful on a pipeline that
+      uses opportunity-level probability. */
+  probability: number | null
   followers: { id: number; name: string }[]
   additional_contacts: {
     id: number; name: string; email: string | null; phone: string | null
@@ -702,6 +713,8 @@ export type OpportunityPatch = {
   source?: string | null
   expected_close_date?: string | null
   custom_fields?: Record<string, unknown>
+  /** 0-100, or null to clear it. */
+  probability?: number | null
 }
 
 export type OpportunityDeleted = {

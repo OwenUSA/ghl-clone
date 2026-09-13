@@ -83,6 +83,8 @@ type Form = {
   businessName: string
   source: string
   closeDate: string
+  /** The deal's own probability as typed, '' for none. */
+  probability: string
   answers: Record<string, unknown>
 }
 
@@ -102,6 +104,7 @@ function formFrom(o: OppDetail): Form {
     businessName: o.business_name ?? '',
     source: o.source ?? '',
     closeDate: o.expected_close_date ?? '',
+    probability: o.probability != null ? String(o.probability) : '',
     answers: { ...(o.custom_fields ?? {}) },
   }
 }
@@ -109,9 +112,15 @@ function formFrom(o: OppDetail): Form {
 const sameIds = (a: Choice[], b: { id: number }[]) =>
   a.length === b.length && a.every((x, i) => x.id === b[i].id)
 
-/** Only what changed. Never a reserved key, never an answer nobody touched. */
-function changes(o: OppDetail, f: Form): OpportunityPatch {
+/** Only what changed. Never a reserved key, never an answer nobody touched.
+    `probabilityShown` is false when the (new) pipeline does not use
+    opportunity-level probability: a field that is not drawn sends nothing. */
+function changes(o: OppDetail, f: Form, probabilityShown = false): OpportunityPatch {
   const body: OpportunityPatch = {}
+  if (probabilityShown) {
+    const typed = f.probability.trim() === '' ? null : Number(f.probability)
+    if (typed !== o.probability) body.probability = typed
+  }
   if (f.title !== o.title) body.title = f.title
   if (f.contact && f.contact.id !== o.contact_id) body.contact_id = f.contact.id
   if (f.pipelineId !== o.pipeline_id) body.pipeline_id = f.pipelineId
@@ -310,14 +319,21 @@ export function OpportunityDetail({
           const phone = form.phone ?? contact.data?.phone ?? o.contact_phone ?? ''
           const tags = contact.data?.tags ?? o.contact_tags
           const shows = (value: unknown) => !hideEmpty || !isEmptyAnswer(value)
-          const body = changes(o, form)
+          // Probability is drawn only when the deal's (new) pipeline weighs each deal
+          // on its own probability — GoHighLevel's "Use opportunity-level probability".
+          const probabilityShown = !!current?.use_opportunity_probability
+          const body = changes(o, form, probabilityShown)
+          const badProbability = probabilityShown && form.probability.trim() !== ''
+            && !(Number.isInteger(Number(form.probability))
+              && Number(form.probability) >= 0 && Number(form.probability) <= 100)
           const contactDirty = (form.email != null && form.email !== (contact.data?.email ?? ''))
             || (form.phone != null && form.phone !== (contact.data?.phone ?? ''))
           const dirty = Object.keys(body).length > 0 || contactDirty
           const problem = !form.title.trim() ? 'Opportunity name is required'
             : !form.contact ? 'Choose a primary contact'
               : form.stageId == null ? `Choose a stage in ${current?.name ?? 'the new pipeline'}`
-                : null
+                : badProbability ? 'Probability is a whole number from 0 to 100'
+                  : null
           const formTab = tab === 'details' || tab.startsWith('group:')
           const group = tab.startsWith('group:')
             ? sections.groups.find((g) => 'group:' + g.group.id === tab) : undefined
@@ -455,6 +471,9 @@ export function OpportunityDetail({
 
                       <div className="grid grid-cols-2 gap-x-3">
                         <div style={{ marginBottom: 16 }}>
+                          {/* Only pipelines this user can access: GET /api/pipelines
+                              never returns one they cannot (pipeline_access.py), and
+                              the server refuses a move into one regardless. */}
                           <Label>Pipeline</Label>
                           <Select value={form.pipelineId} ariaLabel="Pipeline" disabled={!canEdit}
                             onChange={(v) => setForm((f) => f && ({
@@ -502,6 +521,20 @@ export function OpportunityDetail({
                           </div>
                           {/* centsFromDollars( is what Update sends — see changes(). */}
                         </div>
+                        {probabilityShown && (!hideEmpty || form.probability !== '') && (
+                          <div style={{ marginBottom: 16 }}>
+                            <Label>Probability</Label>
+                            <div className="relative">
+                              <input type="number" min={0} max={100} step={1}
+                                value={form.probability} aria-label="Probability"
+                                placeholder="Enter probability"
+                                onChange={(e) => set('probability', e.target.value)}
+                                style={{ ...INPUT, paddingRight: 30 }} />
+                              <span className="pointer-events-none absolute"
+                                style={{ right: 12, top: 17, fontSize: 14, color: FAINT }}>%</span>
+                            </div>
+                          </div>
+                        )}
                         {(!hideEmpty || form.ownerId) && (
                           <div style={{ marginBottom: 16 }}>
                             <Label>Owner</Label>

@@ -1967,7 +1967,10 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     old_pipeline_id = o.pipeline_id
     new_pipeline_id = data.pop("pipeline_id", None) or o.pipeline_id
     if new_pipeline_id != o.pipeline_id:
-        if not db.get(Pipeline, new_pipeline_id):
+        # A pipeline the caller cannot access answers exactly as one that does not
+        # exist (pipeline_access.py): the move is refused and existence not leaked.
+        if (not db.get(Pipeline, new_pipeline_id)
+                or not pipeline_access.can_see(db, principal, new_pipeline_id)):
             raise HTTPException(400, "unknown pipeline_id")
         # Every stage belongs to one pipeline, so a deal moved without a stage
         # would sit in a column of the board it just left.

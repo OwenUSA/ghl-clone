@@ -2904,6 +2904,22 @@ match screenshots by eye, and every reading taken from them is listed in
 
 Payments tab (out of the product). An audit log and its footer id (no audit log
 exists). GHL's association chip on a note card (nothing counts note associations).
-Probability in Opportunity details and a per-user pipeline filter (wait on
-`feature/ghl-pipelines`). A `ghl` CLI for tasks, notes or groups. A TECH completing
+A `ghl` CLI for tasks, notes or groups. A TECH completing
 their own task (every task write is STAFF). Notifications for tasks, by design.
+
+### After `feature/ghl-pipelines` merged (same day)
+
+- **Probability** is drawn in Opportunity details only when the deal's pipeline has
+  "Use opportunity-level probability" on — including the pipeline it is being moved
+  TO in the same edit. Off, the field is not drawn and Update sends no probability,
+  so a stored value is left alone rather than cleared.
+- **The modal's Pipeline dropdown lists only pipelines the user can access**: it is
+  fed by `GET /api/pipelines`, which omits the rest. The server is the gate, not the
+  list: a move into an inaccessible pipeline is refused with the same
+  `400 unknown pipeline_id` a nonexistent one gets, and a deal's tasks and notes in a
+  hidden pipeline answer the same 404 as the deal (`pipeline_access.py`).
+- **Migration `f3c8e2a61d97`**, on `d4a9c1e7b352`: five CREATE TABLEs and one nullable
+  ADD COLUMN (`custom_field_defs.group_id`). Proven on a throwaway SQLite stood up at
+  the previous head with representative rows: every pre-existing table hashed
+  byte-identical before and after, the new tables empty, `alembic check` clean, one
+  head, and a downgrade/upgrade round trip clean.

@@ -584,3 +584,90 @@ def test_view_conversations_finds_or_creates_one_thread_and_sends_nothing(client
     assert made["conversation_id"] == again["conversation_id"]
     assert _count(Conversation, Conversation.contact_id == ids["bob"]) == 1
     assert (_count(Job), _count(ConversationEvent)) == (jobs_before, events_before)
+
+
+# ---------------- per-pipeline access (feature/ghl-pipelines, merged) ----------------
+
+def _restrict_retail_to_the_tech(client):
+    """A permission row naming only the tech: the dispatcher loses Retail (an ADMIN
+    always keeps access)."""
+    from app.models import PipelinePermission
+    with SessionLocal() as s:
+        s.add(PipelinePermission(pipeline_id=client.ids["retail"],
+                                 user_id=client.ids["tech"]))
+        retail_deal = Opportunity(title="Retail secret", pipeline_id=client.ids["retail"],
+                                  stage_id=client.ids["retail_lead"],
+                                  contact_id=client.ids["bob"])
+        s.add(retail_deal)
+        s.flush()
+        s.add(OpportunityTask(opportunity_id=retail_deal.id, title="hidden task"))
+        s.add(OpportunityNote(opportunity_id=retail_deal.id, body="hidden note"))
+        s.commit()
+        return retail_deal.id
+
+
+def test_the_modal_pipeline_dropdown_source_lists_only_accessible_pipelines(client):
+    _restrict_retail_to_the_tech(client)
+    names = [p["name"] for p in client.get(
+        "/api/pipelines", headers=_as(client, "dispatcher")).json()]
+    assert names == ["AHS"], "a pipeline the dispatcher cannot access is offered"
+    assert [p["name"] for p in client.get("/api/pipelines").json()] == ["AHS", "Retail"]
+
+
+def test_a_deal_cannot_be_moved_into_a_pipeline_the_user_cannot_access(client):
+    ids = client.ids
+    _restrict_retail_to_the_tech(client)
+    r = client.patch(f"/api/opportunities/{ids['deal']}/detail",
+                     headers=_as(client, "dispatcher"),
+                     json={"pipeline_id": ids["retail"], "stage_id": ids["retail_lead"]})
+    # The same answer an id that does not exist gets, so existence does not leak.
+    assert r.status_code == 400 and r.json()["detail"] == "unknown pipeline_id"
+    with SessionLocal() as s:
+        o = s.get(Opportunity, ids["deal"])
+        assert (o.pipeline_id, o.stage_id) == (ids["ahs"], ids["new_lead"])
+
+
+def test_tasks_and_notes_of_a_hidden_pipeline_answer_404_and_change_nothing(client):
+    hidden = _restrict_retail_to_the_tech(client)
+    d = _as(client, "dispatcher")
+    with SessionLocal() as s:
+        task_id = s.scalar(select(OpportunityTask.id).where(
+            OpportunityTask.opportunity_id == hidden))
+        note_id = s.scalar(select(OpportunityNote.id).where(
+            OpportunityNote.opportunity_id == hidden))
+    for method, url, body in (
+            ("GET", f"/api/opportunities/{hidden}/tasks", None),
+            ("POST", f"/api/opportunities/{hidden}/tasks", {"title": "x"}),
+            ("PATCH", f"/api/tasks/{task_id}", {"done": True}),
+            ("DELETE", f"/api/tasks/{task_id}", None),
+            ("GET", f"/api/opportunities/{hidden}/notes", None),
+            ("POST", f"/api/opportunities/{hidden}/notes", {"body": "x"}),
+            ("PATCH", f"/api/opportunity-notes/{note_id}", {"body": "changed"}),
+            ("DELETE", f"/api/opportunity-notes/{note_id}", None)):
+        r = client.request(method, url, json=body, headers=d)
+        assert r.status_code == 404, (method, url, r.status_code)
+        assert "hidden" not in r.text
+    with SessionLocal() as s:
+        assert [(t.title, t.completed_at) for t in s.scalars(select(OpportunityTask).where(
+            OpportunityTask.opportunity_id == hidden))] == [("hidden task", None)]
+        assert [n.body for n in s.scalars(select(OpportunityNote).where(
+            OpportunityNote.opportunity_id == hidden))] == ["hidden note"]
+    # The admin still reaches both.
+    assert len(client.get(f"/api/opportunities/{hidden}/tasks").json()) == 1
+
+
+def test_probability_round_trips_through_the_modal_save(client):
+    """The modal renders Probability only when the pipeline uses opportunity-level
+    probability; whatever it sends must land and come back on the detail."""
+    ids = client.ids
+    with SessionLocal() as s:
+        s.get(Pipeline, ids["ahs"]).use_opportunity_probability = True
+        s.commit()
+    rows = client.get("/api/pipelines").json()
+    assert next(p for p in rows if p["id"] == ids["ahs"])["use_opportunity_probability"]
+    r = client.patch(f"/api/opportunities/{ids['deal']}/detail", json={"probability": 65})
+    assert r.status_code == 200
+    assert client.get(f"/api/opportunities/{ids['deal']}").json()["probability"] == 65
+    assert client.patch(f"/api/opportunities/{ids['deal']}/detail",
+                        json={"probability": 101}).status_code == 422
+    assert client.get(f"/api/opportunities/{ids['deal']}").json()["probability"] == 65

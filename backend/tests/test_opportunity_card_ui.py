@@ -272,3 +272,25 @@ def test_notes_card_draws_no_association_chip():
     assert "association" not in body.lower()
     assert "Show more" in source and "Show less" in source
     assert "Created by: " in body
+
+
+def test_probability_is_drawn_only_for_opportunity_level_probability():
+    """§7: GoHighLevel shows a deal's Probability when its pipeline weighs each deal
+    on its own probability. A field drawn on a stage-probability pipeline would
+    save a number the Forecast never reads."""
+    source = _read(*MODAL.split("/"))
+    assert "const probabilityShown = !!current?.use_opportunity_probability" in source
+    assert "{probabilityShown && (" in source and 'aria-label="Probability"' in source
+    assert "changes(o, form, probabilityShown)" in source, (
+        "a hidden Probability field still sends a value on Update")
+    changes = source.split("function changes(", 1)[1].split("\n}\n", 1)[0]
+    assert "if (probabilityShown) {" in changes
+
+
+def test_the_pipeline_dropdown_lists_what_the_server_says_this_user_can_access():
+    """The dropdown is fed by GET /api/pipelines, which omits any pipeline the user
+    cannot access (test_opportunity_workspace.py proves the list and the refusal).
+    It must not be fed from anything that lists every pipeline."""
+    source = _read(*MODAL.split("/"))
+    assert "queryFn: listPipelines" in source
+    assert "pipelineList.map((p) => <option" in source

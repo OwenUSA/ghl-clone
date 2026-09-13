@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations
+from . import auth, automations, pipeline_access
 from .db import get_db
 from .models import (
     Contact,
@@ -59,11 +59,29 @@ NOTE_PREVIEWS_MAX = 10
 NOTE_PREVIEW_CHARS = 60
 
 
-def _get_opportunity(db: Session, opp_id: int) -> Opportunity:
-    o = db.get(Opportunity, opp_id)
-    if not o:
-        raise HTTPException(404, "opportunity not found")
-    return o
+def _get_opportunity(db: Session, principal: auth.Principal, opp_id: int) -> Opportunity:
+    """The deal, or the SAME 404 for "no such deal" and "a pipeline you cannot
+    access" — per-pipeline permissions (pipeline_access.py) cover a deal's tasks
+    and notes exactly as they cover the deal."""
+    return pipeline_access.get_opportunity(db, principal, opp_id)
+
+
+def _get_task(db: Session, principal: auth.Principal, task_id: int) -> OpportunityTask:
+    t = db.get(OpportunityTask, task_id)
+    if t is None or not pipeline_access.can_see(
+            db, principal, db.scalar(select(Opportunity.pipeline_id).where(
+                Opportunity.id == t.opportunity_id))):
+        raise HTTPException(404, "task not found")
+    return t
+
+
+def _get_note(db: Session, principal: auth.Principal, note_id: int) -> OpportunityNote:
+    n = db.get(OpportunityNote, note_id)
+    if n is None or not pipeline_access.can_see(
+            db, principal, db.scalar(select(Opportunity.pipeline_id).where(
+                Opportunity.id == n.opportunity_id))):
+        raise HTTPException(404, "note not found")
+    return n
 
 
 def _refuse_notes(principal: auth.Principal, verb: str) -> None:
@@ -239,10 +257,10 @@ def _check_assignee(db: Session, user_id: int | None) -> None:
 
 @router.get("/api/opportunities/{opp_id}/tasks")
 def list_tasks(opp_id: int, db: Session = Depends(get_db),
-               _: auth.Principal = auth.ANY_USER):
+               principal: auth.Principal = auth.ANY_USER):
     """Open tasks first, soonest due first (undated last); done ones after.
     Everyone reads: a TECH is who a site task is usually for."""
-    _get_opportunity(db, opp_id)
+    _get_opportunity(db, principal, opp_id)
     rows = db.scalars(select(OpportunityTask)
                       .options(selectinload(OpportunityTask.assignee))
                       .where(OpportunityTask.opportunity_id == opp_id)).all()
@@ -260,7 +278,7 @@ def create_task(opp_id: int, body: TaskCreate, db: Session = Depends(get_db),
     Enqueues NOTHING. There is no reminder and no assignee notification — the
     owner's rule — and `test_opportunity_workspace.py` counts the jobs table.
     """
-    o = _get_opportunity(db, opp_id)
+    o = _get_opportunity(db, principal, opp_id)
     _check_assignee(db, body.assigned_user_id)
     t = OpportunityTask(opportunity_id=o.id, contact_id=o.contact_id,
                         title=_clean_task_title(body.title),
@@ -276,10 +294,8 @@ def create_task(opp_id: int, body: TaskCreate, db: Session = Depends(get_db),
 
 @router.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, body: TaskPatch, db: Session = Depends(get_db),
-                _: auth.Principal = auth.STAFF):
-    t = db.get(OpportunityTask, task_id)
-    if not t:
-        raise HTTPException(404, "task not found")
+                principal: auth.Principal = auth.STAFF):
+    t = _get_task(db, principal, task_id)
     data = body.model_dump(exclude_unset=True)
     if "title" in data:
         t.title = _clean_task_title(data["title"])
@@ -302,13 +318,11 @@ def update_task(task_id: int, body: TaskPatch, db: Session = Depends(get_db),
 
 @router.delete("/api/tasks/{task_id}")
 def delete_task(task_id: int, db: Session = Depends(get_db),
-                _: auth.Principal = auth.STAFF):
+                principal: auth.Principal = auth.STAFF):
     """STAFF, not ADMIN: a task is the team's own to-do, not a customer record,
     and making a dispatcher ask an admin to remove a typo would be friction for
     nothing. Overrulable — see DECISIONS.md."""
-    t = db.get(OpportunityTask, task_id)
-    if not t:
-        raise HTTPException(404, "task not found")
+    t = _get_task(db, principal, task_id)
     db.delete(t)
     db.commit()
     return {"deleted": task_id}
@@ -358,7 +372,7 @@ def list_notes(opp_id: int, db: Session = Depends(get_db),
     refusal carries the same sentence every other internal-note door gives.
     """
     _refuse_notes(principal, "read")
-    o = _get_opportunity(db, opp_id)
+    o = _get_opportunity(db, principal, opp_id)
     notes = db.scalars(select(OpportunityNote)
                        .options(selectinload(OpportunityNote.author))
                        .where(OpportunityNote.opportunity_id == opp_id)
@@ -377,7 +391,7 @@ def list_notes(opp_id: int, db: Session = Depends(get_db),
 def create_note(opp_id: int, body: NoteBody, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.ANY_USER):
     _refuse_notes(principal, "write")
-    _get_opportunity(db, opp_id)
+    _get_opportunity(db, principal, opp_id)
     n = OpportunityNote(opportunity_id=opp_id, body=_clean_note(body.body),
                         created_by_id=principal.user_id)
     db.add(n)
@@ -390,9 +404,7 @@ def create_note(opp_id: int, body: NoteBody, db: Session = Depends(get_db),
 def update_note(note_id: int, body: NoteBody, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.ANY_USER):
     _refuse_notes(principal, "write")
-    n = db.get(OpportunityNote, note_id)
-    if not n:
-        raise HTTPException(404, "note not found")
+    n = _get_note(db, principal, note_id)
     n.body = _clean_note(body.body)
     db.commit()
     db.refresh(n)
@@ -403,9 +415,7 @@ def update_note(note_id: int, body: NoteBody, db: Session = Depends(get_db),
 def delete_note(note_id: int, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.ANY_USER):
     _refuse_notes(principal, "delete")
-    n = db.get(OpportunityNote, note_id)
-    if not n:
-        raise HTTPException(404, "note not found")
+    n = _get_note(db, principal, note_id)
     db.delete(n)
     db.commit()
     return {"deleted": note_id}

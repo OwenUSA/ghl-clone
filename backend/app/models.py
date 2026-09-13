@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    func,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -687,7 +688,8 @@ class CustomFieldGroup(Base):
     name: Mapped[str] = mapped_column(String(80))
     position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow)
+        DateTime(timezone=True), default=utcnow,
+        server_default=func.now())
 
 
 class OpportunityTask(Base):
@@ -711,9 +713,11 @@ class OpportunityTask(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow)
+        DateTime(timezone=True), default=utcnow,
+        server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow,
+        server_default=func.now())
 
     assignee: Mapped["User | None"] = relationship(foreign_keys=[assigned_user_id])
 
@@ -729,9 +733,11 @@ class OpportunityNote(Base):
     body: Mapped[str] = mapped_column(Text)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow)
+        DateTime(timezone=True), default=utcnow,
+        server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow,
+        server_default=func.now())
 
     author: Mapped["User | None"] = relationship()
 
