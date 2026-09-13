@@ -168,21 +168,21 @@ def number_events(client, as_, thread_id, who="admin", filter="all"):
 # The four shapes of "an unknown number reached us": each line, call and text. The
 # BulkVS bodies are what owen-main's CRM link sends; the Quo ones what the mirror sends.
 UNKNOWN = {
-    "bulkvs-call": dict(from_number=STRANGER, type="CALL", direction="INBOUND",
-                        duration_seconds=4, call_status="no-answer",
-                        provider_ref="call-1", source_system="BulkVS",
-                        source_number=BULKVS_LINE),
-    "bulkvs-text": dict(from_number=STRANGER, type="SMS", direction="INBOUND",
-                        body="Do you do skylights?", provider_ref="msg-1",
-                        source_system="BulkVS", source_number=BULKVS_LINE),
-    "quo-call": dict(from_number=STRANGER, type="CALL", direction="INBOUND",
-                     duration_seconds=3, call_status="no-answer",
-                     dedupe_key="openphone:call:AC1", occurred_at=now_iso(-1),
-                     source_system="OpenPhone", source_number=QUO_LINE),
-    "quo-text": dict(from_number=STRANGER, type="SMS", direction="INBOUND",
-                     body="WIN A FREE CRUISE", dedupe_key="openphone:message:M1",
-                     occurred_at=now_iso(-1), source_system="OpenPhone",
-                     source_number=QUO_LINE),
+    "bulkvs-call": {"from_number": STRANGER, "type": "CALL", "direction": "INBOUND",
+                        "duration_seconds": 4, "call_status": "no-answer",
+                        "provider_ref": "call-1", "source_system": "BulkVS",
+                        "source_number": BULKVS_LINE},
+    "bulkvs-text": {"from_number": STRANGER, "type": "SMS", "direction": "INBOUND",
+                        "body": "Do you do skylights?", "provider_ref": "msg-1",
+                        "source_system": "BulkVS", "source_number": BULKVS_LINE},
+    "quo-call": {"from_number": STRANGER, "type": "CALL", "direction": "INBOUND",
+                     "duration_seconds": 3, "call_status": "no-answer",
+                     "dedupe_key": "openphone:call:AC1", "occurred_at": now_iso(-1),
+                     "source_system": "OpenPhone", "source_number": QUO_LINE},
+    "quo-text": {"from_number": STRANGER, "type": "SMS", "direction": "INBOUND",
+                     "body": "WIN A FREE CRUISE", "dedupe_key": "openphone:message:M1",
+                     "occurred_at": now_iso(-1), "source_system": "OpenPhone",
+                     "source_number": QUO_LINE},
 }
 
 
@@ -268,7 +268,7 @@ def test_a_known_number_lands_on_the_contact_labelled_and_interleaved(world):
            source_number=BULKVS_LINE)
 
     assert counts()["number_threads"] == 0, "a known number must not get its own thread"
-    conv = [r for r in inbox(client, as_) if r["contact_id"] == ids["jane"]][0]
+    conv = next(r for r in inbox(client, as_) if r["contact_id"] == ids["jane"])
     rows = client.get("/api/conversations/%d/events" % conv["id"],
                       headers=as_("admin")).json()
     assert [(r["source_system"], r["body"] or r["type"]) for r in rows] == [
@@ -312,8 +312,8 @@ def _one_of_each(client, as_):
            occurred_at=now_iso(-30))
     ingest(client, as_, **{**UNKNOWN["bulkvs-text"], "occurred_at": now_iso(-5)})
     rows = inbox(client, as_)
-    return ([r for r in rows if r["kind"] == "contact"][0],
-            [r for r in rows if r["kind"] == "number"][0])
+    return (next(r for r in rows if r["kind"] == "contact"),
+            next(r for r in rows if r["kind"] == "number"))
 
 
 def test_the_list_is_mixed_by_last_activity_in_both_sort_orders(world):
@@ -376,7 +376,7 @@ def test_deleting_a_number_thread_is_admin_only_and_removes_only_it(world):
 def test_internal_notes_on_a_number_thread_are_staff_only(world):
     client, _, as_ = world
     ingest(client, as_, **UNKNOWN["bulkvs-text"])
-    tid = [r for r in inbox(client, as_) if r["kind"] == "number"][0]["id"]
+    tid = next(r for r in inbox(client, as_) if r["kind"] == "number")["id"]
 
     r = client.post("/api/number-threads/%d/messages" % tid,
                     json={"type": "INTERNAL_COMMENT", "body": "spam, ignore"},
@@ -404,7 +404,7 @@ def test_texting_a_number_thread_is_logged_only_while_the_link_is_unarmed(world,
     monkeypatch.delenv("CRM_LINK_BASE_URL", raising=False)
     monkeypatch.delenv("CRM_LINK_API_KEY", raising=False)
     ingest(client, as_, **UNKNOWN["bulkvs-text"])
-    tid = [r for r in inbox(client, as_) if r["kind"] == "number"][0]["id"]
+    tid = next(r for r in inbox(client, as_) if r["kind"] == "number")["id"]
     r = client.post("/api/number-threads/%d/messages" % tid,
                     json={"type": "SMS", "body": "Yes we do"}, headers=as_("tech"))
     assert r.status_code == 201, r.text
@@ -420,7 +420,7 @@ def test_texting_a_number_thread_is_refused_exactly_as_a_contact_is(world, link)
     dark = (403, {"detail": "CRM-link SMS is dark (CRM_LINK_SMS_ENABLED=false)"})
     link.answers["/messages"] = dark
     ingest(client, as_, **UNKNOWN["bulkvs-text"])
-    tid = [r for r in inbox(client, as_) if r["kind"] == "number"][0]["id"]
+    tid = next(r for r in inbox(client, as_) if r["kind"] == "number")["id"]
 
     to_number = client.post("/api/number-threads/%d/messages" % tid,
                             json={"type": "SMS", "body": "hello"}, headers=as_("admin"))
@@ -438,7 +438,7 @@ def test_texting_a_number_thread_is_refused_exactly_as_a_contact_is(world, link)
 def test_calling_a_number_thread_uses_the_same_dialling_path(world, link):
     client, _, as_ = world
     ingest(client, as_, **UNKNOWN["bulkvs-call"])
-    tid = [r for r in inbox(client, as_) if r["kind"] == "number"][0]["id"]
+    tid = next(r for r in inbox(client, as_) if r["kind"] == "number")["id"]
 
     # owen-main's allowlist refuses — the refusal comes back and nothing is written.
     link.answers["/calls"] = (403, {"detail": "destination is not on CRM_LINK_ALLOWLIST"})
@@ -464,7 +464,7 @@ def test_calling_is_refused_without_a_request_while_the_link_is_unarmed(world, m
     calls = []
     monkeypatch.setattr(crmlink.httpx, "post", lambda *a, **k: calls.append(a))
     ingest(client, as_, **UNKNOWN["bulkvs-call"])
-    tid = [r for r in inbox(client, as_) if r["kind"] == "number"][0]["id"]
+    tid = next(r for r in inbox(client, as_) if r["kind"] == "number")["id"]
     before = counts()
     r = client.post("/api/number-threads/%d/call" % tid, headers=as_("admin"))
     assert r.json()["placed"] is False and calls == [] and counts() == before
@@ -474,7 +474,7 @@ def test_a_delivery_receipt_advances_a_text_sent_from_a_number_thread(world, lin
     client, _, as_ = world
     link.answers["/messages"] = (200, {"ok": True, "message_id": "om-77"})
     ingest(client, as_, **UNKNOWN["bulkvs-text"])
-    tid = [r for r in inbox(client, as_) if r["kind"] == "number"][0]["id"]
+    tid = next(r for r in inbox(client, as_) if r["kind"] == "number")["id"]
     client.post("/api/number-threads/%d/messages" % tid,
                 json={"type": "SMS", "body": "hi"}, headers=as_("admin"))
     r = client.post("/api/events/delivery", json={"provider_ref": "om-77",
@@ -520,7 +520,7 @@ def test_the_same_quo_object_twice_is_one_event_and_later_parts_fill_it_in(world
 def _stranger_history(client, as_):
     for shape in ("bulkvs-call", "quo-text", "bulkvs-text"):
         ingest(client, as_, **UNKNOWN[shape])
-    tid = [r for r in inbox(client, as_) if r["kind"] == "number"][0]["id"]
+    tid = next(r for r in inbox(client, as_) if r["kind"] == "number")["id"]
     client.post("/api/number-threads/%d/messages" % tid,
                 json={"type": "INTERNAL_COMMENT", "body": "real lead"},
                 headers=as_("admin"))
@@ -570,7 +570,7 @@ def test_add_as_contact_moves_every_event_and_keeps_dedupe_keys(world):
     # The unread badge came with it, and the number is gone from the list.
     rows = inbox(client, as_)
     assert not any(r["kind"] == "number" for r in rows)
-    bob = [r for r in rows if r["id"] == adopted["conversation_id"]][0]
+    bob = next(r for r in rows if r["id"] == adopted["conversation_id"])
     assert bob["unread_count"] == 3, "the three unread inbound events came across"
 
 
@@ -741,3 +741,56 @@ def test_the_conversion_commit_touches_only_qualifying_contacts(world):
         assert convert_auto_contacts.run(db, commit=True)["converted"] == []
     finally:
         db.close()
+
+
+# --- 9. the browser: keys, not ids, and the not-a-contact affordances -----------------
+
+FRONTEND = __import__("pathlib").Path(__file__).resolve().parents[2] / "frontend" / "src"
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None,
+                    reason="node is not on PATH, so inbox.ts cannot be executed")
+def test_marking_a_number_thread_read_does_not_clear_a_contact_thread_with_the_same_id():
+    """Ids come from two tables. Clearing by id would clear the wrong badge."""
+    import json
+    import subprocess
+
+    script = """
+        import * as inbox from %s
+        const rows = [{id: 1, key: 'c1', unread_count: 2}, {id: 1, key: 'n1', unread_count: 3}]
+        const after = inbox.markReadIn(rows, 'n1')
+        console.log('@@' + JSON.stringify({
+          after, tab: inbox.unreadTabCount(after),
+          legacy: inbox.markReadIn([{id: 7, unread_count: 1}], 7),
+        }))
+    """ % json.dumps((FRONTEND / "lib" / "inbox.ts").as_posix())
+    proc = subprocess.run(["node", "--experimental-strip-types", "--input-type=module", "-"],
+                          input=script, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads([ln for ln in proc.stdout.splitlines() if ln.startswith("@@")][-1][2:])
+    assert [r["unread_count"] for r in out["after"]] == [2, 0]
+    assert out["tab"] == 1
+    assert out["legacy"] == [{"id": 7, "unread_count": 0}], "rows without a key still work"
+
+
+def test_the_page_selects_by_key_and_shows_the_number_thread_affordances():
+    page = (FRONTEND / "pages" / "ConversationsPage.tsx").read_text(encoding="utf-8")
+    panel = (FRONTEND / "components" / "NumberDetailsPanel.tsx").read_text(encoding="utf-8")
+    api = (FRONTEND / "lib" / "api.ts").read_text(encoding="utf-8")
+    assert "useState<string | null>(null)" in page and "c.key === active" in page
+    assert "c.id === active" not in page, "a row selected by id collides across kinds"
+    # Every thread action goes through the row-addressed helpers.
+    for helper in ("listThreadEvents(", "patchThread(", "deleteThread(", "sendToThread(",
+                   "callThread("):
+        assert helper in page, helper
+    assert "`/api/number-threads/${t.id}`" in api
+    # Not-a-contact marker on the row and in the header; Add as contact in the header
+    # and in the right-hand panel instead of an empty contact.
+    assert page.count("<NotAContactPill />") >= 2
+    assert "Add as contact" in page and "Add as contact" in panel
+    assert "<NumberDetailsPanel row={current}" in page
+    assert "!isNumber && current.contact_id != null" in page, (
+        "the contact panel would render an empty contact for a number thread")
+    # Quo's name is labelled as Quo's, and the reply-line banner still names BulkVS.
+    assert "from Quo" in panel and "<FromQuo />" in page
+    assert "This reply goes from" in page and "'+19544829099'" in page

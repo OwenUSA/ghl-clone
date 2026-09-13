@@ -247,10 +247,21 @@ export const moveOpportunity = (id: number, stageId: number, position: number) =
   })
 
 export type ConversationSummary = {
+  /** Unique within its KIND only — a contact thread and a number thread can share an
+   *  id. Select and compare rows by `key`. */
   id: number
-  contact_id: number
+  /** "c<id>" for a contact thread, "n<id>" for a number-only thread. */
+  key: string
+  /** 'number' is a thread for a phone number no contact holds (2026-09-13). */
+  kind: 'contact' | 'number'
+  /** Null on a number-only thread: there is no contact, and nothing pretends so. */
+  contact_id: number | null
+  number_thread_id: number | null
   contact_name: string | null
   contact_phone: string | null
+  phone_display: string | null
+  /** The name Quo's own contact book has for the number. Shown "from Quo". */
+  quo_name: string | null
   /** Do Not Disturb. The composer disables Send rather than let a message be typed
    *  and then silently suppressed. */
   contact_dnd: boolean
@@ -298,6 +309,8 @@ export type ThreadEvent = {
   source_system: string | null
   /** The LINE it came through, e.g. "+19417247244". Null renders no chip. */
   source_number: string | null
+  /** What was said on a call, when the far side transcribed it (Quo does). */
+  transcript?: string | null
 }
 
 /**
@@ -1324,3 +1337,45 @@ export const patchBlockedTime = (id: number, body: Partial<BlockedTimeBody>) =>
   send<BlockedTime>(`/api/blocked-times/${id}`, 'PATCH', body)
 export const deleteBlockedTime = (id: number) =>
   send<{ deleted: number }>(`/api/blocked-times/${id}`, 'DELETE')
+
+/**
+ * ---------------------------------------------------------------------------
+ * One inbox, two kinds of thread (2026-09-13).
+ *
+ * A row from `GET /api/conversations` is either a contact's thread or a thread
+ * for a phone number nobody has saved. They share the list, the badge and the
+ * composer; they live at different URLs. These helpers take the ROW, so the page
+ * never has to branch on the kind itself — and never addresses a number thread's
+ * id at a contact thread's route, where the same number means someone else.
+ * ---------------------------------------------------------------------------
+ */
+type ThreadRef = Pick<ConversationSummary, 'id' | 'kind'>
+
+const threadPath = (t: ThreadRef) =>
+  t.kind === 'number' ? `/api/number-threads/${t.id}` : `/api/conversations/${t.id}`
+
+export const listThreadEvents = (t: ThreadRef, filter: string) =>
+  get<ThreadEvent[]>(`${threadPath(t)}/events?filter=${encodeURIComponent(filter)}`)
+
+export const patchThread = (t: ThreadRef, body: { read?: boolean; starred?: boolean }) =>
+  send<ConversationSummary>(threadPath(t), 'PATCH', body)
+
+export const deleteThread = (t: ThreadRef) =>
+  send<{ deleted: number; events_deleted: number }>(threadPath(t), 'DELETE')
+
+export const sendToThread = (t: ThreadRef, body: string, type: SendableType) =>
+  send<SentMessage>(`${threadPath(t)}/messages`, 'POST', { body, type })
+
+/** Ring the thread's number — a contact's, or a number nobody has saved — through the
+ *  same owen-main click-to-call path. */
+export const callThread = (t: ThreadRef) =>
+  send<CallPlaced>(`${threadPath(t)}/call`, 'POST')
+
+/** What `POST /api/contacts` reports when saving the contact adopted a number-only
+ *  thread: its whole history now sits on `conversation_id`. */
+export type AdoptedThread = {
+  number_thread_id: number
+  events_moved: number
+  duplicates_skipped: number
+  conversation_id: number | null
+} | null

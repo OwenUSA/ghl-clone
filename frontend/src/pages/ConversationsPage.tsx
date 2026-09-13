@@ -4,14 +4,19 @@ import type { Me } from '../lib/auth'
 import { PageTabs } from '../components/PageTabs'
 import { ContactDetailsPanel } from '../components/ContactDetailsPanel'
 import {
+  FromQuo, NotAContactPill, NumberDetailsPanel, canAddContact, prefillFromQuo,
+} from '../components/NumberDetailsPanel'
+import { AddContactDialog } from '../components/AddContactDialog'
+import {
   IconCalendar, IconChat, IconChevronDown, IconClock, IconEye, IconFilter,
-  IconFunnel, IconInbox, IconMail, IconPhone, IconPlay, IconSearch, IconSort,
-  IconStar, IconTrash, IconUser, IconUsers,
+  IconFunnel, IconInbox, IconMail, IconPhone, IconPlay, IconPlus, IconSearch, IconSort,
+  IconStar, IconStarFilled, IconTrash, IconUser, IconUsers,
 } from '../components/Icon'
 import {
-  ApiError, PANE, deleteConversation, listConversations, listEvents,
-  patchConversation, placeCall, sendMessage,
-  type ConversationSummary, type SendableType, type ThreadEvent,
+  ApiError, PANE, callThread, deleteThread, listConversations, listThreadEvents,
+  patchThread, sendToThread,
+  type AdoptedThread, type ContactDetail, type ConversationSummary, type SendableType,
+  type ThreadEvent,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
 import {
@@ -113,6 +118,10 @@ const FILTERS = [
   { key: 'sla', label: 'SLA', unimplemented: true },
   { key: 'wa_perm', label: 'WhatsApp Permission', unimplemented: true },
 ]
+
+/** The bound BulkVS DID every reply from this CRM leaves on (locked 2026-09-11). Named
+ *  in the Quo banner when the thread holds no outbound row to read it from. */
+const BULKVS_LINE = '+19544829099'
 
 const dayLabel = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -303,18 +312,28 @@ const SOURCE_TONE: Record<string, { fg: string; bg: string }> = {
   BulkVS: { fg: 'rgb(71,84,103)', bg: 'rgb(242,244,247)' },
 }
 
+/**
+ * The name the owner uses for each system (2026-09-13). OpenPhone rebranded as Quo;
+ * the feed still says "OpenPhone" on the wire, and the screen says what he calls it.
+ */
+const SOURCE_LABEL: Record<string, string> = { OpenPhone: 'Quo', BulkVS: 'BulkVS' }
+
+/** Does this event come through the Quo (OpenPhone) line? */
+export const isQuo = (e: Pick<ThreadEvent, 'source_system'>) =>
+  e.source_system === 'OpenPhone' || e.source_system === 'Quo'
+
 export function SourceChip({ e }: { e: ThreadEvent }) {
   if (!e.source_system && !e.source_number) return null
   const system = e.source_system ?? ''
-  const tone = SOURCE_TONE[system] ?? SOURCE_TONE.BulkVS
+  const tone = SOURCE_TONE[isQuo(e) ? 'OpenPhone' : system] ?? SOURCE_TONE.BulkVS
   const line = e.source_number ? formatPhone(e.source_number) : ''
   // Both facts, in one chip: the system names WHICH app owns it, the number names
   // the line the customer actually dialled or was texted from.
-  const label = [system, line].filter(Boolean).join(' · ')
+  const label = [SOURCE_LABEL[system] ?? system, line].filter(Boolean).join(' · ')
   return (
     <span
-      title={system === 'OpenPhone'
-        ? `Mirrored from OpenPhone ${line} — read-only. A reply from here goes out on the BulkVS number.`
+      title={isQuo(e)
+        ? `Through Quo ${line} — read-only here. A reply from here goes out on the BulkVS number.`
         : `Sent and received on ${line || 'the BulkVS line'}.`}
       style={{
         marginLeft: 6, padding: '1px 6px', borderRadius: 10, fontSize: 11,
@@ -406,6 +425,13 @@ function EventBubble({ e }: { e: ThreadEvent }) {
               </div>
               <audio controls src={e.recording_url ?? undefined}
                 style={{ marginTop: 6, height: 28, width: 280 }} />
+              {e.transcript && (
+                // Quo transcribes its calls; the words are part of the record.
+                <details style={{ marginTop: 6, fontSize: 13, color: 'rgb(71,84,103)' }}>
+                  <summary style={{ cursor: 'pointer', color: 'rgb(0,78,235)' }}>Transcript</summary>
+                  <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{e.transcript}</div>
+                </details>
+              )}
             </div>
           ) : (
             <div>{e.body}</div>
@@ -425,7 +451,9 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   const [tab, setTab] = useState<string>('all')
   const [sort, setSort] = useState('latest')
   const [filter, setFilter] = useState('all')
-  const [selected, setSelected] = useState<number | null>(null)
+  // A row KEY ("c12" / "n3"), not an id: contact threads and number-only threads
+  // share the list and their ids come from different tables.
+  const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [showSort, setShowSort] = useState(false)
   const [showFilter, setShowFilter] = useState(false)
@@ -435,7 +463,9 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   const [scope, setScope] = useState<InboxScope>('team')
   const [q, setQ] = useState('')
   const [searching, setSearching] = useState(false)
-  const [checked, setChecked] = useState<number[]>([])
+  const [checked, setChecked] = useState<string[]>([])
+  // "Add as contact" opened from the thread header (the panel has its own button).
+  const [addingContact, setAddingContact] = useState(false)
   const [composerType, setComposerType] = useState<SendableType>('SMS')
   const [showComposerType, setShowComposerType] = useState(false)
   const [sending, setSending] = useState(false)
@@ -473,7 +503,8 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   // record and a clicked row on exactly the same path.
   useEffect(() => {
     if (!focus) return
-    setSelected(focus.id)
+    // The palette names a CONVERSATION id; its row key is "c<id>".
+    setSelected(`c${focus.id}`)
     // The palette searches the whole account, so the thread it just asked for
     // can easily sit outside the scope or the search the inbox is narrowed to.
     // Widen back to the team inbox rather than open a thread the list cannot
@@ -510,14 +541,15 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     queryFn: () => listConversations(tab, sort, scope === 'mine' ? 'me' : 'all', q),
     ...LIVE,
   })
-  const active = selected ?? convs.data?.[0]?.id ?? null
+  const active = selected ?? convs.data?.[0]?.key ?? null
+  const current: ConversationSummary | undefined = convs.data?.find((c) => c.key === active)
   const events = useQuery({
     queryKey: ['events', active, filter],
-    queryFn: () => listEvents(active as number, filter),
-    enabled: active != null,
+    queryFn: () => listThreadEvents(current as ConversationSummary, filter),
+    enabled: current != null,
     ...LIVE,
   })
-  const current: ConversationSummary | undefined = convs.data?.find((c) => c.id === active)
+  const isNumber = current?.kind === 'number'
 
   useEffect(() => {
     const on = () => setVisible(document.visibilityState === 'visible')
@@ -536,7 +568,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
    */
   useEffect(() => {
     if (selected == null || convs.isFetching || !convs.data) return
-    if (!convs.data.some((c) => c.id === selected)) setSelected(null)
+    if (!convs.data.some((c) => c.key === selected)) setSelected(null)
   }, [selected, convs.data, convs.isFetching])
 
   /**
@@ -569,7 +601,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
    * back. The snapshot keeps it for as long as the thread stays open, which is
    * also what it means -- "this is where you were up to".
    */
-  const [openedWith, setOpenedWith] = useState<{ id: number; unread: number } | null>(null)
+  const [openedWith, setOpenedWith] = useState<{ id: string; unread: number } | null>(null)
   useEffect(() => {
     if (active == null) { setOpenedWith(null); return }
     // Wait for the row: on a cold load `current` is undefined for a frame, and a
@@ -588,9 +620,10 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
    * user switches to it. Nothing else is invalidated; the list refetch below is
    * the only request this triggers beyond the PATCH itself.
    */
-  const markRead = async (id: number): Promise<boolean> => {
-    const update = await markConversationRead(
-      id, (cid) => patchConversation(cid, { read: true }))
+  const markRead = async (key: string): Promise<boolean> => {
+    const row = convs.data?.find((c) => c.key === key)
+    if (!row) return false
+    const update = await markConversationRead(key, () => patchThread(row, { read: true }))
     qc.setQueriesData<ConversationSummary[]>({ queryKey: ['conversations'] }, update.apply)
     if (update.error) {
       // The badge stays where it was -- `apply` is identity on a failure -- and
@@ -629,7 +662,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     const key = `${active}:${openUnread}`
     if (asked.current === key) return
     asked.current = key
-    void markRead(active as number)
+    void markRead(active as string)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, openUnread, visible])
 
@@ -645,22 +678,23 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   const canDelete = user.role === 'ADMIN'
 
   const onDelete = async () => {
-    if (active == null || deleting) return
+    if (!current || deleting) return
     setDeleting(true)
     setDeleteError(null)
+    const gone = current.key
     try {
-      const r = await deleteConversation(active)
+      await deleteThread(current)
       setConfirmDelete(false)
       // Close the thread first, then drop the row from every cached list, so the
       // pane is never rendering a conversation that no longer exists.
       setSelected(null)
-      setChecked((s) => s.filter((x) => x !== r.deleted))
+      setChecked((s) => s.filter((x) => x !== gone))
       qc.setQueriesData<ConversationSummary[]>(
         { queryKey: ['conversations'] },
-        (rows) => (rows ?? []).filter((c) => c.id !== r.deleted))
+        (rows) => (rows ?? []).filter((c) => c.key !== gone))
       // Its timeline is gone too; invalidating instead would refetch a 404 over
       // a pane that is on its way out.
-      qc.removeQueries({ queryKey: ['events', r.deleted] })
+      qc.removeQueries({ queryKey: ['events', gone] })
       void qc.invalidateQueries({ queryKey: ['conversations'] })
       setNote(null)
     } catch (err) {
@@ -699,6 +733,9 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     }
     if (!current.contact_phone) return 'This contact has no phone number.'
     if (current.contact_dnd) return 'This contact is on Do Not Disturb.'
+    // A number-only thread has a number by construction and no DND: DND is a
+    // contact's setting. Its texts still go through the same transport and are
+    // refused, logged or queued exactly as a contact's would be.
     return null
   }
   const blocked = sendBlocked()
@@ -720,18 +757,18 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
    * BulkVS thread there is nothing to warn about, and a banner that is always there
    * is a banner nobody reads.
    */
-  const mirrored = events.data?.find((e) => e.source_system === 'OpenPhone')
+  const mirrored = events.data?.find((e) => isQuo(e))
   const replyLine = events.data?.find(
-    (e) => e.direction === 'OUTBOUND' && e.source_system && e.source_system !== 'OpenPhone',
+    (e) => e.direction === 'OUTBOUND' && e.source_system && !isQuo(e),
   )?.source_number
 
   const onSend = async () => {
     const text = draft.trim()
-    if (!text || blocked || active == null || sending) return
+    if (!text || blocked || !current || sending) return
     setSending(true)
     setNote(null)
     try {
-      const r = await sendMessage(active, text, composerType)
+      const r = await sendToThread(current, text, composerType)
       // The draft is cleared for anything that was RECORDED -- including a refusal,
       // which writes a row carrying the text. It is kept only when nothing was
       // written at all (a suppression), so the operator does not have to retype a
@@ -758,11 +795,11 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   }
 
   const onCall = async () => {
-    if (active == null || calling) return
+    if (!current || calling) return
     setCalling(true)
     setNote(null)
     try {
-      const r = await placeCall(active)
+      const r = await callThread(current)
       setNote({ text: r.reason, bad: !r.placed })
       if (r.placed) {
         await Promise.all([
@@ -785,6 +822,37 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   // row. The per-row badge further down keeps the message total -- there it
   // labels a single thread, so "2" means two unread texts, which is true.
   const unreadTotal = unreadTabCount(convs.data)
+
+  /** Star / unstar — the same PATCH for either kind of thread. */
+  const onStar = async () => {
+    if (!current) return
+    try {
+      const row = await patchThread(current, { starred: !current.starred })
+      qc.setQueriesData<ConversationSummary[]>(
+        { queryKey: ['conversations'] },
+        (rows) => rows?.map((c) => (c.key === row.key ? { ...c, starred: row.starred } : c)))
+      void qc.invalidateQueries({ queryKey: ['conversations'] })
+    } catch (err) {
+      setNote({
+        text: err instanceof ApiError ? err.message : 'The conversation could not be starred.',
+        bad: true,
+      })
+    }
+  }
+
+  /**
+   * A contact now exists with this number. The server already moved the number's
+   * whole history onto the contact's thread in the same save, so the number-only row
+   * is gone: open the contact's thread, which is where every one of those events is.
+   */
+  const onAdopted = (c: ContactDetail & { adopted_number_thread?: AdoptedThread }) => {
+    setAddingContact(false)
+    const conv = c.adopted_number_thread?.conversation_id
+    setSelected(conv != null ? `c${conv}` : null)
+    setNote({ text: `Saved ${c.name || 'the contact'}. This thread is now theirs.`, bad: false })
+    void qc.invalidateQueries({ queryKey: ['conversations'] })
+    void qc.invalidateQueries({ queryKey: ['events'] })
+  }
   const allChecked = (convs.data ?? []).length > 0 && checked.length === convs.data!.length
 
   return (
@@ -915,7 +983,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                 type="checkbox"
                 checked={allChecked}
                 onChange={(e) =>
-                  setChecked(e.target.checked ? (convs.data ?? []).map((c) => c.id) : [])}
+                  setChecked(e.target.checked ? (convs.data ?? []).map((c) => c.key) : [])}
               />
               <span style={{ fontSize: 14, fontWeight: 500, color: 'rgb(71,84,103)' }}>
                 Select all
@@ -934,11 +1002,12 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                 </div>
               )}
               {convs.data?.map((c) => {
-                const on = c.id === active
+                const on = c.key === active
+                const numberOnly = c.kind === 'number'
                 return (
                   <div
-                    key={c.id}
-                    onClick={() => setSelected(c.id)}
+                    key={c.key}
+                    onClick={() => setSelected(c.key)}
                     className="cursor-pointer"
                     style={{
                       display: 'flex', gap: 8, padding: '10px 8px', marginTop: 6,
@@ -949,11 +1018,11 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   >
                     <input
                       type="checkbox"
-                      checked={checked.includes(c.id)}
+                      checked={checked.includes(c.key)}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) =>
                         setChecked((s) =>
-                          e.target.checked ? [...s, c.id] : s.filter((x) => x !== c.id))}
+                          e.target.checked ? [...s, c.key] : s.filter((x) => x !== c.key))}
                       style={{ marginTop: 3 }}
                     />
                     <div className="relative shrink-0">
@@ -963,7 +1032,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                           backgroundColor: 'rgb(185,230,254)', fontSize: 10,
                           color: 'rgb(71,84,103)',
                         }}>
-                        {(c.contact_name ?? '+1').slice(0, 2)}
+                        {(c.contact_name ?? c.quo_name ?? '+1').slice(0, 2)}
                       </div>
                       <span style={{
                         position: 'absolute', right: -4, bottom: -2,
@@ -977,8 +1046,11 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                         <span className="truncate" style={{
                           fontSize: 14, fontWeight: 700, color: 'rgb(71,84,103)',
                         }}>
-                          {c.contact_name ?? c.contact_phone}
+                          {numberOnly ? (c.quo_name || c.phone_display) : (c.contact_name ?? c.contact_phone)}
                         </span>
+                        {numberOnly && c.quo_name && (
+                          <span className="ml-1 shrink-0"><FromQuo /></span>
+                        )}
                         <span className="ml-auto flex items-center gap-1 pl-2">
                           <span style={{ fontSize: 12, color: 'rgb(102,112,133)' }}>
                             {dayLabel(c.last_event_at)}
@@ -997,8 +1069,11 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                         <span style={{ fontSize: 14, color: 'rgb(102,112,133)' }}>
                           {c.contact_phone}
                         </span>
+                        {numberOnly && <span className="ml-2"><NotAContactPill /></span>}
                         <span className="ml-auto">
-                          <IconStar size={14} color="rgb(152,162,179)" />
+                          {c.starred
+                            ? <IconStarFilled size={14} color="rgb(247,144,9)" />
+                            : <IconStar size={14} color="rgb(152,162,179)" />}
                         </span>
                       </div>
                     </div>
@@ -1020,8 +1095,39 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   color: 'rgb(71,84,103)',
                 }}>+1</div>
               <div style={{ fontSize: 16, fontWeight: 500, color: 'rgb(16,24,40)' }}>
-                {current?.contact_name ?? current?.contact_phone ?? '—'}
+                {isNumber
+                  ? (current?.quo_name || current?.phone_display)
+                  : (current?.contact_name ?? current?.contact_phone ?? '—')}
               </div>
+              {/* A number-only thread says so, names its number, and offers the one
+                  action that changes it. Quo's name is labelled as Quo's. */}
+              {isNumber && current && (
+                <>
+                  {current.quo_name && (
+                    <span style={{ fontSize: 14, color: 'rgb(102,112,133)' }}>
+                      {current.phone_display} · <FromQuo />
+                    </span>
+                  )}
+                  <NotAContactPill />
+                  <button
+                    onClick={() => setAddingContact(true)}
+                    disabled={!canAddContact(user)}
+                    title={canAddContact(user)
+                      ? 'Save this number as a contact — its history moves with it'
+                      : 'Only staff can add contacts'}
+                    className="flex items-center gap-1"
+                    style={{
+                      marginLeft: 4, height: 28, padding: '0 10px', borderRadius: 6,
+                      fontSize: 13, fontWeight: 500, color: 'rgb(0,78,235)',
+                      border: '1px solid rgb(178,204,255)', backgroundColor: '#fff',
+                      ...(canAddContact(user) ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
+                    }}
+                  >
+                    <IconPlus size={14} color="rgb(0,78,235)" />
+                    Add as contact
+                  </button>
+                </>
+              )}
               {/* five 24x24 icons at a 40px pitch — measured x=852..1036 */}
               <div className="relative ml-auto flex items-center" style={{ gap: 16 }}>
                 <IconBtn title="Filter messages" onClick={() => setShowFilter((s) => !s)}>
@@ -1037,12 +1143,21 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   title={calling
                     ? 'Placing the call…'
                     : 'Call %s'.replace('%s', current?.contact_phone ?? 'this contact')}
+                  disabled={current == null}
                   onClick={() => void onCall()}
                 >
                   <IconPhone size={24}
                     color={calling ? 'rgb(152,162,179)' : 'rgb(71,84,103)'} />
                 </IconBtn>
-                <IconBtn title="Add to Favorites"><IconStar size={24} color="rgb(71,84,103)" /></IconBtn>
+                <IconBtn
+                  title={current?.starred ? 'Remove from Favorites' : 'Add to Favorites'}
+                  disabled={current == null}
+                  onClick={() => void onStar()}
+                >
+                  {current?.starred
+                    ? <IconStarFilled size={24} color="rgb(247,144,9)" />
+                    : <IconStar size={24} color="rgb(71,84,103)" />}
+                </IconBtn>
                 {/* Was decorative. It now runs exactly the same PATCH that opening
                     the thread does, so the two can never disagree about what
                     "read" means. */}
@@ -1094,14 +1209,19 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
               >
                 <div style={{ fontSize: 13, color: 'rgb(180,35,24)' }}>
                   Delete the conversation with{' '}
-                  <strong>{current.contact_name ?? current.contact_phone ?? 'this contact'}</strong>
+                  <strong>
+                    {isNumber
+                      ? current.phone_display
+                      : (current.contact_name ?? current.contact_phone ?? 'this contact')}
+                  </strong>
                   {' '}and all {current.event_count}{' '}
                   {current.event_count === 1 ? 'message' : 'messages'} on it —
                   texts, calls, recordings and internal notes? This cannot be undone.
                 </div>
                 <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 6 }}>
-                  The contact, their opportunities and their appointments are kept.
-                  Only this thread is removed.
+                  {isNumber
+                    ? 'This number is not a contact, so there is nothing else to keep. Only this thread is removed.'
+                    : 'The contact, their opportunities and their appointments are kept. Only this thread is removed.'}
                 </div>
                 {deleteError && (
                   <div role="alert" style={{
@@ -1192,12 +1312,12 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                     border: '1px solid rgb(254,240,199)',
                   }}
                 >
-                  This thread includes messages mirrored from OpenPhone
+                  This thread includes messages through Quo
                   {mirrored.source_number ? ` (${formatPhone(mirrored.source_number)})` : ''},
-                  which is read&#8209;only here. Your reply sends from
-                  {' '}{replyLine ? formatPhone(replyLine) : 'the Dream Team Roofing number'}
+                  which is read&#8209;only here. This reply goes from
+                  {' '}{formatPhone(replyLine ?? BULKVS_LINE)}
                   {' '}— a different number from the one the customer used. To reply on the
-                  OpenPhone line, use the OpenPhone app.
+                  Quo line, use the Quo app.
                 </div>
               )}
               {blocked && composerType === 'SMS' && (
@@ -1276,7 +1396,10 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
             </div>
           </div>
 
-          {current && (
+          {current && isNumber && (
+            <NumberDetailsPanel row={current} user={user} onAdopted={onAdopted} />
+          )}
+          {current && !isNumber && current.contact_id != null && (
             <ContactDetailsPanel
               contactId={current.contact_id}
               user={user}
@@ -1284,6 +1407,13 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
               // pane is showing goes with it. Without this, `selected` still holds
               // the dead id and the thread pane sits empty after the list refetches.
               onDeleted={() => setSelected(null)}
+            />
+          )}
+          {addingContact && current && isNumber && (
+            <AddContactDialog
+              initial={prefillFromQuo(current)}
+              onClose={() => setAddingContact(false)}
+              onCreated={onAdopted}
             />
           )}
         </div>
