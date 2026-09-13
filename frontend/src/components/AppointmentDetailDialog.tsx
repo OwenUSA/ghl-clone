@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  cancelAppointment, getAppointment, listCalendars, listOpenOpportunities,
+  ApiError, cancelAppointment, getAppointment, listCalendars, listOpenOpportunities,
   listUsers, patchAppointment,
   type AppointmentDetail, type AppointmentPatch,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
-import { dateInputValue, fromInputs, timeInputValue } from '../lib/calendarGrid'
+import {
+  ACCOUNT_TIME_ZONE, dateInput as dateInputValue, fromDateTimeInputs as fromInputs,
+  timeInput as timeInputValue, whenLabel, zoneLabel,
+} from '../lib/accountTime'
 import { reminderSentence } from '../lib/reminders'
 import { ContactPicker } from './ContactPicker'
 
@@ -37,6 +40,13 @@ import { ContactPicker } from './ContactPicker'
  * happened: `PATCH` returns `automation`, and the panel prints it, so a
  * dispatcher who moves a roof inspection can see the reminder moved with it
  * instead of taking it on faith.
+ *
+ * 2026-09-13, with GoHighLevel's Book appointment modal: the panel shows and edits
+ * the booking's Description and Meeting location; its notes are the modal's
+ * STAFF-only "Internal notes" and are not drawn for a TECH (the server sends none);
+ * times are read and typed in the ACCOUNT's timezone (America/New_York), not the
+ * browser's, so 1:30 PM Eastern reads 1:30 PM on any laptop and either side of a
+ * DST change; and a move onto blocked off time asks before it saves.
  */
 
 /** The measured Appointment report tiles (DECISIONS.md), which is the status set
@@ -84,6 +94,8 @@ type Form = {
   status: string
   notes: string
   opportunityId: string
+  description: string
+  location: string
 }
 
 function formOf(a: AppointmentDetail): Form {
@@ -101,17 +113,15 @@ function formOf(a: AppointmentDetail): Form {
     status: a.status,
     notes: a.notes ?? '',
     opportunityId: a.opportunity_id ? String(a.opportunity_id) : '',
+    description: a.description ?? '',
+    location: a.location ?? '',
   }
 }
 
-const when = (d: Date) =>
-  d.toLocaleString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit',
-  })
+/** In the account's timezone, like everything else about a booking's time. */
+const when = (d: Date) => whenLabel(d)
 
-const clock = (d: Date) =>
-  d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+const clock = (d: Date) => whenLabel(d).split(', ').slice(-1)[0]
 
 export function AppointmentDetailDialog({
   appointmentId, user, onClose, onChanged,
@@ -127,6 +137,9 @@ export function AppointmentDetailDialog({
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
   const [confirmingCancel, setConfirmingCancel] = useState(false)
+  // A move onto blocked off time is refused 409 until confirmed: the refusal is
+  // the question, and "Save anyway" re-sends the same changes with the answer.
+  const [overlap, setOverlap] = useState<AppointmentPatch | null>(null)
 
   // `PATCH` and `DELETE /api/appointments/{id}` are both auth.STAFF. Mirror that
   // here rather than let a TECH fill the form and be refused on submit — the
@@ -177,6 +190,13 @@ export function AppointmentDetailDialog({
     if (form.title !== was.title) body.title = form.title.trim()
     if (form.status !== was.status) body.status = form.status
     if (form.notes !== was.notes) body.notes = form.notes.trim() || null
+    if (form.description !== was.description)
+      body.description = form.description.trim() || null
+    if (form.location !== was.location) {
+      // Typed text is a Custom location; clearing it records none.
+      if (form.location.trim()) body.location_kind = 'custom'
+      body.location = form.location.trim() || null
+    }
     if ((form.contact?.id ?? null) !== (was.contact?.id ?? null))
       body.contact_id = form.contact?.id ?? null
     if (form.calendarId !== was.calendarId)
@@ -214,6 +234,7 @@ export function AppointmentDetailDialog({
 
   const save = useMutation({
     mutationFn: (patch: AppointmentPatch) => patchAppointment(appointmentId, patch),
+    onMutate: () => setOverlap(null),
     onSuccess: (updated) => {
       // Re-seed from what the server actually stored, so the panel shows the
       // saved record and not the draft that produced it.
@@ -236,6 +257,7 @@ export function AppointmentDetailDialog({
     // detail into one and never lets the wire body reach the screen.
     onError: (e: Error) => { setSaved(null); setError(e.message) },
   })
+  const blockedRefusal = save.error instanceof ApiError && save.error.status === 409
 
   const cancel = useMutation({
     mutationFn: () => cancelAppointment(appointmentId),
@@ -260,7 +282,9 @@ export function AppointmentDetailDialog({
     const bad = invalid()
     if (bad) { setSaved(null); setError(bad); return }
     const patch = changes()
-    if (patch && Object.keys(patch).length) save.mutate(patch)
+    if (patch && Object.keys(patch).length) {
+      save.mutate(patch, { onError: () => setOverlap(patch) })
+    }
   }
 
   const busy = save.isPending || cancel.isPending
@@ -436,6 +460,35 @@ export function AppointmentDetailDialog({
               </Field>
             </div>
 
+            <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
+              Times are {zoneLabel(starts ?? new Date(a.starts_at), ACCOUNT_TIME_ZONE)}
+            </div>
+
+            <Field label="Description">
+              <textarea
+                value={form.description}
+                rows={2}
+                disabled={!canWrite}
+                onChange={(e) => set({ description: e.target.value })}
+                title={canWrite ? undefined : why}
+                style={{
+                  ...(canWrite ? INPUT : { ...INPUT, ...OFF_INPUT }),
+                  height: 'auto', padding: 8,
+                }}
+              />
+            </Field>
+
+            <Field label="Meeting location">
+              <input
+                value={form.location}
+                disabled={!canWrite}
+                placeholder="No location recorded"
+                onChange={(e) => set({ location: e.target.value })}
+                title={canWrite ? undefined : why}
+                style={canWrite ? INPUT : { ...INPUT, ...OFF_INPUT }}
+              />
+            </Field>
+
             <Field label="Status">
               {/* Live here, unlike the create dialog: `AppointmentPatch` DOES
                   accept a status and validates it against the measured set, so
@@ -454,23 +507,42 @@ export function AppointmentDetailDialog({
               </select>
             </Field>
 
-            <Field label="Notes">
-              <textarea
-                value={form.notes}
-                rows={2}
-                disabled={!canWrite}
-                onChange={(e) => set({ notes: e.target.value })}
-                title={canWrite ? undefined : why}
-                style={{
-                  ...(canWrite ? INPUT : { ...INPUT, ...OFF_INPUT }),
-                  height: 'auto', padding: 8,
-                }}
-              />
-            </Field>
+            {/* Internal notes are STAFF-only on every path. The server sends a
+                TECH none, and says so with `notes_visible`, so the field is not
+                drawn at all rather than drawn empty. */}
+            {a.notes_visible && (
+              <Field label="Internal notes">
+                <textarea
+                  value={form.notes}
+                  rows={2}
+                  disabled={!canWrite}
+                  onChange={(e) => set({ notes: e.target.value })}
+                  title={canWrite ? undefined : why}
+                  style={{
+                    ...(canWrite ? INPUT : { ...INPUT, ...OFF_INPUT }),
+                    height: 'auto', padding: 8,
+                  }}
+                />
+              </Field>
+            )}
 
             {error && (
               <div role="alert" style={{ fontSize: 13, color: 'rgb(217,45,32)', marginTop: 10 }}>
                 {error}
+                {blockedRefusal && overlap && (
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      onClick={() => save.mutate({ ...overlap, allow_blocked_time: true })}
+                      disabled={save.isPending}
+                      style={{
+                        height: 32, padding: '0 12px', borderRadius: 6, fontSize: 13,
+                        fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)',
+                      }}
+                    >
+                      Save anyway
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             {saved && !error && (

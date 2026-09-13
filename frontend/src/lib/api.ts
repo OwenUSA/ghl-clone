@@ -445,6 +445,8 @@ export type Appointment = {
   /** The deal this visit is for, or null. Both ends of the link are readable. */
   opportunity_id: number | null
   opportunity_title: string | null
+  /** "Meeting location", resolved when it was booked. */
+  location: string | null
 }
 
 export function listAppointments(p: {
@@ -466,10 +468,13 @@ export function listAppointments(p: {
  * Create a booking. STAFF-only on the backend, so the callers gate on the role
  * first -- a TECH must not be able to fill this form and learn on submit.
  *
- * The body mirrors `AppointmentCreate` in backend/app/main.py exactly. Note what
- * is NOT there: `status`. The POST model does not accept it, so a booking always
- * lands on the model default (`confirmed`); adding it here would be a field the
- * server silently ignores.
+ * The body mirrors `AppointmentCreate` in backend/app/main.py exactly. `status`
+ * joined it on 2026-09-13 with GoHighLevel's Book appointment modal, whose footer
+ * books with a status. `assigned_user_id` stays in the contract for the CLI; the
+ * modal leaves it out and the server assigns the calendar's user.
+ *
+ * A booking over blocked off time on the same calendar is refused 409 until it is
+ * re-sent with `allow_blocked_time: true`, after the booker has confirmed.
  */
 export type AppointmentCreated = {
   id: number
@@ -477,10 +482,15 @@ export type AppointmentCreated = {
   starts_at: string
   ends_at: string
   opportunity_id: number | null
+  assigned_user_id: number | null
+  status: string
+  description: string | null
+  location: string | null
   automation: string
 }
 
 export const createAppointment = (body: {
+  /** May carry the contact.name template variable; the server resolves it. */
   title: string
   starts_at: string
   ends_at: string
@@ -490,6 +500,11 @@ export const createAppointment = (body: {
   /** Optional in both directions -- see NewAppointmentDialog. */
   opportunity_id?: number | null
   notes?: string | null
+  description?: string | null
+  location_kind?: 'calendar_default' | 'custom' | null
+  location?: string | null
+  status?: string
+  allow_blocked_time?: boolean
 }) => send<AppointmentCreated>('/api/appointments', 'POST', body)
 
 /**
@@ -503,7 +518,11 @@ export type AppointmentDetail = {
   starts_at: string
   ends_at: string
   status: string
+  /** STAFF-only internal notes: null for a TECH, with `notes_visible` false. */
   notes: string | null
+  notes_visible: boolean
+  description: string | null
+  location: string | null
   contact_id: number | null
   contact_name: string | null
   calendar_id: number | null
@@ -544,6 +563,10 @@ export type AppointmentPatch = {
       the status touch the reminder queue. */
   opportunity_id?: number | null
   notes?: string | null
+  description?: string | null
+  location_kind?: 'calendar_default' | 'custom' | null
+  location?: string | null
+  allow_blocked_time?: boolean
 }
 
 export const patchAppointment = (id: number, body: AppointmentPatch) =>
@@ -594,6 +617,11 @@ export type ContactDetail = {
   phone_warning: string | null
   business_name: string | null
   source: string | null
+  /** Read-only property address (the Workiz import). "Calendar default" location. */
+  address_street?: string | null
+  address_city?: string | null
+  address_state?: string | null
+  address_postal_code?: string | null
   date_of_birth: string | null
   contact_type: string | null
   dnd: boolean
@@ -802,6 +830,7 @@ export type LinkedAppointment = {
   ends_at: string
   status: string
   calendar_name: string | null
+  location: string | null
 }
 
 export const getOpportunity = (id: number) =>
@@ -1252,3 +1281,46 @@ export const reorderFieldGroups = (groupIds: number[]) =>
 export const deleteFieldGroup = (id: number) =>
   send<{ deleted: number; moved_field_ids: number[] }>(
     `/api/custom-field-groups/${id}`, 'DELETE')
+
+// ---------- blocked off time (the Book appointment modal's second tab) ----------
+
+/** A range blocked off on a calendar. Sends nothing and enqueues nothing. */
+export type BlockedTime = {
+  id: number
+  title: string
+  calendar_id: number
+  calendar_name: string | null
+  color: string
+  starts_at: string
+  ends_at: string
+  notes: string | null
+}
+
+export function listBlockedTimes(p: {
+  start: string
+  end: string
+  calendar_ids?: number[]
+  user_ids?: number[]
+}) {
+  const sp = new URLSearchParams({ start: p.start, end: p.end })
+  if (p.calendar_ids?.length) sp.set('calendar_ids', p.calendar_ids.join(','))
+  if (p.user_ids?.length) sp.set('user_ids', p.user_ids.join(','))
+  return get<BlockedTime[]>(`/api/blocked-times?${sp}`)
+}
+
+export type BlockedTimeBody = {
+  title: string
+  calendar_id: number
+  starts_at: string
+  ends_at: string
+  notes?: string | null
+}
+
+export const getBlockedTime = (id: number) =>
+  get<BlockedTime>(`/api/blocked-times/${id}`)
+export const createBlockedTime = (body: BlockedTimeBody) =>
+  send<BlockedTime>('/api/blocked-times', 'POST', body)
+export const patchBlockedTime = (id: number, body: Partial<BlockedTimeBody>) =>
+  send<BlockedTime>(`/api/blocked-times/${id}`, 'PATCH', body)
+export const deleteBlockedTime = (id: number) =>
+  send<{ deleted: number }>(`/api/blocked-times/${id}`, 'DELETE')

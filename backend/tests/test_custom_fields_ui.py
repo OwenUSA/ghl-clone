@@ -350,13 +350,19 @@ def test_the_booking_dialog_is_not_nested_inside_the_deals_backdrop():
 
 
 def test_the_calendar_can_bind_a_booking_to_an_open_deal():
-    """The same link from the other direction, and only OPEN deals are offered."""
+    """The same link from the other direction, and only OPEN deals are offered.
+
+    2026-09-13: GoHighLevel's Book appointment modal has NO Opportunity field, and
+    the owner said to match it exactly. So the CREATE dialog no longer offers one —
+    a booking made from a deal still sends that deal without drawing it — and
+    binding from the calendar side is done in the appointment panel."""
     dialog = _read("components", "NewAppointmentDialog.tsx")
-    assert "listOpenOpportunities" in dialog, (
-        "the calendar's create dialog cannot offer a deal to bind to")
-    assert "Not linked to a deal" in dialog, (
-        "the link is not optional, or does not say so")
+    assert "listOpenOpportunities" not in dialog and "Not linked to a deal" not in dialog, (
+        "the create dialog draws an Opportunity field GoHighLevel's modal does not have")
+    assert "opportunity_id: lockedOpportunity?.id ?? null" in dialog, (
+        "a booking made from a deal no longer links the deal")
     panel = _read("components", "AppointmentDetailDialog.tsx")
+    assert "listOpenOpportunities" in panel, "nothing can bind a booking to an open deal"
     assert "opportunity_id" in panel, "the panel cannot rebind a booking"
     assert "opportunity_title" in panel, "the panel never names the deal"
 

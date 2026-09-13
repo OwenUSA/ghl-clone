@@ -25,6 +25,11 @@ import { IconPlus } from './Icon'
  * dialog, the global search) needs no changes here. It is currently adopted in
  * ONE place, the Add-opportunity dialog — the other pickers are being edited on
  * other branches right now and converting them is a separate, later change.
+ *
+ * 2026-09-13: the Book appointment modal adopts it with `variant="search"`, which
+ * draws GoHighLevel's "Search by name, email, or phone" box (screenshot 29) — a
+ * magnifier, the placeholder and a chevron, with the matches in a list under it.
+ * Same query, same inline Add Contact; only the look differs.
  */
 export type PickedContact = { id: number; name: string }
 
@@ -35,6 +40,7 @@ export function ContactPicker({
   hint,
   placeholder = 'Search contacts',
   disabled = false,
+  variant = 'default',
 }: {
   value: PickedContact | null
   onChange: (contact: PickedContact | null) => void
@@ -45,6 +51,8 @@ export function ContactPicker({
   placeholder?: string
   /** A role that cannot write still sees who the booking is with, read-only. */
   disabled?: boolean
+  /** `search`: GoHighLevel's Select Contact box, used by the Book appointment modal. */
+  variant?: 'default' | 'search'
 }) {
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
@@ -105,6 +113,129 @@ export function ContactPicker({
     </button>
   )
 
+  // The pieces both looks share, so the search variant cannot drift from the
+  // default one: the no-match sentence with its `+`, the "created" note, and the
+  // real Add Contact dialog.
+  const noMatch = (
+    <div style={{ padding: '8px 10px' }}>
+      <div style={{ fontSize: 13, color: 'rgb(102,112,133)' }}>
+        {answered ? `No contacts match “${typed}”.` : 'Searching…'}
+      </div>
+      {/* The `+` again, here, where the dead end actually is: this is the moment
+          the dispatcher learns the person is not on file, and sending them to
+          look for a button elsewhere is the whole friction being removed. The
+          form opens prefilled. */}
+      {answered && plusButton('Add “' + typed + '”')}
+    </div>
+  )
+
+  const createdNote = created && (
+    <div role="status" style={{ fontSize: 12, color: 'rgb(2,122,72)', marginTop: 4 }}>
+      {created} created and selected
+    </div>
+  )
+
+  const addDialog = adding && (
+    <AddContactDialog
+      // Whatever was typed into the search goes into the form: a number into
+      // the phone field, a word into the name. Nobody should have to type a
+      // phone number twice to record the person it belongs to.
+      initial={prefillFrom(typed)}
+      onClose={() => setAdding(false)}
+      onCreated={(contact) => {
+        select({ id: contact.id, name: contact.name }, contact.name)
+        // The Contacts list and every other picker are now stale by exactly
+        // one row.
+        qc.invalidateQueries({ queryKey: ['contacts'] })
+      }}
+      // The duplicate warning offers the contact already on file. Selecting
+      // it is the same act as picking it from the list above, so it ends the
+      // dialog the same way — without creating anything.
+      onUseExisting={(contact) => select({ id: contact.id, name: contact.name })}
+    />
+  )
+
+  if (variant === 'search') {
+    const box = {
+      ...input, marginTop: 0, height: 38, borderRadius: 8,
+      border: '1px solid rgb(208,213,221)', display: 'flex', alignItems: 'center',
+      gap: 8, padding: '0 10px',
+    } as const
+    const glass = (
+      <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="rgb(52,64,84)"
+        strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+      </svg>
+    )
+    const chevron = (
+      <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="rgb(52,64,84)"
+        strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="m6 9 6 6 6-6" />
+      </svg>
+    )
+    return (
+      <div className="relative">
+        {value ? (
+          <div style={box}>
+            <span className="min-w-0 flex-1 truncate" style={{ color: 'rgb(16,24,40)' }}>
+              {value.name}
+            </span>
+            {!disabled && (
+              <button type="button" aria-label="Clear contact"
+                onClick={() => { onChange(null); setCreated(null); setQ('') }}
+                style={{ fontSize: 16, lineHeight: '16px', color: 'rgb(102,112,133)' }}>
+                ×
+              </button>
+            )}
+          </div>
+        ) : (
+          <label style={{ ...box, ...(disabled
+            ? { backgroundColor: 'rgb(249,250,251)', cursor: 'not-allowed' } : {}) }}>
+            {glass}
+            <input
+              value={q}
+              disabled={disabled}
+              aria-label="Select Contact"
+              onChange={(e) => setQ(e.target.value)}
+              placeholder={placeholder}
+              className="min-w-0 flex-1"
+              style={{ border: 'none', outline: 'none', fontSize: 14, height: 34,
+                backgroundColor: 'transparent', color: 'rgb(16,24,40)' }}
+            />
+            {chevron}
+          </label>
+        )}
+
+        {!value && typed.length > 0 && (
+          <div role="listbox" className="absolute bg-white"
+            style={{ left: 0, right: 0, top: 42, zIndex: 20, maxHeight: 220,
+              overflowY: 'auto', borderRadius: 8, padding: 4,
+              border: '1px solid rgb(234,236,240)',
+              boxShadow: '0 12px 16px -4px rgba(16,24,40,0.08)' }}>
+            {items.map((c) => (
+              <button key={c.id} type="button" role="option" aria-selected={false}
+                onClick={() => select({ id: c.id, name: c.name })}
+                className="block w-full text-left hover:bg-[rgb(249,250,251)]"
+                style={{ padding: '8px 10px', fontSize: 14, borderRadius: 6,
+                  color: 'rgb(52,64,84)' }}>
+                <div className="truncate">{c.name || '(no name)'}</div>
+                {(c.email || c.phone) && (
+                  <div className="truncate" style={{ fontSize: 12, color: 'rgb(102,112,133)' }}>
+                    {[c.email, c.phone].filter(Boolean).join(' · ')}
+                  </div>
+                )}
+              </button>
+            ))}
+            {items.length === 0 && noMatch}
+          </div>
+        )}
+
+        {createdNote}
+        {addDialog}
+      </div>
+    )
+  }
+
   return (
     <>
       {value ? (
@@ -161,18 +292,7 @@ export function ContactPicker({
                     {c.phone ? ' · ' + c.phone : ''}
                   </button>
                 ))
-              ) : (
-                <div style={{ padding: '8px 10px' }}>
-                  <div style={{ fontSize: 13, color: 'rgb(102,112,133)' }}>
-                    {answered ? `No contacts match “${typed}”.` : 'Searching…'}
-                  </div>
-                  {/* The `+` again, here, where the dead end actually is: this is
-                      the moment the dispatcher learns the person is not on file,
-                      and sending them to look for a button elsewhere is the whole
-                      friction being removed. The form opens prefilled. */}
-                  {answered && plusButton('Add “' + typed + '”')}
-                </div>
-              )}
+              ) : noMatch}
             </div>
           )}
 
@@ -184,31 +304,8 @@ export function ContactPicker({
         </>
       )}
 
-      {created && (
-        <div role="status" style={{ fontSize: 12, color: 'rgb(2,122,72)', marginTop: 4 }}>
-          {created} created and selected
-        </div>
-      )}
-
-      {adding && (
-        <AddContactDialog
-          // Whatever was typed into the search goes into the form: a number into
-          // the phone field, a word into the name. Nobody should have to type a
-          // phone number twice to record the person it belongs to.
-          initial={prefillFrom(typed)}
-          onClose={() => setAdding(false)}
-          onCreated={(contact) => {
-            select({ id: contact.id, name: contact.name }, contact.name)
-            // The Contacts list and every other picker are now stale by exactly
-            // one row.
-            qc.invalidateQueries({ queryKey: ['contacts'] })
-          }}
-          // The duplicate warning offers the contact already on file. Selecting
-          // it is the same act as picking it from the list above, so it ends the
-          // dialog the same way — without creating anything.
-          onUseExisting={(contact) => select({ id: contact.id, name: contact.name })}
-        />
-      )}
+      {createdNote}
+      {addDialog}
     </>
   )
 }

@@ -2,10 +2,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconChevronDown, IconPlus, IconSettings } from '../components/Icon'
 import { AppointmentDetailDialog } from '../components/AppointmentDetailDialog'
 import { NewAppointmentDialog } from '../components/NewAppointmentDialog'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  listAppointments, listCalendars, listUsers,
-  type Appointment,
+  listAppointments, listBlockedTimes, listCalendars, listUsers,
+  type Appointment, type BlockedTime,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
 import { PageTabs } from '../components/PageTabs'
@@ -42,9 +42,22 @@ import {
  */
 const VIEWS = ['Day view', 'Week view', 'Month view'] as const
 
+/**
+ * Every hour of the day is drawn, 12 AM to 11 PM. The owner: "we should show at
+ * least from 5am to 11pm" — so the pane opens scrolled to FIRST_VISIBLE_HOUR, and
+ * 11 PM is the last row, not cut off. Nothing earlier is removed: a 2 AM emergency
+ * booking still has somewhere to be drawn.
+ */
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
+const FIRST_VISIBLE_HOUR = 5
 /** One hour of the vertical grid, in px. The current-time line shares it. */
 const HOUR_PX = 48
+
+/**
+ * Blocked off time is drawn grey and hatched, never in a calendar's colour, so it
+ * cannot be mistaken for a booking.
+ */
+const BLOCKED_FILL = 'repeating-linear-gradient(135deg, rgb(242,244,247) 0 6px, rgb(234,236,240) 6px 12px)'
 
 const fmtHour = (h: number) =>
   h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`
@@ -65,6 +78,8 @@ export function CalendarsPage({ user }: { user: Me }) {
   const [draft, setDraft] = useState<Date | null>(null)
   // The appointment whose detail panel is open. Null = closed.
   const [openAppt, setOpenAppt] = useState<number | null>(null)
+  // The blocked off time whose tab is open in the Book appointment modal.
+  const [openBlocked, setOpenBlocked] = useState<number | null>(null)
   const qc = useQueryClient()
 
   // `POST /api/appointments` is auth.STAFF, so a TECH's create is refused with
@@ -93,6 +108,32 @@ export function CalendarsPage({ user }: { user: Me }) {
         calendar_ids: selectedCals,
       }),
   })
+
+  // Under the 'appointments' key family on purpose: every place that invalidates
+  // ['appointments'] after a write now refreshes the blocks too.
+  const blocked = useQuery({
+    queryKey: ['appointments', 'blocked-times', window_.start.toISOString(),
+               window_.end.toISOString(), selectedUsers, selectedCals],
+    queryFn: () =>
+      listBlockedTimes({
+        start: window_.start.toISOString(),
+        end: window_.end.toISOString(),
+        user_ids: selectedUsers,
+        calendar_ids: selectedCals,
+      }),
+    // "View by type: Appointments" hides them; All and Blocked slots show them.
+    enabled: kind !== 'appointments',
+  })
+  const blockedBuckets = useMemo(
+    () => bucketByDay(dayList, kind === 'appointments' ? [] : blocked.data ?? []),
+    [dayList, kind, blocked.data],
+  )
+
+  // Open the hour grid at 5 AM rather than at midnight.
+  const hourPane = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (hourPane.current) hourPane.current.scrollTop = FIRST_VISIBLE_HOUR * HOUR_PX
+  }, [view, tab])
 
   const now = new Date()
   const nowOffset = now.getHours() * HOUR_PX + (now.getMinutes() / 60) * HOUR_PX
@@ -123,6 +164,13 @@ export function CalendarsPage({ user }: { user: Me }) {
     // slot; a click that lands on a booking is not a request for a new one.
     e.stopPropagation()
     setOpenAppt(id)
+  }
+
+  /** Open blocked off time on its tab of the Book appointment modal. Anyone may
+   *  open one; the modal disables the controls a TECH cannot use. */
+  function openBlock(id: number, e: React.MouseEvent) {
+    e.stopPropagation()
+    setOpenBlocked(id)
   }
 
   /**
@@ -276,6 +324,8 @@ export function CalendarsPage({ user }: { user: Me }) {
             <MonthGrid
               cells={dayList}
               buckets={buckets}
+              blocked={blockedBuckets}
+              onOpenBlocked={openBlock}
               month={anchor.getMonth()}
               today={now}
               canCreate={canCreate}
@@ -305,7 +355,7 @@ export function CalendarsPage({ user }: { user: Me }) {
               </div>
 
               {/* hour grid - this pane scrolls, not the document */}
-              <div className="relative min-h-0 flex-1 overflow-y-auto">
+              <div ref={hourPane} className="relative min-h-0 flex-1 overflow-y-auto">
                 <div className="flex">
                   <div style={{ width: 60 }}>
                     {HOURS.map((h) => (
@@ -334,6 +384,17 @@ export function CalendarsPage({ user }: { user: Me }) {
                           borderTop: '2px solid rgb(217,45,32)',
                         }} />
                       )}
+                      {blockedBuckets[i].map((b) => {
+                        const s = new Date(b.starts_at)
+                        const e = new Date(b.ends_at)
+                        const top = s.getHours() * HOUR_PX + (s.getMinutes() / 60) * HOUR_PX
+                        const h = Math.max(24, ((e.getTime() - s.getTime()) / 3_600_000) * HOUR_PX)
+                        return (
+                          <BlockedBlock key={'b' + b.id} b={b} top={top} height={h}
+                            label={fmtChipTime(s) + ' – ' + fmtChipTime(e)}
+                            onOpen={openBlock} />
+                        )
+                      })}
                       {buckets[i].map((a) => {
                         const s = new Date(a.starts_at)
                         const e = new Date(a.ends_at)
@@ -461,6 +522,21 @@ export function CalendarsPage({ user }: { user: Me }) {
         />
       )}
 
+      {openBlocked !== null && (
+        <NewAppointmentDialog
+          key={'blocked-' + openBlocked}
+          blockedTimeId={openBlocked}
+          initialStart={now}
+          initialEnd={new Date(now.getTime() + 3_600_000)}
+          user={user}
+          onClose={() => setOpenBlocked(null)}
+          onCreated={() => {
+            setOpenBlocked(null)
+            qc.invalidateQueries({ queryKey: ['appointments'] })
+          }}
+        />
+      )}
+
       {draft && (
         <NewAppointmentDialog
           initialStart={draft}
@@ -492,10 +568,12 @@ export function CalendarsPage({ user }: { user: Me }) {
  * cell reads as "nothing booked", and one of those days may well have a booking.
  */
 function MonthGrid({
-  cells, buckets, month, today, canCreate, onBook, onOpen,
+  cells, buckets, blocked, month, today, canCreate, onBook, onOpen, onOpenBlocked,
 }: {
   cells: Date[]
   buckets: Appointment[][]
+  blocked: BlockedTime[][]
+  onOpenBlocked: (id: number, e: React.MouseEvent) => void
   month: number
   today: Date
   canCreate: boolean
@@ -561,6 +639,25 @@ function MonthGrid({
               </div>
 
               <div className="mt-1 flex min-h-0 flex-col gap-1 overflow-hidden">
+                {blocked[i].map((b) => (
+                  <div
+                    key={'b' + b.id}
+                    data-blocked-time={b.id}
+                    title={`Blocked off: ${b.title} — ${fmtChipTime(new Date(b.starts_at))}`
+                           + ' — click to open'}
+                    onClick={(e) => onOpenBlocked(b.id, e)}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    className="truncate"
+                    style={{
+                      fontSize: 11, lineHeight: '16px', borderRadius: 3,
+                      padding: '1px 4px', color: 'rgb(71,84,103)',
+                      background: BLOCKED_FILL, borderLeft: '3px solid rgb(152,162,179)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {fmtChipTime(new Date(b.starts_at))} {b.title}
+                  </div>
+                ))}
                 {shown.map((a) => (
                   <div
                     key={a.id}
@@ -598,6 +695,33 @@ function MonthGrid({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/** One block of blocked off time on the Day/Week grid: grey, hatched, dashed edge. */
+function BlockedBlock({ b, top, height, label, onOpen }: {
+  b: BlockedTime
+  top: number
+  height: number
+  label: string
+  onOpen: (id: number, e: React.MouseEvent) => void
+}) {
+  return (
+    <div
+      data-blocked-time={b.id}
+      title={`Blocked off: ${b.title} (${b.calendar_name ?? 'calendar'}) — click to open`}
+      onClick={(ev) => onOpen(b.id, ev)}
+      onDoubleClick={(ev) => ev.stopPropagation()}
+      style={{
+        position: 'absolute', left: 2, right: 2, top, height,
+        background: BLOCKED_FILL, border: '1px dashed rgb(152,162,179)',
+        borderRadius: 4, padding: '2px 6px', overflow: 'hidden',
+        fontSize: 12, color: 'rgb(71,84,103)', cursor: 'pointer',
+      }}
+    >
+      <div className="truncate" style={{ fontWeight: 500 }}>Blocked · {b.title}</div>
+      <div className="truncate">{label}</div>
     </div>
   )
 }

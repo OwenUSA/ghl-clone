@@ -41,6 +41,12 @@ export function AppointmentTab({ appointments, canBook, onBook, onOpen }: {
                 { month: 'short', day: 'numeric', year: 'numeric' })}
               {' · '}{a.calendar_name ?? 'No calendar'}{' · '}{a.status}
             </div>
+            {a.location && (
+              <div className="truncate" title={a.location}
+                style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+                {a.location}
+              </div>
+            )}
           </div>
           <button type="button" onClick={() => onOpen(a.id)}
             style={{ fontSize: 14, fontWeight: 500, color: PRIMARY }}>

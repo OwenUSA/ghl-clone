@@ -34,6 +34,7 @@ from .models import (
     CONVERSATION_TYPES,
     ApiToken,
     Appointment,
+    BlockedTime,
     Calendar,
     Contact,
     ContactTag,
@@ -348,7 +349,8 @@ def _contact_detail(c: Contact, hidden: set[int]) -> dict:
         # and the panel has to say which bookings are about to lose their customer
         # before anyone confirms.
         "appointments": [{"id": a.id, "title": a.title, "starts_at": a.starts_at,
-                          "status": a.status} for a in c.appointments],
+                          "status": a.status, "location": a.location}
+                         for a in c.appointments],
         "custom_fields": c.custom_fields or {},
     }
 
@@ -1765,6 +1767,9 @@ class AppointmentCreate(BaseModel):
     starts_at: datetime
     ends_at: datetime
     contact_id: int | None = None
+    # Not in GoHighLevel's Book appointment modal (2026-09-13): the assignee is the
+    # selected calendar's user. Still accepted, so `ghl appts create --user` and
+    # the telephony feed keep working; an explicit assignee wins over the calendar's.
     assigned_user_id: int | None = None
     # Was missing, so every appointment created through the API landed on no
     # calendar at all and never appeared under a calendar filter.
@@ -1774,7 +1779,20 @@ class AppointmentCreate(BaseModel):
     # an open deal or none at all. Never required — a call at 2am becomes a visit
     # before anybody has filed a deal for it.
     opportunity_id: int | None = None
+    # The modal's STAFF-only "Internal notes". The route is STAFF already.
     notes: str | None = None
+    # "Add description" — visible to every role.
+    description: str | None = None
+    # "Meeting location". `calendar_default` resolves to the contact's property
+    # address; `custom` takes `location` as typed; absent stores `location` as sent.
+    location_kind: Literal["calendar_default", "custom"] | None = None
+    location: str | None = None
+    # The footer's "Status :" dropdown. Was not accepted before 2026-09-13, when the
+    # dialog showed it disabled; the owner's GoHighLevel modal books with a status.
+    status: str = "confirmed"
+    # Booking over blocked off time on the same calendar is refused with 409 until
+    # the booker has seen it and confirms by sending this.
+    allow_blocked_time: bool = False
 
 
 def _check_appointment_opportunity(db: Session, principal: auth.Principal,
@@ -1800,24 +1818,146 @@ def _clean_appointment_title(title: str) -> str:
     return cleaned
 
 
+# GoHighLevel prefills "Appointment title" with `{{contact.name}}`. The variable is
+# resolved when the booking is SAVED and the resolved text is what is stored, so a
+# calendar chip, a reminder and the CLI all read a name rather than braces, and
+# renaming the contact later does not rename a visit already booked.
+TITLE_VARIABLES = {
+    "contact.name": lambda c: c.name,
+    "contact.first_name": lambda c: c.first_name,
+    "contact.last_name": lambda c: c.last_name,
+    "contact.email": lambda c: c.email or "",
+    "contact.phone": lambda c: format_phone(c.phone) if c.phone else "",
+}
+_TEMPLATE_VARIABLE = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
+
+
+def _resolve_appointment_title(title: str, contact: Contact | None) -> str:
+    """Resolve every `{{...}}` in a title, then clean it like any other title.
+
+    An unknown variable is refused rather than stored verbatim: braces on a
+    customer's calendar chip read as a bug. A contact variable with no contact is
+    refused with the reason, rather than resolved to an empty title."""
+    def sub(m: re.Match) -> str:
+        name = m.group(1).strip()
+        resolve = TITLE_VARIABLES.get(name.lower())
+        if resolve is None:
+            raise HTTPException(400, "the title uses {{%s}}, which is not a variable "
+                                "this app knows — {{contact.name}} is" % name)
+        if contact is None:
+            raise HTTPException(400, "the title uses {{%s}}, so select a contact "
+                                "first" % name)
+        return resolve(contact) or ""
+    return _clean_appointment_title(_TEMPLATE_VARIABLE.sub(sub, title or ""))
+
+
+def contact_address(c: Contact | None) -> str | None:
+    """The contact's saved property address on one line — "Calendar default" in
+    the Meeting location control. `None` when nothing is on file."""
+    if c is None:
+        return None
+    region = " ".join(p.strip() for p in (c.address_state, c.address_postal_code)
+                      if p and p.strip())
+    parts = [p.strip() for p in (c.address_street, c.address_city, region)
+             if p and p.strip()]
+    return ", ".join(parts) or None
+
+
+def _resolve_location(kind: str | None, typed: str | None,
+                      contact: Contact | None) -> str | None:
+    if kind == "calendar_default":
+        return contact_address(contact)
+    cleaned = (typed or "").strip() or None
+    if kind == "custom" and cleaned is None:
+        raise HTTPException(400, "a custom meeting location needs an address")
+    return cleaned
+
+
+def _utc(dt: datetime) -> datetime:
+    """Normalise an incoming time to UTC before it is stored or compared.
+
+    SQLite keeps a datetime's wall-clock digits and drops its offset, so
+    `13:30-04:00` stored as-is reads back as 13:30 UTC — four hours early. The
+    browser always sends UTC, which is why this never showed; the CLI and a test
+    sending an Eastern offset would not. PostgreSQL is unaffected either way."""
+    return auth.as_aware(dt).astimezone(UTC)
+
+
+def _blocked_overlaps(db: Session, calendar_id: int | None, starts: datetime,
+                      ends: datetime) -> list[BlockedTime]:
+    """Blocked off time on the same calendar that this range overlaps. Touching
+    ends do not overlap: a visit from 3:00 may follow a block ending at 3:00."""
+    if calendar_id is None:
+        return []
+    return list(db.scalars(select(BlockedTime).where(
+        BlockedTime.calendar_id == calendar_id,
+        BlockedTime.starts_at < _utc(ends),
+        BlockedTime.ends_at > _utc(starts)).order_by(BlockedTime.starts_at)).all())
+
+
+def _refuse_blocked_overlap(db: Session, calendar_id: int | None, starts: datetime,
+                            ends: datetime, allowed: bool) -> None:
+    """409 until the booker has confirmed. Raised BEFORE anything is written."""
+    if allowed:
+        return
+    hits = _blocked_overlaps(db, calendar_id, starts, ends)
+    if hits:
+        cal = db.get(Calendar, calendar_id)
+        raise HTTPException(409, "This time overlaps blocked off time on %s: %s. "
+                            "Book it anyway?" % (
+                                cal.name if cal else "this calendar",
+                                ", ".join('"%s"' % b.title for b in hits)))
+
+
+def _check_new_status(status: str) -> str:
+    if status not in APPOINTMENT_STATUSES:
+        raise HTTPException(400, "unknown status %r — expected one of %s" % (
+            status, sorted(APPOINTMENT_STATUSES)))
+    return status
+
+
 @app.post("/api/appointments", status_code=201)
 def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
                        principal: auth.Principal = auth.STAFF):
-    title = _clean_appointment_title(body.title)
+    contact = None
+    if body.contact_id is not None:
+        contact = db.get(Contact, body.contact_id)
+        if contact is None:
+            raise HTTPException(404, "contact %s not found" % body.contact_id)
+    calendar = None
+    if body.calendar_id is not None:
+        calendar = db.get(Calendar, body.calendar_id)
+        if calendar is None:
+            raise HTTPException(404, "calendar %s not found" % body.calendar_id)
+    title = _resolve_appointment_title(body.title, contact)
+    status = _check_new_status(body.status)
     if body.ends_at <= body.starts_at:
         raise HTTPException(400, "ends_at must be after starts_at")
     # A dangling id would be an IntegrityError rendered as a 500 in the dialog, the
     # same reason PATCH resolves its ids before writing.
     _check_appointment_opportunity(db, principal, body.opportunity_id)
-    a = Appointment(**{**body.model_dump(), "title": title})
+    _refuse_blocked_overlap(db, body.calendar_id, body.starts_at, body.ends_at,
+                            body.allow_blocked_time)
+    a = Appointment(
+        title=title, starts_at=_utc(body.starts_at), ends_at=_utc(body.ends_at),
+        contact_id=body.contact_id, calendar_id=body.calendar_id,
+        opportunity_id=body.opportunity_id, status=status,
+        # GoHighLevel: the calendar's user is the assignee.
+        assigned_user_id=(body.assigned_user_id if body.assigned_user_id is not None
+                          else calendar.user_id if calendar else None),
+        notes=(body.notes or "").strip() or None,
+        description=(body.description or "").strip() or None,
+        location=_resolve_location(body.location_kind, body.location, contact))
     db.add(a)
     db.flush()
-    # Rule 3: booked -> reminders at T-24h and T-1h.
+    # Rule 3: booked -> reminders at T-24h and T-1h. Unchanged by the new modal.
     outcome = automations.on_appointment_booked(db, a)
     db.commit()
     db.refresh(a)
     return {"id": a.id, "title": a.title, "starts_at": a.starts_at,
             "ends_at": a.ends_at, "opportunity_id": a.opportunity_id,
+            "assigned_user_id": a.assigned_user_id, "status": a.status,
+            "description": a.description, "location": a.location,
             "automation": outcome}
 
 
@@ -1833,7 +1973,8 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
         appointments = [
             {"id": a.id, "title": a.title, "starts_at": a.starts_at,
              "ends_at": a.ends_at, "status": a.status,
-             "calendar_name": a.calendar.name if a.calendar else None}
+             "calendar_name": a.calendar.name if a.calendar else None,
+             "location": a.location}
             for a in db.scalars(
                 select(Appointment)
                 .options(selectinload(Appointment.calendar))
@@ -2870,9 +3011,9 @@ def list_appointments(
                                 selectinload(Appointment.calendar),
                                 selectinload(Appointment.opportunity))
     if start:
-        stmt = stmt.where(Appointment.ends_at >= start)
+        stmt = stmt.where(Appointment.ends_at >= _utc(start))
     if end:
-        stmt = stmt.where(Appointment.starts_at <= end)
+        stmt = stmt.where(Appointment.starts_at <= _utc(end))
     if kind == "appointments":
         stmt = stmt.where(Appointment.status != "blocked")
     elif kind == "blocked":
@@ -2901,6 +3042,7 @@ def list_appointments(
              "calendar_name": a.calendar.name if a.calendar else None,
              "color": a.calendar.color if a.calendar else "#004eeb",
              **_appointment_deal(a, hidden),
+             "location": a.location,
              "contact_name": a.contact.name if a.contact else None} for a in rows]
 
 
@@ -3104,9 +3246,18 @@ def _appointment_deal(a: Appointment, hidden: set[int]) -> dict:
             "opportunity_title": a.opportunity.title}
 
 
-def _appointment_detail(a: Appointment, hidden: set[int]) -> dict:
+def _appointment_detail(a: Appointment, hidden: set[int],
+                        principal: auth.Principal) -> dict:
+    sees_notes = auth.sees_internal(principal)
     return {"id": a.id, "title": a.title, "starts_at": a.starts_at,
-            "ends_at": a.ends_at, "status": a.status, "notes": a.notes,
+            "ends_at": a.ends_at, "status": a.status,
+            # `notes` is the Book appointment modal's "Internal notes" — STAFF-only
+            # like every internal note in this app (2026-09-10), through the same
+            # predicate. A TECH reads `description` and `location` instead.
+            "notes": a.notes if sees_notes else None,
+            "notes_visible": sees_notes,
+            "description": a.description,
+            "location": a.location,
             "contact_id": a.contact_id,
             "contact_name": a.contact.name if a.contact else None,
             "calendar_id": a.calendar_id,
@@ -3123,7 +3274,8 @@ def get_appointment(appointment_id: int, db: Session = Depends(get_db),
     a = db.get(Appointment, appointment_id)
     if not a:
         raise HTTPException(404, "appointment not found")
-    return _appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal))
+    return _appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal),
+                               principal)
 
 
 class AppointmentPatch(BaseModel):
@@ -3139,6 +3291,11 @@ class AppointmentPatch(BaseModel):
     # linking a booking to a deal is not a change to when it happens.
     opportunity_id: int | None = None
     notes: str | None = None
+    description: str | None = None
+    # Same meaning as on create. Absent leaves the stored location alone.
+    location_kind: Literal["calendar_default", "custom"] | None = None
+    location: str | None = None
+    allow_blocked_time: bool = False
 
 
 def _drop_pending_reminders(db: Session, appointment_id: int) -> int:
@@ -3198,12 +3355,14 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
         raise HTTPException(404, "appointment not found")
 
     data = body.model_dump(exclude_unset=True)
+    allow_blocked = data.pop("allow_blocked_time", False)
+    location_kind = data.pop("location_kind", None)
     if "status" in data and data["status"] not in APPOINTMENT_STATUSES:
         raise HTTPException(400, "unknown status %r — expected one of %s" % (
             data["status"], sorted(APPOINTMENT_STATUSES)))
-    # An edit must not be able to blank a title that the create path refuses.
-    if "title" in data:
-        data["title"] = _clean_appointment_title(data["title"] or "")
+    for when in ("starts_at", "ends_at"):
+        if data.get(when) is not None:
+            data[when] = _utc(data[when])
     # A dangling id is a 404 with a sentence, not an IntegrityError rendered as
     # "Something went wrong (500)." in the panel. The dialog picks from lists, so
     # this is really the CLI's and the telephony feed's answer.
@@ -3214,6 +3373,35 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
         if data.get(field) is not None and not db.get(model, data[field]):
             raise HTTPException(404, "%s %s not found" % (what, data[field]))
     _check_appointment_opportunity(db, principal, data.get("opportunity_id"))
+
+    contact = (db.get(Contact, data["contact_id"]) if data.get("contact_id") is not None
+               else None if "contact_id" in data else a.contact)
+    # An edit must not be able to blank a title that the create path refuses, and
+    # a template variable resolves against the contact the booking will have.
+    if "title" in data:
+        data["title"] = _resolve_appointment_title(data["title"] or "", contact)
+    for text in ("notes", "description"):
+        if text in data:
+            data[text] = (data[text] or "").strip() or None
+    if location_kind is not None or "location" in data:
+        data["location"] = _resolve_location(location_kind, data.get("location"), contact)
+    # GoHighLevel: the calendar's user is the assignee. Moving a booking to another
+    # calendar hands it to that calendar's user unless an assignee was sent too.
+    if data.get("calendar_id") is not None and "assigned_user_id" not in data:
+        new_calendar = db.get(Calendar, data["calendar_id"])
+        if new_calendar.user_id is not None:
+            data["assigned_user_id"] = new_calendar.user_id
+
+    new_calendar_id = data.get("calendar_id", a.calendar_id)
+    new_starts = data.get("starts_at") or a.starts_at
+    new_ends = data.get("ends_at") or a.ends_at
+    new_status = data.get("status", a.status)
+    if (("starts_at" in data or "ends_at" in data or "calendar_id" in data)
+            and new_status not in automations.NO_REMINDER_STATUSES
+            and _aware(new_ends) > _aware(new_starts)):
+        # Checked before a single attribute is set, so a refusal writes nothing.
+        _refuse_blocked_overlap(db, new_calendar_id, _aware(new_starts),
+                                _aware(new_ends), allow_blocked)
 
     old_start = _aware(a.starts_at)
     was_off = a.status in automations.NO_REMINDER_STATUSES
@@ -3238,7 +3426,8 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
 
     db.commit()
     db.refresh(a)
-    return {**_appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal)),
+    return {**_appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal),
+                                  principal),
             "automation": outcome}
 
 
@@ -3270,6 +3459,144 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
     db.commit()
     return {"id": a.id, "status": a.status, "deleted": False,
             "reminders_cancelled": dropped}
+
+
+# ---------- blocked off time ----------
+#
+# GoHighLevel's "Blocked off time" tab of the Book appointment modal (2026-09-13).
+# A range on a calendar that is not a booking. It sends nothing and enqueues no
+# job — no route below imports the queue or calls an automation. Everyone reads
+# (a tech needs to know the crew is off), staff write. A delete is a real delete:
+# a block is the team's own schedule, not a customer record, the same call
+# DECISIONS.md makes for an opportunity's tasks.
+
+
+class BlockedTimeIn(BaseModel):
+    title: str
+    calendar_id: int
+    starts_at: datetime
+    ends_at: datetime
+    notes: str | None = None
+
+
+class BlockedTimePatch(BaseModel):
+    title: str | None = None
+    calendar_id: int | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    notes: str | None = None
+
+
+def _blocked_row(b: BlockedTime) -> dict:
+    return {"id": b.id, "title": b.title, "calendar_id": b.calendar_id,
+            "calendar_name": b.calendar.name if b.calendar else None,
+            "color": b.calendar.color if b.calendar else "#004eeb",
+            "starts_at": b.starts_at, "ends_at": b.ends_at, "notes": b.notes}
+
+
+def _clean_blocked_title(title: str) -> str:
+    cleaned = (title or "").strip()
+    if not cleaned:
+        raise HTTPException(400, "blocked off time needs a title")
+    return cleaned
+
+
+@app.get("/api/blocked-times")
+def list_blocked_times(
+    db: Session = Depends(get_db),
+    start: datetime | None = None,
+    end: datetime | None = None,
+    calendar_ids: str | None = None,
+    user_ids: str | None = None,
+    _: auth.Principal = auth.ANY_USER):
+    """Everything overlapping the window — the same shape of range query the
+    calendar grid asks `/api/appointments` for. `user_ids` selects the blocks on
+    those users' calendars, which is what the Users filter means for a block."""
+    stmt = select(BlockedTime).options(selectinload(BlockedTime.calendar))
+    if start:
+        stmt = stmt.where(BlockedTime.ends_at >= _utc(start))
+    if end:
+        stmt = stmt.where(BlockedTime.starts_at <= _utc(end))
+
+    def _ids(raw):
+        return [int(x) for x in (raw or "").split(",") if x.strip().isdigit()]
+
+    if _ids(calendar_ids):
+        stmt = stmt.where(BlockedTime.calendar_id.in_(_ids(calendar_ids)))
+    if _ids(user_ids):
+        stmt = stmt.where(BlockedTime.calendar_id.in_(
+            select(Calendar.id).where(Calendar.user_id.in_(_ids(user_ids)))))
+    return [_blocked_row(b) for b in db.scalars(stmt.order_by(BlockedTime.starts_at))]
+
+
+@app.get("/api/blocked-times/{blocked_id}")
+def get_blocked_time(blocked_id: int, db: Session = Depends(get_db),
+                     _: auth.Principal = auth.ANY_USER):
+    b = db.get(BlockedTime, blocked_id)
+    if b is None:
+        raise HTTPException(404, "blocked off time not found")
+    return _blocked_row(b)
+
+
+@app.post("/api/blocked-times", status_code=201)
+def create_blocked_time(body: BlockedTimeIn, db: Session = Depends(get_db),
+                        principal: auth.Principal = auth.STAFF):
+    title = _clean_blocked_title(body.title)
+    if db.get(Calendar, body.calendar_id) is None:
+        raise HTTPException(404, "calendar %s not found" % body.calendar_id)
+    if body.ends_at <= body.starts_at:
+        raise HTTPException(400, "ends_at must be after starts_at")
+    b = BlockedTime(title=title, calendar_id=body.calendar_id,
+                    starts_at=_utc(body.starts_at), ends_at=_utc(body.ends_at),
+                    notes=(body.notes or "").strip() or None,
+                    created_by_id=principal.user_id)
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+    return _blocked_row(b)
+
+
+@app.patch("/api/blocked-times/{blocked_id}")
+def update_blocked_time(blocked_id: int, body: BlockedTimePatch,
+                        db: Session = Depends(get_db),
+                        _: auth.Principal = auth.STAFF):
+    b = db.get(BlockedTime, blocked_id)
+    if b is None:
+        raise HTTPException(404, "blocked off time not found")
+    data = body.model_dump(exclude_unset=True)
+    if "title" in data:
+        data["title"] = _clean_blocked_title(data["title"] or "")
+    if "calendar_id" in data and (
+            data["calendar_id"] is None or db.get(Calendar, data["calendar_id"]) is None):
+        raise HTTPException(404, "calendar %s not found" % data["calendar_id"])
+    for when in ("starts_at", "ends_at"):
+        if when in data:
+            if data[when] is None:
+                raise HTTPException(400, "%s cannot be empty" % when)
+            data[when] = _utc(data[when])
+    if "notes" in data:
+        data["notes"] = (data["notes"] or "").strip() or None
+    starts = _aware(data.get("starts_at", b.starts_at))
+    ends = _aware(data.get("ends_at", b.ends_at))
+    # Checked before anything is set, so a refusal writes nothing.
+    if ends <= starts:
+        raise HTTPException(400, "ends_at must be after starts_at")
+    for k, v in data.items():
+        setattr(b, k, v)
+    db.commit()
+    db.refresh(b)
+    return _blocked_row(b)
+
+
+@app.delete("/api/blocked-times/{blocked_id}")
+def delete_blocked_time(blocked_id: int, db: Session = Depends(get_db),
+                        _: auth.Principal = auth.STAFF):
+    b = db.get(BlockedTime, blocked_id)
+    if b is None:
+        raise HTTPException(404, "blocked off time not found")
+    db.delete(b)
+    db.commit()
+    return {"deleted": blocked_id}
 
 
 # ---------- deletes ----------
