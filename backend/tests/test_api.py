@@ -269,7 +269,9 @@ def test_contact_delete_keeps_the_opportunities_and_drops_the_conversations(clie
     # appointments at all — this contact has none, and an empty list is still the
     # honest answer to "what did the delete sever?".
     assert r.json() == {"deleted": cid, "detached_opportunities": opp_ids,
-                        "detached_appointments": [], "reminders_cancelled": 0}
+                        "detached_appointments": [], "reminders_cancelled": 0,
+                        # 2026-09-13: the deals it was an ADDITIONAL contact on.
+                        "removed_from_opportunities": []}
 
     # The contact is gone, and gone from the list the UI renders.
     assert client.get(f"/api/contacts/{cid}").status_code == 404
