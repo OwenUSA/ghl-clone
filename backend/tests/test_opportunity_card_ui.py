@@ -298,3 +298,33 @@ def test_the_pipeline_dropdown_lists_what_the_server_says_this_user_can_access()
     source = _read(*MODAL.split("/"))
     assert "queryFn: listPipelines" in source
     assert "pipelineList.map((p) => <option" in source
+
+
+@node
+def test_manage_fields_links_to_the_settings_custom_fields_deep_link():
+    """Brief §2: "⚙ Manage fields" LINKS TO Settings → Custom Fields. It navigates to
+    the path SETTINGS_SECTIONS names, and this executes the shipped resolvers App.tsx
+    and SettingsPage use on load to prove that path lands on that section."""
+    source = _read(*MODAL.split("/"))
+    assert ("SETTINGS_SECTIONS.find((s) => s.key === 'custom-fields')!.path"
+            in source), "the link is not taken from the Settings sections table"
+    nav = source.split('aria-label="Opportunity sections"', 1)[1].split("</nav>", 1)[0]
+    button = nav.rsplit("<button", 1)[1]
+    assert "window.location.assign(CUSTOM_FIELDS_PATH)" in button and \
+        "Manage fields" in button, "Manage fields does not navigate to Settings"
+    assert "if (dirty && !window.confirm(" in button, (
+        "leaving for Settings silently discards an unsaved edit")
+    assert "<CustomFieldsPanel" not in source, "the old overlay is still rendered"
+
+    proc = subprocess.run(
+        [NODE, "--experimental-strip-types", "--input-type=module", "-"],
+        input=textwrap.dedent("""
+            import * as m from %s
+            const path = m.SETTINGS_SECTIONS.find((s) => s.key === 'custom-fields').path
+            console.log('@@' + JSON.stringify(
+              [path, m.viewFromPath(path), m.sectionFromPath(path)]))
+        """) % json.dumps((FRONTEND / "lib" / "settingsSections.ts").as_posix()),
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads([ln for ln in proc.stdout.splitlines() if ln.startswith("@@")][-1][2:])
+    assert got == ["/settings/custom-fields", "settings", "custom-fields"]

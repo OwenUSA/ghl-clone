@@ -2896,9 +2896,11 @@ match screenshots by eye, and every reading taken from them is listed in
   2026-09-13) registering `openRecord` with `lib/openRecord.ts`; without them those
   controls are not drawn. Opening a thread for a contact with none creates the empty
   thread (`POST /api/contacts/{id}/conversation`) and sends nothing.
-- **"⚙ Manage fields" opens the Custom fields panel over the modal** rather than
-  navigating to Settings, which this branch may not touch. Once Settings hosts the
-  panel, pointing the link there is a one-line change.
+- **"⚙ Manage fields" links to Settings → Custom Fields** (`/settings/custom-fields`,
+  from `SETTINGS_SECTIONS`). It is a real navigation to the deep link App.tsx already
+  honours on load, so no fenced file changed. That reloads the app, so an unsaved
+  edit in the modal is confirmed before it is discarded. (Until feature/ghl-pipelines
+  merged it opened the panel over the modal instead; that overlay is gone.)
 
 ### Not built
 

@@ -19,9 +19,9 @@ import {
 } from '../lib/api'
 import { changedAnswers, isEmptyAnswer, modalSections } from '../lib/customFields'
 import { takeModalTab, type ModalTab } from '../lib/opportunityModal'
+import { SETTINGS_SECTIONS } from '../lib/settingsSections'
 import { AppointmentDetailDialog } from './AppointmentDetailDialog'
 import { CustomFieldAnswers } from './CustomFieldAnswers'
-import { CustomFieldsPanel } from './CustomFieldsPanel'
 import { NewAppointmentDialog } from './NewAppointmentDialog'
 import { AppointmentTab } from './opportunity/AppointmentTab'
 import { AssociatedTab } from './opportunity/AssociatedTab'
@@ -29,7 +29,7 @@ import { NotesTab } from './opportunity/NotesTab'
 import { Chip, ContactSelect, MultiSelect, type Choice } from './opportunity/Pickers'
 import { TasksTab } from './opportunity/TasksTab'
 import {
-  BODY, BORDER, BUTTON, DANGER, DIVIDER, ErrorLine, FAINT, HEADING, INPUT, Label, MUTED,
+  BODY, BUTTON, DANGER, DIVIDER, ErrorLine, FAINT, HEADING, INPUT, Label, MUTED,
   PRIMARY, PRIMARY_BUTTON, PRIMARY_TINT, Select, TEXT, dead, footerStamp,
 } from './opportunity/ui'
 import type { Me } from '../lib/auth'
@@ -66,6 +66,9 @@ import type { Me } from '../lib/auth'
  * because there is no router (DECISIONS.md, "Deliberate deviation").
  */
 const STATUSES = ['open', 'won', 'lost', 'abandoned'] as const
+
+/** Settings → Custom Fields, from the one table of Settings sections. */
+const CUSTOM_FIELDS_PATH = SETTINGS_SECTIONS.find((s) => s.key === 'custom-fields')!.path
 
 type Form = {
   title: string
@@ -184,7 +187,6 @@ export function OpportunityDetail({
   const [error, setError] = useState<string | null>(null)
   const [booking, setBooking] = useState(false)
   const [openAppointment, setOpenAppointment] = useState<number | null>(null)
-  const [managing, setManaging] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [newTag, setNewTag] = useState('')
   const scroller = useRef<HTMLDivElement>(null)
@@ -388,7 +390,17 @@ export function OpportunityDetail({
                     <NavItem label="Associated objects" active={tab === 'associated'}
                       onClick={() => setTab('associated')} />
                   </div>
-                  <button type="button" onClick={() => setManaging(true)}
+                  {/* LINKS TO Settings → Custom Fields (brief §2). A real navigation to
+                      the deep link App.tsx already honours on load (`viewFromPath`,
+                      and SettingsPage's `sectionFromPath`), so no fenced file needed
+                      to change. It reloads the app, which would drop an unsaved edit
+                      without a word — so an unsaved edit is asked about first. */}
+                  <button type="button"
+                    onClick={() => {
+                      if (dirty && !window.confirm(
+                        'You have unsaved changes to this opportunity. Leave and discard them?')) return
+                      window.location.assign(CUSTOM_FIELDS_PATH)
+                    }}
                     className="flex items-center gap-2"
                     style={{ fontSize: 14, fontWeight: 500, color: PRIMARY, padding: '16px 0' }}>
                     <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke={PRIMARY}
@@ -770,31 +782,6 @@ export function OpportunityDetail({
         />
       )}
 
-      {/* "Manage fields": the Custom Fields panel itself, over the deal, so the
-          owner can add a tab or a field and see it here the moment he closes it. */}
-      {managing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(16,24,40,0.4)' }} onClick={() => setManaging(false)}>
-          <div onClick={(e) => e.stopPropagation()} className="flex flex-col"
-            style={{ width: 1100, maxWidth: '96vw', height: '90vh', borderRadius: 12,
-              backgroundColor: 'rgb(249,250,251)', border: '1px solid ' + BORDER }}>
-            <div className="flex items-center justify-between bg-white"
-              style={{ padding: '16px 20px', borderRadius: '12px 12px 0 0',
-                borderBottom: '1px solid ' + DIVIDER }}>
-              <div style={{ fontSize: 18, fontWeight: 600, color: TEXT }}>Custom fields</div>
-              <button type="button" aria-label="Close custom fields" onClick={() => setManaging(false)}>
-                <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={BODY}
-                  strokeWidth={2} strokeLinecap="round" aria-hidden="true">
-                  <path d="M18 6 6 18M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col" style={{ paddingTop: 16 }}>
-              <CustomFieldsPanel user={user} />
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }
