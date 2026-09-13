@@ -1093,6 +1093,15 @@ def test_managing_pipelines_is_disabled_rather_than_403_on_submit():
     assert "'Only an admin can delete a stage'" in modal
 
 
+def test_the_pipelines_tab_stays_open_to_everyone_who_works_the_board():
+    """The panel disables what a role cannot do; hiding the structure from the
+    people who work it every day would be worse."""
+    page = _read("pages", "OpportunitiesPage.tsx")
+    assert "tab === 'Pipelines' && <PipelinesPanel user={user} />" in page
+    live = page.split("const live =", 1)[1].splitlines()[0]
+    assert "Pipelines" not in live, "the Pipelines tab was gated on a role"
+
+
 def test_deleting_a_populated_stage_asks_which_stage_receives_its_deals():
     """The owner's override (2026-09-13): like GoHighLevel, but no deal is deleted.
     A stage holding deals asks for a destination in THIS pipeline; an empty one asks
