@@ -547,9 +547,11 @@ def test_the_board_sends_the_position_a_card_was_dropped_at():
         "a drop back into the card's own column is being discarded again")
 
     # The column has to be a sortable list, or a drop has no index to report.
-    assert "SortableContext" in source and "useSortable(" in source, (
+    # The card itself moved to components/OpportunityCard.tsx on 2026-09-13.
+    card = _read("components", "OpportunityCard.tsx")
+    assert "SortableContext" in source and "useSortable(" in card, (
         "the columns are drop targets only, so a reorder has no drop index")
-    assert "useDraggable(" not in source, (
+    assert "useDraggable(" not in source + card, (
         "a card is still a bare draggable, which cannot report where it landed")
 
     api = _read("lib", "api.ts")
@@ -973,7 +975,9 @@ def test_selection_mode_does_not_open_the_detail_dialog():
     page = _read("pages", "OpportunitiesPage.tsx")
     # Written as a branch rather than a ternary since board-reorder's sortable
     # Card and this one were merged, so match the two arms rather than one line.
-    handler = page.split("function Card({", 1)[1].split("<CardFace", 1)[0]
+    # The card moved to components/OpportunityCard.tsx (verbatim) on 2026-09-13.
+    card = _read("components", "OpportunityCard.tsx")
+    handler = card.split("function Card({", 1)[1].split("<CardFace", 1)[0]
     assert "if (selectable && onToggle) onToggle(o.id)" in handler, (
         "a card in selection mode still opens the opportunity")
     assert "else onOpen(o.id)" in handler, (
@@ -982,7 +986,7 @@ def test_selection_mode_does_not_open_the_detail_dialog():
         "opening wins over selecting, so a tick also opens the dialog")
     assert "selecting ? toggle(o.id) : setOpenOpp(o.id)" in page, (
         "a list row in selection mode still opens the opportunity")
-    assert "e.stopPropagation(); onToggle?.(o.id)" in page, (
+    assert "e.stopPropagation(); onToggle?.(o.id)" in card, (
         "the checkbox and the card both fire, so the tick lands back where it was")
 
 

@@ -239,8 +239,8 @@ def test_one_component_asks_the_questions_on_both_forms():
 def test_the_board_card_does_not_render_custom_fields():
     """The owner was explicit: not on the board card. It is already dense and has
     to stay scannable."""
-    source = _read("pages", "OpportunitiesPage.tsx")
-    card = source.split("function CardFace(", 1)[1].split("\nfunction ", 1)[0]
+    source = _read("components", "OpportunityCard.tsx")
+    card = source.split("function CardFace(", 1)[1].split("\nexport function ", 1)[0]
     for leak in ("CustomFieldAnswers", "custom_fields", "customFields"):
         assert leak not in card, (
             "the board card renders custom fields (%s)" % leak)
