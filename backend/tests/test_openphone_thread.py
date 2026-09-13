@@ -151,12 +151,12 @@ def test_a_mirrored_text_carries_its_direction_and_body(world):
     assert rows[0]["source_system"] == "OpenPhone"
 
 
-def test_an_unknown_number_auto_creates_a_contact_matched_on_ten_digits(world):
-    """A stranger is a lead, not a dropped event — the same rule the BulkVS path uses.
+def test_an_unknown_number_gets_a_number_thread_matched_on_ten_digits(world):
+    """AMENDED 2026-09-13: a stranger on the Quo line is NOT saved as a contact.
 
-    Asserted in both directions: a NEW number creates exactly one contact, and a
-    second event written the way a HUMAN types the same number lands on that same
-    contact rather than creating a second one.
+    Asserted in both directions: a NEW number creates no contact and one number
+    thread, and a second event written the way a HUMAN types the same number lands on
+    that same thread rather than a second one.
     """
     client, ids, as_ = world
     before = client.get("/api/contacts?page_size=200", headers=as_("admin")).json()
@@ -165,11 +165,12 @@ def test_an_unknown_number_auto_creates_a_contact_matched_on_ten_digits(world):
         from_number="+19415559999", dedupe_key="openphone:call:AC_new",
         provider_ref="AC_new"))
     assert r.status_code == 201, r.text
-    new_contact = r.json()["contact_id"]
-    assert new_contact != ids["jane"]
+    assert r.json()["contact_id"] is None
+    thread_id = r.json()["number_thread_id"]
+    assert thread_id is not None
 
     after = client.get("/api/contacts?page_size=200", headers=as_("admin")).json()
-    assert after["total"] == before["total"] + 1, "exactly one contact was created"
+    assert after["total"] == before["total"], "no contact was created"
 
     # Same line, written the way a person writes it.
     r2 = ingest(client, as_, **mirrored_call(
@@ -177,12 +178,9 @@ def test_an_unknown_number_auto_creates_a_contact_matched_on_ten_digits(world):
         type="SMS", direction="INBOUND", body="hello", call_status=None,
         duration_seconds=None, recording_url=None, transcript=None))
     assert r2.status_code == 201, r2.text
-    assert r2.json()["contact_id"] == new_contact, "one number, one contact"
+    assert r2.json()["number_thread_id"] == thread_id, "one number, one thread"
     final = client.get("/api/contacts?page_size=200", headers=as_("admin")).json()
-    assert final["total"] == after["total"], "no second contact for one number"
-
-
-# --- 2. idempotency -------------------------------------------------------------------
+    assert final["total"] == after["total"]
 
 
 def test_the_same_call_ingested_twice_produces_one_event(world):
@@ -360,19 +358,13 @@ def test_a_backfill_does_not_inflate_the_unread_badge(world):
 
 
 def test_a_backfilled_missed_call_does_not_queue_an_auto_text_back(world):
-    """THE ONE THAT COULD HAVE TEXTED REAL PEOPLE.
-
-    Rule 1 auto-texts any inbound call under 15 seconds. Every missed OpenPhone call
-    in a 30-day backfill is exactly that, so without the freshness guard, switching
-    the mirror on would queue one text-back per missed call — to real customers,
-    about calls up to a month old, from a number they have never seen.
-    """
+    """THE ONE THAT COULD HAVE TEXTED REAL PEOPLE — and, since 2026-09-13, nothing
+    texts anybody back at all. A month-old mirrored missed call queues nothing."""
     client, ids, as_ = world
     r = ingest(client, as_, **mirrored_call(
         duration_seconds=3, call_status="no-answer",
         occurred_at=(datetime.now(UTC) - timedelta(days=9)).isoformat()))
     assert r.status_code == 201, r.text
-    assert "too old" in r.json()["automation"]
 
     db = SessionLocal()
     queued = db.query(Job).filter(Job.type == "missed_call_textback").count()
@@ -380,36 +372,25 @@ def test_a_backfilled_missed_call_does_not_queue_an_auto_text_back(world):
     assert queued == 0, "no text-back was queued for a month-old call"
 
 
-def test_a_live_missed_call_still_queues_the_auto_text_back(world):
-    """The guard must only ever stop a text nobody wanted. A real missed call reaches
-    us seconds after it ends and must still fire, or the freshness rule has broken
-    the feature it was protecting."""
+@pytest.mark.parametrize("minutes_ago", [None, 10])
+def test_a_live_missed_call_queues_no_text_back_either(world, minutes_ago):
+    """AMENDED 2026-09-13: rule 1 is disabled. A live missed call and a relay ten
+    minutes late used to queue a text-back; they now queue nothing."""
     client, ids, as_ = world
-    r = ingest(client, as_, **{
-        "from_number": "+19415550101", "type": "CALL", "direction": "INBOUND",
-        "duration_seconds": 4, "call_status": "no-answer",
-        "body": "Inbound call ended.", "provider_ref": "owen-live-1",
-    })
+    body = {"from_number": "+19415550101", "type": "CALL", "direction": "INBOUND",
+            "duration_seconds": 4, "call_status": "no-answer",
+            "body": "Inbound call ended.", "provider_ref": "owen-live-%s" % minutes_ago}
+    if minutes_ago:
+        body["occurred_at"] = (datetime.now(UTC)
+                               - timedelta(minutes=minutes_ago)).isoformat()
+    r = ingest(client, as_, **body)
     assert r.status_code == 201, r.text
-    assert r.json()["automation"] == "queued"
+    assert "disabled" in r.json()["automation"]
 
     db = SessionLocal()
-    queued = db.query(Job).filter(Job.type == "missed_call_textback").count()
+    queued = db.query(Job).count()
     db.close()
-    assert queued == 1
-
-
-def test_a_delayed_relay_is_still_treated_as_live(world):
-    """A queue backlog or a retried job can deliver a real missed call minutes late.
-    That must still text back, which is why the window is an hour and not a minute."""
-    client, ids, as_ = world
-    r = ingest(client, as_, **{
-        "from_number": "+19415550101", "type": "CALL", "direction": "INBOUND",
-        "duration_seconds": 4, "call_status": "no-answer",
-        "body": "Inbound call ended.", "provider_ref": "owen-late-1",
-        "occurred_at": (datetime.now(UTC) - timedelta(minutes=10)).isoformat(),
-    })
-    assert r.json()["automation"] == "queued"
+    assert queued == 0
 
 
 # --- 5. the composer sends over BulkVS, in a mixed thread -----------------------------
