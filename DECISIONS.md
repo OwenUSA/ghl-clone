@@ -3154,8 +3154,11 @@ operator runs it.
 
 ### Screens — ours, not measured
 
-GoHighLevel has no number-only thread, so the "Not a contact" pill, the header's
-"Add as contact" button, the right-hand number panel, the "from Quo" label and the transcript
-disclosure under a call are OUR design in the existing Conversations style. The measured
+GoHighLevel has no number-only thread, so the "Not a contact" pill (on the row and in the
+panel), the header's "Add as contact" button beside the formatted number, the right-hand
+number panel, the "from Quo" label and the transcript disclosure under a call are OUR design
+in the existing Conversations style. Checked in a browser at 1440×900 against a disposable
+database: the header holds the number, the button and the measured icon row without pushing
+the panel off screen; a longer header was tried first and did. The measured
 geometry of the list, header and composer is untouched for a contact thread; the star in the
 header now works for both kinds.

@@ -1049,7 +1049,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                           {numberOnly ? (c.quo_name || c.phone_display) : (c.contact_name ?? c.contact_phone)}
                         </span>
                         {numberOnly && c.quo_name && (
-                          <span className="ml-1 shrink-0"><FromQuo /></span>
+                          <span className="shrink-0" style={{ marginLeft: 6 }}><FromQuo /></span>
                         )}
                         <span className="ml-auto flex items-center gap-1 pl-2">
                           <span style={{ fontSize: 12, color: 'rgb(102,112,133)' }}>
@@ -1094,30 +1094,34 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   backgroundColor: 'rgb(185,230,254)', fontSize: 11,
                   color: 'rgb(71,84,103)',
                 }}>+1</div>
-              <div style={{ fontSize: 16, fontWeight: 500, color: 'rgb(16,24,40)' }}>
+              {/* Title and, on a number-only thread, its extras share one box that
+                  takes the header's spare width and clips — so a long name can never
+                  push the measured icon row, or the panel beside it, off screen. */}
+              <div className="flex items-center gap-2 overflow-hidden"
+                style={{ flex: '1 1 0%', minWidth: 0, width: 0 }}>
+              <div className="truncate" style={{
+                fontSize: 16, fontWeight: 500, color: 'rgb(16,24,40)', minWidth: 0,
+              }}>
                 {isNumber
-                  ? (current?.quo_name || current?.phone_display)
+                  ? current?.phone_display
                   : (current?.contact_name ?? current?.contact_phone ?? '—')}
               </div>
-              {/* A number-only thread says so, names its number, and offers the one
-                  action that changes it. Quo's name is labelled as Quo's. */}
+              {/* A number-only thread's header is its NUMBER and the one action that
+                  changes what it is. Quo's name and the not-a-contact marker are on
+                  the row and in the panel beside it; at 1440 the header has room for
+                  the number, the button and the measured icon row, and no more. */}
               {isNumber && current && (
                 <>
-                  {current.quo_name && (
-                    <span style={{ fontSize: 14, color: 'rgb(102,112,133)' }}>
-                      {current.phone_display} · <FromQuo />
-                    </span>
-                  )}
-                  <NotAContactPill />
                   <button
                     onClick={() => setAddingContact(true)}
                     disabled={!canAddContact(user)}
                     title={canAddContact(user)
                       ? 'Save this number as a contact — its history moves with it'
                       : 'Only staff can add contacts'}
-                    className="flex items-center gap-1"
+                    className="flex shrink-0 items-center gap-1"
                     style={{
                       marginLeft: 4, height: 28, padding: '0 10px', borderRadius: 6,
+                      whiteSpace: 'nowrap',
                       fontSize: 13, fontWeight: 500, color: 'rgb(0,78,235)',
                       border: '1px solid rgb(178,204,255)', backgroundColor: '#fff',
                       ...(canAddContact(user) ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
@@ -1128,6 +1132,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   </button>
                 </>
               )}
+              </div>
               {/* five 24x24 icons at a 40px pitch — measured x=852..1036 */}
               <div className="relative ml-auto flex items-center" style={{ gap: 16 }}>
                 <IconBtn title="Filter messages" onClick={() => setShowFilter((s) => !s)}>

@@ -786,7 +786,7 @@ def test_the_page_selects_by_key_and_shows_the_number_thread_affordances():
     assert "`/api/number-threads/${t.id}`" in api
     # Not-a-contact marker on the row and in the header; Add as contact in the header
     # and in the right-hand panel instead of an empty contact.
-    assert page.count("<NotAContactPill />") >= 2
+    assert "<NotAContactPill />" in page and "<NotAContactPill />" in panel
     assert "Add as contact" in page and "Add as contact" in panel
     assert "<NumberDetailsPanel row={current}" in page
     assert "!isNumber && current.contact_id != null" in page, (

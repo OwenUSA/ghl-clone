@@ -73,7 +73,7 @@ export function NumberDetailsPanel({
 
   return (
     <div
-      className="flex h-full flex-col overflow-hidden"
+      className="flex h-full shrink-0 flex-col overflow-hidden"
       style={{
         width: PANE.panel,
         backgroundColor: 'rgb(247,249,253)',
