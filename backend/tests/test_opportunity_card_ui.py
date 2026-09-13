@@ -283,6 +283,10 @@ def test_probability_is_drawn_only_for_opportunity_level_probability():
     assert "{probabilityShown && (" in source and 'aria-label="Probability"' in source
     assert "changes(o, form, probabilityShown)" in source, (
         "a hidden Probability field still sends a value on Update")
+    save = source.split("const save = useMutation({", 1)[1].split("\n  })", 1)[0]
+    assert "changes(o, form, shown)" in save and "use_opportunity_probability" in save, (
+        "Update is enabled by a typed probability but the save does not send it — "
+        "found in the browser: the modal closed and nothing was written")
     changes = source.split("function changes(", 1)[1].split("\n}\n", 1)[0]
     assert "if (probabilityShown) {" in changes
 

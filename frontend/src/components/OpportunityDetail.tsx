@@ -261,7 +261,12 @@ export function OpportunityDetail({
           qc.invalidateQueries({ queryKey: ['contacts'] })
         }
       }
-      const body = changes(o, form)
+      // The SAME rule the screen used to decide Update was live: probability is
+      // sent only when the (new) pipeline draws the field. Computing it here
+      // separately once made Update close the modal having sent nothing.
+      const shown = !!pipelines.data?.find((p) => p.id === form.pipelineId)
+        ?.use_opportunity_probability
+      const body = changes(o, form, shown)
       if (Object.keys(body).length) await patchOpportunity(opportunityId, body)
     },
     onSuccess: () => { invalidate(); onClose() },
