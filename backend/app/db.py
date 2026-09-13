@@ -9,8 +9,8 @@ but `custom_fields` is only JSONB — indexable — on Postgres.
 """
 import os
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 DEFAULT_URL = "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/dtr_ghl_clone"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_URL)
@@ -25,6 +25,20 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 class Base(DeclarativeBase):
     pass
+
+
+@event.listens_for(Session, "before_flush")
+def _adopt_number_threads(session, flush_context, instances):
+    """A contact that comes to exist with a number adopts that number's thread.
+
+    Registered on the Session CLASS, so it covers every session this process makes —
+    the API, the CLI-facing routes, the Workiz import and the tests alike — and a
+    new way of creating a contact is covered without anyone remembering to call it.
+    Imported lazily: the models import this module. See app/number_threads.py.
+    """
+    from .number_threads import adopt_on_flush
+
+    adopt_on_flush(session)
 
 
 def get_db():

@@ -97,8 +97,14 @@ def calendar(client, ref: str) -> dict:
 
 
 def conversation(client, ref: str) -> dict:
-    """Accept a conversation id, a contact id, or a contact name."""
-    rows = client.get("/api/conversations")
+    """Accept a conversation id, a contact id, or a contact name.
+
+    Only CONTACT threads are candidates. The list also carries number-only threads
+    (kind "number", 2026-09-13) whose ids come from another table and can equal a
+    conversation id — matching those here would act on the wrong thread.
+    """
+    rows = [r for r in client.get("/api/conversations")
+            if r.get("kind", "contact") == "contact"]
     if str(ref).strip().isdigit():
         wanted = int(ref)
         for r in rows:

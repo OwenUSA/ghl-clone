@@ -131,6 +131,16 @@ uv run ghl opps move 42 --stage "Inspection"
 uv run ghl jobs list --status pending         # did the automation fire?
 ```
 
+## Unknown numbers are threads, not contacts (2026-09-13)
+
+An inbound call or text from a number no contact holds creates **no contact, no deal and no
+job**. It lands on a `number_threads` row that shows in the inbox beside contact threads
+(`kind: "number"`, `key: "n<id>"` — select rows by `key`, ids collide across the two kinds).
+The moment a contact exists with that number, by any path, a `before_flush` listener moves
+the whole history onto the contact's thread (`app/number_threads.py`). The missed-call
+auto text-back is **off**. Converting the old auto-created contacts back:
+`uv run python -m app.convert_auto_contacts` (dry run; `--commit` writes). See DECISIONS.md.
+
 ## Answering a call in the browser (the softphone)
 
 The CRM can be a ring destination. `+19544829099` already rings two mobiles in parallel

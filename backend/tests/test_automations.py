@@ -42,41 +42,42 @@ def jobs(db, type_=None):
     return list(db.scalars(stmt).all())
 
 
-# ---------- rule 1: missed call ----------
+# ---------- rule 1: missed call — DISABLED (owner's decision, 2026-09-13) ----------
+#
+# "Nothing texts anyone back automatically — contacts included." The rule answers
+# with the reason and queues nothing, for every shape that used to fire it. Asserted
+# on the jobs table, not on the returned string alone.
 
-def test_missed_call_queues_textback(db, contact):
+def test_a_missed_call_queues_no_textback(db, contact):
     ev = _call(db, contact, seconds=4)
-    assert automations.on_inbound_call(db, ev) == "queued"
-    assert len(jobs(db, "missed_call_textback")) == 1
-
-
-def test_answered_call_does_not_queue(db, contact):
-    ev = _call(db, contact, seconds=95)
-    assert automations.on_inbound_call(db, ev) == "call was answered"
+    assert automations.on_inbound_call(db, ev) == automations.MISSED_CALL_DISABLED
     assert jobs(db) == []
 
 
-def test_missed_call_is_deduped(db, contact):
+def test_an_answered_call_queues_nothing_either(db, contact):
+    ev = _call(db, contact, seconds=95)
+    automations.on_inbound_call(db, ev)
+    assert jobs(db) == []
+
+
+def test_asking_twice_still_queues_nothing(db, contact):
     ev = _call(db, contact, seconds=3)
     automations.on_inbound_call(db, ev)
-    assert automations.on_inbound_call(db, ev) == "already queued"
-    assert len(jobs(db, "missed_call_textback")) == 1
+    automations.on_inbound_call(db, ev)
+    assert jobs(db, "missed_call_textback") == []
 
 
-def test_dnd_contact_is_never_texted(db, contact):
-    contact.dnd = True
-    db.flush()
-    ev = _call(db, contact, seconds=3)
-    assert "DND" in automations.on_inbound_call(db, ev)
-    assert jobs(db) == []
+def test_a_textback_job_already_in_the_queue_sends_nothing(db, contact):
+    """A job queued before the switch must not text anyone when the worker drains it."""
+    from app.queue import enqueue
 
-
-def test_contact_without_phone_is_skipped(db, contact):
-    contact.phone = None
-    db.flush()
-    ev = _call(db, contact, seconds=3)
-    assert "no phone" in automations.on_inbound_call(db, ev)
-    assert jobs(db) == []
+    enqueue(db, "missed_call_textback", {"contact_id": contact.id})
+    db.commit()
+    assert drain_once() == 1
+    db.expire_all()
+    assert db.scalars(select(ConversationEvent).where(
+        ConversationEvent.direction == Direction.OUTBOUND)).all() == []
+    assert [j.status for j in db.scalars(select(Job)).all()] == ["done"]
 
 
 # ---------- rule 2: new lead ----------
@@ -148,10 +149,15 @@ def test_same_stage_does_not_notify(db, opportunity):
 
 # ---------- worker ----------
 
-def test_worker_records_outbound_as_logged_only(db, contact):
-    """The whole point of the stub: the message is recorded, never transmitted."""
-    ev = _call(db, contact, seconds=5)
-    automations.on_inbound_call(db, ev)
+def test_worker_records_outbound_as_logged_only(db, opportunity, pipeline):
+    """The whole point of the stub: the message is recorded, never transmitted.
+
+    Driven through rule 4 (a stage move texts the customer) since rule 1 is off."""
+    _, _, b = pipeline
+    old = opportunity.stage_id
+    opportunity.stage_id = b.id
+    db.flush()
+    automations.on_opportunity_stage_changed(db, opportunity, old)
     db.commit()
 
     assert drain_once() == 1
@@ -162,7 +168,7 @@ def test_worker_records_outbound_as_logged_only(db, contact):
             ConversationEvent.direction == Direction.OUTBOUND)).all()
     assert len(sent) == 1
     assert sent[0].delivery_status == DeliveryStatus.LOGGED_ONLY
-    assert "missed your call" in sent[0].body
+    assert "Inspection" in sent[0].body
 
     done = db.scalars(select(Job)).all()
     assert [j.status for j in done] == ["done"]

@@ -797,3 +797,97 @@ class OpportunityContact(Base):
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
 
     contact: Mapped["Contact"] = relationship()
+
+
+# ---------- number-only threads (2026-09-13) ----------
+#
+# The owner's rule: "if its a number that is not registered as a contact, it should
+# not be saved as contact but the numbers with the conversation must display
+# anyways". A call or text from a number no contact holds creates NO Contact and NO
+# Opportunity; it lands on a thread that belongs to the NUMBER.
+#
+# Why two NEW tables rather than a flag on the existing two. `conversations.contact_id`
+# and `conversation_events.conversation_id` are both NOT NULL, and the standing
+# migration rule is CREATE TABLE / ADD COLUMN only — no ALTER of an existing column.
+# So a number-only thread cannot be a `conversations` row (it has no contact to point
+# at) and its events cannot be `conversation_events` rows (they have no conversation
+# to point at). Everything else follows from that:
+#
+#   * `number_threads` carries exactly the thread state a conversation carries —
+#     unread_count, starred, last_event_at — plus the number itself and the name
+#     Quo's own contact book gives it, which is display-only and creates nothing.
+#   * `number_thread_events` is `conversation_events` column for column, with the
+#     parent swapped. `test_number_threads.py` pins the two column sets equal, so a
+#     column added to one and forgotten on the other fails a test instead of being
+#     silently dropped when a thread is adopted.
+#   * ADOPTION moves every event into `conversation_events` and deletes the number
+#     thread, in the same transaction that gave the number a contact
+#     (`number_threads.adopt_on_flush`). A number-only thread is a waiting room, not
+#     a second kind of history.
+
+class NumberThread(Base):
+    """A thread for a phone number that no contact holds. See the block above."""
+    __tablename__ = "number_threads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # As `store_phone` stores it: E.164 when it parses, verbatim when it does not.
+    phone: Mapped[str] = mapped_column(String(40))
+    # The last ten digits — the identity rule shared with contacts, the picker, the
+    # CRM link and owen-main. UNIQUE: one number, one thread.
+    phone_key: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    # The name Quo's (OpenPhone's) own contact book has for this number, when it has
+    # one. Shown labelled "from Quo". Never used to create anything here.
+    quo_name: Mapped[str | None] = mapped_column(String(200))
+    last_event_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    unread_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    starred: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+    events: Mapped[list["NumberThreadEvent"]] = relationship(
+        back_populates="thread", cascade="all, delete-orphan",
+        order_by="NumberThreadEvent.occurred_at")
+
+
+class NumberThreadEvent(Base):
+    """One entry on a number-only thread: `ConversationEvent`, parent swapped."""
+    __tablename__ = "number_thread_events"
+    __table_args__ = (
+        Index("ix_number_thread_events_type_occurred", "type", "occurred_at"),
+        # The same idempotency guarantee, declared the same way (a unique INDEX, see
+        # ConversationEvent). Uniqueness ACROSS the two tables is the ingest's job:
+        # `POST /api/events` looks a key up in both before writing either, and
+        # adoption skips an event whose key the contact's thread already holds.
+        Index("uq_number_thread_events_dedupe_key", "dedupe_key", unique=True),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    number_thread_id: Mapped[int] = mapped_column(
+        ForeignKey("number_threads.id"), index=True)
+    type: Mapped[EventType] = mapped_column(Enum(EventType))
+    direction: Mapped[Direction] = mapped_column(Enum(Direction))
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True)
+    body: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(String(255))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    call_status: Mapped[str | None] = mapped_column(String(30))
+    recording_url: Mapped[str | None] = mapped_column(String(500))
+    transcript: Mapped[str | None] = mapped_column(Text)
+    delivery_status: Mapped[DeliveryStatus | None] = mapped_column(Enum(DeliveryStatus))
+    delivery_detail: Mapped[str | None] = mapped_column(Text)
+    provider_ref: Mapped[str | None] = mapped_column(String(120), index=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    source_system: Mapped[str | None] = mapped_column(String(40))
+    source_number: Mapped[str | None] = mapped_column(String(40))
+
+    thread: Mapped[NumberThread] = relationship(back_populates="events")
+
+
+# The columns an event carries that are not its identity or its parent. Adoption and
+# conversion copy exactly these, in both directions.
+EVENT_PAYLOAD_COLUMNS = (
+    "type", "direction", "occurred_at", "body", "subject", "duration_seconds",
+    "call_status", "recording_url", "transcript", "delivery_status",
+    "delivery_detail", "provider_ref", "dedupe_key", "source_system",
+    "source_number",
+)

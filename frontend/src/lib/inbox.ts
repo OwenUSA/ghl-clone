@@ -16,8 +16,19 @@
  *     accepted `{"read": true}`.
  */
 
-/** The least a row needs for any of this. `ConversationSummary` satisfies it. */
-export type UnreadRow = { id: number; unread_count: number }
+/**
+ * The least a row needs for any of this. `ConversationSummary` satisfies it.
+ *
+ * `key` exists since 2026-09-13, when number-only threads joined the list: their
+ * ids come from a different table and can equal a contact thread's id, so a row is
+ * identified by `key` ("c12" / "n12") whenever it has one, and by `id` otherwise.
+ */
+export type UnreadRow = { id: number; key?: string; unread_count: number }
+
+/** The identity of a row: its `key` when it has one, else its `id`. */
+export function rowId(r: { id: number; key?: string }): number | string {
+  return r.key ?? r.id
+}
 
 /**
  * The rows the Unread tab shows: `GET /api/conversations?tab=unread` is
@@ -44,11 +55,11 @@ export function unreadTabCount(rows: readonly UnreadRow[] | undefined): number {
 
 /** Zero one conversation's unread count in a cached list. Returns a NEW array. */
 export function markReadIn<T extends UnreadRow>(
-  rows: readonly T[] | undefined, id: number,
+  rows: readonly T[] | undefined, id: number | string,
 ): T[] | undefined {
   if (!rows) return rows as undefined
-  if (!rows.some((r) => r.id === id && r.unread_count > 0)) return rows as T[]
-  return rows.map((r) => (r.id === id ? { ...r, unread_count: 0 } : r))
+  if (!rows.some((r) => rowId(r) === id && r.unread_count > 0)) return rows as T[]
+  return rows.map((r) => (rowId(r) === id ? { ...r, unread_count: 0 } : r))
 }
 
 /**
@@ -61,7 +72,7 @@ export function markReadIn<T extends UnreadRow>(
  * the tab and it clears.
  */
 export function shouldMarkRead(
-  openId: number | null, unread: number, visible: boolean,
+  openId: number | string | null, unread: number, visible: boolean,
 ): boolean {
   return openId != null && unread > 0 && visible
 }
@@ -95,9 +106,9 @@ const IDENTITY = <T extends UnreadRow>(rows: readonly T[] | undefined) =>
  * badge to stay put. Ten seconds of polling means a stale badge is never stale
  * for long; a lying one is wrong until someone notices.
  */
-export async function markConversationRead(
-  id: number,
-  patch: (id: number) => Promise<unknown>,
+export async function markConversationRead<K extends number | string>(
+  id: K,
+  patch: (id: K) => Promise<unknown>,
 ): Promise<InboxUpdate> {
   try {
     await patch(id)

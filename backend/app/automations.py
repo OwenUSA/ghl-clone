@@ -3,7 +3,7 @@
 No visual workflow builder in v1 — these four rules are what the business actually
 runs, and a canvas to configure four rules is 30-40% of the build for no gain.
 
-  1. missed call            -> auto-text the caller back
+  1. missed call            -> auto-text the caller back   DISABLED 2026-09-13
   2. new lead created       -> notify the team internally
   3. appointment booked     -> remind the customer at T-24h and T-1h
   4. opportunity stage move -> text the customer the status update
@@ -254,12 +254,63 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
     return ev, _outcome_reason(ref)
 
 
+def send_outbound_to_number(db: Session, thread, body: str, *,
+                            type_: EventType = EventType.SMS
+                            ) -> tuple[object | None, str]:
+    """`send_outbound`, for a number-only thread (app/number_threads.py).
+
+    The SAME transport, resolved the same way (`get_transport()`), so a text to a
+    number nobody has saved is exactly as refused, queued or logged as a text to a
+    contact: `LoggingTransport` records LOGGED_ONLY while the link is unarmed, and
+    owen-main refuses it while SMS is dark. A number-only thread is not a way
+    around either gate. There is no DND to honour — DND is a contact's setting and
+    there is no contact — and no email, because a number has no address.
+    """
+    from .models import NumberThreadEvent
+
+    if type_ in INTERNAL_TYPES:
+        ev = NumberThreadEvent(
+            number_thread_id=thread.id, type=type_, direction=Direction.OUTBOUND,
+            occurred_at=_utcnow(), body=body)
+        db.add(ev)
+        thread.last_event_at = ev.occurred_at
+        db.flush()
+        return ev, "recorded"
+    if type_ is not EventType.SMS:
+        return None, "suppressed: a number-only thread can only be texted"
+    if not thread.phone:
+        return None, "suppressed: no phone number"
+
+    ref = get_transport().send_sms(to=thread.phone, body=body, from_number="")
+    ev = NumberThreadEvent(
+        number_thread_id=thread.id, type=type_, direction=Direction.OUTBOUND,
+        occurred_at=_utcnow(), body=body,
+        delivery_status=ref.status, delivery_detail=ref.detail or None,
+        provider_ref=ref.provider_ref or None,
+        source_system=SENT_SOURCE_SYSTEM, source_number=_sent_source_number())
+    db.add(ev)
+    thread.last_event_at = ev.occurred_at
+    db.flush()
+    return ev, _outcome_reason(ref)
+
+
 # ---------- triggers (called from the API) ----------
 
+# Rule 1 is OFF, by the owner's decision (DECISIONS.md, 2026-09-13): "nothing texts
+# anyone back automatically — contacts included". The rule is not deleted, because
+# its guards (`is_fresh`, DND, no phone) are documented history worth keeping readable,
+# but nothing below the early return runs, and the worker refuses the job type too, so
+# a `missed_call_textback` job left in a queue from before this change sends nothing.
+MISSED_CALL_TEXTBACK_ENABLED = False
+MISSED_CALL_DISABLED = "missed-call text-back is disabled (owner's decision, 2026-09-13)"
+
+
 def on_inbound_call(db: Session, event: ConversationEvent) -> str:
-    """Rule 1 — missed call -> auto text back."""
+    """Rule 1 — missed call -> auto text back. DISABLED; see the note above."""
     if event.type != EventType.CALL or event.direction != Direction.INBOUND:
         return "not an inbound call"
+    if not MISSED_CALL_TEXTBACK_ENABLED:
+        return MISSED_CALL_DISABLED
     if (event.duration_seconds or 0) > MISSED_CALL_MAX_SECONDS:
         return "call was answered"
     # A mirrored call from three weeks ago is history, not a missed call to answer now.
@@ -353,6 +404,10 @@ def on_opportunity_stage_changed(db: Session, opp: Opportunity,
 # ---------- handlers (run by the worker) ----------
 
 def _h_missed_call(db: Session, payload: dict) -> None:
+    if not MISSED_CALL_TEXTBACK_ENABLED:
+        # A job queued before the rule was switched off must not send either.
+        log.info("missed_call_textback skipped: %s", MISSED_CALL_DISABLED)
+        return
     contact = db.get(Contact, payload["contact_id"])
     ok, why = _can_message(contact)
     if not ok:

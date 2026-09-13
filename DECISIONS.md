@@ -3059,3 +3059,106 @@ to 11 PM. **Known gap, not fixed:** the grid positions bookings in the BROWSER's
 account's. For staff in Florida the two are the same; a laptop set to another zone draws the
 grid shifted while the modal reads correctly. Moving the grid onto the account zone is a
 change to `calendarGrid.ts` and to the measured Week view, and is its own task.
+
+## AMENDMENT (2026-09-13): every call and text, both lines, one inbox — and an unknown number is never a contact
+
+The owner, in his words:
+
+> *"show everyone that texts/calls the number binded to the system and the number from openphone/quo"*
+> *"show all the conversation in chronological order whether we are texting from quo or from this ghl clone"*
+> *"if its a number that is not registered as a contact, it should not be saved as contact but the numbers with the conversation must display anyways"*
+> *"i need to have tracking of all the communication we have with the customer across the platforms, centralized in this module"*
+
+Branch `feature/unified-inbox` (this repository) and `feature/quo-inbox` (owen-main).
+
+### What this OVERRIDES, item by item
+
+1. **"`POST /api/events` accepts a phone number, and creates the contact" (2026-09-11) —
+   OVERRIDDEN.** A number no contact holds (last ten digits, the shared rule) creates **no
+   Contact, no Opportunity and no job**, from either line, call or text. The event lands on
+   a **number-only thread**. The judgement recorded then ("a roofing lead that rings once and
+   is never recorded is a lost job") is still honoured — nothing is dropped, the thread is in
+   the inbox, unread — but spam no longer becomes contacts. `new_lead_notify` is not fired
+   for an unknown number. A too-short number (fewer than ten digits) is refused 422 rather
+   than filed under a fragment. The explicit-`contact_id` path is unchanged.
+2. **Rule 1, missed call → auto text back — DISABLED.** "Nothing texts anyone back
+   automatically — contacts included." `automations.on_inbound_call` returns
+   `MISSED_CALL_DISABLED` before doing anything, and the worker's `missed_call_textback`
+   handler refuses too, so a job queued before deploy sends nothing. The rule's code and its
+   `is_fresh` guard are kept, readable, behind `MISSED_CALL_TEXTBACK_ENABLED = False`. The
+   "Automations — BUILT" table above is historical for rule 1. Tests assert on the `jobs`
+   table that no `missed_call_textback` is ever enqueued.
+3. **"Polling, not webhooks — decided on owen-main" (2026-09-11) — AMENDED.** The owner
+   registers the Quo webhook in Quo's dashboard and pastes its signing secret into owen-main's
+   config, which removes both disqualifiers. owen-main now receives
+   `POST https://api.owen.santiagoproperties.uk/webhooks/openphone`, HMAC-verified, off by
+   default, and the poll stays on as the backstop. owen-main still makes no non-GET request to
+   OpenPhone. Setup steps: owen-main `docs/QUO_WEBHOOK.md`.
+4. **The source chip says "Quo"**, not "OpenPhone" — the owner's name for it. The wire value
+   stays `OpenPhone`. BulkVS events relayed by owen-main now carry `source_system = BulkVS`
+   and the DID, so new rows on both lines show their line and system; rows from before still
+   render no chip (no guessing, as recorded 2026-09-11).
+
+### The number-only thread — design, and why
+
+`conversations.contact_id` and `conversation_events.conversation_id` are both NOT NULL, and
+the migration rule is CREATE TABLE / ADD COLUMN only. So a thread with no contact cannot be a
+`conversations` row, and its events cannot be `conversation_events` rows. Two new tables:
+
+* `number_threads` — `phone` (as `store_phone` stores it), `phone_key` (last ten digits,
+  UNIQUE), `quo_name` (display only), `unread_count`, `starred`, `last_event_at`,
+  `created_at`: exactly a conversation's thread state, keyed by number instead of contact.
+* `number_thread_events` — `conversation_events` column for column with the parent swapped,
+  including the unique `dedupe_key` index. A test pins the two column sets equal.
+
+Rejected: a sentinel "unknown" contact (it IS a contact row, which the owner forbade);
+nullable columns on the existing tables (needs an ALTER); a flag on `contacts` (still a
+contact, still in every contact list, search and export).
+
+**Adoption.** When a contact comes to exist with that number — "Add as contact", any
+`POST /api/contacts`, a phone edited on a contact (the opportunity modal's Primary phone goes
+through the same PATCH), the Workiz import, or any other ORM write — a `before_flush` listener
+on the Session class (`app/db.py` → `number_threads.adopt_on_flush`) copies every event onto
+the contact's thread and deletes the number thread, in the same flush. No event lost (every
+payload column copied), none duplicated (a `dedupe_key` already on a contact thread is
+skipped), unread count and star carried over. It imports neither `automations` nor `queue`,
+so the Workiz import's jobs-table guard still holds. Hooked on the Session rather than on each
+route so a path added later is covered by default.
+
+**One inbox.** `GET /api/conversations` returns both kinds mixed by `last_event_at`, each row
+carrying `kind` (`contact` | `number`) and `key` (`c<id>` / `n<id>`) — ids come from two tables
+and can collide, so the browser and the CLI never select by id alone. Every surface applies
+one rule to both: Unread/Starred tabs (the same two columns), Recent/All, `assigned=me` (a
+number has no owner, so it is in the team inbox and nobody's own — like an unowned contact),
+the in-place search (the number by the shared digits rule, and Quo's name), read/star
+(`PATCH /api/number-threads/{id}`, same body), delete (`DELETE`, ADMIN, same as a thread),
+and staff-only notes (the thread view for both is ONE function, `_thread_events`, through
+`auth.sees_internal`). The ctrl+K palette is unchanged: it searches contacts, deals and
+contact-thread message bodies, and does not list number-only threads — the inbox search does.
+
+**Usable without saving.** `POST /api/number-threads/{id}/messages` goes through the same
+`get_transport()` — LOGGED_ONLY while unarmed, REFUSED by owen-main while SMS is dark — and
+`/call` through the same `_dial` a contact call uses, so owen-main's `CRM_LINK_ALLOWLIST` (empty
+allows nothing) gates a number exactly as it gates a contact. Replies always leave on the
+BulkVS DID; the Quo banner names `+1 954-482-9099`.
+
+**Quo's name.** owen-main reads Quo's contact book (GET only, cached) and sends
+`source_contact_name`; it is shown "from Quo" and only prefills the Add-contact form.
+
+**The one auto-created contact in production** is converted by
+`python -m app.convert_auto_contacts` (dry run by default, `--commit` to write), which only
+touches a contact created by `owen-main` with no deal, no additional-contact link, no
+appointment, no task, no tag, no thread note, no field changed from what the ingest wrote and
+`updated_at` within two seconds of `created_at`, and whose number no other contact holds. The
+operator runs it.
+
+### Screens — ours, not measured
+
+GoHighLevel has no number-only thread, so the "Not a contact" pill (on the row and in the
+panel), the header's "Add as contact" button beside the formatted number, the right-hand
+number panel, the "from Quo" label and the transcript disclosure under a call are OUR design
+in the existing Conversations style. Checked in a browser at 1440×900 against a disposable
+database: the header holds the number, the button and the measured icon row without pushing
+the panel off screen; a longer header was tried first and did. The measured
+geometry of the list, header and composer is untouched for a contact thread; the star in the
+header now works for both kinds.

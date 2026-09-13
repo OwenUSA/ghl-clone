@@ -375,7 +375,10 @@ def test_the_page_marks_a_thread_read_when_it_is_opened():
     """The endpoint has always worked; the browser never called it."""
     source = _page()
     assert "markConversationRead" in source, "nothing in the page marks a thread read"
-    assert "patchConversation" in source and "read: true" in source, (
+    # Retargeted 2026-09-13: the page addresses a thread by its ROW (contact or
+    # number-only) through `patchThread`, which PATCHes /api/conversations/{id} for a
+    # contact thread and /api/number-threads/{id} for a number.
+    assert "patchThread" in source and "read: true" in source, (
         "the page no longer sends {read: true} — retarget this test")
     assert "shouldMarkRead(active" in source, (
         "the auto mark-read no longer keys off the open thread")
@@ -528,7 +531,7 @@ def test_the_trash_icon_is_no_longer_labelled_not_implemented():
     source = _page()
     assert "Delete Conversation (not implemented in v1)" not in source, (
         "the trash icon still says it does nothing")
-    assert "deleteConversation" in source, "the page cannot delete a conversation"
+    assert "deleteThread" in source, "the page cannot delete a conversation"
 
 
 def test_a_role_that_may_not_delete_gets_a_disabled_control_with_a_reason():

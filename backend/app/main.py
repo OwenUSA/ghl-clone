@@ -22,6 +22,7 @@ from . import (
     crmlink,
     custom_fields,
     models,
+    number_threads,
     openphone,
     opportunity_workspace,
     phone_match,
@@ -46,6 +47,8 @@ from .models import (
     Direction,
     EventType,
     Job,
+    NumberThread,
+    NumberThreadEvent,
     Opportunity,
     Pipeline,
     PipelinePermission,
@@ -214,6 +217,8 @@ class EventOut(BaseModel):
     # inventing a fact to make the UI tidier.
     source_system: str | None = None
     source_number: str | None = None
+    # What was said on a call, when the far side transcribed it (Quo does).
+    transcript: str | None = None
 
 
 # ---------- contacts ----------
@@ -441,7 +446,10 @@ def update_contact(contact_id: int, body: ContactPatch,
         setattr(c, k, v)
     db.commit()
     db.refresh(c)
-    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
+    # A phone edited to a number that has a number-only thread adopts it, in the
+    # commit above (number_threads.adopt_on_flush); this only reports it.
+    return {**_contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal)),
+            **_adopted(db, c)}
 
 
 class TagBody(BaseModel):
@@ -1432,7 +1440,27 @@ def create_contact(body: ContactCreate, db: Session = Depends(get_db),
     db.commit()
     db.refresh(c)
     return {**_contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal)),
-            "automation": outcome}
+            "automation": outcome, **_adopted(db, c)}
+
+
+def _adopted(db: Session, contact: Contact) -> dict:
+    """What the flush that just saved `contact` adopted, if anything.
+
+    The adoption itself happens in `number_threads.adopt_on_flush`, whatever route
+    wrote the contact; this only reports it, so "Add as contact" can open the
+    contact's thread — which now holds the number's whole history — instead of the
+    number thread that no longer exists.
+    """
+    found = [r for r in db.info.pop("adopted_number_threads", [])
+             if r.get("contact") is contact]
+    if not found:
+        return {"adopted_number_thread": None}
+    conv = db.scalar(select(Conversation).where(Conversation.contact_id == contact.id))
+    r = found[0]
+    return {"adopted_number_thread": {
+        "number_thread_id": r["number_thread_id"], "events_moved": r["moved"],
+        "duplicates_skipped": r["skipped_duplicates"],
+        "conversation_id": conv.id if conv else None}}
 
 
 # The measured Call report groups calls by these five statuses (DECISIONS.md).
@@ -1499,6 +1527,14 @@ class EventIngest(BaseModel):
     # OpenPhone has already transcribed its calls, so carrying the text costs a
     # field and no STT spend. The column has existed since the baseline.
     transcript: str | None = None
+    # The name Quo's own contact book gives the customer's number, when it has one
+    # (2026-09-13). Shown on a number-only thread labelled "from Quo". It creates
+    # nothing and never renames an existing contact.
+    source_contact_name: str | None = Field(default=None, max_length=200)
+    # A call's summary, as Quo wrote it. On a FIRST delivery it is already inside
+    # `body`; it is carried separately so a summary Quo finishes after the call was
+    # mirrored can be added to that one row (see `_enrich`).
+    summary: str | None = None
 
     # owen-main's job payloads carry more than this (linkedid, outcome, winning
     # destination...) and are explicitly documented as forward-compatible. Ignoring
@@ -1527,16 +1563,20 @@ def _contact_by_number(db: Session, number: str) -> Contact | None:
     ).first()
 
 
-def _resolve_ingest_contact(db: Session, body: EventIngest) -> Contact:
-    """The contact an ingested event belongs to, creating one if need be.
-
-    Three paths, in order of how much the caller claims to know:
+def _resolve_ingest_contact(db: Session, body: EventIngest) -> Contact | None:
+    """The contact an ingested event belongs to, or None for a number nobody holds.
 
       1. an explicit `contact_id` — must exist, else 404. Unchanged: this is the
          path owen-main uses today and the one its own tests pin.
       2. a `from_number` that matches an existing contact on the last ten digits.
-      3. a `from_number` that matches nothing — a contact is CREATED, named by the
-         number, so a first-time caller becomes a lead instead of being dropped.
+      3. a `from_number` that matches nothing — **None**. The caller files the
+         event on that number's thread (app/number_threads.py).
+
+    AMENDED 2026-09-13. Path 3 used to CREATE a contact named by the number and fire
+    the new-lead notification. The owner reversed that: "if its a number that is
+    not registered as a contact, it should not be saved as contact". Spam callers
+    were becoming contacts. Nothing is created and nobody is notified; the number
+    still shows in the inbox, unread, with its whole conversation.
     """
     if body.contact_id is not None:
         contact = db.get(Contact, body.contact_id)
@@ -1548,33 +1588,92 @@ def _resolve_ingest_contact(db: Session, body: EventIngest) -> Contact:
     if not number:
         raise HTTPException(
             422, "an event needs either contact_id or from_number")
-
     existing = _contact_by_number(db, number)
     if existing is not None:
         return existing
+    if not number_threads.phone_key(number):
+        # Too short to be a line anyone can be called back on. Filing it under a
+        # fragment would let it collide with every number ending in those digits.
+        raise HTTPException(
+            422, "from_number %r is not a complete phone number" % number)
+    return None
 
-    # A stranger called. Create them rather than lose them — the owner's rule is
-    # that a new roofing lead is never lost, and an unnamed contact carrying a real
-    # number is recoverable while a dropped event is not.
-    #
-    # The display name IS the number, formatted, because that is the only true
-    # thing we know about them. `store_phone` cannot raise (DECISIONS.md): a number
-    # we could not parse is stored exactly as it arrived rather than refused.
-    stored = store_phone(number)
-    contact = Contact(
-        first_name=format_phone(stored) or number,
-        last_name="",
-        phone=stored,
-        source="Inbound call",
-        created_by="owen-main",
-        contact_type="Lead",
+
+def _duplicate_event(db: Session, key: str):
+    """The event already holding `key`, on either kind of thread, or None."""
+    seen = db.scalar(select(ConversationEvent)
+                     .where(ConversationEvent.dedupe_key == key))
+    if seen is not None:
+        return seen
+    return db.scalar(select(NumberThreadEvent)
+                     .where(NumberThreadEvent.dedupe_key == key))
+
+
+# Fields a later delivery of the SAME object may fill in when the first one could
+# not carry them. A Quo call reaches us on `call.completed` before its recording,
+# transcript and summary exist; those arrive as separate webhook events for the same
+# call and must land on the one row rather than a second (2026-09-13). Only BLANKS
+# are filled — nothing already recorded is ever overwritten by a repeat delivery.
+ENRICHABLE_FIELDS = ("recording_url", "transcript", "call_status", "duration_seconds",
+                     "source_number")
+
+
+def _enrich(seen, body: EventIngest) -> list[str]:
+    filled = []
+    for name in ENRICHABLE_FIELDS:
+        new = getattr(body, name)
+        if new in (None, "") or getattr(seen, name) not in (None, ""):
+            continue
+        if name == "call_status" and seen.type is not EventType.CALL:
+            continue
+        setattr(seen, name, new)
+        filled.append(name)
+    # The one field that is ADDED TO rather than filled: a summary is appended to the
+    # call's sentence once. Containment is the idempotency check — a second delivery
+    # of the same summary finds it already there and changes nothing.
+    summary = (body.summary or "").strip()
+    if summary and seen.type is EventType.CALL and summary not in (seen.body or ""):
+        seen.body = ((seen.body or "").rstrip() + " Summary: " + summary).strip()
+        filled.append("summary")
+    return filled
+
+
+def _ingest_to_number(db: Session, body: EventIngest, key: str) -> dict:
+    """File an event from a number no contact holds. Creates no contact, no deal,
+    no job. See app/number_threads.py."""
+    thread, _ = number_threads.thread_for_number(db, body.from_number or "",
+                                                 at=body.occurred_at)
+    name = (body.source_contact_name or "").strip()
+    if name:
+        thread.quo_name = name
+    ev = NumberThreadEvent(
+        number_thread_id=thread.id,
+        type=EventType[body.type],
+        direction=Direction[body.direction],
+        body=body.body,
+        duration_seconds=body.duration_seconds,
+        call_status=body.call_status,
+        recording_url=body.recording_url,
+        provider_ref=body.provider_ref,
+        dedupe_key=key or None,
+        source_system=body.source_system,
+        source_number=body.source_number,
+        transcript=body.transcript,
     )
-    db.add(contact)
+    if body.occurred_at is not None:
+        ev.occurred_at = body.occurred_at
+    db.add(ev)
     db.flush()
-    # Rule 2 — a contact that appeared from nowhere is exactly the case the
-    # new-lead notification exists for, so the crew hears about it.
-    automations.on_contact_created(db, contact)
-    return contact
+    previous = automations.as_utc(thread.last_event_at)
+    occurred = automations.as_utc(ev.occurred_at)
+    if previous is None or occurred > previous:
+        thread.last_event_at = ev.occurred_at
+    if body.direction == "INBOUND" and automations.is_fresh(ev.occurred_at):
+        thread.unread_count += 1
+    db.commit()
+    return {"id": ev.id, "conversation_id": None, "number_thread_id": thread.id,
+            "contact_id": None,
+            "automation": "none: not a contact — filed on a number-only thread"}
 
 
 @app.post("/api/events", status_code=201)
@@ -1601,15 +1700,22 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
     # was already on file.
     key = (body.dedupe_key or "").strip()
     if key:
-        seen = db.scalar(select(ConversationEvent)
-                         .where(ConversationEvent.dedupe_key == key))
+        seen = _duplicate_event(db, key)
         if seen is not None:
+            filled = _enrich(seen, body)
+            if filled:
+                db.commit()
+            if isinstance(seen, NumberThreadEvent):
+                return {"id": seen.id, "conversation_id": None,
+                        "number_thread_id": seen.number_thread_id,
+                        "contact_id": None, "enriched": filled,
+                        "automation": "duplicate: already ingested"}
             conv_existing = db.get(Conversation, seen.conversation_id)
             return {"id": seen.id, "conversation_id": seen.conversation_id,
                     "contact_id": conv_existing.contact_id if conv_existing else None,
+                    "enriched": filled,
                     "automation": "duplicate: already ingested"}
 
-    contact = _resolve_ingest_contact(db, body)
     if body.call_status is not None:
         if body.type != "CALL":
             raise HTTPException(400, "call_status is only meaningful on a CALL")
@@ -1617,10 +1723,18 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
             raise HTTPException(400, "unknown call_status %r — expected one of %s"
                                 % (body.call_status, sorted(CALL_STATUSES)))
 
+    contact = _resolve_ingest_contact(db, body)
+    if contact is None:
+        return _ingest_to_number(db, body, key)
+
     conv = db.scalar(select(Conversation).where(
         Conversation.contact_id == contact.id))
     if conv is None:
+        # Dated by the event that opens it, not by the ingest clock: a thread first
+        # seen through a back-dated event must not sort above one active since.
         conv = Conversation(contact_id=contact.id)
+        if body.occurred_at is not None:
+            conv.last_event_at = body.occurred_at
         db.add(conv)
         db.flush()
 
@@ -1665,7 +1779,8 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
     if body.direction == "INBOUND" and fresh:
         conv.unread_count += 1
 
-    # Rule 1: missed call -> auto text back.
+    # Rule 1 (missed call -> auto text back) is DISABLED as of 2026-09-13 and
+    # answers with the reason; it is still asked so the response says so.
     outcome = automations.on_inbound_call(db, ev)
     db.commit()
     return {"id": ev.id, "conversation_id": conv.id, "contact_id": contact.id,
@@ -1739,6 +1854,14 @@ def ingest_delivery_receipt(body: DeliveryReceipt, db: Session = Depends(get_db)
         .order_by(ConversationEvent.id.desc())
     ).first()
     if ev is None:
+        # A text sent from a number-only thread is receipted the same way.
+        ev = db.scalars(
+            select(NumberThreadEvent)
+            .where(NumberThreadEvent.provider_ref == key,
+                   NumberThreadEvent.direction == Direction.OUTBOUND)
+            .order_by(NumberThreadEvent.id.desc())
+        ).first()
+    if ev is None:
         raise HTTPException(404, "no outbound message with provider_ref %r" % key)
 
     before = ev.delivery_status
@@ -1754,7 +1877,8 @@ def ingest_delivery_receipt(body: DeliveryReceipt, db: Session = Depends(get_db)
 
     return {
         "id": ev.id,
-        "conversation_id": ev.conversation_id,
+        "conversation_id": getattr(ev, "conversation_id", None),
+        "number_thread_id": getattr(ev, "number_thread_id", None),
         "delivery_status": ev.delivery_status.value if ev.delivery_status else None,
         # False when a stale or out-of-order receipt was correctly ignored. The
         # relay needs to tell "we applied it" from "we already knew better".
@@ -2565,13 +2689,79 @@ def list_conversations(
     # than let the operator type a message and discover it was suppressed. Same
     # precedent as the disabled Internal Comment row: never offer an enabled
     # control that cannot work.
-    return [{"id": c.id, "contact_id": c.contact_id,
-             "contact_name": c.contact.name if c.contact else None,
-             "contact_phone": c.contact.phone if c.contact else None,
-             "contact_dnd": bool(c.contact.dnd) if c.contact else False,
-             "last_event_at": c.last_event_at, "unread_count": c.unread_count,
-             "event_count": counts.get(c.id, 0),
-             "starred": c.starred} for c in rows]
+    out = [_conversation_row(c, counts.get(c.id, 0)) for c in rows]
+
+    # NUMBER-ONLY THREADS (2026-09-13), mixed in by last activity. Every narrowing
+    # control above applies to them by the same rule, so the Unread badge and the
+    # list it labels are still computed over one set:
+    #   tab      unread_count > 0 / starred — the same two columns;
+    #   assigned "me" is the contact's owner, and a number has no owner, so it is in
+    #            the team inbox and in nobody's own — like a contact nobody owns;
+    #   q        the number (by the shared digits rule) and Quo's name, which is
+    #            what the row shows in place of a contact name.
+    if assigned != "me":
+        out.extend(_number_thread_rows(db, tab=tab, q=q))
+        out.sort(key=lambda r: automations.as_utc(r["last_event_at"]),
+                 reverse=not oldest)
+    return out
+
+
+def _conversation_row(c: Conversation, event_count: int) -> dict:
+    """One contact thread as the inbox list renders it."""
+    phone = c.contact.phone if c.contact else None
+    return {"id": c.id, "key": "c%d" % c.id, "kind": "contact",
+            "contact_id": c.contact_id, "number_thread_id": None,
+            "contact_name": c.contact.name if c.contact else None,
+            "contact_phone": phone, "phone_display": format_phone(phone),
+            "contact_dnd": bool(c.contact.dnd) if c.contact else False,
+            "quo_name": None,
+            "last_event_at": c.last_event_at, "unread_count": c.unread_count,
+            "event_count": event_count,
+            "starred": c.starred}
+
+
+def _number_event_counts(db: Session, thread_id: int | None = None) -> dict[int, int]:
+    """`_event_counts` for number-only threads: the WHOLE thread, notes included."""
+    stmt = select(NumberThreadEvent.number_thread_id, func.count())
+    if thread_id is not None:
+        stmt = stmt.where(NumberThreadEvent.number_thread_id == thread_id)
+    return dict(db.execute(stmt.group_by(NumberThreadEvent.number_thread_id)).all())
+
+
+def _number_thread_row(t: NumberThread, event_count: int) -> dict:
+    """One number-only thread, in the SAME shape as a contact thread's row, so the
+    list, the badge arithmetic and the CLI read both kinds with one set of keys.
+
+    `kind` and `key` are what tell them apart: ids come from two tables and can
+    collide, so the browser selects by `key` ("c12" / "n3"), never by `id` alone.
+    `contact_id` and `contact_name` are None — this is not a contact, and nothing
+    here pretends otherwise.
+    """
+    return {"id": t.id, "key": "n%d" % t.id, "kind": "number",
+            "contact_id": None, "number_thread_id": t.id,
+            "contact_name": None, "contact_phone": t.phone,
+            "phone_display": format_phone(t.phone) or t.phone,
+            "contact_dnd": False, "quo_name": t.quo_name,
+            "last_event_at": t.last_event_at, "unread_count": t.unread_count,
+            "event_count": event_count, "starred": t.starred}
+
+
+def _number_thread_rows(db: Session, *, tab: str = "all", q: str | None = None) -> list:
+    stmt = select(NumberThread)
+    if tab == "unread":
+        stmt = stmt.where(NumberThread.unread_count > 0)
+    elif tab == "starred":
+        stmt = stmt.where(NumberThread.starred.is_(True))
+    if q and q.strip():
+        text = q.strip()
+        terms = [NumberThread.quo_name.ilike(contains(text), escape=LIKE_ESCAPE),
+                 NumberThread.phone.ilike(contains(text), escape=LIKE_ESCAPE)]
+        if phone_match.looks_like_phone(text):
+            terms.append(phone_match.phone_clause(NumberThread.phone, text))
+        stmt = stmt.where(or_(*terms))
+    counts = _number_event_counts(db)
+    return [_number_thread_row(t, counts.get(t.id, 0))
+            for t in db.scalars(stmt).all()]
 
 
 @app.get("/api/conversations/{conv_id}/events", response_model=list[EventOut])
@@ -2587,17 +2777,26 @@ def conversation_events(
     CONVERSATION_TYPES contains INTERNAL_COMMENT, so the measured "Conversations"
     filter is one of the places that has to narrow.
     """
+    return _thread_events(ConversationEvent,
+                          ConversationEvent.conversation_id == conv_id,
+                          db, filter, principal)
+
+
+def _thread_events(model, parent_clause, db: Session, filter: str,
+                   principal: auth.Principal) -> list[EventOut]:
+    """The thread view for either kind of thread — ONE filter implementation, so a
+    number-only thread cannot quietly disagree with a contact thread about what
+    "Conversations" means or who may read a note."""
     internal_ok = _sees_internal(principal)
-    stmt = (select(ConversationEvent)
-            .where(ConversationEvent.conversation_id == conv_id))
+    stmt = select(model).where(parent_clause)
 
     if filter == "conversations":
         types = set(CONVERSATION_TYPES)
         if not internal_ok:
             types -= INTERNAL_TYPES
-        stmt = stmt.where(ConversationEvent.type.in_(types))
+        stmt = stmt.where(model.type.in_(types))
     elif filter == "activities":
-        stmt = stmt.where(ConversationEvent.type.in_(ACTIVITY_TYPES))
+        stmt = stmt.where(model.type.in_(ACTIVITY_TYPES))
     elif filter != "all":
         try:
             wanted = EventType[filter.upper()]
@@ -2605,11 +2804,11 @@ def conversation_events(
             raise HTTPException(400, "unknown filter %r" % filter) from None
         if wanted in INTERNAL_TYPES and not internal_ok:
             _refuse_internal(principal, "read")
-        stmt = stmt.where(ConversationEvent.type == wanted)
+        stmt = stmt.where(model.type == wanted)
     elif not internal_ok:
-        stmt = stmt.where(ConversationEvent.type.not_in(INTERNAL_TYPES))
+        stmt = stmt.where(model.type.not_in(INTERNAL_TYPES))
 
-    rows = db.scalars(stmt.order_by(ConversationEvent.occurred_at)).all()
+    rows = db.scalars(stmt.order_by(model.occurred_at, model.id)).all()
     return [EventOut(id=e.id, type=e.type.value, direction=e.direction.value,
                      occurred_at=e.occurred_at, body=e.body, subject=e.subject,
                      duration_seconds=e.duration_seconds,
@@ -2618,6 +2817,7 @@ def conversation_events(
                      delivery_status=e.delivery_status.value
                      if e.delivery_status else None,
                      delivery_detail=e.delivery_detail,
+                     transcript=e.transcript,
                      source_system=e.source_system,
                      source_number=e.source_number) for e in rows]
 
@@ -4159,6 +4359,25 @@ def send_to_conversation(conv_id: int, body: MessageSend,
     return _send_to_contact(db, contact, body, principal)
 
 
+def _dial(number: str) -> tuple[dict | None, crmlink.LinkResult | None]:
+    """Ask owen-main to ring `number`. `(refusal, None)` or `(None, result)`.
+
+    The ONE dialling path, shared by a contact and a number-only thread, so calling
+    a number nobody has saved passes exactly the gates calling a contact does: the
+    CRM link must be armed here, and owen-main then applies its own kill switch,
+    `CRM_LINK_ALLOWLIST` (empty allows nothing), the bound-DID check and its block
+    list. Nothing on this side widens or skips any of them.
+    """
+    if not crmlink.configured():
+        return {"placed": False, "id": None,
+                "reason": "Calling is not switched on — this CRM is not connected "
+                          "to the phone system yet."}, None
+    result = crmlink.place_call(to_number=number)
+    if not result.ok:
+        return {"placed": False, "id": None, "reason": result.reason}, None
+    return None, result
+
+
 def _place_call(db: Session, contact: Contact) -> dict:
     """Ring the customer from the bound DID, via owen-main.
 
@@ -4181,14 +4400,9 @@ def _place_call(db: Session, contact: Contact) -> dict:
     if contact.dnd:
         return {"placed": False, "id": None,
                 "reason": "This contact is on Do Not Disturb."}
-    if not crmlink.configured():
-        return {"placed": False, "id": None,
-                "reason": "Calling is not switched on — this CRM is not connected "
-                          "to the phone system yet."}
-
-    result = crmlink.place_call(to_number=contact.phone)
-    if not result.ok:
-        return {"placed": False, "id": None, "reason": result.reason}
+    refused, result = _dial(contact.phone)
+    if refused:
+        return refused
 
     # The call is ringing. Record it so the thread shows it happened.
     #
@@ -4266,18 +4480,129 @@ def update_conversation(conv_id: int, body: ConversationPatch,
         conv.starred = data["starred"]
     db.commit()
     db.refresh(conv)
-    contact = db.get(Contact, conv.contact_id)
-    return {"id": conv.id, "contact_id": conv.contact_id,
-            "contact_name": contact.name if contact else None,
-            "contact_phone": contact.phone if contact else None,
-            "contact_dnd": bool(contact.dnd) if contact else False,
-            "last_event_at": conv.last_event_at,
-            "unread_count": conv.unread_count,
-            # Same shape as a row from GET /api/conversations, so the browser can
-            # drop this straight into the cached list without the row it patches
-            # losing a field the list had.
-            "event_count": _event_counts(db, conv.id).get(conv.id, 0),
-            "starred": conv.starred}
+    # Same shape as a row from GET /api/conversations, so the browser can drop this
+    # straight into the cached list without the row it patches losing a field.
+    return _conversation_row(conv, _event_counts(db, conv.id).get(conv.id, 0))
+
+
+# ---------- number-only threads (2026-09-13) ----------
+#
+# The routes a contact thread has, for a thread that belongs to a number nobody has
+# saved (app/number_threads.py). Each one applies the SAME rule its contact-thread
+# twin applies — the same role gate, the same internal-note predicate, the same
+# transport and the same dialling path — because the two kinds of thread share one
+# inbox and an operator must not be able to tell them apart by what they are allowed
+# to do. What differs is only what cannot exist: there is no contact, so there is no
+# DND to honour and no email to send.
+
+def _number_thread(db: Session, thread_id: int) -> NumberThread:
+    t = db.get(NumberThread, thread_id)
+    if not t:
+        raise HTTPException(404, "number thread not found")
+    return t
+
+
+@app.get("/api/number-threads/{thread_id}")
+def get_number_thread(thread_id: int, db: Session = Depends(get_db),
+                      _: auth.Principal = auth.ANY_USER):
+    t = _number_thread(db, thread_id)
+    return _number_thread_row(t, _number_event_counts(db, t.id).get(t.id, 0))
+
+
+@app.get("/api/number-threads/{thread_id}/events", response_model=list[EventOut])
+def number_thread_events(thread_id: int, db: Session = Depends(get_db),
+                         filter: str = "all",
+                         principal: auth.Principal = auth.ANY_USER):
+    """The thread view. Internal notes follow the STAFF-only rule exactly as on a
+    contact thread — the same function builds both."""
+    _number_thread(db, thread_id)
+    return _thread_events(NumberThreadEvent,
+                          NumberThreadEvent.number_thread_id == thread_id,
+                          db, filter, principal)
+
+
+@app.patch("/api/number-threads/{thread_id}")
+def update_number_thread(thread_id: int, body: ConversationPatch,
+                         db: Session = Depends(get_db),
+                         _: auth.Principal = auth.ANY_USER):
+    """Read / unread / star — `PATCH /api/conversations/{id}`'s rule, verbatim."""
+    t = _number_thread(db, thread_id)
+    data = body.model_dump(exclude_unset=True)
+    if "read" in data:
+        t.unread_count = 0 if data["read"] else max(1, t.unread_count)
+    if "starred" in data:
+        t.starred = data["starred"]
+    db.commit()
+    db.refresh(t)
+    return _number_thread_row(t, _number_event_counts(db, t.id).get(t.id, 0))
+
+
+@app.delete("/api/number-threads/{thread_id}")
+def delete_number_thread(thread_id: int, db: Session = Depends(get_db),
+                         _: auth.Principal = auth.ADMIN):
+    """Delete the thread and its events. ADMIN, like a contact thread's delete.
+    There is no contact to keep, so there is nothing else to leave alone."""
+    t = _number_thread(db, thread_id)
+    events = _number_event_counts(db, t.id).get(t.id, 0)
+    phone = t.phone
+    db.delete(t)
+    db.commit()
+    return {"deleted": thread_id, "phone": phone, "events_deleted": events}
+
+
+@app.post("/api/number-threads/{thread_id}/messages", status_code=201)
+def send_to_number_thread(thread_id: int, body: MessageSend,
+                          db: Session = Depends(get_db),
+                          principal: auth.Principal = auth.ANY_USER):
+    """Text the number, or note on its thread — through the SAME transport a contact
+    text uses, so it is logged, refused or queued exactly as that would be."""
+    t = _number_thread(db, thread_id)
+    if not body.body.strip():
+        raise HTTPException(400, "a message needs a body")
+    type_ = EventType[body.type]
+    if type_ in INTERNAL_TYPES and not _sees_internal(principal):
+        _refuse_internal(principal, "write")
+    ev, reason = automations.send_outbound_to_number(db, t, body.body, type_=type_)
+    db.commit()
+    if ev is None:
+        return {"suppressed": True, "reason": reason, "id": None,
+                "conversation_id": None, "number_thread_id": t.id}
+    db.refresh(ev)
+    return {"suppressed": False, "reason": reason, "id": ev.id,
+            "conversation_id": None, "number_thread_id": t.id,
+            "type": ev.type.value, "direction": ev.direction.value,
+            "occurred_at": ev.occurred_at, "body": ev.body,
+            "delivery_status": (ev.delivery_status.value
+                                if ev.delivery_status else None),
+            "delivery_detail": ev.delivery_detail}
+
+
+@app.post("/api/number-threads/{thread_id}/call")
+def call_number_thread(thread_id: int, db: Session = Depends(get_db),
+                       _: auth.Principal = auth.ANY_USER):
+    """Ring the number from the bound DID, through the same `_dial` a contact call
+    uses — owen-main's allowlist and block list apply unchanged."""
+    t = _number_thread(db, thread_id)
+    refused, result = _dial(t.phone)
+    if refused:
+        return refused
+    linkedid = str((result.data or {}).get("linkedid") or "")
+    ev = NumberThreadEvent(
+        number_thread_id=t.id, type=EventType.CALL, direction=Direction.OUTBOUND,
+        occurred_at=datetime.now(UTC),
+        body="Outbound call placed from %s. Ringing an operator, then the customer."
+             % crmlink.current().from_number,
+        provider_ref=linkedid or None,
+        source_system=automations.SENT_SOURCE_SYSTEM,
+        source_number=crmlink.current().from_number,
+    )
+    db.add(ev)
+    t.last_event_at = ev.occurred_at
+    db.commit()
+    db.refresh(ev)
+    return {"placed": True, "id": ev.id, "number_thread_id": t.id,
+            "reason": "Calling %s now — your phone will ring first."
+                      % (format_phone(t.phone) or t.phone)}
 
 
 # ---------- tags ----------

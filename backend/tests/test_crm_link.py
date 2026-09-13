@@ -491,36 +491,33 @@ def test_every_rendering_of_one_number_reaches_one_contact(world, rendering):
         "%s did not match the stored (941) 555-0101" % rendering)
 
 
-def test_an_inbound_from_an_unknown_number_creates_the_contact(world):
-    """A first-time caller is the new roofing lead the owner cannot afford to lose.
+def test_an_inbound_from_an_unknown_number_is_filed_on_a_number_thread(world):
+    """AMENDED 2026-09-13: an unknown number is never saved as a contact.
 
-    Before this, `POST /api/events` required a contact_id and 404'd on anything
-    else, so owen-main dropped the event rather than post one it knew we would
-    refuse — and the lead vanished.
+    It used to create one (the "never lose a lead" judgement); the owner reversed
+    that to keep spam out of his contacts. The event is not dropped either — it lands
+    on the number's own thread, which shows in the inbox (test_number_threads.py).
     """
     client, ids, as_ = world
+    before = client.get("/api/contacts?page_size=200", headers=as_("admin")).json()
     r = client.post("/api/events",
                     json={"from_number": "+19415559999", "type": "CALL",
                           "direction": "INBOUND", "call_status": "no-answer",
                           "duration_seconds": 4},
                     headers=as_("feed"))
     assert r.status_code == 201, r.text
-    new_id = r.json()["contact_id"]
-    assert new_id not in (ids["jane"], ids["quiet"], ids["nophone"])
+    assert r.json()["contact_id"] is None
+    after = client.get("/api/contacts?page_size=200", headers=as_("admin")).json()
+    assert after["total"] == before["total"], "an unknown number became a contact"
 
-    got = client.get("/api/contacts/%d" % new_id, headers=as_("admin")).json()
-    # The number is the only true thing we know about them, so it is the name.
-    assert "9415559999" in (got["phone"] or "").replace("+1", "")
-    assert "555" in got["name"], "the contact is not identifiable: %r" % got["name"]
-
-    # And it is reachable as a thread, which is the whole point.
     convs = client.get("/api/conversations?tab=all&sort=latest",
                        headers=as_("admin")).json()
-    assert any(c["contact_id"] == new_id for c in convs)
+    rows = [c for c in convs if c["kind"] == "number"]
+    assert [c["number_thread_id"] for c in rows] == [r.json()["number_thread_id"]]
 
 
-def test_a_second_call_from_the_same_stranger_does_not_make_a_second_contact(world):
-    """The "hundreds of junk contacts" failure owen-main's own notes warn about."""
+def test_a_second_call_from_the_same_stranger_lands_on_the_same_number_thread(world):
+    """One number, one thread, however the number is written."""
     client, ids, as_ = world
     first = client.post("/api/events",
                         json={"from_number": "+19415558888", "type": "CALL",
@@ -530,8 +527,9 @@ def test_a_second_call_from_the_same_stranger_does_not_make_a_second_contact(wor
                          json={"from_number": "(941) 555-8888", "type": "SMS",
                                "direction": "INBOUND", "body": "call me back"},
                          headers=as_("feed")).json()
-    assert first["contact_id"] == second["contact_id"]
-    assert first["conversation_id"] == second["conversation_id"]
+    assert first["number_thread_id"] is not None
+    assert first["number_thread_id"] == second["number_thread_id"]
+    assert first["contact_id"] is None and second["contact_id"] is None
 
 
 def test_owen_mains_own_caller_number_field_name_is_accepted(world):

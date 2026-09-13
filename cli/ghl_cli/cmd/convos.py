@@ -22,9 +22,17 @@ def list_convos(
         for r in rows:
             r["last"] = output.when(r["last_event_at"])
             r["star"] = "*" if r["starred"] else ""
+            # A number-only thread (not a contact) is shown by its key ("n3"), since
+            # its id is from another table, and says plainly that it is not a contact.
+            r["thread"] = r.get("key") if r.get("kind") == "number" else r["id"]
+            if r.get("kind") == "number":
+                r["who"] = ("%s (from Quo, not a contact)" % r["quo_name"]
+                            if r.get("quo_name") else "(not a contact)")
+            else:
+                r["who"] = r["contact_name"]
         output.emit(rows, render=lambda rs: (
             output.table(rs, [
-                ("id", "ID"), ("contact_name", "CONTACT"),
+                ("thread", "ID"), ("who", "CONTACT"),
                 ("contact_phone", "PHONE"), ("unread_count", "UNREAD"),
                 ("star", "*"), ("last", "LAST ACTIVITY")]),
             output.note("\n%d threads" % len(rs)),
