@@ -7,12 +7,12 @@ people use every day.
 
 Three things must be true, and every test here is one of them:
 
-  1. **Deleting only ever removes something EMPTY.** A stage holding an
-     opportunity cannot be deleted and the refusal names how many are in the way.
-     There is no `force` at any role. `Pipeline.stages` cascades delete-orphan, so
-     a pipeline delete that ran with stages present would take the columns — and
-     every deal in them — with it, and `custom_fields.owen_call_id` is the
-     telephony project's join key.
+  1. **Deleting never removes a DEAL.** A stage holding an opportunity cannot be
+     deleted without saying where its deals go, and the refusal names how many are
+     in the way; no `force` flag skips that, at any role. (AMENDED 2026-09-13: with
+     a destination the deals are MOVED and the stage or pipeline then deleted —
+     that path is pinned in test_pipeline_settings.py.) `custom_fields.owen_call_id`
+     is the telephony project's join key.
   2. **Renaming and reordering move labels and columns, never deals.** After
      either, every opportunity is in the stage it started in. The assertions read
      the `opportunity_id -> stage_id` map before and after and compare the whole
@@ -389,13 +389,21 @@ def test_deleting_a_populated_pipeline_is_refused_and_mutates_nothing(client):
     assert _where_every_deal_is() == deals
 
 
-def test_a_pipeline_with_stages_but_no_deals_is_still_refused(client):
-    """Empty means empty. The columns are somebody's configuration too."""
+def test_a_pipeline_with_stages_but_no_deals_now_deletes_with_its_stages(client):
+    """AMENDED 2026-09-13 (owner's override, DECISIONS.md). This used to be refused
+    — "empty means empty: the columns are somebody's configuration too". GoHighLevel
+    deletes such a pipeline after a confirm, and the owner asked for exactly that:
+    there is no deal in it, so nothing the no-deal-is-ever-deleted rule protects.
+    Its columns go with it; every other pipeline and every deal is untouched."""
     other = client.post("/api/pipelines", json={"name": "Draft"}).json()
     client.post("/api/pipelines/%d/stages" % other["id"], json={"name": "Only"})
+    deals = _where_every_deal_is()
     r = client.delete("/api/pipelines/%d" % other["id"])
-    assert r.status_code == 409
-    assert "1 stage" in r.json()["detail"] and "0 opportunit" in r.json()["detail"]
+    assert r.status_code == 200, r.text
+    assert r.json()["moved_opportunities"] == []
+    assert other["id"] not in [p["id"] for p in client.get("/api/pipelines").json()]
+    assert _where_every_deal_is() == deals
+    assert _stage_names(client) == STAGE_NAMES
 
 
 def test_an_empty_pipeline_deletes_and_detaches_what_pointed_at_it(client):
@@ -419,7 +427,10 @@ def test_an_empty_pipeline_deletes_and_detaches_what_pointed_at_it(client):
     # `detached_custom_fields` joined this list on 2026-09-11: a custom field
     # attached to the pipeline loses the attachment, never the definition and
     # never an answer, and the response names that too.
+    # `moved_opportunities` joined on 2026-09-13: a pipeline holding deals can now
+    # be deleted by MOVING them first; this one held none, so nothing moved.
     assert r.json() == {"deleted": client.ids["empty"],
+                        "moved_opportunities": [],
                         "detached_saved_views": [view_id],
                         "detached_calendars": [cal_id],
                         "detached_custom_fields": []}
@@ -439,29 +450,39 @@ def test_deleting_a_stage_that_does_not_exist_is_a_404_not_a_no_op(client):
 # ---------------- roles ----------------
 
 @pytest.mark.parametrize("role", ["dispatcher", "tech"])
-def test_only_an_admin_can_change_the_pipeline_structure(client, role):
-    """Renaming a stage changes a label four people navigate by and the `ghl` CLI
-    resolves against; deleting one removes a column of the board."""
+def test_who_may_change_the_pipeline_structure(client, role):
+    """AMENDED 2026-09-13 (owner's decision, DECISIONS.md): a DISPATCHER may create,
+    edit and reorder; deleting a stage or a pipeline stays ADMIN. A TECH changes
+    nothing. Every refusal is re-read from the database and changed nothing."""
     who = _as(client, role)
     stages = client.ids["stages"]
     before = _structure()
     deals = _where_every_deal_is()
 
-    attempts = [
-        who.post("/api/pipelines", json={"name": "Sneaky"}),
-        who.patch("/api/pipelines/%d" % client.ids["pipeline"],
-                  json={"name": "Renamed"}),
+    deletes = [
         who.delete("/api/pipelines/%d" % client.ids["empty"]),
-        who.post("/api/pipelines/%d/stages" % client.ids["pipeline"],
-                 json={"name": "Sneaky stage"}),
-        who.patch("/api/stages/%d" % stages[0], json={"name": "Renamed"}),
         who.delete("/api/stages/%d" % stages[2]),        # an EMPTY stage
-        who.post("/api/pipelines/%d/stages/reorder" % client.ids["pipeline"],
-                 json={"stage_ids": list(reversed(stages))}),
     ]
-    assert [r.status_code for r in attempts] == [403] * 7
+    assert [r.status_code for r in deletes] == [403, 403]
+    assert _structure() == before, "a forbidden delete still changed the structure"
 
-    assert _structure() == before, "a forbidden request still changed the structure"
+    edits = [
+        lambda: who.post("/api/pipelines", json={"name": "Sneaky"}),
+        lambda: who.patch("/api/pipelines/%d" % client.ids["pipeline"],
+                          json={"name": "Renamed"}),
+        # Reorder before the add, so the permutation still names every stage.
+        lambda: who.post("/api/pipelines/%d/stages/reorder" % client.ids["pipeline"],
+                         json={"stage_ids": list(reversed(stages))}),
+        lambda: who.post("/api/pipelines/%d/stages" % client.ids["pipeline"],
+                         json={"name": "Sneaky stage"}),
+        lambda: who.patch("/api/stages/%d" % stages[0], json={"name": "Renamed"}),
+    ]
+    if role == "tech":
+        assert [e().status_code for e in edits] == [403] * 5
+        assert _structure() == before, "a forbidden request still changed the structure"
+    else:
+        assert [e().status_code for e in edits] == [201, 200, 200, 201, 200]
+        assert _structure() != before
     assert _where_every_deal_is() == deals
 
 
