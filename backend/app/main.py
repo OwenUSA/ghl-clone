@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 from . import (
     auth,
     automations,
+    connection_status,
     crmlink,
     custom_fields,
     models,
@@ -87,6 +88,9 @@ app.include_router(softphone.router)
 # no code here -- owen-main posts mirrored events to /api/events like any other
 # telephony feed. See app/openphone.py.
 app.include_router(openphone.router)
+# The top-bar status dot (2026-09-14): one GET that asks owen-main how the link and
+# the Quo sync are, server-side, cached 30s. See app/connection_status.py.
+app.include_router(connection_status.router)
 # The opportunity modal's tasks, notes and custom-field tabs (2026-09-13). One
 # router, under the same app-level gate — see app/opportunity_workspace.py.
 app.include_router(opportunity_workspace.router)

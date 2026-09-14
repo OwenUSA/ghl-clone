@@ -1379,3 +1379,9 @@ export type AdoptedThread = {
   duplicates_skipped: number
   conversation_id: number | null
 } | null
+
+/** The top-bar status dot's link and Quo checks (2026-09-14). Asked of owen-main by the
+ *  backend, cached 30s there; always a 200 — an unreachable phone system is a state in the
+ *  body, not an error. Shape: `ServerStatus` in lib/connectionStatus.ts. */
+export const fetchConnectionStatus = () =>
+  get<import('./connectionStatus').ServerStatus>('/api/connection-status')

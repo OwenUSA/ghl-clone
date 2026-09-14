@@ -3162,3 +3162,63 @@ database: the header holds the number, the button and the measured icon row with
 the panel off screen; a longer header was tried first and did. The measured
 geometry of the list, header and composer is untouched for a contact thread; the star in the
 header now works for both kinds.
+
+## AMENDMENT (2026-09-14): the floating softphone dock is gone — one status dot, top right, every page
+
+The owner, looking at the bottom-right "Ready for calls / Switch off / This browser rings
+alongside the mobiles / Registered as …" card (refs/round3/33): *"i want something more subtle
+... on the top right that shows on every page or view, but very subtle and if i hover onto it
+it should show any more details if needed, but it should always show if we are online or not
+so i know if everything working good"*.
+
+### What this AMENDS in "The browser softphone is OURS" (2026-09-11)
+
+- **"The dock is always on screen and says which of eight states it is in"** → the DOT is
+  always on screen and its COLOUR says whether everything works; the eight states are still
+  written out in plain words, one hover (or keyboard focus) away. Registration state still
+  comes only from a SIP registration callback — that decision is unchanged.
+- **The in-call bar** (Mute / Hang up) moved into the same hover card. While a call is live
+  the dot becomes GHL's filled green phone button with the call timer and a soft pulse.
+- **"A deployment with no phone system shows nothing at all"** → the dot always shows. The
+  owner asked for "always"; the phone row then says browser calling is not set up.
+- The incoming-call card is unchanged.
+
+### The three checks, and what counts
+
+The dot is the WORST of: **this browser's phone** (the softphone hook), **the link to the
+phone system** (can the CRM reach owen-main, and is `CRM_LINK_ENABLED` / telephony on there),
+and **Quo sync** (mirror on and keyed, last poll tick within 2 poll intervals, 30-day
+backfill completed, webhook on with a secret; the last webhook time is shown but never turns
+anything amber — a quiet line gets no webhooks). Ranking: red > amber > grey > green, so a
+switched-off phone is grey rather than "all good", and anything broken beats it.
+
+`GET /api/connection-status` (ANY_USER) asks owen-main's new read-only `GET /api/link-status`
+server-side with the key this CRM already holds (`CRM_LINK_API_KEY` if the send link is
+configured, else `OWEN_SOFTPHONE_KEY`, both `crm_link`-scoped), 3 s timeout, 30 s cache shared
+by every tab, and **always answers 200**: owen-main unreachable is `link.state = "down"`, not
+an error. The browser polls every 60 s and on window focus.
+
+### Judgement calls, all overrulable
+
+- **Quo sync switched off is RED**, not amber or grey. The owner named Quo sync as one of
+  the three things "working" means, so its absence is broken, not optional. If the mirror is
+  ever turned off on purpose, the dot will stay red until this is revisited.
+- **Webhook off is AMBER.** The poll still backstops it; only latency degrades.
+- **"Another tab is the phone" is GREY**, not green: this tab cannot see whether that tab is
+  actually registered, and green would claim it is.
+- **owen-main answering 404** (an older build without the status route) is amber on the link,
+  not red — it is reachable.
+- **The CRM API itself failing, or the browser offline, is RED** on the link row.
+- **The Dashboard header gained `marginRight: 44`** on its right-hand controls. It is the one
+  page whose own header puts controls in the top-right corner; in a real browser the dot sat
+  on its ⋮ menu. No other page needed a change (checked at 1440×900 and 1024×768).
+
+### Screenshot assumptions (what the references do not show)
+
+GHL's top bar (refs/opps/02) shows a filled green round phone button, a bell and an avatar,
+and nothing about hovering them. The idle look (a grey phone glyph with a small coloured
+dot), the hover card's layout and wording, and the live pulse are OURS, styled after the
+Opportunities dropdown/card look already rebuilt (white, 1px rgb(234,236,240), 8px radius,
+soft shadow). Colours are the dock's own. The dot sits at `top: 9px; right: 16px` because this
+app has no global top bar — GHL's icon row sits in the page header's top strip, and ours is
+pinned into the same strip of every page header.

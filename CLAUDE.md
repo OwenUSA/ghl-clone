@@ -154,7 +154,7 @@ OWEN_SOFTPHONE_KEY=owen_sk_...             # an OWEN API key with the `crm_link`
 ```
 
 With either unset, `POST /api/softphone/credentials` answers 503 without making a
-request and the dock hides itself. That is the default in tests and in a fresh checkout,
+request and the status dot's phone row says browser calling is not set up. That is the default in tests and in a fresh checkout,
 so nothing here can reach a live telephony service by accident.
 
 On the OWEN side the user's email must also be listed in `CRM_LINK_SOFTPHONE_OPERATORS`
@@ -163,8 +163,15 @@ provisioned gets a 403 saying so — we never invent an operator.
 
 - `frontend/src/lib/softphone.ts` — the SIP.js hook. Registration state comes only from
   a SIP registration callback, never from "register() did not throw".
-- `frontend/src/components/Softphone.tsx` — the dock, incoming card and in-call bar.
-  Mounted once in `App.tsx`; it is deliberately not part of any page.
+- `frontend/src/components/Softphone.tsx` — the incoming-call card. Mounted once in
+  `App.tsx`; it is deliberately not part of any page.
+- **The status dot** (2026-09-14) replaced the floating bottom-right dock:
+  `components/StatusIndicator.tsx`, top right on every page, the worst of three checks —
+  this browser's phone, the link to owen-main, Quo sync. Hover or focus opens a card with
+  Switch off/on and, during a call, Mute / Hang up. The browser polls
+  `GET /api/connection-status` (`app/connection_status.py`), which asks owen-main's
+  `GET /api/link-status` server-side with the `crm_link` key, 3s timeout, 30s cache, and
+  answers 200 even when owen-main is down. Colours and sentences: `lib/connectionStatus.ts`.
 - **Only one tab can be the phone.** The operator AOR holds one contact, so a second tab
   evicts the first. The tabs elect a holder over a BroadcastChannel and the others say so.
 - Answering does **not** cancel the mobiles from here — OWEN's ring group already hangs
