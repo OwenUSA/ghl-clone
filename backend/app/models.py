@@ -916,3 +916,89 @@ EVENT_PAYLOAD_COLUMNS = (
     "delivery_detail", "provider_ref", "dedupe_key", "source_system",
     "source_number",
 )
+
+
+# ---- CompanyCam (2026-09-14) ---------------------------------------------------------
+#
+# Job photos stay in CompanyCam. What this CRM keeps is only WHICH project belongs to
+# which card, how that was decided, what the hourly check last did, and what a human
+# still has to look at. No photo, no photo URL and no token is ever stored. See
+# app/companycam.py and DECISIONS.md (2026-09-14, CompanyCam).
+
+class CompanyCamLink(Base):
+    """One card <-> one CompanyCam project. A project can sit on several cards (a
+    repeat customer at one address) and a card can hold several projects."""
+    __tablename__ = "companycam_links"
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", "project_id", name="uq_companycam_link"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # CASCADE at the database: deleting a deal must never be refused over a photo link,
+    # and the link means nothing without its card. Nothing in CompanyCam is touched.
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunities.id", ondelete="CASCADE"), index=True)
+    # CompanyCam's own id, as text: it is theirs, and nothing here does arithmetic on it.
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    # workiz_job | address | manual | created
+    method: Mapped[str] = mapped_column(String(20))
+    # The project's name when it was linked, so the contact panel and the review page
+    # can say which project this is without a round trip. Display only.
+    project_name: Mapped[str | None] = mapped_column(String(255))
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    linked_by: Mapped[str | None] = mapped_column(String(200))
+    # An ADMIN's unlink. The row is kept so the address rule never links the same
+    # project back onto this card on the next sweep; every read skips it.
+    unlinked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CompanyCamReviewItem(Base):
+    """A project that matched a card by customer NAME only. Never linked on that
+    evidence; listed for an admin, who may link it by hand or dismiss it."""
+    __tablename__ = "companycam_review_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    project_name: Mapped[str | None] = mapped_column(String(255))
+    project_address: Mapped[str | None] = mapped_column(String(500))
+    candidate_opportunity_ids: Mapped[list] = mapped_column(JSONType, default=list,
+                                                           server_default="[]")
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CompanyCamSyncState(Base):
+    """The hourly check's heartbeat. One row (id 1), readable by the operator through
+    `python -m app.companycam_link status` and `GET /api/companycam/status`."""
+    __tablename__ = "companycam_sync_state"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_full_sweep_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Unix seconds: projects updated at or after this are re-examined next hour.
+    modified_cursor: Mapped[int | None] = mapped_column(Integer)
+    last_counts: Mapped[dict | None] = mapped_column(JSONType)
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class CompanyCamProjectRequest(Base):
+    """A card that should get a CompanyCam project: created by hand or by an AHS
+    email with an address, or given its first address. The worker searches
+    CompanyCam first and links what is already there; it creates only when nothing
+    is. UNIQUE per card: one card can never ask twice."""
+    __tablename__ = "companycam_project_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("opportunities.id", ondelete="CASCADE"), unique=True, index=True)
+    # created (Add opportunity / API) | address_saved | ahs_email
+    origin: Mapped[str] = mapped_column(String(20))
+    # pending | creating | linked | created | skipped | failed
+    state: Mapped[str] = mapped_column(String(20), default="pending",
+                                       server_default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    project_id: Mapped[str | None] = mapped_column(String(40))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

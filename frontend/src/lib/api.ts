@@ -1420,3 +1420,65 @@ export type AdoptedThread = {
  *  body, not an error. Shape: `ServerStatus` in lib/connectionStatus.ts. */
 export const fetchConnectionStatus = () =>
   get<import('./connectionStatus').ServerStatus>('/api/connection-status')
+
+/* ---------------------------------------------------------------------------
+ * CompanyCam job photos (2026-09-14). Read on demand by the backend; the browser
+ * never sees the token or a CompanyCam image URL — every image is a CRM path.
+ * Shapes and the shared logic: lib/companycam.ts.
+ * ---------------------------------------------------------------------------
+ */
+export const getOpportunityCompanyCam = (opportunityId: number, refresh = false) =>
+  get<import('./companycam').CompanyCamProjects>(
+    `/api/opportunities/${opportunityId}/companycam${refresh ? '?refresh=true' : ''}`)
+
+export const getCompanyCamPhotos = (opportunityId: number, projectId: string, page: number,
+                                    refresh = false) =>
+  get<import('./companycam').CompanyCamPhotoPage>(
+    `/api/opportunities/${opportunityId}/companycam/projects/${encodeURIComponent(projectId)}`
+    + `/photos?page=${page}${refresh ? '&refresh=true' : ''}`)
+
+export const getContactCompanyCam = (contactId: number) =>
+  get<import('./companycam').ContactCompanyCamProjects>(`/api/contacts/${contactId}/companycam`)
+
+export type CompanyCamStatus = {
+  token_set: boolean
+  create_projects: boolean
+  sync_enabled: boolean
+  heartbeat: {
+    last_started_at: string | null
+    last_finished_at: string | null
+    last_success_at: string | null
+    last_full_sweep_at: string | null
+    last_counts: Record<string, number | boolean> | null
+    last_error: string | null
+  }
+  links_by_method: Record<string, number>
+  project_requests: Record<string, number>
+  review_open: number
+}
+
+export type CompanyCamReviewItem = {
+  id: number
+  project_id: string
+  project_name: string | null
+  project_address: string | null
+  first_seen_at: string
+  candidates: { id: number; title: string; contact_name: string | null;
+    pipeline_name: string | null; address: string | null }[]
+}
+
+export const getCompanyCamStatus = () => get<CompanyCamStatus>('/api/companycam/status')
+
+export const listCompanyCamReview = () => get<CompanyCamReviewItem[]>('/api/companycam/review')
+
+export const linkCompanyCamReview = (itemId: number, opportunityIds: number[]) =>
+  send<{ project_id: string; linked: number[] }>(
+    `/api/companycam/review/${itemId}/link`, 'POST', { opportunity_ids: opportunityIds })
+
+export const dismissCompanyCamReview = (itemId: number) =>
+  send<{ dismissed: number }>(`/api/companycam/review/${itemId}/dismiss`, 'POST')
+
+export const unlinkCompanyCamProject = (opportunityId: number, projectId: string) =>
+  send<{ unlinked: string }>(
+    `/api/opportunities/${opportunityId}/companycam/projects/${encodeURIComponent(projectId)}`,
+    'DELETE')

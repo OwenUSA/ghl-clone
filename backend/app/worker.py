@@ -5,8 +5,10 @@ on failure. Nothing here transmits anything while LoggingTransport is the wired
 implementation.
 """
 import logging
+import threading
 import time
 
+from . import companycam
 from .automations import HANDLERS
 from .db import SessionLocal
 from .queue import claim, finish
@@ -46,12 +48,18 @@ def drain_once() -> int:
 
 def main() -> None:
     log.info("worker started; polling every %ss", POLL_SECONDS)
+    # CompanyCam (2026-09-14): project creation requests every minute and the hourly
+    # linking check, on a thread of their own so a slow CompanyCam page never delays a
+    # reminder. Each tick re-reads the switches, and with no token it does nothing.
+    stop = threading.Event()
+    companycam.start_worker_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:
                 time.sleep(POLL_SECONDS)
         except KeyboardInterrupt:
             log.info("worker stopping")
+            stop.set()
             break
         except Exception:
             log.exception("drain loop error")

@@ -138,7 +138,8 @@ def test_the_deep_link_path_opens_the_opportunities_view_and_settings_sections_r
              f.SETTINGS_SECTIONS.map((s) => s.label)])
     """, module=SECTIONS_TS)
     assert got == ["opportunities", "opportunities", "settings", None, "custom-fields",
-                   "custom-fields", "account", "account", ["My account", "Custom Fields"]]
+                   "custom-fields", "account", "account",
+                   ["My account", "Custom Fields", "CompanyCam"]]
 
 
 def test_the_app_opens_the_view_a_deep_link_names():

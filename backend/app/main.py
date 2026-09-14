@@ -20,6 +20,8 @@ from . import (
     ahs_jobs,
     auth,
     automations,
+    companycam,
+    companycam_api,
     connection_status,
     crmlink,
     custom_fields,
@@ -95,6 +97,9 @@ app.include_router(connection_status.router)
 # The opportunity modal's tasks, notes and custom-field tabs (2026-09-13). One
 # router, under the same app-level gate — see app/opportunity_workspace.py.
 app.include_router(opportunity_workspace.router)
+# CompanyCam job photos (2026-09-14): the Photos tab, the contact panel's projects, the
+# image relay and the admin page. See app/companycam.py and app/companycam_api.py.
+app.include_router(companycam_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
@@ -1951,6 +1956,9 @@ def ingest_ahs_job(body: ahs_jobs.AhsJobIn, response: Response,
     `ahs_job_id` answers 200 with the card that exists and writes nothing."""
     code, out = ahs_jobs.deliver_job(db, body, principal)
     if code == 201:
+        # The work order's card gets its CompanyCam project, like a card made by hand.
+        card = db.get(Opportunity, out["opportunity"]["id"])
+        companycam.request_project(db, card, "ahs_email")
         db.commit()
     response.status_code = code
     return out
@@ -2396,6 +2404,7 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     data.pop("custom_fields", None)
 
     old_stage_id = o.stage_id
+    had_street = bool((o.address_street or "").strip())
     for k, v in data.items():
         setattr(o, k, v)
     if new_pipeline_id != old_pipeline_id:
@@ -2410,6 +2419,9 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
                 .order_by(Opportunity.position, Opportunity.id)).all()):
             left.position = i
     db.flush()
+    if not had_street:
+        # The first address saved on a card gets its CompanyCam project.
+        companycam.request_project(db, o, "address_saved")
     outcome = automations.on_opportunity_stage_changed(db, o, old_stage_id)
     db.commit()
     db.refresh(o)
@@ -2474,6 +2486,9 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
     if body.follower_ids:
         # Refused whole (400, nothing committed) when a follower does not exist.
         opportunity_workspace.set_followers(db, o, body.follower_ids)
+    # A card made in the CRM with an address gets its CompanyCam project (the
+    # worker searches first and links an existing one). No-op without a token.
+    companycam.request_project(db, o, "created")
     db.commit()
     db.refresh(o)
     return {"id": o.id, "title": o.title, "stage_id": o.stage_id, **_opp_address(o)}

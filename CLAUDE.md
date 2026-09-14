@@ -160,6 +160,34 @@ is stored under `<key>__details`). Create it with `uv run python -m app.checklis
 is GoHighLevel's modal (`components/AddOpportunityModal.tsx`): contact required in the UI,
 not in the API. AHS card titles are name-first. See DECISIONS.md.
 
+## CompanyCam job photos (2026-09-14)
+
+Photos stay in CompanyCam; the CRM stores only which project belongs to which card
+(`companycam_links`), a heartbeat, a review list and creation requests. `app/companycam.py` is
+the ONLY code that talks to CompanyCam, and its `_request` refuses every non-GET except
+`POST /projects` — **creating a project is the one write this package can ever send**.
+
+```bash
+COMPANYCAM_API_TOKEN=...               # empty = feature off, Photos tab says so, nothing sent
+COMPANYCAM_CREATE_PROJECTS=true        # DEFAULT TRUE once a token is set
+COMPANYCAM_SYNC_ENABLED=false          # hourly linking check; turn on after the first run
+uv run python -m app.companycam_link            # DRY RUN, counts only
+uv run python -m app.companycam_link --commit   # link existing projects to cards
+uv run python -m app.companycam_link --status   # the hourly check's heartbeat
+```
+
+- **Linking order:** a project named `Workiz <job #> - ...` links to the card with that
+  `workiz_id` (`workiz_job`); everything else by address (card's, else contact's) to one or
+  ALL matching cards; a name-only match goes on Settings → CompanyCam → Review, never linked.
+- **Creation** (worker, every minute): a card made by `POST /api/opportunities` or by an AHS
+  email, with an address — or given its first address — gets a project. It SEARCHES first and
+  links what exists. A Workiz-imported card never creates. Named `CRM <id> - <customer>` /
+  `AHS <ahs_job_id> - <customer>`.
+- **The browser never gets an image URL or the token**: `/api/companycam/photos/{id}/{variant}`
+  relays the bytes, and only for a project linked to a card the reader can see.
+- The worker runs CompanyCam on its own thread; a CompanyCam outage is a heartbeat error, never
+  a crash. See the 2026-09-14 CompanyCam amendment in `DECISIONS.md`.
+
 ## Answering a call in the browser (the softphone)
 
 The CRM can be a ring destination. `+19544829099` already rings two mobiles in parallel

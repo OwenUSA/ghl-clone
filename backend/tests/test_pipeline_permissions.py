@@ -23,6 +23,7 @@ import inspect
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app import companycam_api as companycam_mod
 from app import main as main_mod
 from app.auth import mint_api_token
 from app.db import Base, SessionLocal, engine
@@ -547,6 +548,14 @@ AUDITED = {
     "update_appointment": "_check_appointment_opportunity; _appointment_detail(hidden)",
     "report_calls": "won deals visible_opportunities()",
     "search": "_search_opportunities(hidden)",
+    # CompanyCam (app/companycam_api.py, 2026-09-14): a hidden card has no photos.
+    "companycam_projects_for_opportunity": "pipeline_access.get_opportunity -> 404",
+    "companycam_project_photos": "pipeline_access.get_opportunity -> 404",
+    "companycam_photo_image": "served only if linked to a card outside hidden_pipeline_ids",
+    "companycam_projects_for_contact": "visible_opportunities(hidden)",
+    "companycam_unlink": "ADMIN; pipeline_access.get_opportunity -> 404",
+    "companycam_review_list": "ADMIN (sees all)",
+    "companycam_review_link": "ADMIN (sees all)",
 }
 
 MARKERS = ("Opportunity", "Pipeline", "Stage", "_contact_detail", "_appointment_detail",
@@ -570,7 +579,7 @@ def test_every_route_that_reads_a_deal_is_on_the_audited_list():
     touching = set()
     for r in _routes():
         fn = r.endpoint
-        if getattr(fn, "__module__", "") != main_mod.__name__:
+        if getattr(fn, "__module__", "") not in (main_mod.__name__, companycam_mod.__name__):
             continue
         src = inspect.getsource(fn)
         if any(m in src for m in MARKERS):

@@ -3600,3 +3600,162 @@ beside the input, the address split (street full width, then City / State / Zip)
 foot of the contact list, the Address group and custom fields below Business name / Source,
 the error sentence left of Cancel, and the card badge are ours, built from the edit modal's
 and the card's existing parts. The Settings → Custom Fields editor remains OUR design.
+
+## AMENDMENT (2026-09-14): CompanyCam job photos in the CRM — the photos stay in CompanyCam
+
+The crew photographs every job in CompanyCam (measured read-only on the owner's account:
+1,759 projects, 837 with photos, 53,403 photos). The owner's decisions, implemented as given,
+with the two changes the operator made during the build recorded below. Branch
+`feature/companycam`. Code: `app/companycam.py` (the only module that talks to CompanyCam),
+`app/companycam_api.py` (routes), `app/companycam_link.py` (the linking command), a thread in
+`app/worker.py`; screens `components/CompanyCamPhotos.tsx`, `components/CompanyCamSettings.tsx`,
+a section in `ContactDetailsPanel.tsx`.
+
+### What is stored, and what is not
+
+Four NEW tables, nothing else in the schema touched: `companycam_links` (card ↔ project, how —
+`workiz_job` / `address` / `manual` / `created` — when, by whom, and an `unlinked_at`),
+`companycam_review_items` (name-only matches), `companycam_sync_state` (one row: the hourly
+check's heartbeat and cursor) and `companycam_project_requests` (cards waiting for a project,
+UNIQUE per card). **No photo, no photo URL and no token is ever stored.** A link's
+`project_name` is a display copy taken when it was linked. Both foreign keys to `opportunities`
+are `ON DELETE CASCADE`: deleting a card is never refused over a photo link, and nothing in
+CompanyCam is touched by it.
+
+### The image bytes go through the CRM — the browser never loads a CompanyCam URL
+
+`GET /api/companycam/photos/{id}/{thumbnail|web}` relays the bytes; the JSON the browser gets
+carries only CRM paths. The brief asked whether CompanyCam's photo URIs are signed or expiring:
+**that could not be measured** (no token on the build machine). The relay is right either way,
+which is why it was chosen without the measurement:
+
+- if the URIs do NOT expire, they are bearer links to photos of customers' homes — forwardable
+  and alive after the viewer's session, role or pipeline access are gone;
+- if they DO expire, a cached list hands the browser dead links, and re-resolving server-side
+  is what the relay does anyway;
+- per-pipeline access then applies to the picture itself: an image is served only when its
+  project is linked to a card in a pipeline the reader can see;
+- it is the call already made for Quo recordings (2026-09-11): stream, do not redirect.
+
+The token is sent only to `api.companycam.com`; an image host is asked without it, and only a
+host under `companycam.com` that answers 401/403 is asked again with it. Cost: bandwidth
+through the VPS for four users, softened by `Cache-Control: private, max-age=3600`. Photo
+lists are cached 2 minutes, projects 10 minutes, in process; **Refresh** bypasses both.
+
+### Linking existing projects (decision 3) — AND the operator's first rule
+
+`python -m app.companycam_link` (dry run; `--commit` writes; `--json`; `--status`) and the
+hourly check apply ONE planner, in this order:
+
+1. **Workiz job number (operator, 2026-09-14).** A project whose name matches
+   `^Workiz (\S+) - ` links to THE card whose `custom_fields.workiz_id` is that job number
+   (method `workiz_job`). Measured by the operator: all 441 Workiz-typed projects are named
+   `Workiz <job #> - <customer>`, 374 carry a job number a card holds. Such a project does NOT
+   also go through the address rule, so a repeat customer's other cards at that street do not
+   receive it.
+2. **Address.** Street number + normalised street name (USPS suffixes, directionals, ordinal
+   words, unit designators dropped), the card's own address else its contact's. One card, or
+   ALL cards sharing the address.
+3. **Name only** (the contact's first + last name adjacent in the project name) → the review
+   list, **never linked**. Settings → CompanyCam lists them for an ADMIN to link by hand
+   (`manual`) or dismiss.
+4. **No match** → left alone. Nothing creates a contact or a card from CompanyCam.
+
+Counts printed (and nothing else — no name, address or project name): projects scanned, linked
+by Workiz job number, linked to one card, linked to several, name-only for review, unmatched,
+already linked. A second `--commit` changes nothing (tested as a hash of every row).
+
+Judgement calls, all overrulable:
+- **A different 5-digit ZIP on both sides is a different house**, even with the same street.
+  Only when both ZIPs are known. This can only make the measured match counts smaller.
+- **A city glued onto the street** (`14436 SW 95TH LN MIAMI`, the AHS dispatch format) still
+  matches `14436 SW 95th Lane` — but only when the shorter street ends in a street suffix, so
+  `123 MAIN` never swallows `123 MAIN ST`.
+- **An ADMIN's unlink is permanent for that card**: the row is kept with `unlinked_at`, so the
+  next sweep does not link it back.
+- Archived projects are linked like any other (none exist today).
+
+### The hourly check (decision 4)
+
+The worker's CompanyCam thread ticks every 60 s. With `COMPANYCAM_SYNC_ENABLED=true` it runs the
+check when an hour has passed since the last one STARTED (read from the database, so a restart
+does not re-run it): projects updated since the last success minus 15 minutes, filtered
+client-side on `updated_at` (`modified_since` is also sent, unmeasured — if CompanyCam ignores
+it we read more pages, never fewer projects). **Once a day it reads every project**, which is
+what links an old project to a card that arrived later (a Workiz import run by hand a week after
+Workiz made the project). Heartbeat: `companycam_sync_state` — last started / finished /
+success / full sweep, last counts, last error — shown on Settings → CompanyCam, by
+`GET /api/companycam/status` (ADMIN) and by `python -m app.companycam_link --status`. An outage
+or a bad token is `last_error`; the cursor does not move; nothing else stops. The Photos tab
+says **"Photos are unavailable right now"**.
+
+### Project creation — AMENDS decision 5: ON by default (operator, 2026-09-14)
+
+The brief shipped creation switched off. **The operator overrode that**: creation is ON whenever
+`COMPANYCAM_API_TOKEN` is set (`COMPANYCAM_CREATE_PROJECTS=false` turns it off). Everything else
+in decision 5 stands.
+
+- **Exactly two doors, plus the first address.** `POST /api/opportunities` (the Add opportunity
+  modal, and `ghl opps create`) and `POST /api/ahs-jobs` (a new AHS work-order card) record a
+  request when the card has a street; `PATCH /api/opportunities/{id}/detail` records one when a
+  card that had no street is given one. Nothing else records a request — not the Workiz importer,
+  not a drag, not a bulk action.
+- **A card the Workiz importer made never creates** — `created_by = "Workiz import"`, or a
+  `workiz_id` on a card not created by an AHS email. Its project already exists; it links.
+- **Search first.** The worker pages `GET /projects?query=<street>` and compares addresses
+  itself; any project at that address is LINKED (`address`) instead of creating a duplicate.
+- **Then create once**, and never twice for one card: the request row is UNIQUE per card, a card
+  holding any link is finished without a request to CompanyCam, and the state is committed as
+  `creating` BEFORE the POST, so a crash between CompanyCam answering and our commit is followed
+  by a search that finds the new project. Up to 5 attempts, then `failed`.
+- **Named like Workiz's projects** (operator's answer, from the measured `Workiz <job #> -
+  <customer>`): an AHS email card → `AHS <ahs_job_id> - <customer>`; any other card →
+  `CRM <opportunity id> - <customer>`. The customer is the contact's name, else the card title.
+- **`primary_contact`** = the contact's name, email and phone (blank ones omitted).
+- **The AHS path's "Nothing is notified" guarantee is unchanged**: a creation request is a row in
+  `companycam_project_requests`, not a `jobs` row, and it texts nobody. The AHS module itself was
+  not edited; the route records the request after `deliver_job` returns 201.
+
+### The one write — REPLACES "creation OFF sends zero non-GET requests"
+
+`_request` refuses every method but GET before a client exists — except `POST /projects` while
+creation is on. So **the only non-GET request this package can ever send is the project-create
+POST, from the two doors above, never for a Workiz-imported card**. There is no upload, delete,
+edit, tag or webhook call (decision 6: view only). `test_companycam.py` drives the whole package
+— linking run, hourly check, photo reads, image relay, contact panel, admin page, unlink, card
+delete, the Workiz importer, a hand-made card, a card given its first address, an AHS email, a
+Workiz card given an address — through a recording transport and asserts exactly three POSTs,
+to the three expected cards; a source test pins that `_request` has one POST call site.
+
+### Who sees what (decision 7)
+
+Viewing: every signed-in role, TECH included. Linking, unlinking, the review list and the status
+page: ADMIN. Per-pipeline permissions: every read resolves the card through `pipeline_access`
+(404 exactly like a missing card); the contact panel lists only projects on the contact's
+VISIBLE cards; an image needs a link to a visible card. The routes are on
+`test_pipeline_permissions.py`'s audited list, whose module filter now covers
+`app/companycam_api.py`.
+
+### Screens — OURS, not measured
+
+GoHighLevel has no CompanyCam integration in the owner's screenshots, so all of it is ours,
+built from the opportunity modal's parts (refs/opps/11, 22): the **Photos** nav item after
+Associated objects; its heading row with Refresh and "Open in CompanyCam"; project groups only
+when a card has several; a 4-across square thumbnail grid (`auto-fill, minmax(140px, 1fr)`),
+`loading="lazy"`, "Load more photos" per 50; the dark full-screen viewer (portal on `<body>`,
+above the status dot) with ‹ › and ← → Esc, "n of N", date in the account zone, "Photo by",
+"Annotated", description, "Open in CompanyCam"; the contact panel's collapsible "CompanyCam
+projects (n)" section, drawn only when there is at least one (so a contact with none renders the
+measured panel unchanged), each opening a project dialog; and Settings → CompanyCam (ADMIN only).
+Newest first is decided in the browser across loaded pages, because CompanyCam's own photo order
+is not measured. Checked in headless Chromium at 1440×900 against a throwaway database and a fake
+CompanyCam.
+
+### Not verified without the real token
+
+The request body `POST /projects` accepts (`name`, `address{…}`, `primary_contact{name, email,
+phone_number}` — shaped from CompanyCam's public docs, unwrapped); whether `GET /projects` honours
+`query` and `modified_since`; `GET /photos/{id}` (used only when an image is asked for before its
+list was read); whether photo URIs are signed/expiring and whether the image host wants the token;
+how fast a just-created project becomes searchable; CompanyCam's rate limits (429 is retried with
+`Retry-After`, pages are 0.25 s apart).

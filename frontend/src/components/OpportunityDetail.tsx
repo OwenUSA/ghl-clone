@@ -31,6 +31,7 @@ import { CustomFieldAnswers, type LinkedValues } from './CustomFieldAnswers'
 import { NewAppointmentDialog } from './NewAppointmentDialog'
 import { AppointmentTab } from './opportunity/AppointmentTab'
 import { AssociatedTab } from './opportunity/AssociatedTab'
+import { PhotosTab } from './CompanyCamPhotos'
 import { NotesTab } from './opportunity/NotesTab'
 import { Chip, ContactSelect, MultiSelect, type Choice } from './opportunity/Pickers'
 import { TasksTab } from './opportunity/TasksTab'
@@ -419,6 +420,8 @@ export function OpportunityDetail({
                     )}
                     <NavItem label="Associated objects" active={tab === 'associated'}
                       onClick={() => setTab('associated')} />
+                    {/* CompanyCam job photos (2026-09-14): every role, like the card. */}
+                    <NavItem label="Photos" active={tab === 'photos'} onClick={() => setTab('photos')} />
                   </div>
                   {/* LINKS TO Settings → Custom Fields (brief §2). A real navigation to
                       the deep link App.tsx already honours on load (`viewFromPath`,
@@ -752,6 +755,7 @@ export function OpportunityDetail({
                   {tab === 'associated' && (
                     <AssociatedTab o={o} onOpenAppointment={setOpenAppointment} />
                   )}
+                  {tab === 'photos' && <PhotosTab opportunityId={o.id} />}
                 </div>
               </div>
 

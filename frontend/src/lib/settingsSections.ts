@@ -9,6 +9,8 @@
 export const SETTINGS_SECTIONS = [
   { key: 'account', label: 'My account', path: '/settings' },
   { key: 'custom-fields', label: 'Custom Fields', path: '/settings/custom-fields' },
+  // ADMIN only: SettingsPage does not draw it for anyone else (2026-09-14).
+  { key: 'companycam', label: 'CompanyCam', path: '/settings/companycam' },
 ] as const
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]['key']

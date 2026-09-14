@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { IconChevronDown, IconExternal } from './Icon'
+import { ProjectPhotosDialog } from './CompanyCamPhotos'
 import {
   ApiError,
   PANE,
   addContactTag,
   deleteContact,
   getContact,
+  getContactCompanyCam,
   listUsers,
   patchContact,
   removeContactTag,
@@ -479,6 +481,11 @@ export function ContactDetailsPanel({
                   value={c.owner_name ?? 'Unassigned'}
                 />
               </Section>
+              {/* CompanyCam (2026-09-14): every project linked to this customer's cards
+                  that the reader can see. OUR section, not measured: drawn only when
+                  there is at least one, so a contact with none renders exactly the
+                  measured panel. */}
+              <CompanyCamSection contactId={c.id} />
 
               {/* measured: "Created by:" is its own 11px label beside the value */}
               <div className="mt-3" style={{ fontSize: 11, color: 'rgb(96,113,121)' }}>
@@ -658,6 +665,35 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </button>
       {open && <div className="mt-3">{children}</div>}
     </div>
+  )
+}
+
+function CompanyCamSection({ contactId }: { contactId: number }) {
+  const [open, setOpen] = useState<string | null>(null)
+  const { data } = useQuery({
+    queryKey: ['contact-companycam', contactId],
+    queryFn: () => getContactCompanyCam(contactId),
+    staleTime: 60_000,
+  })
+  if (!data || data.state !== 'ok' || data.projects.length === 0) return null
+  const project = data.projects.find((p) => p.id === open)
+  return (
+    <>
+      <Section title={`CompanyCam projects (${data.projects.length})`}>
+        {data.projects.map((p) => (
+          <button key={p.id} type="button" onClick={() => setOpen(p.id)}
+            className="block w-full text-left" style={{ marginBottom: 12 }}>
+            <div className="truncate" style={{ fontSize: 14, fontWeight: 500, color: 'rgb(56,160,219)' }}>
+              {p.name ?? 'CompanyCam project'}
+            </div>
+            <div className="truncate" style={{ ...LABEL, fontSize: 12, marginTop: 2 }}>
+              {p.opportunities.map((o) => o.title).join(', ')}
+            </div>
+          </button>
+        ))}
+      </Section>
+      {project && <ProjectPhotosDialog project={project} onClose={() => setOpen(null)} />}
+    </>
   )
 }
 

@@ -21,6 +21,7 @@ export type ModalTab =
   | 'tasks'
   | 'notes'
   | 'associated'
+  | 'photos'
   | `group:${number}`
 
 export type ModalRequest = {
