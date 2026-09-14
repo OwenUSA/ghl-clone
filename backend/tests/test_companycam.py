@@ -927,3 +927,31 @@ def test_the_source_holds_one_write_and_one_place_that_talks_to_companycam():
         assert "api.companycam.com" not in src, path.name
         assert not re.search(r"(getenv|environ)[^\n]*COMPANYCAM_API_TOKEN", src), \
             "%s reads the CompanyCam token; only companycam.py may" % path.name
+
+
+# ============================================= descriptions as CompanyCam sends them
+
+def test_a_photo_description_object_reaches_the_browser_as_plain_text(world, cc):
+    """Production, 2026-09-14: a photo note arrives as an OBJECT. Sent through as-is it
+    crashed the photo viewer to a white screen. The browser must only ever get text."""
+    run_command("--commit")
+    seed_photos(cc)
+    shapes = {
+        "p-old": {"id": "51212927",
+                  "html_content": "<p>Bedroom </p><p><br></p><p>Roof is from 1971</p>",
+                  "plain_text_content": "Bedroom \n\nRoof is from 1971"},
+        "p-mid": {"id": "9", "html_content": "<p>Only <b>html</b></p>", "plain_text_content": ""},
+    }
+    for p in cc.photos["1"]:
+        if p["id"] in shapes:
+            p["description"] = shapes[p["id"]]
+    opp = world.ids["main"]
+    page = world.get("/api/opportunities/%d/companycam/projects/1/photos" % opp,
+                     headers=h(world, "tech")).json()
+    by_id = {p["id"]: p for p in page["photos"]}
+    assert by_id["p-old"]["description"] == "Bedroom\n\nRoof is from 1971"
+    assert by_id["p-mid"]["description"] == "Only html"
+    assert by_id["p-new"]["description"] == "Ridge vent"
+    for p in page["photos"]:
+        assert p["description"] is None or isinstance(p["description"], str)
+        assert p["creator_name"] is None or isinstance(p["creator_name"], str)

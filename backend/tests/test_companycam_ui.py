@@ -144,8 +144,9 @@ def test_the_viewer_has_every_control_the_owner_asked_for():
     tab = _read("components", "CompanyCamPhotos.tsx")
     viewer = tab.split("export function PhotoViewer(", 1)[1].split("\nfunction ", 1)[0]
     for needle in ('label="Previous photo"', 'label="Next photo"', "'ArrowLeft'", "'ArrowRight'",
-                   "'Escape'", "photoStamp(photo.captured_at)", "Photo by {photo.creator_name",
-                   "{photo.description}", "Open in CompanyCam", "href={projectUrl}"):
+                   "'Escape'", "photoStamp(photo.captured_at)",
+                   "Photo by {textOf(photo.creator_name)", "{textOf(photo.description)}",
+                   "Open in CompanyCam", "href={projectUrl}"):
         assert needle in viewer, needle
 
 

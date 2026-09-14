@@ -34,6 +34,7 @@ Nothing is written to disk or to the database.
 """
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -62,6 +63,30 @@ def _active_links(stmt):
     return stmt.where(CompanyCamLink.unlinked_at.is_(None))
 
 
+def _text(value) -> str | None:
+    """A CompanyCam text field as plain text, or None.
+
+    Measured on production 2026-09-14: a photo's `description` is null when nobody typed a
+    note, and an OBJECT when somebody did - {"id", "html_content", "plain_text_content"}
+    ("Bedroom / Roof is from 1971"). Passing that object to the browser crashed the photo
+    viewer to a white screen, because React cannot render an object as text.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        text = value.get("plain_text_content")
+        if not isinstance(text, str) or not text.strip():
+            html = value.get("html_content")
+            text = re.sub(r"<[^>]+>", " ", html) if isinstance(html, str) else None
+        value = text
+    if not isinstance(value, str):
+        return None
+    lines = [" ".join(line.split()) for line in value.splitlines()]
+    text = "\n".join(lines).strip()
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text or None
+
+
 def _photo_out(photo: dict) -> dict:
     """What the browser gets for one photo. No CompanyCam URI, no token."""
     pid = str(photo["id"])
@@ -70,8 +95,8 @@ def _photo_out(photo: dict) -> dict:
         "project_id": str(photo.get("project_id")) if photo.get("project_id") else None,
         "captured_at": companycam.iso_from_unix(photo.get("captured_at")
                                                or photo.get("created_at")),
-        "creator_name": photo.get("creator_name"),
-        "description": photo.get("description") or None,
+        "creator_name": _text(photo.get("creator_name")),
+        "description": _text(photo.get("description")),
         "annotated": companycam.preferred_uri(photo, "web")
         != companycam._uri(photo, "web"),
         "thumbnail_url": "/api/companycam/photos/%s/thumbnail" % pid,

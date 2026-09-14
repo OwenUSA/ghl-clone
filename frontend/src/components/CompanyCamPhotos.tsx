@@ -250,7 +250,7 @@ export function PhotoViewer({ photos, index, hasMore, projectUrl, projectName, o
         {prev != null && (
           <NavArrow side="left" label="Previous photo" onClick={() => go(prev)} />
         )}
-        <img key={photo.id} src={photo.image_url} alt={photo.description ?? 'Job photo'}
+        <img key={photo.id} src={photo.image_url} alt={textOf(photo.description) ?? 'Job photo'}
           onClick={(e) => e.stopPropagation()}
           style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 4 }} />
         {next != null && (
@@ -264,7 +264,7 @@ export function PhotoViewer({ photos, index, hasMore, projectUrl, projectName, o
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1" style={{ fontSize: 13 }}>
           <span>{photoStamp(photo.captured_at)}</span>
           <span style={{ color: 'rgb(208,213,221)' }}>
-            Photo by {photo.creator_name ?? 'unknown'}
+            Photo by {textOf(photo.creator_name) ?? 'unknown'}
           </span>
           {photo.annotated && <span style={{ color: 'rgb(208,213,221)' }}>Annotated</span>}
           <span className="flex-1" />
@@ -276,16 +276,22 @@ export function PhotoViewer({ photos, index, hasMore, projectUrl, projectName, o
             </a>
           )}
         </div>
-        {photo.description && (
+        {textOf(photo.description) && (
           <div style={{ fontSize: 14, marginTop: 6, whiteSpace: 'pre-wrap', maxHeight: 96,
             overflowY: 'auto' }}>
-            {photo.description}
+            {textOf(photo.description)}
           </div>
         )}
       </div>
     </div>,
     document.body,
   )
+}
+
+/** Only a string is ever rendered as text; anything else (a CompanyCam object, a number)
+ *  is dropped rather than crashing the viewer to a white screen. */
+function textOf(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null
 }
 
 /** A lazy thumbnail; a relay failure reads as a sentence, not a broken-image glyph. */
