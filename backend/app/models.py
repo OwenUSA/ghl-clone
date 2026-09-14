@@ -366,6 +366,14 @@ class Opportunity(Base):
     # 0-100, or NULL. Read by the Forecast ONLY when the pipeline has "Use
     # opportunity-level probability" switched on; otherwise the stage's applies.
     probability: Mapped[int | None] = mapped_column(Integer)
+    # The address of the JOB — the property being worked on (2026-09-14). A customer
+    # with six roofs is one contact and six cards, so the contact's address cannot
+    # say which roof a card is. Typed like the contact's four columns. Null means
+    # "none on the card"; nothing falls back to the contact's address at rest.
+    address_street: Mapped[str | None] = mapped_column(String(255))
+    address_city: Mapped[str | None] = mapped_column(String(120))
+    address_state: Mapped[str | None] = mapped_column(String(80))
+    address_postal_code: Mapped[str | None] = mapped_column(String(20))
 
     # The live account already carries owen_* custom fields written by the
     # telephony project ("from OWEN"), with owen_call_id documented as the

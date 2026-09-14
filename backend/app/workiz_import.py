@@ -57,6 +57,14 @@ Two records have no `workiz_id` of their own to be found by (2026-09-14, DECISIO
 Opportunities whose `workiz_id` the export no longer mentions are REPORTED and left
 exactly as they are.
 
+## Each card carries its own job's address (2026-09-14)
+
+An opportunity's `address_*` columns come from ITS job row (`Address`, `City`,
+`State`, `Zip code`), all four as a unit, on every run — so a re-import both fills the
+cards imported before the columns existed and follows an address corrected in
+Workiz. A row with no address writes nothing to the card. The CONTACT's address
+follows the clients file exactly as before; nothing here changed it.
+
 ## What it will not do
 
 It never deletes a contact, an opportunity or an appointment, and it never deletes a
@@ -523,6 +531,9 @@ class OppPlan:
     # Its stage, status and value follow Workiz like any other; its title, creator,
     # creation date and contact are the email's, and are kept.
     email_card: bool = False
+    # The address of THIS job (2026-09-14): the four columns of its own row, via
+    # `address_from_job`. All None when the row has none — never another job's.
+    address: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -971,6 +982,8 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
             # with no Client at all falls back to the job name.
             name = (clean(row.get("Client")) or clean(row.get("Job name"))
                     or "Workiz job %s" % job_id)
+            # Workiz drops "&" from a name and leaves the gap: "ANGELO  ALEXIA PURP".
+            name = " ".join(name.split())
             job_type = clean(row.get("Type")) or None
 
             existing = existing_opps.get(job_id) or []
@@ -995,6 +1008,7 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
                 created_at=created_at,
                 existing_id=current.id if current else None,
                 email_card=current is not None and is_email_card(current),
+                address=address_from_job(row),
             ))
             contact_id, contact_phone = planned.get(client_wid, (None, None))
             phones = {last10(r.get("Phone")) for r in group_for.get(client_wid, [])}
@@ -1493,6 +1507,13 @@ def apply_plan(db: Session, plan: Plan) -> dict:
             _set(o, "title", op.title)
             _set(o, "contact_id", contact.id if contact else None)
             _set(o, "created_by", "Workiz import")
+        if any(op.address.values()):
+            # The job's address, as a unit: all four columns from this one row, so a
+            # card never holds one job's street and another's ZIP. A row with no
+            # address writes nothing — a new card stays empty, and an address somebody
+            # typed on the card (or an AHS email's) is not wiped by a blank export.
+            for key, value in op.address.items():
+                _set(o, key, value)
         _set(o, "value_cents", op.value_cents)
         _set(o, "status", op.status)
         _set(o, "source", op.source)
@@ -1539,6 +1560,8 @@ REQUIRED_SCHEMA = {
     "contacts": ("address_street", "address_city", "address_state",
                  "address_postal_code"),
     "appointments": ("opportunity_id",),
+    "opportunities": ("address_street", "address_city", "address_state",
+                      "address_postal_code"),
     "custom_field_defs": (),
     "custom_field_pipelines": (),
 }

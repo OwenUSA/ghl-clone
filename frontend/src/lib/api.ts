@@ -208,6 +208,11 @@ export type Opportunity = {
   /** The PRIMARY CONTACT's tag names — an opportunity has no tags of its own. */
   tags: string[]
   open_tasks_count: number
+  /** The JOB's address (2026-09-14); the card draws "street, city" when set. */
+  address_street?: string | null
+  address_city?: string | null
+  address_state?: string | null
+  address_postal_code?: string | null
   /** STAFF only. The server leaves both keys OUT for a TECH, so `undefined`
       means "this role may not see notes", never "no notes". */
   notes_count?: number
@@ -729,6 +734,11 @@ export type OpportunityDetail = {
   /** The deal's own win probability, 0-100; only meaningful on a pipeline that
       uses opportunity-level probability. */
   probability: number | null
+  /** The address of the job/property this card is for — not the contact's. */
+  address_street: string | null
+  address_city: string | null
+  address_state: string | null
+  address_postal_code: string | null
   followers: { id: number; name: string }[]
   additional_contacts: {
     id: number; name: string; email: string | null; phone: string | null
@@ -756,6 +766,10 @@ export type OpportunityPatch = {
   custom_fields?: Record<string, unknown>
   /** 0-100, or null to clear it. */
   probability?: number | null
+  address_street?: string | null
+  address_city?: string | null
+  address_state?: string | null
+  address_postal_code?: string | null
 }
 
 export type OpportunityDeleted = {

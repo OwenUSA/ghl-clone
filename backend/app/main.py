@@ -119,6 +119,16 @@ def contains(q: str) -> str:
     return "%" + q + "%"
 
 
+def _opportunity_text_match(term: str):
+    """What the board search and the ctrl+K palette match a card on: its title, or
+    its job's street or city (2026-09-14). One clause, so the two cannot drift. It
+    narrows a query; it never widens one past `pipeline_access`."""
+    like = contains(term)
+    return or_(Opportunity.title.ilike(like, escape=LIKE_ESCAPE),
+               Opportunity.address_street.ilike(like, escape=LIKE_ESCAPE),
+               Opportunity.address_city.ilike(like, escape=LIKE_ESCAPE))
+
+
 # NOTE and INTERNAL_COMMENT are the team talking to itself on a thread: recorded
 # for the crew, never transmitted to the customer (see automations.INTERNAL_TYPES,
 # which is why DND never suppresses them). As of 2026-09-10 they are STAFF-only on
@@ -1340,7 +1350,9 @@ def list_opportunities(
     if status != "all":
         stmt = stmt.where(Opportunity.status == status)
     if q:
-        stmt = stmt.where(Opportunity.title.ilike(contains(q), escape=LIKE_ESCAPE))
+        # The board's search box: the title, or the job's street or city
+        # (2026-09-14) — "which card is the one on Palm Ave" is a real question.
+        stmt = stmt.where(_opportunity_text_match(q))
     # `id` is the tiebreak, not decoration: `position` defaults to 0, so any rows
     # written before a re-pack can share one, and without it the board's order
     # changes between two identical refetches — which the optimistic drag would
@@ -1358,6 +1370,7 @@ def list_opportunities(
              "business_name": o.contact.business_name if o.contact else None,
              "source": o.contact.source if o.contact else None,
              "probability": o.probability,
+             **_opp_address(o),
              "owner_id": o.owner_id,
              "owner_name": o.owner.name if o.owner else None,
              "updated_at": o.updated_at, **extras[o.id]} for o in rows]
@@ -2017,7 +2030,7 @@ def _resolve_appointment_title(title: str, contact: Contact | None) -> str:
     return _clean_appointment_title(_TEMPLATE_VARIABLE.sub(sub, title or ""))
 
 
-def contact_address(c: Contact | None) -> str | None:
+def contact_address(c: Contact | Opportunity | None) -> str | None:
     """The contact's saved property address on one line — "Calendar default" in
     the Meeting location control. `None` when nothing is on file."""
     if c is None:
@@ -2030,9 +2043,14 @@ def contact_address(c: Contact | None) -> str | None:
 
 
 def _resolve_location(kind: str | None, typed: str | None,
-                      contact: Contact | None) -> str | None:
+                      contact: Contact | None,
+                      opportunity: Opportunity | None = None) -> str | None:
+    """"Calendar default" is the JOB's address when the booking is linked to a card
+    that has one (2026-09-14), else the contact's — a customer with six roofs is
+    visited at the roof the deal is for. `contact_address` formats either: it reads
+    the same four attribute names off both."""
     if kind == "calendar_default":
-        return contact_address(contact)
+        return contact_address(opportunity) or contact_address(contact)
     cleaned = (typed or "").strip() or None
     if kind == "custom" and cleaned is None:
         raise HTTPException(400, "a custom meeting location needs an address")
@@ -2113,7 +2131,10 @@ def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
                           else calendar.user_id if calendar else None),
         notes=(body.notes or "").strip() or None,
         description=(body.description or "").strip() or None,
-        location=_resolve_location(body.location_kind, body.location, contact))
+        location=_resolve_location(
+            body.location_kind, body.location, contact,
+            db.get(Opportunity, body.opportunity_id)
+            if body.opportunity_id is not None else None))
     db.add(a)
     db.flush()
     # Rule 3: booked -> reminders at T-24h and T-1h. Unchanged by the new modal.
@@ -2161,6 +2182,9 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
         # 0-100 or null. Read by the Forecast only when the pipeline uses
         # opportunity-level probability.
         "probability": o.probability,
+        # The JOB's address (2026-09-14), not the contact's. All four null when the
+        # card has none; the modal then offers the contact's as a greyed fallback.
+        **_opp_address(o),
         "created_by": o.created_by,
         "created_at": o.created_at,
         "custom_fields": o.custom_fields or {},
@@ -2229,6 +2253,17 @@ def _check_opportunity_contact(db: Session, contact_id: int | None) -> None:
         raise HTTPException(400, "unknown contact_id")
 
 
+# The job's address on a card (2026-09-14). The max_lengths mirror the columns, as
+# ContactPatch's do, so an over-long value is a 422 naming the field rather than a
+# truncation error rendered as a bare 500; whitespace is stored as nothing.
+OPPORTUNITY_ADDRESS = ("address_street", "address_city", "address_state",
+                       "address_postal_code")
+
+
+def _opp_address(o: Opportunity) -> dict:
+    return {k: getattr(o, k) for k in OPPORTUNITY_ADDRESS}
+
+
 class OpportunityPatch(BaseModel):
     """Measured GHL statuses: Open / Won / Lost / Abandoned.
 
@@ -2253,6 +2288,13 @@ class OpportunityPatch(BaseModel):
     # opportunity-level probability.
     probability: int | None = Field(None, ge=0, le=100)
     custom_fields: dict | None = None
+    # The job's address, one field at a time; null or blank clears that field.
+    address_street: str | None = Field(None, max_length=255)
+    address_city: str | None = Field(None, max_length=120)
+    address_state: str | None = Field(None, max_length=80)
+    address_postal_code: str | None = Field(None, max_length=20)
+
+    _address = field_validator(*OPPORTUNITY_ADDRESS, mode="after")(_blank_to_none)
 
 
 @app.patch("/api/opportunities/{opp_id}/detail")
@@ -2359,6 +2401,12 @@ class OpportunityCreate(BaseModel):
     # same code the detail form goes through, so a dropdown cannot be talked into
     # an answer it does not offer by using the other door.
     custom_fields: dict | None = None
+    address_street: str | None = Field(None, max_length=255)
+    address_city: str | None = Field(None, max_length=120)
+    address_state: str | None = Field(None, max_length=80)
+    address_postal_code: str | None = Field(None, max_length=20)
+
+    _address = field_validator(*OPPORTUNITY_ADDRESS, mode="after")(_blank_to_none)
 
 
 @app.post("/api/opportunities", status_code=201)
@@ -2379,11 +2427,12 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
     o = Opportunity(title=title, pipeline_id=body.pipeline_id,
                     stage_id=body.stage_id, contact_id=body.contact_id,
                     value_cents=body.value_cents, position=n,
-                    probability=body.probability, custom_fields=answers)
+                    probability=body.probability, custom_fields=answers,
+                    **{k: getattr(body, k) for k in OPPORTUNITY_ADDRESS})
     db.add(o)
     db.commit()
     db.refresh(o)
-    return {"id": o.id, "title": o.title, "stage_id": o.stage_id}
+    return {"id": o.id, "title": o.title, "stage_id": o.stage_id, **_opp_address(o)}
 
 
 # ---------- bulk actions ----------
@@ -3626,7 +3675,14 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
         if text in data:
             data[text] = (data[text] or "").strip() or None
     if location_kind is not None or "location" in data:
-        data["location"] = _resolve_location(location_kind, data.get("location"), contact)
+        opp_id = data.get("opportunity_id", a.opportunity_id)
+        deal = db.get(Opportunity, opp_id) if opp_id is not None else None
+        if deal is not None and not pipeline_access.can_see(db, principal, deal.pipeline_id):
+            # A deal in a pipeline this user cannot access lends the booking nothing:
+            # its address must not surface through the calendar.
+            deal = None
+        data["location"] = _resolve_location(location_kind, data.get("location"),
+                                             contact, deal)
     # GoHighLevel: the calendar's user is the assignee. Moving a booking to another
     # calendar hands it to that calendar's user unless an assignee was sent too.
     if data.get("calendar_id") is not None and "assigned_user_id" not in data:
@@ -4235,9 +4291,9 @@ def _search_contacts(db: Session, term: str, limit: int) -> tuple[list, int]:
 
 def _search_opportunities(db: Session, term: str, limit: int,
                           hidden: set[int]) -> tuple[list, int]:
-    """Title only, per the owner. Every status, not just open: a palette is how
-    you go back to a deal you already won or lost, so `status` rides along and the
-    row says which.
+    """Title, or the job's street or city (2026-09-14). Every status, not just
+    open: a palette is how you go back to a deal you already won or lost, so
+    `status` rides along and the row says which.
 
     Deals in a pipeline the reader cannot access are neither listed nor counted in
     `total` — a total of 3 above two rows would say a third exists."""
@@ -4245,7 +4301,7 @@ def _search_opportunities(db: Session, term: str, limit: int,
         select(Opportunity)
         .options(selectinload(Opportunity.stage),
                  selectinload(Opportunity.contact))
-        .where(Opportunity.title.ilike(contains(term), escape=LIKE_ESCAPE)), hidden)
+        .where(_opportunity_text_match(term)), hidden)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
         stmt.order_by(Opportunity.updated_at.desc(), Opportunity.id.desc())
@@ -4254,7 +4310,8 @@ def _search_opportunities(db: Session, term: str, limit: int,
              "value_cents": o.value_cents,
              "pipeline_id": o.pipeline_id, "stage_id": o.stage_id,
              "stage_name": o.stage.name if o.stage else None,
-             "contact_name": o.contact.name if o.contact else None}
+             "contact_name": o.contact.name if o.contact else None,
+             "address_street": o.address_street, "address_city": o.address_city}
             for o in rows], total
 
 

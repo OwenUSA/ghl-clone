@@ -55,6 +55,7 @@ function subtitle(row: FlatRow): string {
       o.status !== 'open' ? o.status : null,
       money(o.value_cents),
       o.contact_name,
+      [o.address_street, o.address_city].filter(Boolean).join(', '),
     ]
       .filter(Boolean)
       .join(' · ')

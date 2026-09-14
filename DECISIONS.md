@@ -3418,3 +3418,92 @@ a pause icon (ring + two bars) mirrors the existing play icon; pressing play on 
 pauses any other call that is playing; a finished recording shows its full length with the
 play icon, and pressing play restarts it; before loading, "total" is the event's own
 `duration_seconds`, replaced by the media's real length once it loads.
+
+## AMENDMENT (2026-09-14): every opportunity carries its job's address
+
+**The owner approved it: an opportunity stores the address of the job / property being
+worked on.** Until now the only address was the CONTACT's, so one customer with six
+properties (six cards, one contact) kept one address and each card's property survived only
+in its title. Workiz stores an address per job; every AHS work order carries a service
+address per job. Branch `feature/opportunity-address`.
+
+### What this AMENDS
+
+- **"contact address, for the Workiz import" (2026-09-11)** stays exactly as it was for the
+  contact. What changes is that it is no longer the ONLY address: a card has its own four
+  columns, and where the two disagree the card's is the job's.
+- **The Book appointment amendment (2026-09-13), "Calendar default" location**: it resolved
+  to the contact's property address. It is now **the opportunity's address when the booking
+  is linked to a card that has one, else the contact's**. Still resolved on save and stored
+  as text. A card in a pipeline the editor cannot access lends a booking nothing (a PATCH
+  re-defaulting a booking linked to a hidden card uses the contact's address).
+- **"Search: opportunity title only, per the owner" (the palette)**: `/api/search` and the
+  board's search box now match a card's title, **street or city** — one shared clause
+  (`main._opportunity_text_match`), always inside `pipeline_access` like everything else.
+  The contact's address is still NOT searched; nothing asked for it.
+- **Workiz import card titles** collapse internal whitespace (`" ".join(name.split())`):
+  Workiz drops "&" from a name and leaves "ANGELO  ALEXIA PURP". Imported appointments are
+  named after the same string.
+
+### The schema — additive only
+
+`b3e9a7c51d28`, `down_revision = c8f2b6d41a93` (the single head on origin/main and in
+production). Four `op.add_column` on `opportunities`, all NULLABLE, typed exactly like the
+contact's: `address_street` VARCHAR(255), `address_city` VARCHAR(120), `address_state`
+VARCHAR(80), `address_postal_code` VARCHAR(20). No server default (nullable; an empty-string
+default would make "none" and "blank" the same). No backfill: existing cards read NULL
+until the importer is re-run by a human.
+
+### Who writes it
+
+- **The API**: `POST /api/opportunities` and `PATCH /api/opportunities/{id}/detail` take the
+  four fields; max lengths mirror the columns (422 naming the field), whitespace is stored as
+  NULL. Role rules unchanged — whoever may edit the card (STAFF) edits its address; a TECH
+  reads it. The board list, the detail read and the palette rows carry it.
+- **The Workiz importer**: each card's address comes from ITS job row (`Address`, `City`,
+  `State`, `Zip code` via `address_from_job`), **all four as a unit** on every run, so a
+  re-run fills the cards imported before the columns existed and follows a correction made
+  in Workiz. **A job row with no address writes nothing to the card** — a new card stays
+  empty (never another job's, never the contact's), and an existing address (typed by a
+  human, or from an AHS email) is not wiped by a blank export. *Judgement call, overrulable:*
+  a paired AHS email card also takes the Workiz job's address when the row has one — it is the
+  same job, and Workiz's is split into four columns where the email's city is stuck inside
+  the street. The email card's title, creator, date and notes are still the email's.
+- **`POST /api/ahs-jobs`**: the service address goes on the CARD through the same
+  conservative `split_address` the contact gets. A matched contact is still never edited. A
+  repeat delivery answers with the existing card and changes nothing (pinned column by
+  column). Cards created before this change are not touched by a repeat delivery either.
+
+### Screens
+
+- **Opportunity modal → Opportunity details**: an **Address** group after the ungrouped
+  custom fields — Street address (full width), City · State, Zip code. Honours "Hide empty
+  fields" (the whole group hides when the card has none). While the card has no address and
+  the primary contact has one, the contact's values show greyed as the inputs' placeholders,
+  with the sentence "No address on this opportunity. Showing the contact's address." and a
+  blue **Use contact address** text button on the heading row. Only that click copies it;
+  Update then saves it like any other edit.
+- **Board card**: ONE grey line (12px, rgb(152,162,179)) directly under Value — "street,
+  city", truncated with an ellipsis, full text on hover — only when the card has a street or
+  city, and only in the layouts that draw Value (not Unlabeled). Nothing else on the card moved.
+- **Book appointment**: the "Calendar default" caption shows the card's address when opened
+  from a card that has one, else the contact's.
+- **ctrl+K palette**: an opportunity row's second line ends with "street, city" when set.
+
+### Screenshot assumptions (the references do not show an opportunity address)
+
+GoHighLevel's opportunity screen has no native address group in the owner's screenshots 11,
+12 and 22 — the placement, the "Address" heading styled like "Opportunity details", the field
+labels (GoHighLevel's contact labels: Street address, City, State, Zip code), the greyed
+placeholder fallback and the text-button styling are ours, built from the modal's existing
+parts. The card line's colour and position are ours, kept one line so the measured card is
+otherwise identical.
+
+### Filling the existing cards in production (a human runs this, after the migration)
+
+`uv run python -m app.workiz_import` (dry run) then `--commit`, with the same clients and
+jobs files as the last import. It writes each card's address from its job row; it also
+re-applies everything the importer always writes (stage, status, value, source, Job type,
+title — now whitespace-collapsed — and contacts from the clients file). It never creates a
+second card for a Job # it already imported, never deletes, and does not touch cards made by
+hand, AHS email cards it has not paired, or cards whose Job # the export no longer mentions.

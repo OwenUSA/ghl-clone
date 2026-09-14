@@ -18,6 +18,10 @@ import {
   type Pipeline,
 } from '../lib/api'
 import { changedAnswers, isEmptyAnswer, modalSections } from '../lib/customFields'
+import {
+  ADDRESS_FIELDS, addressChanges, addressForm, contactFallback, withContactAddress,
+  type AddressForm,
+} from '../lib/opportunityAddress'
 import { takeModalTab, type ModalTab } from '../lib/opportunityModal'
 import { SETTINGS_SECTIONS } from '../lib/settingsSections'
 import { AppointmentDetailDialog } from './AppointmentDetailDialog'
@@ -50,6 +54,8 @@ import type { Me } from '../lib/auth'
  *   Associated objects    │ Pipeline | Stage · Status | Value · Owner | Followers
  *                         │ Business name | Source · Expected close date | Tags
  *   ⚙ Manage fields       │ …custom fields with no group
+ *                         │ Address                          [Use contact address]
+ *                         │ Street address | City · State | Zip code
  *   ─────────────────────────────────────────────────────────────────────────
  *   Created by: …                                       [🗑] [Cancel] [Update]
  *   Created on: Sep 13 2026, 9:17am (EDT)
@@ -89,6 +95,8 @@ type Form = {
   /** The deal's own probability as typed, '' for none. */
   probability: string
   answers: Record<string, unknown>
+  /** The JOB's address — the card's own, never seeded from the contact. */
+  address: AddressForm
 }
 
 function formFrom(o: OppDetail): Form {
@@ -109,6 +117,7 @@ function formFrom(o: OppDetail): Form {
     closeDate: o.expected_close_date ?? '',
     probability: o.probability != null ? String(o.probability) : '',
     answers: { ...(o.custom_fields ?? {}) },
+    address: addressForm(o),
   }
 }
 
@@ -146,6 +155,7 @@ function changes(o: OppDetail, f: Form, probabilityShown = false): OpportunityPa
   }
   const answers = changedAnswers(o.custom_fields ?? {}, f.answers)
   if (Object.keys(answers).length) body.custom_fields = answers
+  Object.assign(body, addressChanges(o, f.address))
   return body
 }
 
@@ -325,6 +335,10 @@ export function OpportunityDetail({
           const email = form.email ?? contact.data?.email ?? o.contact_email ?? ''
           const phone = form.phone ?? contact.data?.phone ?? o.contact_phone ?? ''
           const tags = contact.data?.tags ?? o.contact_tags
+          // Greyed contact address while the card has none. The contact whose
+          // address is offered is the one the form has chosen, once it has loaded.
+          const fallback = contact.data && contact.data.id === form.contact?.id
+            ? contactFallback(form.address, contact.data) : null
           const shows = (value: unknown) => !hideEmpty || !isEmptyAnswer(value)
           // Probability is drawn only when the deal's (new) pipeline weighs each deal
           // on its own probability — GoHighLevel's "Use opportunity-level probability".
@@ -638,6 +652,46 @@ export function OpportunityDetail({
                         disabledReason={why}
                         onChange={(next) => set('answers', next)}
                       />
+
+                      {/* The job's address (2026-09-14). Hide empty fields hides the
+                          whole group when the card has none — the contact's greyed
+                          address is a hint about an empty field, not a value. */}
+                      {(!hideEmpty || ADDRESS_FIELDS.some(([k]) => form.address[k].trim())) && (
+                        <div data-field="address">
+                          <div className="flex items-center justify-between"
+                            style={{ ...HEADING, paddingBottom: 10, marginTop: 4, marginBottom: 16,
+                              borderBottom: '1px solid ' + DIVIDER }}>
+                            Address
+                            {fallback && canEdit && (
+                              <button type="button"
+                                onClick={() => set('address', withContactAddress(form.address, contact.data))}
+                                style={{ fontSize: 14, fontWeight: 500, color: PRIMARY }}>
+                                Use contact address
+                              </button>
+                            )}
+                          </div>
+                          {fallback && (
+                            <div style={{ fontSize: 13, color: FAINT, marginTop: -8, marginBottom: 12 }}>
+                              No address on this opportunity. Showing the contact's address.
+                            </div>
+                          )}
+                          <div className="grid grid-cols-2 gap-x-3">
+                            {ADDRESS_FIELDS.map(([key, label, placeholder, max]) =>
+                              (!hideEmpty || form.address[key].trim()) && (
+                                <div key={key} style={{ marginBottom: 16,
+                                  gridColumn: key === 'address_street' ? 'span 2' : undefined }}>
+                                  <Label>{label}</Label>
+                                  <input value={form.address[key]} aria-label={label} maxLength={max}
+                                    // The contact's value, greyed, while the card has none.
+                                    placeholder={fallback?.[key] || placeholder}
+                                    onChange={(e) => set('address',
+                                      { ...form.address, [key]: e.target.value })}
+                                    style={INPUT} />
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
                     </fieldset>
                   )}
 
@@ -755,7 +809,10 @@ export function OpportunityDetail({
           initialContact={o.contact_id != null
             ? { id: o.contact_id, name: o.contact_name ?? '' }
             : null}
-          lockedOpportunity={{ id: o.id, title: o.title }}
+          // With its SAVED address: that is what "Calendar default" will store.
+          lockedOpportunity={{ id: o.id, title: o.title, address_street: o.address_street,
+            address_city: o.address_city, address_state: o.address_state,
+            address_postal_code: o.address_postal_code }}
           user={user}
           onClose={() => setBooking(false)}
           onCreated={() => {

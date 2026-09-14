@@ -145,7 +145,8 @@ def split_name(full: str) -> tuple[str, str]:
 
 
 def split_address(raw: str | None) -> dict:
-    """The contact's four address columns from one AHS address string.
+    """The four address columns — a created contact's, and the card's — from one
+    AHS address string.
 
     Dispatch writes "14436 SW 95TH LN MIAMI, FL 33186": no comma between the street
     and the city, so the city cannot be told apart from the street's last word. The
@@ -246,7 +247,10 @@ def _match_contact(db: Session, body: AhsJobIn) -> tuple[Contact | None, str | N
 def _opportunity_out(o: Opportunity) -> dict:
     return {"id": o.id, "title": o.title, "pipeline_id": o.pipeline_id,
             "stage_id": o.stage_id, "status": o.status, "value_cents": o.value_cents,
-            "source": o.source, "created_by": o.created_by, "contact_id": o.contact_id}
+            "source": o.source, "created_by": o.created_by, "contact_id": o.contact_id,
+            "address_street": o.address_street, "address_city": o.address_city,
+            "address_state": o.address_state,
+            "address_postal_code": o.address_postal_code}
 
 
 # ---------------------------------------------------------------- the two writes
@@ -283,11 +287,15 @@ def deliver_job(db: Session, body: AhsJobIn,
 
     position = db.scalar(select(func.count(Opportunity.id))
                          .where(Opportunity.stage_id == stage.id)) or 0
+    # The work order's service address goes on the CARD too (2026-09-14), split the
+    # same conservative way — a matched contact keeps its own address, but the card
+    # is this job's property.
     card = Opportunity(title=title_for(body), contact_id=contact.id,
                        pipeline_id=pipeline.id, stage_id=stage.id,
                        value_cents=body.value_cents, status="open", position=position,
                        source=SOURCE, created_by=CREATED_BY,
-                       custom_fields={AHS_JOB_ID: body.ahs_job_id})
+                       custom_fields={AHS_JOB_ID: body.ahs_job_id},
+                       **split_address(body.service_address))
     db.add(card)
     db.flush()
 

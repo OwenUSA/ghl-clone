@@ -5,7 +5,7 @@ import {
   getContact, listCalendars, patchBlockedTime,
 } from '../lib/api'
 import {
-  ACCOUNT_TIME_ZONE, US_TIME_ZONES, addressLine, zoneLabel,
+  ACCOUNT_TIME_ZONE, US_TIME_ZONES, meetingDefaultAddress, zoneLabel,
 } from '../lib/accountTime'
 import type { Me } from '../lib/auth'
 import { ContactPicker } from './ContactPicker'
@@ -86,7 +86,12 @@ export function NewAppointmentDialog({
    * Opened from an opportunity: the booking is for THIS deal. Not drawn — GoHighLevel's
    * modal has no Opportunity field — but always sent, so the visit is linked.
    */
-  lockedOpportunity?: { id: number; title: string }
+  lockedOpportunity?: {
+    id: number; title: string
+    /** The card's saved address, which "Calendar default" prefers to the contact's. */
+    address_street?: string | null; address_city?: string | null
+    address_state?: string | null; address_postal_code?: string | null
+  }
   initialTab?: Tab
   /** Open an existing blocked off time on its tab, to edit or delete it. */
   blockedTimeId?: number
@@ -164,7 +169,9 @@ export function NewAppointmentDialog({
     setEnds(new Date(next.getTime() + (length > 0 ? length : 3_600_000)))
   }
 
-  const address = addressLine(picked.data)
+  // The same preference the server applies: the card's address, else the contact's.
+  const address = meetingDefaultAddress(lockedOpportunity, picked.data)
+  const cardAddress = meetingDefaultAddress(lockedOpportunity, null)
   const hasCalendars = (calendars.data?.length ?? 0) > 0
 
   /**
@@ -367,9 +374,9 @@ export function NewAppointmentDialog({
                   </div>
                   {locationKind === 'calendar_default' ? (
                     <div style={{ marginTop: 8, fontSize: 13, color: FAINT }}>
-                      {!contact ? "The selected contact's property address."
+                      {cardAddress ?? (!contact ? "The selected contact's property address."
                         : picked.isLoading ? 'Looking up the address…'
-                          : address ?? 'No address on file for this contact.'}
+                          : address ?? 'No address on file for this contact.')}
                     </div>
                   ) : (
                     <input value={customLocation} autoFocus aria-label="Custom location"

@@ -176,6 +176,18 @@ export function addressLine(c: {
   return [t(c.address_street), t(c.address_city), region].filter(Boolean).join(', ') || null
 }
 
+/**
+ * What "Calendar default" will store (2026-09-14): the OPPORTUNITY's address when the
+ * booking is for a card that has one, else the contact's — `_resolve_location` in
+ * backend/app/main.py, the same preference in the same order.
+ */
+export function meetingDefaultAddress(
+  opportunity: Parameters<typeof addressLine>[0],
+  contact: Parameters<typeof addressLine>[0],
+): string | null {
+  return addressLine(opportunity) ?? addressLine(contact)
+}
+
 /** "2026-09-15" / "13:30" for native inputs, read in the account's zone. */
 export function dateInput(instant: Date, timeZone: string = ACCOUNT_TIME_ZONE): string {
   const w = wallOf(instant, timeZone)

@@ -25,6 +25,9 @@ export type SearchOpportunity = {
   stage_id: number
   stage_name: string | null
   contact_name: string | null
+  /** The job's street and city — what a search by address matched (2026-09-14). */
+  address_street?: string | null
+  address_city?: string | null
 }
 
 export type SearchMessage = {

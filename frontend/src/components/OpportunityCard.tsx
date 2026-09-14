@@ -14,6 +14,7 @@ import {
 } from '../lib/api'
 import { me } from '../lib/auth'
 import { canOpenRecords, openRecord } from '../lib/openRecord'
+import { cardAddressLine } from '../lib/opportunityAddress'
 import { CARD_ICON_REQUEST, requestModalTab } from '../lib/opportunityModal'
 
 /** The board's card layouts — the same union `OpportunitiesPage` declares. */
@@ -24,6 +25,7 @@ export type Layout = 'Default' | 'Compact' | 'Unlabeled'
  *
  *   title (truncated) · circular assign-owner button · checkbox
  *   Value:  $100.00
+ *   12 Palm Ave, Bradenton          (the job's address — only when the card has one)
  *   call · view conversations · tags(n) · notes(n) · add task · add an appointment
  *
  * Every icon is a thin outline SVG — no emoji anywhere on the card, by the owner's
@@ -353,6 +355,7 @@ export function CardFace({
   }
 
   const notesVisible = o.notes_count !== undefined
+  const address = cardAddressLine(o)
 
   return (
     <>
@@ -392,6 +395,15 @@ export function CardFace({
           <span style={{ fontSize: 12, fontWeight: 400, color: 'rgb(96,113,121)' }}>
             {money(o.value_cents)}
           </span>
+        </div>
+      )}
+      {/* The job's address (2026-09-14): ONE subtle grey line under Value, "street,
+          city", cut with an ellipsis. Drawn only when the card has an address and
+          only where Value is — the rest of GoHighLevel's card is unchanged. */}
+      {layout !== 'Unlabeled' && address && (
+        <div className="truncate" title={address} data-card-address
+          style={{ fontSize: 12, lineHeight: '18px', color: 'rgb(152,162,179)', marginTop: 2 }}>
+          {address}
         </div>
       )}
       {layout === 'Default' && o.business_name && (
