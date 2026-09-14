@@ -478,8 +478,9 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
             Add field
           </button>
           <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 6 }}>
-            A field starting <code>owen_</code> or <code>workiz_</code> is refused:
-            those belong to the telephony project and the Workiz import.
+            A field starting <code>owen_</code>, <code>workiz_</code> or <code>ahs_job_</code> is
+            refused: those belong to the telephony project, the Workiz import and the AHS
+            email relay.
           </div>
         </div>
 

@@ -247,6 +247,10 @@ EXEMPT = {"/api/health", "/api/auth/login", "/api/auth/refresh", "/api/auth/logo
 _ADMIN_PREFIXES = ("/api/users", "/api/jobs")
 
 
+EVENTS_WRITE_PATHS = ("/api/events", "/api/events/delivery",
+                      "/api/ahs-jobs", "/api/ahs-jobs/cancellations")
+
+
 def _scope_allows(scopes: frozenset[str], method: str, path: str) -> bool:
     if not scopes:
         return True                                   # role governs
@@ -255,8 +259,11 @@ def _scope_allows(scopes: frozenset[str], method: str, path: str) -> bool:
     # the text arrive". Both are the same feed from the same machine account, so
     # they sit behind the same single scope rather than making the owner mint a
     # second token to turn on delivery status.
+    #
+    # `/api/ahs-jobs` (2026-09-14) is the same machine account relaying the AHS work
+    # orders it reads out of the Dispatch mailbox. Same feed, same scope.
     if ("events:write" in scopes and method == "POST"
-            and path in ("/api/events", "/api/events/delivery")):
+            and path in EVENTS_WRITE_PATHS):
         return True
     if path.startswith(_ADMIN_PREFIXES):
         return "admin" in scopes
@@ -384,7 +391,8 @@ def require_scope(scope: str):
 
 def require_events_ingest(
         principal: Principal | None = Depends(current_principal)) -> Principal:
-    """Authorization for POST /api/events, the telephony (OWEN) ingest.
+    """Authorization for POST /api/events, the telephony (OWEN) ingest — and for
+    POST /api/ahs-jobs, the same machine's AHS work orders (2026-09-14).
 
     Two ways in: a machine token carrying `events:write` — the normal case — or an
     unscoped staff credential, so a human can replay an event by hand. A TECH cannot:

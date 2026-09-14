@@ -30,13 +30,14 @@ export type FieldDef = {
 }
 
 /**
- * Namespaces this app does not own: `owen_*` (the telephony project) and `workiz_*`
- * (the Workiz import). The values stay on every deal untouched — `owen_call_id` is
- * a live join key and `workiz_id` the import's idempotency key — but the owner
- * does not want them on the screen (2026-09-13), so NOTHING in the modal renders
- * one. Mirrors `RESERVED_PREFIXES` in backend/app/custom_fields.py.
+ * Namespaces this app does not own: `owen_*` (the telephony project), `workiz_*`
+ * (the Workiz import) and `ahs_job_*` (the AHS email relay, 2026-09-14). The values
+ * stay on every deal untouched — `owen_call_id` is a live join key, `workiz_id` the
+ * import's idempotency key and `ahs_job_id` the relay's — but the owner does not
+ * want them on the screen (2026-09-13), so NOTHING in the modal renders one.
+ * Mirrors `RESERVED_PREFIXES` in backend/app/custom_fields.py.
  */
-export const RESERVED_PREFIXES = ['owen_', 'workiz_'] as const
+export const RESERVED_PREFIXES = ['owen_', 'workiz_', 'ahs_job_'] as const
 export const JOIN_KEY = 'owen_call_id'
 
 export function isReserved(key: string): boolean {

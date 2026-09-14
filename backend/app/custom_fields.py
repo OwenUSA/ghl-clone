@@ -44,10 +44,18 @@ from .models import CustomFieldDef, CustomFieldPipeline
 #             Editing one by hand would silently make the next import create a
 #             second copy of that customer, so the API refuses. A record created in
 #             the CRM by hand simply has no workiz_id, which is expected.
+#   ahs_job_* the American Home Shield work-order emails owen-main relays
+#             (`app/ahs_jobs.py`, 2026-09-14). `ahs_job_id` is the AHS job number and
+#             the idempotency key of `POST /api/ahs-jobs`: the same email delivered
+#             twice finds the card by it and creates nothing. Read-only in every
+#             direction, exactly like `workiz_*`. The prefix is `ahs_job_` and NOT
+#             `ahs_`: "AHS claim number" is a question the owner asks on the warranty
+#             board, its derived key is `ahs_claim_number`, and reserving all of
+#             `ahs_` would freeze and hide his own answers.
 #
 # One tuple, checked in one function, so a third namespace is a one-line change and
 # not a second guard that drifts from this one.
-RESERVED_PREFIXES = ("owen_", "workiz_")
+RESERVED_PREFIXES = ("owen_", "workiz_", "ahs_job_")
 # Kept as a name because it reads better in the message `claim_key` raises, and
 # because it is the prefix that has been in this codebase the longest.
 RESERVED_PREFIX = RESERVED_PREFIXES[0]
@@ -57,6 +65,11 @@ JOIN_KEY = "owen_call_id"
 # none, this one is immutable in every direction through this module — see
 # `_check_reserved`.
 IMPORT_PREFIX = "workiz_"
+# The AHS email relay's identity key (see above). Same rule as `IMPORT_PREFIX`.
+AHS_JOB_PREFIX = "ahs_job_"
+AHS_JOB_ID = AHS_JOB_PREFIX + "id"
+# Keys nothing but a machine writer may set, change or remove.
+READ_ONLY_PREFIXES = (IMPORT_PREFIX, AHS_JOB_PREFIX)
 
 KEY_MAX = 64
 LABEL_MAX = 160
@@ -199,6 +212,9 @@ def claim_key(db: Session, label: str) -> str:
     if is_reserved(key):
         owner = ("the telephony project — those fields are written by OWEN"
                  if key.startswith(RESERVED_PREFIX)
+                 else "the AHS email relay — those fields are written when an "
+                      "American Home Shield work order arrives"
+                 if key.startswith(AHS_JOB_PREFIX)
                  else "the Workiz migration — those fields are written by the "
                       "importer")
         raise HTTPException(400, (
@@ -323,10 +339,16 @@ def merge_answers(db: Session, *, pipeline_id: int | None,
     # every save — so only a real difference is refused, and it is refused out loud
     # rather than ignored, because silently discarding a value somebody typed is how
     # an edit looks like it worked when it did not.
+    # `ahs_job_*` (2026-09-14) takes exactly the same line, through the same loop.
     for key in sorted(set(existing) | set(incoming)):
-        if not key.startswith(IMPORT_PREFIX):
+        if not key.startswith(READ_ONLY_PREFIXES):
             continue
         if key in incoming and incoming[key] != existing.get(key):
+            if key.startswith(AHS_JOB_PREFIX):
+                raise HTTPException(400, (
+                    "%s is written by the AHS email relay and is read-only here — it "
+                    "is how a repeat delivery of the same work order finds this card "
+                    "instead of creating a second one." % key))
             raise HTTPException(400, (
                 "%s is written by the Workiz import and is read-only here — it is "
                 "how a re-import recognises this record instead of creating a "

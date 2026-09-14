@@ -3233,3 +3233,90 @@ Smaller calls, all overrulable: the window is measured against the card's `creat
 email's arrival as ahsmail records it); a future-dated Workiz visit on a paired card books its
 appointment in "Workiz Jobs (imported)" exactly as any imported job does, whether or not
 ahsmail booked one. No migration: everything lives in existing JSON columns.
+
+## AMENDMENT (2026-09-14): American Home Shield work-order emails become cards, as they do in GoHighLevel
+
+The owner's decisions, implemented as given. Branches `feature/ahs-email-jobs` (this
+repository) and `feature/ahs-email-to-crm` (owen-main).
+
+owen-main has relayed every AHS work order in the Dispatch mailbox to GoHighLevel since
+before this CRM existed. It now relays each one to BOTH: GoHighLevel exactly as before, and
+this CRM through its own queued job (`email_relay_crm`) with its own recorded status per
+email (`inbound_emails.crm_status`). Neither can block, delay or re-send the other. Off by
+default on owen-main (`CRM_LINK_EMAIL_JOBS_ENABLED=false`).
+
+### What arrives here
+
+`POST /api/ahs-jobs` and `POST /api/ahs-jobs/cancellations` (`app/ahs_jobs.py`, routes in
+`main.py`), one transaction each:
+
+* **A card**: pipeline **Dream Team Roofing AHS**, stage **New Lead**, status open, titled
+  `<job id> <service> - <customer>` (GoHighLevel's name, built the same way), value in
+  integer cents (a float on the wire is refused 422, not rounded), source `AHS`,
+  `created_by = "AHS email"`.
+* **A new card per AHS job**, repeat customer included.
+* **The customer**: last ten digits of the phone, then email (case-insensitive); otherwise a
+  contact is CREATED from the email — name split on the first space, phone through
+  `store_phone`, email, the service address into the `address_*` columns,
+  `created_by = "AHS email"`, source `AHS`. A matched contact is never edited.
+* **The work order** (the same `job_description` GoHighLevel's note gets) as an opportunity
+  NOTE — STAFF-only on every path already.
+* **A cancellation** adds `JOB CANCELLED by AHS: job <id> (<date in America/New_York>)` to
+  that job's card and changes nothing else. No card → `outcome: no_card`, 200, nothing
+  written; owen-main records `skipped_no_card`. The same cancellation twice is one note.
+
+### AMENDS "`POST /api/events` … an unknown number is never a contact" (2026-09-13) — for AHS only
+
+That rule protects against spam CALLERS. A work order American Home Shield dispatched to
+this company is not spam, so this path creates the contact, as the owner said. The events
+path is unchanged.
+
+### `ahs_job_*` is a reserved namespace — the prefix is NOT `ahs_`
+
+`custom_fields.ahs_job_id` is the idempotency key: the same email delivered twice answers
+**200 with the existing card** (never 409 — a retry of a request that committed before its
+answer got home must complete, not dead-letter). It is added to `RESERVED_PREFIXES` and
+read-only in every direction through the SAME loop `workiz_*` uses (`READ_ONLY_PREFIXES`),
+hidden by the browser's mirror of that tuple, and no field definition may claim it.
+
+**Judgement call:** the reserved prefix is `ahs_job_`, not `ahs_`. The owner's own question
+"AHS claim number" derives the key `ahs_claim_number` (it is the example in this file's
+2026-09-11 custom-fields section). Reserving all of `ahs_` would have frozen those answers,
+hidden them from the modal, and refused the definition. A test pins that it still works.
+
+### THE CONTRACT with the Workiz importer
+
+A card created from an AHS email has `created_by = "AHS email"`, `custom_fields.ahs_job_id`
+set, and NO `custom_fields.workiz_id`. The importer finds an email card by exactly those three
+facts. `test_the_contract_with_the_workiz_importer` pins them.
+
+### Nothing is notified
+
+`app/ahs_jobs.py` imports neither `app.automations` nor `app.queue` (a test parses its
+imports), and counts the `jobs` table before and after inside the transaction: a new row is a
+500 and the write rolls back (tested by making the count lie). `new_lead_notify` is never
+enqueued.
+
+### Auth: the same token and the same `events:write` scope as `/api/events`
+
+Same machine account, same feed, same role check (`require_events_ingest`: ADMIN or
+DISPATCHER; a TECH is refused). A second scope would only mean a second token to mint and
+rotate for no narrowing that matters. `auth.EVENTS_WRITE_PATHS` lists the four paths.
+Per-pipeline access: if the token's user cannot see the AHS board it is refused as "not
+found", and a cancellation for a card in a hidden pipeline is `no_card`.
+
+### Refusals, all 4xx so owen-main does not retry them
+
+No pipeline of that name (or hidden) → 422. Two pipelines of that name, or two `New Lead`
+columns on it → 409, "refusing to guess". A missing `customer_name` or a malformed job id →
+422. Each is recorded on the email on owen-main as `refused` with the reason.
+
+### Known limits, stated
+
+* The address split keeps anything not confidently identified in `address_street`, the
+  importer's rule. Dispatch writes `14436 SW 95TH LN MIAMI, FL 33186` — no comma between
+  street and city — so the city stays inside the street and only state and ZIP are split.
+* Idempotency on a JSON key has no unique index behind it (that would be a migration). Two
+  deliveries of one job are serialised by a transaction-scoped advisory lock on PostgreSQL;
+  owen-main drains its queue one job at a time anyway.
+* **No migration on this side.**
