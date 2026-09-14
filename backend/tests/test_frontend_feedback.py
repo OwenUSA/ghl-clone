@@ -183,7 +183,8 @@ def test_the_add_opportunity_dialog_survives_a_refused_create():
     """A failed POST must leave the dialog open with a sentence in it, not close as
     though it worked. `onDone` is what closes the dialog, so it must be reachable
     only from onSuccess."""
-    source = _read("pages", "OpportunitiesPage.tsx")
+    # The dialog is its own component since 2026-09-14 (GoHighLevel's Add modal).
+    source = _read("components", "AddOpportunityModal.tsx")
     # to the end of the useMutation call - its inner braces are indented deeper
     mutation = source.split("const create = useMutation({", 1)[1].split(
         "\n  })", 1)[0]
@@ -194,13 +195,13 @@ def test_the_add_opportunity_dialog_survives_a_refused_create():
     # never reaches the dialog.
     assert "setError(error" not in mutation and "JSON.stringify" not in mutation
     dialog = source.split("function AddOpportunityDialog(", 1)[1]
-    assert "{error && (" in dialog, "the dialog has nowhere to show the message"
+    assert "<ErrorLine error={error ?? " in dialog, "the dialog has nowhere to show the message"
 
 
 def test_the_add_opportunity_dialog_cannot_be_submitted_twice():
     """Nothing on the server dedupes a create, so two clicks are two roofs on the
     board. The button has to be dead while the POST is in flight."""
-    source = _read("pages", "OpportunitiesPage.tsx")
+    source = _read("components", "AddOpportunityModal.tsx")
     submit = source.split("onClick={() => { setError(null); create.mutate() }}", 1)[1]
     submit = submit.split("Create", 1)[0]
     assert "disabled={!ready || create.isPending}" in submit, (
@@ -212,23 +213,23 @@ def test_a_new_opportunity_shows_up_on_the_board():
     have been filed into another pipeline, and a board filtered to Won or Lost hides
     a new (always Open) opportunity entirely."""
     source = _read("pages", "OpportunitiesPage.tsx")
-    done = source.split("onDone={(createdInPipelineId) => {", 1)[1].split("}}", 1)[0]
+    done = source.split("onDone={(createdInPipelineId, createdStatus) => {", 1)[1].split("}}", 1)[0]
     assert "invalidateQueries({ queryKey: ['opportunities'] })" in done, (
         "the board is never refetched, so the new card only appears on reload")
     assert "invalidateQueries({ queryKey: ['pipelines'] })" in done, (
         "the stage header count and total keep their old numbers")
     assert "setPipelineId(createdInPipelineId)" in done, (
         "an opportunity filed into another pipeline vanishes on create")
-    assert "setStatus('open')" in done, (
-        "a board filtered to Won or Lost never shows the new card")
+    assert "if (status !== createdStatus && status !== 'all') setStatus(createdStatus)" in done, (
+        "a board filtered to another status never shows the new card")
 
 
 def test_the_stage_select_follows_the_pipeline():
     """A stage from the previous pipeline is a pair the backend refuses, so leaving
     it selected turns a pipeline change into a submit-time error."""
-    source = _read("pages", "OpportunitiesPage.tsx")
+    source = _read("components", "AddOpportunityModal.tsx")
     dialog = source.split("function AddOpportunityDialog(", 1)[1]
-    change = dialog.split("onChange={(e) => { setPipelineId(", 1)[1].split("}}", 1)[0]
+    change = dialog.split("onChange={(v) => { setPipelineId(", 1)[1].split("}}", 1)[0]
     assert "setStageId(null)" in change, "the stage keeps pointing at the old pipeline"
     assert "const stage = stages.find((s) => s.id === stageId) ?? stages[0]" in dialog, (
         "the stage does not default to the first stage of the chosen pipeline")

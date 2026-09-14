@@ -17,7 +17,9 @@ import {
   type OpportunityPatch,
   type Pipeline,
 } from '../lib/api'
-import { changedAnswers, isEmptyAnswer, modalSections } from '../lib/customFields'
+import {
+  answeredCount, changedAnswers, isChecklistGroup, isEmptyAnswer, modalSections,
+} from '../lib/customFields'
 import {
   ADDRESS_FIELDS, addressChanges, addressForm, contactFallback, withContactAddress,
   type AddressForm,
@@ -25,7 +27,7 @@ import {
 import { takeModalTab, type ModalTab } from '../lib/opportunityModal'
 import { SETTINGS_SECTIONS } from '../lib/settingsSections'
 import { AppointmentDetailDialog } from './AppointmentDetailDialog'
-import { CustomFieldAnswers } from './CustomFieldAnswers'
+import { CustomFieldAnswers, type LinkedValues } from './CustomFieldAnswers'
 import { NewAppointmentDialog } from './NewAppointmentDialog'
 import { AppointmentTab } from './opportunity/AppointmentTab'
 import { AssociatedTab } from './opportunity/AssociatedTab'
@@ -74,7 +76,7 @@ import type { Me } from '../lib/auth'
 const STATUSES = ['open', 'won', 'lost', 'abandoned'] as const
 
 /** Settings → Custom Fields, from the one table of Settings sections. */
-const CUSTOM_FIELDS_PATH = SETTINGS_SECTIONS.find((s) => s.key === 'custom-fields')!.path
+export const CUSTOM_FIELDS_PATH = SETTINGS_SECTIONS.find((s) => s.key === 'custom-fields')!.path
 
 type Form = {
   title: string
@@ -159,7 +161,8 @@ function changes(o: OppDetail, f: Form, probabilityShown = false): OpportunityPa
   return body
 }
 
-function NavItem({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+/** One entry of the modal's left nav. Shared with the Add new opportunity modal. */
+export function NavItem({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} aria-current={active ? 'page' : undefined}
       className="block w-full truncate text-left"
@@ -358,6 +361,19 @@ export function OpportunityDetail({
           const formTab = tab === 'details' || tab.startsWith('group:')
           const group = tab.startsWith('group:')
             ? sections.groups.find((g) => 'group:' + g.group.id === tab) : undefined
+          // "N / M answered" on the Checklist tab (2026-09-14): M is only what THIS
+          // deal's (new) pipeline asks there, N what the form holds right now.
+          const progress = group && isChecklistGroup(group.group.name) && group.fields.length
+            ? answeredCount(group.fields, form.answers) : null
+          // A linked yes/no draws the REAL values: the Primary email above (saved on
+          // the contact) and the Address group below (saved on the card).
+          const linked: LinkedValues = {
+            email: { value: email, onChange: (v) => set('email', v),
+              disabled: !form.contact || !canEdit,
+              hint: form.contact ? null : 'Choose a primary contact to record an email.' },
+            address: { value: form.address, onChange: (v) => set('address', v),
+              disabled: !canEdit },
+          }
 
           return (
             <>
@@ -433,6 +449,12 @@ export function OpportunityDetail({
                       style={{ paddingBottom: 12, borderBottom: '1px solid ' + DIVIDER, marginBottom: 16 }}>
                       <div className="flex items-center gap-2" style={HEADING}>
                         {group ? group.group.name : 'Contact details'}
+                        {progress && (
+                          <span data-checklist-progress
+                            style={{ fontSize: 13, fontWeight: 400, color: FAINT, marginLeft: 4 }}>
+                            {progress.answered} / {progress.total} answered
+                          </span>
+                        )}
                         {!group && (
                           <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={BODY}
                             strokeWidth={1.7} aria-hidden="true">
@@ -650,6 +672,7 @@ export function OpportunityDetail({
                         columns={2}
                         disabled={!canEdit}
                         disabledReason={why}
+                        linked={linked}
                         onChange={(next) => set('answers', next)}
                       />
 
@@ -711,6 +734,7 @@ export function OpportunityDetail({
                         columns={2}
                         disabled={!canEdit}
                         disabledReason={why}
+                        linked={linked}
                         onChange={(next) => set('answers', next)}
                       />
                     )

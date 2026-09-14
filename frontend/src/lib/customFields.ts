@@ -12,7 +12,10 @@
  * here is a gate; it decides what to draw.
  */
 
-export type FieldType = 'text' | 'number' | 'dropdown' | 'date' | 'boolean'
+export type FieldType = 'text' | 'number' | 'dropdown' | 'date' | 'boolean' | 'paragraph'
+
+/** What a yes/no question may show beside its tick (2026-09-14). */
+export type LinkedField = 'contact_email' | 'opportunity_address'
 
 export type FieldDef = {
   id: number
@@ -27,6 +30,56 @@ export type FieldDef = {
   /** The modal tab it is drawn under; null = Opportunity details. Optional only
       so fixtures written before groups existed still type-check. */
   group_id?: number | null
+  /** The call Checklist's settings (2026-09-14). Optional so older fixtures
+      type-check; the server always sends all three. */
+  script?: string | null
+  /** yes/no only: the REAL value drawn and edited beside the tick. */
+  linked_field?: LinkedField | null
+  /** dropdown only: the choices that open a details box. */
+  details_when?: string[]
+}
+
+/** The details box's answer is stored beside the main one. Mirrors DETAILS_SUFFIX
+    in backend/app/custom_fields.py; no derived key can contain "__". */
+export const DETAILS_SUFFIX = '__details'
+
+export function detailsKey(key: string): string {
+  return key + DETAILS_SUFFIX
+}
+
+/** Is the details box open for this answer? Only when the CHOSEN option is one the
+    field says calls for details — never for a blank, never for another option. */
+export function showsDetails(def: FieldDef, value: unknown): boolean {
+  if (def.field_type !== 'dropdown' || !def.details_when?.length) return false
+  return typeof value === 'string' && def.details_when.includes(value)
+}
+
+/** The tab whose progress the board card shows. Mirrors CHECKLIST_GROUP. */
+export const CHECKLIST_GROUP = 'Checklist'
+
+export function isChecklistGroup(name: string): boolean {
+  return name.trim().toLowerCase() === CHECKLIST_GROUP.toLowerCase()
+}
+
+/**
+ * "N / M answered" for one tab. M is the questions this pipeline asks in it (the
+ * caller passes exactly those — `modalSections` already dropped the rest), N the
+ * ones holding an answer. `false` is an answer; a details box is not a question.
+ * The server's `custom_fields.progress` counts the same way for the card badge.
+ */
+export function answeredCount(fields: FieldDef[], answers: Record<string, unknown>):
+  { answered: number; total: number } {
+  return {
+    answered: fields.filter((d) => !isEmptyAnswer(answers[d.key])).length,
+    total: fields.length,
+  }
+}
+
+/** A question drawn across both columns: long text, a script, a linked value or a
+    details box would be cramped into half the modal. */
+export function spansRow(def: FieldDef): boolean {
+  return def.field_type === 'paragraph' || !!def.script?.trim() || !!def.linked_field
+    || !!def.details_when?.length
 }
 
 /**
@@ -176,4 +229,25 @@ export function describeBooking(
     weekday: 'short', hour: 'numeric', minute: '2-digit',
   })
   return `${title} — ${when}`
+}
+
+/**
+ * The answers a CREATE should send (the Add new opportunity modal, 2026-09-14): only
+ * the questions the chosen pipeline asks, their details boxes, and nothing blank.
+ *
+ * The dispatcher can answer a question and then switch the Pipeline to one that does
+ * not ask it. The server refuses an answer to a question the pipeline does not ask —
+ * rightly — so posting the whole form would turn a pipeline change into a refused
+ * Create with the caller still on the phone. What is dropped here was never saved.
+ */
+export function answersFor(
+  defs: FieldDef[], pipelineId: number | null | undefined, answers: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const def of askedOn(defs, pipelineId)) {
+    for (const key of [def.key, ...(def.field_type === 'dropdown' ? [detailsKey(def.key)] : [])]) {
+      if (!isEmptyAnswer(answers[key])) out[key] = answers[key]
+    }
+  }
+  return out
 }

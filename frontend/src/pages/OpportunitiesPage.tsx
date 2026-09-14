@@ -19,8 +19,8 @@ import { PipelinesPanel } from '../components/PipelinesPanel'
 import { PageTabs } from '../components/PageTabs'
 import { PipelinePicker } from '../components/PipelinePicker'
 import { PipelineModal } from '../components/PipelineModal'
-import { CustomFieldAnswers } from '../components/CustomFieldAnswers'
-import { ContactPicker, type PickedContact } from '../components/ContactPicker'
+// GoHighLevel's Add new opportunity modal (2026-09-14), in the edit modal's family.
+import { AddOpportunityDialog } from '../components/AddOpportunityModal'
 import { OpportunityDetail } from '../components/OpportunityDetail'
 import { CARD_SURFACE, Card, CardFace } from '../components/OpportunityCard'
 import { useEffect, useRef, useState } from 'react'
@@ -35,9 +35,6 @@ import {
   type BoardMove,
 } from '../lib/boardOrder'
 import {
-  centsFromDollars,
-  createOpportunity,
-  listCustomFields,
   listOpportunities,
   listPipelines,
   moveOpportunity,
@@ -779,14 +776,14 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
           initialPipelineId={pipeline.id}
           user={user}
           onClose={() => setShowAdd(false)}
-          onDone={(createdInPipelineId) => {
+          onDone={(createdInPipelineId, createdStatus) => {
             setShowAdd(false)
             // Show the card that was just filed. It may have gone into a pipeline
-            // the board is not looking at, and a board filtered to Won or Lost
-            // would hide a new (always Open) opportunity entirely -- which reads
-            // as "nothing happened".
+            // the board is not looking at, and a board filtered to another status
+            // would hide it entirely -- which reads as "nothing happened". The Add
+            // modal has a Status since 2026-09-14, so follow the card's own.
             setPipelineId(createdInPipelineId)
-            if (status !== 'open' && status !== 'all') setStatus('open')
+            if (status !== createdStatus && status !== 'all') setStatus(createdStatus)
             qc.invalidateQueries({ queryKey: ['opportunities'] })
             qc.invalidateQueries({ queryKey: ['pipelines'] })
           }}
@@ -889,194 +886,6 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-/**
- * Add opportunity.
- *
- * GHL's own create form sits behind a write we never click — the live account is
- * read-only (DECISIONS.md) — so unlike the rest of this screen there is no capture
- * to match. Markup, styling, error display and close/submit behaviour therefore
- * follow the in-repo idiom, AddContactDialog in ContactsPage, rather than a second
- * invented dialog.
- */
-function AddOpportunityDialog({
-  pipelines,
-  initialPipelineId,
-  user,
-  onClose,
-  onDone,
-}: {
-  pipelines: Pipeline[]
-  initialPipelineId: number
-  // Passed through to ContactPicker, which disables its "+" for a TECH.
-  user: Me
-  onClose: () => void
-  onDone: (createdInPipelineId: number) => void
-}) {
-  const [title, setTitle] = useState('')
-  const [pipelineId, setPipelineId] = useState(initialPipelineId)
-  const [stageId, setStageId] = useState<number | null>(null)
-  const [value, setValue] = useState('')
-  const [contact, setContact] = useState<PickedContact | null>(null)
-  const [answers, setAnswers] = useState<Record<string, unknown>>({})
-  const [error, setError] = useState<string | null>(null)
-
-  // The job questions. Asked here as well as on the detail form, because the
-  // moment to ask "how many stories?" is while the caller is still on the phone.
-  const fields = useQuery({ queryKey: ['custom-fields'], queryFn: listCustomFields })
-
-  const pipeline = pipelines.find((p) => p.id === pipelineId) ?? pipelines[0]
-  const stages = pipeline?.stages ?? []
-  // Default to the first stage, and follow the pipeline when it changes instead of
-  // holding a stage id the new pipeline has never heard of — the backend refuses
-  // that pair, so keeping it would be a submit-time error for no reason.
-  const stage = stages.find((s) => s.id === stageId) ?? stages[0]
-
-  const create = useMutation({
-    mutationFn: () =>
-      createOpportunity({
-        title: title.trim(),
-        pipeline_id: pipeline.id,
-        stage_id: stage.id,
-        contact_id: contact?.id ?? null,
-        // Dollars -> integer cents without a float in the middle; see api.ts.
-        value_cents: centsFromDollars(value),
-        custom_fields: answers,
-      }),
-    onSuccess: () => onDone(pipeline.id),
-    onError: (e: Error) => setError(e.message),
-  })
-
-  // A name is the one field GHL marks required, and `stage` is missing only if the
-  // chosen pipeline has no stages at all — there would be nowhere to file the card.
-  const ready = !!stage && title.trim().length > 0
-
-  const label = { fontSize: 14, color: 'rgb(102,112,133)' } as const
-  const input = {
-    width: '100%', height: 36, marginTop: 4, fontSize: 14,
-    borderRadius: 6, border: '1px solid rgb(234,236,240)', padding: '0 10px',
-    backgroundColor: '#fff',
-  } as const
-
-  return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(16,24,40,0.4)' }}
-      onClick={onClose}
-    >
-      <div onClick={(e) => e.stopPropagation()} className="bg-white"
-        style={{ width: 460, maxHeight: '88vh', overflowY: 'auto',
-          borderRadius: 8, padding: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, color: 'rgb(16,24,40)' }}>
-          Add opportunity
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <div style={label}>Opportunity name</div>
-          <input
-            autoFocus
-            value={title}
-            maxLength={120}
-            onChange={(e) => setTitle(e.target.value)}
-            style={input}
-          />
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <div style={label}>Contact</div>
-          {/* The shared picker: phone-number search, and a `+` that creates a
-              contact without leaving this dialog. */}
-          <ContactPicker
-            value={contact}
-            onChange={setContact}
-            user={user}
-            hint="Optional — an opportunity can be filed without a contact."
-          />
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <div style={label}>Pipeline</div>
-          <select
-            value={pipeline?.id ?? ''}
-            onChange={(e) => { setPipelineId(Number(e.target.value)); setStageId(null) }}
-            style={input}
-          >
-            {pipelines.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <div style={label}>Stage</div>
-          <select
-            value={stage?.id ?? ''}
-            onChange={(e) => setStageId(Number(e.target.value))}
-            style={input}
-          >
-            {stages.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <div style={label}>Value</div>
-          <div className="flex items-center gap-1">
-            <span style={{ fontSize: 14, color: 'rgb(52,64,84)', marginTop: 4 }}>$</span>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="Please Input"
-              style={input}
-            />
-          </div>
-        </div>
-
-        {/* The SAME component the detail form uses, so the two cannot end up
-            asking different questions. `showKept` is off: a deal being created
-            holds no earlier answers and has no owen_* keys yet. */}
-        <div style={{ marginTop: 12 }}>
-          <CustomFieldAnswers
-            defs={fields.data ?? []}
-            pipelineId={pipeline?.id}
-            answers={answers}
-            onChange={setAnswers}
-            showKept={false}
-          />
-        </div>
-
-        {error && (
-          <div style={{ fontSize: 13, color: 'rgb(217,45,32)', marginTop: 10 }}>{error}</div>
-        )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={onClose}
-            style={{ height: 36, padding: '0 14px', borderRadius: 6, fontSize: 14, border: '1px solid rgb(234,236,240)' }}>
-            Cancel
-          </button>
-          <button
-            onClick={() => { setError(null); create.mutate() }}
-            // Disabled while the POST is in flight: a second click would create a
-            // second opportunity, and nothing on the server dedupes them.
-            disabled={!ready || create.isPending}
-            title={ready ? undefined : 'An opportunity needs a name'}
-            style={{
-              height: 36, padding: '0 14px', borderRadius: 6, fontSize: 14,
-              fontWeight: 500, color: '#fff', backgroundColor: 'rgb(0,78,235)',
-              ...(ready && !create.isPending ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
-            }}
-          >
-            {create.isPending ? 'Creating…' : 'Create'}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

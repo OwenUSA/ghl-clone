@@ -128,7 +128,8 @@ def test_the_money_input_does_not_lose_or_invent_a_cent():
 def test_both_money_inputs_use_the_shared_conversion():
     """Create and edit must convert the same way, or the same typed amount saves as
     two different numbers depending on which form the user reached."""
-    for parts in (("pages", "OpportunitiesPage.tsx"),
+    # The Add dialog moved out of the page into its own component (2026-09-14).
+    for parts in (("components", "AddOpportunityModal.tsx"),
                   ("components", "OpportunityDetail.tsx")):
         source = FRONTEND.joinpath(*parts).read_text(encoding="utf-8")
         assert "centsFromDollars(" in source, f"{parts[-1]} converts money by hand"

@@ -55,3 +55,21 @@ export function takeModalTab(opportunityId: number): ModalRequest {
   pending = null
   return hit && hit.id === opportunityId ? hit.request : { tab: 'details' }
 }
+
+/**
+ * The board card's Checklist badge (2026-09-14): "3/16", a sentence for its tooltip,
+ * and the tab a click opens. Null — draw nothing — when the card's pipeline asks no
+ * checklist question (the server then sends `checklist: null`).
+ */
+export function checklistBadge(
+  progress: { answered: number; total: number; group_id: number } | null | undefined,
+): { text: string; tip: string; done: boolean; request: ModalRequest } | null {
+  if (!progress || progress.total <= 0) return null
+  const { answered, total } = progress
+  return {
+    text: `${answered}/${total}`,
+    tip: `Checklist: ${answered} of ${total} answered`,
+    done: answered >= total,
+    request: { tab: `group:${progress.group_id}` },
+  }
+}

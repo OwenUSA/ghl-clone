@@ -324,7 +324,9 @@ def test_the_card_badge_counts_only_the_questions_its_pipeline_asks(client):
 
     def badge(pipeline, deal):
         rows = client.get("/api/opportunities", params={"pipeline_id": client.ids[pipeline]})
-        return next(r for r in rows.json() if r["id"] == client.ids[deal])["checklist"]
+        got = next(r for r in rows.json() if r["id"] == client.ids[deal])["checklist"]
+        assert got["group_id"] == group
+        return {k: v for k, v in got.items() if k != "group_id"}
 
     assert badge("ahs", "ahs_deal") == {"answered": 0, "total": 3}
     assert badge("retail", "retail_deal") == {"answered": 0, "total": 2}
@@ -339,7 +341,7 @@ def test_the_card_badge_counts_only_the_questions_its_pipeline_asks(client):
     # A TECH sees the same badge.
     rows = _as(client, "tech").get("/api/opportunities",
                                    params={"pipeline_id": client.ids["ahs"]}).json()
-    assert rows[0]["checklist"] == {"answered": 3, "total": 3}
+    assert rows[0]["checklist"] == {"answered": 3, "total": 3, "group_id": group}
 
 
 def test_no_badge_where_the_pipeline_asks_no_checklist_question(client):
@@ -481,9 +483,11 @@ def test_the_seed_commit_creates_one_tab_and_sixteen_questions_and_a_rerun_chang
 
     # Retail asks 13, AHS 16.
     rows = client.get("/api/opportunities", params={"pipeline_id": client.ids["retail"]})
-    assert rows.json()[0]["checklist"] == {"answered": 0, "total": 13}
+    assert rows.json()[0]["checklist"] == {"answered": 0, "total": 13,
+                                           "group_id": checklist["id"]}
     rows = client.get("/api/opportunities", params={"pipeline_id": client.ids["ahs"]})
-    assert rows.json()[0]["checklist"] == {"answered": 0, "total": 16}
+    assert rows.json()[0]["checklist"] == {"answered": 0, "total": 16,
+                                           "group_id": checklist["id"]}
 
     snapshot, gsnap = defs_snapshot(), groups_snapshot()
     again = seed(commit=True)

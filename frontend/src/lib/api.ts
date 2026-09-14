@@ -208,6 +208,9 @@ export type Opportunity = {
   /** The PRIMARY CONTACT's tag names — an opportunity has no tags of its own. */
   tags: string[]
   open_tasks_count: number
+  /** The Checklist tab's progress on THIS card's pipeline, or null when it asks no
+      checklist question (2026-09-14). Optional so older fixtures type-check. */
+  checklist?: { answered: number; total: number; group_id: number } | null
   /** The JOB's address (2026-09-14); the card draws "street, city" when set. */
   address_street?: string | null
   address_city?: string | null
@@ -875,6 +878,17 @@ export const createOpportunity = (body: {
   /** Answers given in the Add opportunity dialog, validated by the same server
       code the detail form goes through. */
   custom_fields?: Record<string, unknown>
+  // GoHighLevel's Add new opportunity modal files all of these in one submit
+  // (2026-09-14). Every one optional: the API's machine callers send none.
+  status?: string
+  owner_id?: number | null
+  follower_ids?: number[]
+  business_name?: string | null
+  source?: string | null
+  address_street?: string | null
+  address_city?: string | null
+  address_state?: string | null
+  address_postal_code?: string | null
 }) => send<{ id: number; title: string; stage_id: number }>(
   '/api/opportunities', 'POST', body)
 
@@ -1187,6 +1201,9 @@ export const createCustomField = (body: {
   options?: string[]
   pipeline_ids: number[]
   group_id?: number | null
+  script?: string | null
+  linked_field?: import('./customFields').LinkedField | null
+  details_when?: string[]
 }) => send<import('./customFields').FieldDef>('/api/custom-fields', 'POST', body)
 
 export const patchCustomField = (id: number, body: {
@@ -1195,6 +1212,10 @@ export const patchCustomField = (id: number, body: {
   pipeline_ids?: number[]
   /** null moves the field back under Opportunity details. */
   group_id?: number | null
+  /** Settings, not answers: clearing one ('' / null / []) touches no answer. */
+  script?: string | null
+  linked_field?: import('./customFields').LinkedField | null
+  details_when?: string[]
 }) => send<import('./customFields').FieldDef>(`/api/custom-fields/${id}`, 'PATCH', body)
 
 /** Archives. The name says what it does to the DEFINITION; the answers stay. */

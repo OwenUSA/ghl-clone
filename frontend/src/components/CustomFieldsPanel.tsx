@@ -15,7 +15,7 @@ import {
   restoreCustomField,
   type FieldGroup,
 } from '../lib/api'
-import type { FieldDef } from '../lib/customFields'
+import type { FieldDef, LinkedField } from '../lib/customFields'
 import type { Me } from '../lib/auth'
 
 /**
@@ -44,6 +44,11 @@ import type { Me } from '../lib/auth'
  *     reordered and removed here; removing one moves its fields back to
  *     Opportunity details and touches no answer. Nothing is seeded: the owner
  *     makes his own.
+ *   * QUESTION SETTINGS (2026-09-14), for the call Checklist and anything like it:
+ *     a script under any question, a yes/no that shows the contact's email or the
+ *     opportunity's address beside its tick, and a dropdown that opens a details box
+ *     for chosen answers. They are settings on the question, so the owner rewords
+ *     and changes them here; none of them touches an answer already given.
  */
 
 const TYPES: { value: FieldDef['field_type']; label: string }[] = [
@@ -52,6 +57,14 @@ const TYPES: { value: FieldDef['field_type']; label: string }[] = [
   { value: 'dropdown', label: 'Dropdown (pick one)' },
   { value: 'date', label: 'Date' },
   { value: 'boolean', label: 'Yes / no' },
+  { value: 'paragraph', label: 'Paragraph (multi-line text)' },
+]
+
+/** What a yes/no question can show beside its tick. '' = nothing. */
+const LINKS: { value: LinkedField | ''; label: string }[] = [
+  { value: '', label: 'Nothing' },
+  { value: 'contact_email', label: "The contact's email" },
+  { value: 'opportunity_address', label: "The opportunity's address" },
 ]
 
 const input = {
@@ -75,6 +88,12 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
   const [options, setOptions] = useState('')
   const [attach, setAttach] = useState<number[]>([])
   const [groupId, setGroupId] = useState('')
+  const [script, setScript] = useState('')
+  const [linked, setLinked] = useState<LinkedField | ''>('')
+  const [detailsWhen, setDetailsWhen] = useState<string[]>([])
+  const [draftScript, setDraftScript] = useState('')
+  const [draftLinked, setDraftLinked] = useState<LinkedField | ''>('')
+  const [draftDetails, setDraftDetails] = useState<string[]>([])
   const [draftGroup, setDraftGroup] = useState('')
   const [newGroup, setNewGroup] = useState('')
   const [renaming, setRenaming] = useState<number | null>(null)
@@ -114,20 +133,32 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
       options: splitOptions(options),
       pipeline_ids: attach,
       group_id: groupId ? Number(groupId) : null,
+      script: script.trim() || null,
+      // Each setting is sent only for the type that has it; the server refuses the
+      // rest rather than ignoring them.
+      linked_field: type === 'boolean' && linked ? linked : null,
+      details_when: type === 'dropdown'
+        ? detailsWhen.filter((o) => splitOptions(options).includes(o)) : [],
     }),
     onSuccess: () => {
-      setLabel(''); setOptions(''); setAttach([]); setGroupId(''); refresh()
+      setLabel(''); setOptions(''); setAttach([]); setGroupId('')
+      setScript(''); setLinked(''); setDetailsWhen([]); refresh()
     },
     onError: failed,
   })
 
   const save = useMutation({
-    mutationFn: (id: number) => patchCustomField(id, {
-      label: draftLabel.trim(),
-      options: splitOptions(draftOptions),
-      pipeline_ids: draftPipelines,
-      group_id: draftGroup ? Number(draftGroup) : null,
-    }),
+    mutationFn: (id: number) => {
+      const field = fields.data?.find((f) => f.id === id)
+      return patchCustomField(id, {
+        label: draftLabel.trim(),
+        options: splitOptions(draftOptions),
+        pipeline_ids: draftPipelines,
+        group_id: draftGroup ? Number(draftGroup) : null,
+        script: draftScript.trim() || null,
+        ...typedSettings(field, draftLinked, draftDetails, splitOptions(draftOptions)),
+      })
+    },
     onSuccess: refresh,
     onError: failed,
   })
@@ -203,6 +234,9 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
     setDraftOptions(f.options.join('\n'))
     setDraftPipelines(f.pipeline_ids)
     setDraftGroup(f.group_id != null ? String(f.group_id) : '')
+    setDraftScript(f.script ?? '')
+    setDraftLinked(f.linked_field ?? '')
+    setDraftDetails(f.details_when ?? [])
     setError(null)
   }
 
@@ -426,6 +460,19 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
             </div>
           )}
 
+          <QuestionSettings
+            type={type}
+            choices={splitOptions(options)}
+            script={script}
+            linked={linked}
+            detailsWhen={detailsWhen}
+            disabled={!canManage}
+            why={why}
+            onScript={setScript}
+            onLinked={setLinked}
+            onDetailsWhen={setDetailsWhen}
+          />
+
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 13, color: 'rgb(102,112,133)' }}>
               Tab in the opportunity window
@@ -535,6 +582,21 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
                               padding: 6, marginTop: 6, display: 'block' }}
                           />
                         )}
+                        <div style={{ width: 240 }}>
+                          <QuestionSettings
+                            type={f.field_type}
+                            choices={splitOptions(draftOptions)}
+                            script={draftScript}
+                            linked={draftLinked}
+                            detailsWhen={draftDetails}
+                            disabled={false}
+                            why={why}
+                            label={f.label}
+                            onScript={setDraftScript}
+                            onLinked={setDraftLinked}
+                            onDetailsWhen={setDraftDetails}
+                          />
+                        </div>
                         <select
                           value={draftGroup}
                           aria-label={'Tab for ' + f.label}
@@ -579,6 +641,12 @@ export function CustomFieldsPanel({ user }: { user: Me }) {
                           {f.field_type === 'dropdown' && f.options.length > 0
                             && ' · ' + f.options.join(' / ')}
                         </div>
+                        {settingsSummary(f).map((line) => (
+                          <div key={line} style={{ fontSize: 12, color: 'rgb(102,112,133)',
+                            maxWidth: 360 }} className="truncate" title={line}>
+                            {line}
+                          </div>
+                        ))}
                       </>
                     )}
                   </td>
@@ -737,5 +805,115 @@ function PipelineChecks({
         </label>
       ))}
     </div>
+  )
+}
+
+/** The settings only one type has, sent only for that type: the server refuses a
+    yes/no's link on a dropdown rather than ignoring it. */
+function typedSettings(f: FieldDef | undefined, linked: LinkedField | '', details: string[],
+                       choices: string[]) {
+  if (f?.field_type === 'boolean') return { linked_field: linked || null }
+  if (f?.field_type === 'dropdown') return { details_when: details.filter((o) => choices.includes(o)) }
+  return {}
+}
+
+/** One line per setting a question carries, for its row in the list. */
+function settingsSummary(f: FieldDef): string[] {
+  const out: string[] = []
+  if (f.script?.trim()) out.push('Script: ' + f.script.trim())
+  const link = LINKS.find((l) => l.value && l.value === f.linked_field)
+  if (link) out.push('Shows next to it: ' + link.label.toLowerCase())
+  if (f.details_when?.length) out.push('Details box when: ' + f.details_when.join(', '))
+  return out
+}
+
+/**
+ * The settings a question may carry (2026-09-14). Script: every type. Show next to
+ * it: yes/no only. Details box: dropdown only, one tick per choice. A setting the
+ * type cannot have is not drawn at all, rather than drawn dead.
+ */
+function QuestionSettings({
+  type, choices, script, linked, detailsWhen, disabled, why, label,
+  onScript, onLinked, onDetailsWhen,
+}: {
+  type: FieldDef['field_type']
+  choices: string[]
+  script: string
+  linked: LinkedField | ''
+  detailsWhen: string[]
+  disabled: boolean
+  why: string
+  /** The question being edited, to name the controls; absent on New field. */
+  label?: string
+  onScript: (v: string) => void
+  onLinked: (v: LinkedField | '') => void
+  onDetailsWhen: (v: string[]) => void
+}) {
+  const name = (what: string) => (label ? what + ' for ' + label : what)
+  const caption = { fontSize: 13, color: 'rgb(102,112,133)' } as const
+  const dim = disabled ? { opacity: 0.5 } : {}
+  return (
+    <>
+      <div style={{ marginTop: 10 }}>
+        <div style={caption}>Script (optional)</div>
+        <textarea
+          value={script}
+          disabled={disabled}
+          title={disabled ? why : undefined}
+          aria-label={name('Script')}
+          rows={2}
+          maxLength={1000}
+          placeholder="What to say — shown under the question"
+          onChange={(e) => onScript(e.target.value)}
+          style={{ ...input, width: '100%', height: 'auto', padding: 8, marginTop: 4,
+            display: 'block', ...dim }}
+        />
+      </div>
+      {type === 'boolean' && (
+        <div style={{ marginTop: 10 }}>
+          <div style={caption}>Show next to it</div>
+          <select
+            value={linked}
+            disabled={disabled}
+            title={disabled ? why : undefined}
+            aria-label={name('Show next to it')}
+            onChange={(e) => onLinked(e.target.value as LinkedField | '')}
+            style={{ ...input, width: '100%', marginTop: 4, ...dim }}
+          >
+            {LINKS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+          </select>
+          <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 4 }}>
+            The real value, editable beside the tick. Editing it changes the contact or
+            the opportunity itself.
+          </div>
+        </div>
+      )}
+      {type === 'dropdown' && (
+        <div style={{ marginTop: 10 }}>
+          <div style={caption}>Show a details box when the answer is</div>
+          {choices.length === 0 && (
+            <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 4 }}>
+              Add the choices first.
+            </div>
+          )}
+          {choices.map((o) => (
+            <label key={o} className="flex items-center gap-2"
+              style={{ fontSize: 13, color: 'rgb(52,64,84)', padding: '2px 0', ...dim }}
+              title={disabled ? why : undefined}>
+              <input
+                type="checkbox"
+                checked={detailsWhen.includes(o)}
+                disabled={disabled}
+                aria-label={name('Details box when ' + o)}
+                onChange={(e) => onDetailsWhen(e.target.checked
+                  ? [...detailsWhen.filter((x) => x !== o), o]
+                  : detailsWhen.filter((x) => x !== o))}
+              />
+              {o}
+            </label>
+          ))}
+        </div>
+      )}
+    </>
   )
 }

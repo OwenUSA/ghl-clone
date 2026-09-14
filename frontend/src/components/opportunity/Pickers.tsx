@@ -83,11 +83,14 @@ function useContactSearch(q: string, enabled: boolean) {
 }
 
 /** Primary contact: exactly one, required. */
-export function ContactSelect({ value, onChange, disabled, title }: {
+export function ContactSelect({ value, onChange, disabled, title, onCreateNew }: {
   value: Choice | null
   onChange: (c: Choice) => void
   disabled?: boolean
   title?: string
+  /** The Add new opportunity modal's "+ New" (2026-09-14): offered at the foot of
+      the list with whatever was typed, so the caller can open Add Contact prefilled. */
+  onCreateNew?: (typed: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -124,6 +127,19 @@ export function ContactSelect({ value, onChange, disabled, title }: {
             <div style={{ padding: '8px 10px', fontSize: 13, color: FAINT }}>
               No contacts match.
             </div>
+          )}
+          {onCreateNew && (
+            <button type="button"
+              onClick={() => { setOpen(false); onCreateNew(q.trim()); setQ('') }}
+              className="flex w-full items-center gap-2 text-left hover:bg-[rgb(249,250,251)]"
+              style={{ padding: '8px 10px', fontSize: 14, fontWeight: 500, borderRadius: 6,
+                color: PRIMARY, borderTop: '1px solid ' + DIVIDER }}>
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke={PRIMARY}
+                strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              {q.trim() ? `New contact “${q.trim()}”` : 'New contact'}
+            </button>
           )}
         </div>
       )}

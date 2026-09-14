@@ -244,7 +244,7 @@ def test_one_component_asks_the_questions_on_both_forms():
     validated differently by each. The detail form and the Add dialog use the
     SAME component."""
     for where, parts in (("detail", ("components", "OpportunityDetail.tsx")),
-                         ("add dialog", ("pages", "OpportunitiesPage.tsx"))):
+                         ("add dialog", ("components", "AddOpportunityModal.tsx"))):
         source = _read(*parts)
         assert "<CustomFieldAnswers" in source, (
             "the %s does not render the job questions" % where)

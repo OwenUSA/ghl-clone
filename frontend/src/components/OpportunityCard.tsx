@@ -15,7 +15,7 @@ import {
 import { me } from '../lib/auth'
 import { canOpenRecords, openRecord } from '../lib/openRecord'
 import { cardAddressLine } from '../lib/opportunityAddress'
-import { CARD_ICON_REQUEST, requestModalTab } from '../lib/opportunityModal'
+import { CARD_ICON_REQUEST, checklistBadge, requestModalTab } from '../lib/opportunityModal'
 
 /** The board's card layouts — the same union `OpportunitiesPage` declares. */
 export type Layout = 'Default' | 'Compact' | 'Unlabeled'
@@ -122,6 +122,45 @@ function CardIcon({ label, tip, badge, onClick, children }: {
         </span>
       )}
       {hover && onClick && ref.current && <Tooltip anchor={ref.current}>{tip}</Tooltip>}
+    </button>
+  )
+}
+
+/**
+ * The Checklist's progress, at the right end of the icon row (2026-09-14): a small
+ * grey "3/16" beside a clipboard tick, green once every question is answered. It is a
+ * COUNT, never an answer — the card still shows no custom field (2026-09-11). A click
+ * opens the modal on the Checklist tab.
+ */
+function ChecklistBadge({ badge, onClick }: {
+  badge: NonNullable<ReturnType<typeof checklistBadge>>
+  onClick?: () => void
+}) {
+  const ref = useRef<HTMLButtonElement>(null)
+  const [hover, setHover] = useState(false)
+  const color = badge.done ? 'rgb(2,122,72)' : hover && onClick ? BLUE : 'rgb(102,112,133)'
+  return (
+    <button
+      ref={ref}
+      type="button"
+      aria-label={badge.tip}
+      data-card-checklist
+      onClick={(e) => { e.stopPropagation(); onClick?.() }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
+      className="flex items-center"
+      style={{ marginLeft: 'auto', gap: 3, height: 20, fontSize: 11, fontWeight: 500,
+        lineHeight: '20px', color, cursor: onClick ? 'pointer' : 'grab' }}
+    >
+      {svg(color, <>
+        <rect x="6" y="4" width="12" height="17" rx="2" />
+        <path d="M9 4V3h6v1M9.5 13l2 2 3.5-4" />
+      </>, 14)}
+      {badge.text}
+      {hover && onClick && ref.current && <Tooltip anchor={ref.current}>{badge.tip}</Tooltip>}
     </button>
   )
 }
@@ -356,6 +395,7 @@ export function CardFace({
 
   const notesVisible = o.notes_count !== undefined
   const address = cardAddressLine(o)
+  const checklist = checklistBadge(o.checklist)
 
   return (
     <>
@@ -458,6 +498,12 @@ export function CardFace({
             onClick={live ? () => openOn('appointment') : undefined}>
             {CardIcons.appointment}
           </CardIcon>
+          {checklist && (
+            <ChecklistBadge badge={checklist} onClick={live && onOpen ? () => {
+              requestModalTab(o.id, checklist.request)
+              onOpen(o.id)
+            } : undefined} />
+          )}
         </div>
       )}
       {flash && (

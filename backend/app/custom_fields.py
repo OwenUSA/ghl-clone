@@ -533,4 +533,6 @@ def progress(defs: list[CustomFieldDef], group_ids: set[int], pipeline_id: int |
         return None
     answers = answers or {}
     return {"answered": sum(1 for d in asked if is_answered(answers.get(d.key))),
-            "total": len(asked)}
+            "total": len(asked),
+            # The tab the card's badge opens the modal on.
+            "group_id": min(d.group_id for d in asked)}

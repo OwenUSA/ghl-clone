@@ -39,6 +39,7 @@ PHONE_TS = FRONTEND / "lib" / "phoneMatch.ts"
 PICKER_TSX = FRONTEND / "components" / "ContactPicker.tsx"
 DIALOG_TSX = FRONTEND / "components" / "AddContactDialog.tsx"
 OPPS_TSX = FRONTEND / "pages" / "OpportunitiesPage.tsx"
+ADD_TSX = FRONTEND / "components" / "AddOpportunityModal.tsx"
 
 NODE = shutil.which("node")
 
@@ -255,7 +256,14 @@ def test_the_duplicate_warning_offers_the_existing_contact_and_still_allows_crea
 
 
 def test_the_opportunities_dialog_uses_the_shared_picker():
-    src = OPPS_TSX.read_text(encoding="utf-8")
-    assert "<ContactPicker" in src
-    # ...and no longer runs a contact search of its own.
-    assert "listContacts" not in src
+    """Since 2026-09-14 the Add dialog is GoHighLevel's modal and picks its contact
+    with the edit modal's `ContactSelect` (the same `/api/contacts?q=` query, so the
+    last-ten-digits phone match still applies), and "+ New" opens the SAME Add Contact
+    dialog, prefilled from what was typed. Neither file runs a search of its own."""
+    src = ADD_TSX.read_text(encoding="utf-8")
+    assert "<ContactSelect" in src and "<AddContactDialog" in src
+    assert "initial={prefillFrom(adding)}" in src
+    assert "onUseExisting=" in src, "the duplicate warning cannot pick the existing contact"
+    assert "Your role cannot create contacts" in src
+    for path in (ADD_TSX, OPPS_TSX):
+        assert "listContacts" not in path.read_text(encoding="utf-8")
