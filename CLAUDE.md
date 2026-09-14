@@ -225,6 +225,14 @@ provisioned gets a 403 saying so — we never invent an operator.
   up every losing leg before it bridges. Do not add a second mechanism.
 - **No real call has ever been placed through it.** See the 2026-09-11 entry in
   `DECISIONS.md` and `.qa/state/softphone-done` for exactly what is unverified.
+- **Dialling out** (2026-09-14): Conversations → the phone icon in the Team inbox header opens
+  `components/CallNumberDialog.tsx`; every call button goes through `lib/callLauncher.ts`, which
+  marks the outbound intent (`lib/outboundIntent.ts`) BEFORE the request and sends
+  `ring_browser: true` only while the phone is Ready. `POST /api/calls/dial` is the server half.
+  One in-call window for every browser call: `components/InCallWindow.tsx`. No hold/transfer —
+  owen-main exposes nothing the CRM key can drive (DECISIONS.md lists what it would need).
+  `uv run python -m tests.browser_dialer` (from `backend/`) drives it in headless Chromium with
+  the SIP user faked (`frontend/e2e/`) and owen-main replaced; it is not collected by pytest.
 
 ## It is deployed
 

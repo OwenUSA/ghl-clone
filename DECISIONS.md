@@ -3769,3 +3769,120 @@ with production-shaped rows, upgrades, and asserts every pre-existing table has 
 and identical rows, exactly the four new tables appear and are empty, the server defaults fill,
 a card delete cascades its link and request rows with foreign keys enforced, and a downgrade /
 upgrade round trip is clean.
+
+## AMENDMENT (2026-09-14): dial any number from Conversations, one in-call window, and the browser answers its own outbound leg
+
+The owner's decisions for `feature/call-dialer`: a "Call a number" dialer on the Conversations
+page; calling requires the browser phone to be Ready; an in-call window like owen-main's
+`InCallModal`; the browser auto-answers its own outbound leg and never shows "Incoming call" for
+it; after the call, the duration and "Add as contact" (unknown number) or "Open conversation".
+
+### What this AMENDS
+
+- **"The browser softphone is OURS" (2026-09-11) — "it drives its own leg only: answer, hang up,
+  mute"** → also sends keypad tones (DTMF) and switches microphone/speaker. Still no hold,
+  transfer or bridging from the browser (see below).
+- **`_place_call` — "the conversation happens on real handsets"; owen-main rings the binding's
+  `outbound_operator`** → every call route (`/api/contacts/{id}/call`,
+  `/api/conversations/{id}/call`, `/api/number-threads/{id}/call`, and the new
+  `/api/calls/dial`) takes an optional body `{"ring_browser": true}`. With it, owen-main is asked
+  to ring **the signed-in user's own operator first** (`operator` = the principal's email, which
+  owen-main slugs with the same `operator_slug` its credential minting uses). The browser sends
+  it only while its phone is Ready and idle; otherwise the call rings the binding's default
+  operator exactly as before. The operator is never taken from the request — a client that names
+  one is ignored (tested).
+- **The thread header's phone icon and the board card's call icon** now go through the same
+  launcher, so a call placed from them while the phone is Ready rings this browser and opens the
+  in-call window. With the phone not Ready they behave as before.
+- **The status dot's hover card** closes on a press or focus anywhere outside it. Found in the
+  headless run: after "Switch on" the focused button is replaced, a removed element never fires
+  `blur`, and the card stayed open over the in-call window.
+
+### `POST /api/calls/dial` — not a second dialling path
+
+Body `{number, ring_browser}`; ANY_USER, like the other call routes. The number is validated by
+`dial_problem` (North American only, 10 digits, NANP area code/exchange, not the bound DID) —
+the browser's `lib/dialPad.ts` says the same sentences word for word, and a test runs both on the
+same inputs. Then: a number a **contact** holds (last ten digits, lowest id) is exactly a contact
+call (DND refused, logged on their thread); anyone else goes through `_dial`, and **only once
+owen-main has accepted** is the number-only thread found or created and the call logged there. No
+contact is ever created. Every refusal is a 200 with `placed: false` and a sentence, and writes
+nothing — not even an empty thread.
+
+### Placement: the inbox header, not the rail
+
+A phone icon left of the Team inbox header's measured filter and sort icons (which do not move).
+It is an action on the inbox, where GoHighLevel puts its compose icon. The rail was rejected:
+each rail row is a *view* whose highlight states the filter applied to the list (`railActive`),
+and a dialer is not a view.
+
+### Outbound intent — owen-main's design, plus a number match
+
+Ported from owen-main `lib/outboundIntent.ts`: module scope, marked at ONE choke point
+(`lib/callLauncher.ts`, before the request leaves), TTL 45 s, single-shot, cleared on refusal or
+error. **Added:** the INVITE's caller-ID must match the dialled number (last ten digits). owen-main
+claims whatever INVITE arrives first, which would auto-answer a real customer who rings during
+those seconds; here their INVITE shows as an incoming call and the intent waits for the leg that
+matches. An INVITE with no readable caller-ID is never claimed. Known limit: if the very number
+being dialled happens to call in during those seconds, it is indistinguishable and would be
+answered as the outbound leg.
+
+### Hold and transfer: NOT built, and what owen-main would need to expose
+
+`POST /api/crm-link/calls` does return `operator_channel`, `callee_channel` and `linkedid`, so
+for an OUTBOUND call the CRM backend could know the channels. But nothing the CRM can call acts on
+them: owen-main's `/api/telephony/control/hold` and `/control/transfer` authenticate an owen-main
+**user login** (`current_user`), not the `crm_link` API key, and for an INBOUND ring-group call
+the CRM receives no channel id at all (the operator leg's INVITE carries only caller-ID and the
+dialled DID). So neither is rendered. owen-main would need:
+
+1. `POST /api/crm-link/calls/{linkedid}/hold` `{hold: bool}` and
+   `POST /api/crm-link/calls/{linkedid}/transfer` `{kind, target}` under `require_scope(crm_link)`,
+   acting only on calls on a bound DID and resolving the far-party channel itself from the
+   linkedid (so the CRM never handles raw channel ids);
+2. for inbound calls, the linkedid on the operator leg — e.g. an `X-OWEN-Linkedid` SIP header on
+   the INVITE `ring.py` originates (SIP.js exposes `request.getHeader`), or
+   `GET /api/crm-link/calls/active?operator=<slug>`;
+3. for transfer, a list of valid targets the CRM may offer (`GET /api/crm-link/transfer-targets`).
+
+### Judgement calls, all overrulable
+
+- **The in-call window shows while `phase === 'in-call'`**; the few hundred milliseconds of
+  auto-answering (`connecting`) are shown by the dialer that placed the call. A call started from
+  a thread or card icon shows nothing during that moment.
+- **The timer starts when THIS browser's leg connects**, not when the customer answers: owen-main
+  sends the CRM no event for the callee answering. The first seconds are ringback and the
+  recording notice.
+- **"REC" is always shown during a call.** owen-main records every bridged call on the bound DID
+  (`OUTBOUND_RECORDING_ENABLED`, and the ring group records), but the CRM is not told per call. If
+  recording is ever switched off there, this indicator would be wrong; owen-main returning
+  `recording: bool` from `/calls` would fix it for outbound.
+- **The dialer's own microphone failure** (the auto-answer throws) is reported in the dialer as a
+  sentence, never as an incoming-call card — owen-main's lesson.
+- **A TECH may dial** (ANY_USER, like every call route) but gets "Add as contact" disabled with
+  "Only staff can add contacts", as everywhere else.
+- **The after-call view stays until closed** (or until the next call), so "Add as contact" cannot
+  vanish while somebody is reaching for it. It never saves: it opens the existing Add Contact
+  form, prefilled with the number.
+
+### Screenshot assumptions (refs/round3/41 shows only where the dialer goes)
+
+GoHighLevel's dialer and in-call UI were never captured. OURS, styled from the rebuilt
+Opportunities modal (refs/opps/04) and dropdown card: the dialer modal (340 px, 16px/600 title,
+close cross, 13px/500 label, 40 px number field with a backspace glyph, a 3×4 keypad of 48 px keys
+with letters, a bordered "Calling from (954) 482-9099" row, Cancel + blue Call); the in-call
+window (320 px, fixed top-right under the status dot at `top: 52px`, avatar + name/number +
+"Outbound call · 0:12", red "REC", four 44 px round buttons Mute / Keypad / Audio / Hang up, an
+expanding keypad with a readout, and Microphone/Speaker selects); the after-call view (duration +
+one full-width blue action). No emoji; icons are the app's outline set (`components/Icon.tsx`).
+Not draggable (owen-main's is) — it sits where the call's status dot is.
+
+### Verified, and not
+
+Verified in headless Chromium against a throwaway SQLite database with the SIP user FAKED at the
+dev server (`frontend/e2e/`) and every owen-main hop replaced by a recorder that refuses real
+requests — `uv run python -m tests.browser_dialer`, 58 checks. **No real call has been placed.**
+Not verified: a real SIP.js `sendDTMF` reaching Asterisk, `replaceTrack` on a live
+RTCPeerConnection when the microphone changes, `setSinkId` on real hardware, the operator leg's
+caller-ID actually arriving as the dialled number (it is owen-main's `caller_id=callee_number`,
+read from source), and owen-main ringing `operator=<email>` for a provisioned CRM user.
