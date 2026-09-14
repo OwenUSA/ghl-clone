@@ -6,7 +6,8 @@ ALSO posts the same parsed order here, as its own queued job, so the owner's
 decisions (DECISIONS.md, 2026-09-14) are implemented on this side as:
 
 * **The card.** Pipeline "Dream Team Roofing AHS", stage "New Lead", status open,
-  titled "<job id> <service> - <customer>" exactly as GoHighLevel's relay names it,
+  titled "<customer> - <job id> <service>" (name first, 2026-09-14; it was GoHighLevel's
+  "<job id> <service> - <customer>" until then),
   valued in integer cents, source "AHS", `created_by = "AHS email"`.
 * **A new card per AHS job**, repeat customer or not. GoHighLevel's one-card-per-
   contact limit is not a rule here.
@@ -131,10 +132,14 @@ class AhsCancellationIn(BaseModel):
 # ---------------------------------------------------------------- pieces
 
 def title_for(body: AhsJobIn) -> str:
-    """GoHighLevel's name for the card, built the way owen-main's
-    `emails.build_opportunity_body` builds it."""
-    header = " ".join(x for x in (body.ahs_job_id, body.service) if x)
-    return ("%s - %s" % (header, body.customer_name))[:TITLE_MAX].strip()
+    """"<Customer Name> - <job id> <service>", e.g. "Savannah Vanwyk - 84745849 ROOF".
+
+    Name FIRST, by the owner's decision (2026-09-14): the board is read by customer,
+    and the Workiz importer already names every card after the customer. Until then
+    this mirrored GoHighLevel's relay ("<job id> <service> - <customer>"). Cards that
+    already exist keep their title — a repeat delivery never touches one."""
+    job = " ".join(x for x in (body.ahs_job_id, body.service) if x)
+    return ("%s - %s" % (body.customer_name, job))[:TITLE_MAX].strip()
 
 
 def split_name(full: str) -> tuple[str, str]:

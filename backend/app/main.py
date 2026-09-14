@@ -1164,6 +1164,11 @@ class CustomFieldCreate(BaseModel):
     pipeline_ids: list[int] = Field(default_factory=list)
     # The modal tab it is drawn under; None = Opportunity details.
     group_id: int | None = None
+    # The Checklist's settings (2026-09-14), all optional: what to say, what real
+    # value a yes/no shows beside its tick, which dropdown choices open a details box.
+    script: str | None = None
+    linked_field: str | None = None
+    details_when: list[str] | None = None
 
 
 class CustomFieldPatch(BaseModel):
@@ -1180,6 +1185,11 @@ class CustomFieldPatch(BaseModel):
     # Moving a field between tabs. Send null to put it back under Opportunity
     # details. Moves no answer: the key, and so every value, stays where it was.
     group_id: int | None = None
+    # Settings, not answers: changing or clearing one (null / "" / []) touches no
+    # recorded answer, a details answer included.
+    script: str | None = None
+    linked_field: str | None = None
+    details_when: list[str] | None = None
 
 
 class CustomFieldReorder(BaseModel):
@@ -1240,10 +1250,15 @@ def create_custom_field(body: CustomFieldCreate, db: Session = Depends(get_db),
     pipelines = _check_pipelines(db, body.pipeline_ids)
     group_id = opportunity_workspace.check_group(db, body.group_id)
 
+    script = custom_fields.clean_script(body.script)
+    linked = custom_fields.clean_linked(field_type, body.linked_field)
+    details_when = custom_fields.clean_details_when(field_type, options, body.details_when)
+
     n = db.scalar(select(func.count(CustomFieldDef.id))) or 0
     d = CustomFieldDef(key=key, label=label, field_type=field_type,
                        options=options, position=n, entity="opportunity",
-                       group_id=group_id)
+                       group_id=group_id, script=script, linked_field=linked,
+                       details_when=details_when or None)
     db.add(d)
     db.flush()
     custom_fields.attach(db, d, pipelines)
@@ -1268,6 +1283,18 @@ def update_custom_field(field_id: int, body: CustomFieldPatch,
         d.label = custom_fields.clean_label(data["label"])
     if "options" in data:
         d.options = custom_fields.clean_options(d.field_type, data["options"])
+        if "details_when" not in data and d.details_when:
+            # A retired choice can no longer be chosen, so it can no longer open the
+            # box. Pruned rather than refused: the answers already given are
+            # untouched either way, and this is configuration, not an answer.
+            d.details_when = [o for o in d.details_when if o in d.options] or None
+    if "script" in data:
+        d.script = custom_fields.clean_script(data["script"])
+    if "linked_field" in data:
+        d.linked_field = custom_fields.clean_linked(d.field_type, data["linked_field"])
+    if "details_when" in data:
+        d.details_when = custom_fields.clean_details_when(
+            d.field_type, list(d.options or []), data["details_when"]) or None
     if "pipeline_ids" in data:
         custom_fields.attach(db, d, _check_pipelines(db, data["pipeline_ids"]))
     if "group_id" in data:
@@ -2397,6 +2424,14 @@ class OpportunityCreate(BaseModel):
     contact_id: int | None = None
     value_cents: int = 0
     probability: int | None = Field(None, ge=0, le=100)
+    # GoHighLevel's Add new opportunity modal (2026-09-14) files the whole card in
+    # one submit. All optional, so the machine paths (AHS emails, the Workiz import,
+    # the CLI) are unaffected; the modal is what requires a contact, not the API.
+    status: Literal["open", "won", "lost", "abandoned"] = "open"
+    owner_id: int | None = None
+    follower_ids: list[int] | None = None
+    business_name: str | None = Field(None, max_length=200)
+    source: str | None = Field(None, max_length=120)
     # The job questions, answered in the Add opportunity dialog. Validated by the
     # same code the detail form goes through, so a dropdown cannot be talked into
     # an answer it does not offer by using the other door.
@@ -2420,6 +2455,8 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
     if (not stage or stage.pipeline_id != body.pipeline_id
             or not pipeline_access.can_see(db, principal, body.pipeline_id)):
         raise HTTPException(400, "stage is not in that pipeline")
+    if body.owner_id is not None and not db.get(User, body.owner_id):
+        raise HTTPException(400, "unknown owner_id")
     answers = custom_fields.merge_answers(
         db, pipeline_id=body.pipeline_id, existing={}, incoming=body.custom_fields)
     n = db.scalar(select(func.count(Opportunity.id))
@@ -2428,8 +2465,15 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
                     stage_id=body.stage_id, contact_id=body.contact_id,
                     value_cents=body.value_cents, position=n,
                     probability=body.probability, custom_fields=answers,
+                    status=body.status, owner_id=body.owner_id,
+                    business_name=(body.business_name or "").strip() or None,
+                    source=(body.source or "").strip() or None,
                     **{k: getattr(body, k) for k in OPPORTUNITY_ADDRESS})
     db.add(o)
+    db.flush()
+    if body.follower_ids:
+        # Refused whole (400, nothing committed) when a follower does not exist.
+        opportunity_workspace.set_followers(db, o, body.follower_ids)
     db.commit()
     db.refresh(o)
     return {"id": o.id, "title": o.title, "stage_id": o.stage_id, **_opp_address(o)}

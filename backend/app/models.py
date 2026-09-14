@@ -659,13 +659,21 @@ class CustomFieldDef(Base):
     """
     __tablename__ = "custom_field_defs"
 
-    # The five types the owner asked for. No multi-select: deliberately deferred.
+    # The five types the owner asked for, and PARAGRAPH (multi-line text) for the
+    # call Checklist (2026-09-14). No multi-select: deliberately deferred.
     TEXT = "text"
     NUMBER = "number"
     DROPDOWN = "dropdown"
     DATE = "date"
     BOOLEAN = "boolean"
-    TYPES = (TEXT, NUMBER, DROPDOWN, DATE, BOOLEAN)
+    PARAGRAPH = "paragraph"
+    TYPES = (TEXT, NUMBER, DROPDOWN, DATE, BOOLEAN, PARAGRAPH)
+
+    # What a yes/no question may show beside its tick (2026-09-14). The value shown
+    # is the REAL record's, edited in place — never a copy kept in the answers.
+    LINK_CONTACT_EMAIL = "contact_email"
+    LINK_OPPORTUNITY_ADDRESS = "opportunity_address"
+    LINKS = (LINK_CONTACT_EMAIL, LINK_OPPORTUNITY_ADDRESS)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # The key inside `Opportunity.custom_fields`. Derived from the label ONCE, at
@@ -688,6 +696,15 @@ class CustomFieldDef(Base):
     # deleting a group sets this back to NULL and touches no answer.
     group_id: Mapped[int | None] = mapped_column(
         ForeignKey("custom_field_groups.id"), index=True)
+    # The call Checklist's per-question settings (2026-09-14). All three NULL on
+    # every field that existed before, which is exactly "no setting".
+    #   script        what the dispatcher says, drawn under the question. Any type.
+    #   linked_field  BOOLEAN only: one of LINKS, shown and edited beside the tick.
+    #   details_when  DROPDOWN only: the options that open a details box. Its answer
+    #                 is stored beside the main one, under "<key>__details".
+    script: Mapped[str | None] = mapped_column(Text)
+    linked_field: Mapped[str | None] = mapped_column(String(40))
+    details_when: Mapped[list | None] = mapped_column(JSONType)
 
     pipelines: Mapped[list["CustomFieldPipeline"]] = relationship(
         back_populates="field", cascade="all, delete-orphan")

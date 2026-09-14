@@ -30,7 +30,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from .models import CustomFieldDef, CustomFieldPipeline
+from .models import CustomFieldDef, CustomFieldGroup, CustomFieldPipeline
 
 # Namespaces this app does not own. A key under one of these is written by a
 # machine, read by a machine, and shown to a person — never edited by one.
@@ -74,6 +74,8 @@ READ_ONLY_PREFIXES = (IMPORT_PREFIX, AHS_JOB_PREFIX)
 KEY_MAX = 64
 LABEL_MAX = 160
 TEXT_MAX = 2000
+PARAGRAPH_MAX = 5000
+SCRIPT_MAX = 1000
 OPTION_MAX = 80
 OPTIONS_MAX = 50
 
@@ -82,7 +84,18 @@ NUMBER = CustomFieldDef.NUMBER
 DROPDOWN = CustomFieldDef.DROPDOWN
 DATE = CustomFieldDef.DATE
 BOOLEAN = CustomFieldDef.BOOLEAN
+PARAGRAPH = CustomFieldDef.PARAGRAPH
 TYPES = CustomFieldDef.TYPES
+LINKS = CustomFieldDef.LINKS
+
+# A dropdown's details box (2026-09-14) is answered beside the main answer, under
+# "<key>__details". `slug_for` collapses runs of underscores, so no derived key can
+# ever contain "__" — a details key cannot collide with a field's own key.
+DETAILS_SUFFIX = "__details"
+
+# The one custom tab whose progress the board card shows (2026-09-14). The owner's
+# call Checklist is an ordinary group; this is only the name the card looks for.
+CHECKLIST_GROUP = "Checklist"
 
 # Accepted spellings for a yes/no answer. The browser sends "true"/"false"; the CLI
 # and a human typing JSON send all of these, and refusing "yes" for a field labelled
@@ -136,6 +149,10 @@ def shows_on(d: CustomFieldDef, pipeline_id: int | None) -> bool:
     return any(link.pipeline_id == pipeline_id for link in d.pipelines)
 
 
+def details_key(key: str) -> str:
+    return key + DETAILS_SUFFIX
+
+
 def describe(d: CustomFieldDef) -> dict:
     return {
         "id": d.id,
@@ -150,6 +167,10 @@ def describe(d: CustomFieldDef) -> dict:
         "pipeline_ids": pipeline_ids(d),
         # The modal tab; None = Opportunity details (2026-09-13).
         "group_id": d.group_id,
+        # The Checklist's settings (2026-09-14); null / [] = no setting.
+        "script": d.script,
+        "linked_field": d.linked_field,
+        "details_when": list(d.details_when or []),
     }
 
 
@@ -192,6 +213,48 @@ def clean_options(field_type: str, options: list | None) -> list[str]:
         seen.add(v.lower())
         unique.append(v)
     return unique
+
+
+def clean_script(script: str | None) -> str | None:
+    """Any question may carry a script. Blank is no script."""
+    cleaned = (script or "").strip()
+    if len(cleaned) > SCRIPT_MAX:
+        raise HTTPException(400, "a question's script is limited to %d characters"
+                            % SCRIPT_MAX)
+    return cleaned or None
+
+
+def clean_linked(field_type: str, linked: str | None) -> str | None:
+    """Only a yes/no question shows a real value beside it: a tick that says "email
+    verified" next to the email it verified. On any other type there is no tick for
+    the value to sit beside, so the setting is refused rather than ignored."""
+    if linked in (None, ""):
+        return None
+    if field_type != BOOLEAN:
+        raise HTTPException(400, "only a yes/no question can show the contact's email "
+                                 "or the opportunity's address beside it")
+    if linked not in LINKS:
+        raise HTTPException(400, "%r is not something a question can show — expected "
+                                 "one of %s" % (linked, ", ".join(LINKS)))
+    return linked
+
+
+def clean_details_when(field_type: str, options: list[str],
+                       wanted: list | None) -> list[str]:
+    """The options that open a details box. Dropdown only, and each must be one of
+    the field's own options — a trigger nobody can choose would be a setting that
+    silently does nothing."""
+    values = [str(o).strip() for o in (wanted or []) if str(o).strip()]
+    if not values:
+        return []
+    if field_type != DROPDOWN:
+        raise HTTPException(400, "only a dropdown question can open a details box")
+    for v in values:
+        if v not in options:
+            raise HTTPException(400, "a details box cannot open on %r: it is not one of "
+                                     "this question's choices (%s)"
+                                % (v, ", ".join(options) or "none"))
+    return list(dict.fromkeys(values))
 
 
 def claim_key(db: Session, label: str) -> str:
@@ -295,13 +358,24 @@ def coerce_answer(d: CustomFieldDef, raw):
             return False
         _reject(d, raw, "yes or no")
 
-    # TEXT
+    # TEXT and PARAGRAPH
+    return _coerce_text(d, raw, PARAGRAPH_MAX if d.field_type == PARAGRAPH else TEXT_MAX)
+
+
+def _coerce_text(d: CustomFieldDef, raw, limit: int):
     if isinstance(raw, (list, dict)):
         _reject(d, raw, "text")
     value = str(raw).strip()
-    if len(value) > TEXT_MAX:
-        raise HTTPException(400, "“%s” is limited to %d characters." % (d.label, TEXT_MAX))
+    if len(value) > limit:
+        raise HTTPException(400, "“%s” is limited to %d characters." % (d.label, limit))
     return value
+
+
+def coerce_details(d: CustomFieldDef, raw):
+    """A details box's answer is plain text, and blank is "not answered"."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    return _coerce_text(d, raw, TEXT_MAX)
 
 
 def merge_answers(db: Session, *, pipeline_id: int | None,
@@ -362,7 +436,15 @@ def merge_answers(db: Session, *, pipeline_id: int | None,
             result[key] = value
 
     # --- defined fields ---
+    # A dropdown's details answer ("<key>__details", 2026-09-14) follows its field
+    # through every rule below: kept when not sent, kept when not shown, refused
+    # when written to a field this deal is not asked.
+    owned = {}
     for key, d in defs.items():
+        owned[key] = (d, coerce_answer)
+        if d.field_type == DROPDOWN:
+            owned[details_key(key)] = (d, coerce_details)
+    for key, (d, coerce) in owned.items():
         if shows_on(d, pipeline_id):
             if key not in incoming:
                 if key in existing:
@@ -374,7 +456,7 @@ def merge_answers(db: Session, *, pipeline_id: int | None,
                 # the form posts the whole object back on every save.
                 result[key] = existing[key]
             else:
-                answer = coerce_answer(d, incoming[key])
+                answer = coerce(d, incoming[key])
                 if answer is not None:
                     result[key] = answer
             continue
@@ -401,13 +483,13 @@ def merge_answers(db: Session, *, pipeline_id: int | None,
     # a key no definition claims is stored verbatim. `null` removes one, which is
     # the only way an undefined key can be taken out.
     for key, value in incoming.items():
-        if key in defs or is_reserved(key):
+        if key in owned or is_reserved(key):
             continue
         if value is None:
             continue
         result[key] = value
     for key, value in existing.items():
-        if key in defs or is_reserved(key) or key in incoming:
+        if key in owned or is_reserved(key) or key in incoming:
             continue
         result[key] = value
 
@@ -425,3 +507,30 @@ def attach(db: Session, d: CustomFieldDef, ids: list[int] | None) -> None:
     for pipeline_id in sorted(wanted):
         db.add(CustomFieldPipeline(field_id=d.id, pipeline_id=pipeline_id))
     db.flush()
+
+
+def is_answered(value) -> bool:
+    """The Checklist's "answered": anything but nothing. `False` is an answer — "No,
+    not explained yet" is something the dispatcher chose. Mirrors `isEmptyAnswer`
+    in frontend/src/lib/customFields.ts."""
+    return not (value is None or (isinstance(value, str) and not value.strip()))
+
+
+def checklist_ids(db: Session) -> set[int]:
+    """The ids of the group(s) named CHECKLIST_GROUP, case-insensitively."""
+    return {g.id for g in db.scalars(select(CustomFieldGroup)).all()
+            if g.name.strip().lower() == CHECKLIST_GROUP.lower()}
+
+
+def progress(defs: list[CustomFieldDef], group_ids: set[int], pipeline_id: int | None,
+             answers: dict | None) -> dict | None:
+    """"N / M answered" for one deal: M is the questions in those groups asked on THIS
+    deal's pipeline (archived ones are not asked), N how many of them hold an answer.
+    None when the pipeline asks none of them — the card then draws no badge."""
+    asked = [d for d in defs if d.group_id in group_ids and shows_on(d, pipeline_id)
+             and not is_reserved(d.key)]
+    if not asked:
+        return None
+    answers = answers or {}
+    return {"answered": sum(1 for d in asked if is_answered(answers.get(d.key))),
+            "total": len(asked)}

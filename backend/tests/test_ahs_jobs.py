@@ -132,7 +132,7 @@ def test_a_work_order_makes_one_contact_one_open_card_in_ahs_new_lead_and_a_note
         assert pipeline.name == "Dream Team Roofing AHS"
         assert stage.name == "New Lead" and stage.pipeline_id == pipeline.id
         assert o.status == "open"
-        assert o.title == "66450639 ROOF - Guillermo Escala"
+        assert o.title == "Guillermo Escala - 66450639 ROOF"
         assert o.value_cents == 12500 and isinstance(o.value_cents, int)
         assert o.source == "AHS"
         assert o.custom_fields == {"ahs_job_id": "66450639"}
@@ -214,8 +214,8 @@ def test_a_repeat_customers_second_job_is_a_second_card_on_the_same_contact(worl
     assert second["opportunity"]["id"] != first["opportunity"]["id"]
     cards = read(lambda db: db.scalars(select(Opportunity).where(
         Opportunity.contact_id == first["contact"]["id"]).order_by(Opportunity.id)).all())
-    assert [o.title for o in cards] == ["66450639 ROOF - Guillermo Escala",
-                                        "68730389 PLUMBING - Guillermo Escala"]
+    assert [o.title for o in cards] == ["Guillermo Escala - 66450639 ROOF",
+                                        "Guillermo Escala - 68730389 PLUMBING"]
     assert [o.custom_fields["ahs_job_id"] for o in cards] == ["66450639", "68730389"]
 
 
@@ -493,10 +493,33 @@ def test_the_address_split_never_drops_a_character(raw, expected):
         assert all(word.strip(",") in kept for word in raw.split())
 
 
-def test_the_title_matches_the_ghl_relays_name():
+def test_the_title_puts_the_customer_name_first():
+    """Owner decision 2026-09-14: "<Customer Name> - <job_id> <service>"."""
     body = ahs_jobs.AhsJobIn(**order(service=None))
-    assert ahs_jobs.title_for(body) == "66450639 - Guillermo Escala"
+    assert ahs_jobs.title_for(body) == "Guillermo Escala - 66450639"
     assert ahs_jobs.title_for(ahs_jobs.AhsJobIn(**order())) == \
+        "Guillermo Escala - 66450639 ROOF"
+    savannah = ahs_jobs.AhsJobIn(**order(customer_name="Savannah Vanwyk",
+                                         ahs_job_id="84745849", service="ROOF"))
+    assert ahs_jobs.title_for(savannah) == "Savannah Vanwyk - 84745849 ROOF"
+
+
+def test_a_repeat_delivery_does_not_retitle_a_card_made_before_names_came_first(world):
+    """Existing production cards carry the old job-first title. The operator retitles
+    them; a repeat delivery of the same work order must not."""
+    first = post(world, "/api/ahs-jobs", order()).json()
+
+    db = SessionLocal()
+    try:
+        db.get(Opportunity, first["opportunity"]["id"]).title = \
+            "66450639 ROOF - Guillermo Escala"
+        db.commit()
+    finally:
+        db.close()
+    again = post(world, "/api/ahs-jobs", order()).json()
+    assert again["outcome"] == "existing"
+    assert again["opportunity"]["id"] == first["opportunity"]["id"]
+    assert read(lambda db: db.get(Opportunity, first["opportunity"]["id"]).title) == \
         "66450639 ROOF - Guillermo Escala"
 
 

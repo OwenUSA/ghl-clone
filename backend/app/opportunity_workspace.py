@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations, pipeline_access
+from . import auth, automations, custom_fields, pipeline_access
 from .db import get_db
 from .models import (
     Contact,
@@ -459,6 +459,7 @@ def card_extras(db: Session, opps: list[Opportunity],
     * `tags` — the primary contact's tag names (see DECISIONS.md: opportunities
       have no tags of their own; the card and the modal show the contact's).
     * `open_tasks_count` — tasks not done.
+    * `checklist` — `{answered, total}` for the Checklist tab, or null.
     * `notes_count` / `note_previews` — this deal's notes plus the contact's thread
       NOTE events, exactly what the Notes tab lists. **Absent for a TECH**: the
       keys are not sent at all, so no count of a note they cannot read leaves the
@@ -505,10 +506,18 @@ def card_extras(db: Session, opps: list[Opportunity],
                               ConversationEvent.id.desc())).all():
                 contact_notes.setdefault(contact_id, []).append(first_line(body))
 
+    # The Checklist badge (2026-09-14): "N / M answered", M counting only the
+    # questions THIS card's pipeline asks. Null when it asks none, and then the card
+    # draws nothing. Two queries for the whole page, whatever its size.
+    checklist_groups = custom_fields.checklist_ids(db)
+    defs = custom_fields.load_defs(db, include_archived=False) if checklist_groups else []
+
     out: dict[int, dict] = {}
     for o in opps:
         row = {"tags": tags.get(o.contact_id, []) if o.contact_id else [],
-               "open_tasks_count": open_tasks.get(o.id, 0)}
+               "open_tasks_count": open_tasks.get(o.id, 0),
+               "checklist": custom_fields.progress(defs, checklist_groups, o.pipeline_id,
+                                                   o.custom_fields)}
         if staff:
             lines = deal_notes.get(o.id, []) + (
                 contact_notes.get(o.contact_id, []) if o.contact_id else [])

@@ -123,7 +123,9 @@ def test_the_migration_only_adds_four_nullable_columns_and_keeps_every_row():
         with eng.connect() as conn:
             before_rows, before_cols = _dump(conn), _columns(conn)
 
-        command.upgrade(_config(), "head")
+        # To THIS revision, not "head": later revisions (a7d4c2e9f130, the Checklist
+        # settings) add columns of their own and are proven by their own tests.
+        command.upgrade(_config(), REVISION)
         eng.dispose()
         with eng.connect() as conn:
             after_rows, after_cols = _dump(conn), _columns(conn)
