@@ -174,3 +174,38 @@ export const IconList = make(
 )
 
 export const IconChevronLeft = make(<path d="m15 18-6-6 6-6" />)
+
+// The dialer and the in-call window (2026-09-14). Same 24-grid outline style as above.
+export const IconMic = make(
+  <>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v4" />
+  </>,
+)
+export const IconMicOff = make(
+  <>
+    <path d="M15 9.3V5a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 5.1 2.1" />
+    <path d="M19 11a7 7 0 0 1-1.1 3.8M5 11a7 7 0 0 0 11.4 5.4M12 18v4M3 3l18 18" />
+  </>,
+)
+export const IconPhoneOff = make(
+  <>
+    <path d="M10.7 13.3a16 16 0 0 0 3.1 2.5l1.2-1.1a2 2 0 0 1 2.1-.5c.9.3 1.8.5 2.8.6a2 2 0 0 1 1.7 2v2.7a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19 19 0 0 1-3.3-2.6M5.2 13.1A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h2.6a2 2 0 0 1 2 1.7c.1 1 .3 1.9.6 2.8a2 2 0 0 1-.4 2.1L7.8 9.8" />
+    <path d="M22 2 2 22" />
+  </>,
+)
+export const IconDialpad = make(
+  <>
+    <circle cx="6" cy="4.5" r="1.3" /><circle cx="12" cy="4.5" r="1.3" /><circle cx="18" cy="4.5" r="1.3" />
+    <circle cx="6" cy="10" r="1.3" /><circle cx="12" cy="10" r="1.3" /><circle cx="18" cy="10" r="1.3" />
+    <circle cx="6" cy="15.5" r="1.3" /><circle cx="12" cy="15.5" r="1.3" /><circle cx="18" cy="15.5" r="1.3" />
+    <circle cx="12" cy="21" r="1.3" />
+  </>,
+)
+export const IconBackspace = make(
+  <>
+    <path d="M21 5H8.5L2 12l6.5 7H21a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+    <path d="m11 9 6 6M17 9l-6 6" />
+  </>,
+)
+export const IconClose = make(<path d="M18 6 6 18M6 6l12 12" />)

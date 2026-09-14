@@ -8,13 +8,14 @@ import {
 } from '../components/NumberDetailsPanel'
 import { AddContactDialog } from '../components/AddContactDialog'
 import { CallRecordingPlayer } from '../components/CallRecordingPlayer'
+import { CallNumberDialog } from '../components/CallNumberDialog'
 import {
   IconCalendar, IconChat, IconChevronDown, IconClock, IconEye, IconFilter,
   IconFunnel, IconInbox, IconMail, IconPhone, IconPlus, IconSearch, IconSort,
   IconStar, IconStarFilled, IconTrash, IconUser, IconUsers,
 } from '../components/Icon'
 import {
-  ApiError, PANE, callThread, deleteThread, listConversations, listThreadEvents,
+  ApiError, PANE, callThreadRinging, deleteThread, listConversations, listThreadEvents,
   patchThread, sendToThread,
   type AdoptedThread, type ContactDetail, type ConversationSummary, type SendableType,
   type ThreadEvent,
@@ -25,6 +26,7 @@ import {
   unreadTabCount, type InboxScope, type RailKey,
 } from '../lib/inbox'
 import { sendSentence } from '../lib/sendOutcome'
+import { useCallLauncher } from '../lib/callLauncher'
 import { hasRecording } from '../lib/callPlayer'
 import { formatPhone } from '../lib/phone'
 
@@ -466,6 +468,9 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   // send, a call that is ringing, a suppression. Rendered above the composer.
   const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null)
   const [calling, setCalling] = useState(false)
+  // "Call a number" (2026-09-14): the dialer modal.
+  const [dialing, setDialing] = useState(false)
+  const { launch } = useCallLauncher()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -792,7 +797,13 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     setCalling(true)
     setNote(null)
     try {
-      const r = await callThread(current)
+      // Through the launcher: when this browser's phone is Ready the call rings HERE
+      // first and opens the in-call window; otherwise owen-main rings its default
+      // operator, exactly as before.
+      const r = await launch(
+        { number: current.contact_phone, contactId: current.contact_id,
+          contactName: current.contact_name, conversationId: isNumber ? null : current.id },
+        (ringBrowser) => callThreadRinging(current, ringBrowser))
       setNote({ text: r.reason, bad: !r.placed })
       if (r.placed) {
         await Promise.all([
@@ -894,6 +905,14 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                 Team inbox
               </div>
               <div className="relative ml-auto flex items-center gap-2">
+                {/* Call a number (2026-09-14). In the inbox header, left of the measured
+                    filter and sort icons so neither moves: it is an ACTION on the inbox,
+                    like GoHighLevel's compose icon in this row. The rail is the wrong
+                    place — every rail row is a view whose highlight states the filter
+                    applied to the list, and a dialer is not a view. */}
+                <IconBtn title="Call a number" onClick={() => setDialing(true)}>
+                  <IconPhone size={20} color="rgb(71,84,103)" />
+                </IconBtn>
                 <IconBtn title="Filter conversations" onClick={() => setShowFilter(false)}>
                   <IconFilter size={20} color="rgb(71,84,103)" />
                 </IconBtn>
@@ -1407,6 +1426,11 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
               onDeleted={() => setSelected(null)}
             />
           )}
+          {dialing && <CallNumberDialog onClose={() => {
+            setDialing(false)
+            void qc.invalidateQueries({ queryKey: ['conversations'] })
+            void qc.invalidateQueries({ queryKey: ['events'] })
+          }} />}
           {addingContact && current && isNumber && (
             <AddContactDialog
               initial={prefillFromQuo(current)}

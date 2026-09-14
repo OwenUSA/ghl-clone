@@ -5,7 +5,8 @@ import { createPortal } from 'react-dom'
 import { cardDragId } from '../lib/boardOrder'
 import {
   ApiError,
-  callContact,
+  callContactRinging,
+  getContact,
   listUsers,
   money,
   openContactConversation,
@@ -13,6 +14,7 @@ import {
   type Opportunity,
 } from '../lib/api'
 import { me } from '../lib/auth'
+import { useCallLauncher } from '../lib/callLauncher'
 import { canOpenRecords, openRecord } from '../lib/openRecord'
 import { cardAddressLine } from '../lib/opportunityAddress'
 import { CARD_ICON_REQUEST, checklistBadge, requestModalTab } from '../lib/opportunityModal'
@@ -358,6 +360,7 @@ export function CardFace({
   const [flash, setFlash] = useFlash()
   const [busy, setBusy] = useState(false)
   const live = !!onOpen
+  const { launch, ready } = useCallLauncher()
 
   const openOn = (icon: keyof typeof CARD_ICON_REQUEST) => {
     if (!onOpen) return
@@ -369,7 +372,12 @@ export function CardFace({
     if (o.contact_id == null || busy) return
     setBusy(true)
     try {
-      const r = await callContact(o.contact_id)
+      // Rings THIS browser first when its phone is Ready (the in-call window opens), which
+      // needs the number to recognise the call coming back; otherwise the default operator.
+      const number = ready ? (await getContact(o.contact_id)).phone : null
+      const contactId = o.contact_id
+      const r = await launch({ number, contactId, contactName: o.contact_name },
+        (ringBrowser) => callContactRinging(contactId, ringBrowser))
       setFlash({ text: r.reason, bad: !r.placed })
     } catch (err) {
       setFlash({ text: err instanceof ApiError ? err.message

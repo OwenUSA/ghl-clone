@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from './components/Sidebar'
 import { SearchPalette } from './components/SearchPalette'
 import { Softphone } from './components/Softphone'
+import { InCallWindow } from './components/InCallWindow'
 import { StatusIndicator } from './components/StatusIndicator'
 import { SoftphoneProvider } from './lib/softphoneContext'
 import { ContactsPage } from './pages/ContactsPage'
@@ -131,6 +132,8 @@ export default function App() {
     <div className="flex h-screen w-screen overflow-hidden">
       <Softphone />
       <StatusIndicator />
+      {/* The one in-call window, for every call this browser is on (2026-09-14). */}
+      <InCallWindow user={user} />
       <Sidebar
         active={active}
         onNavigate={setActive}

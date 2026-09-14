@@ -14,16 +14,23 @@
 // registration.
 //
 // What this client does NOT do, deliberately: it drives its OWN leg only -- answer, hang
-// up, mute. Bridging, hold and transfer are backend/ARI concerns in the telephony project
-// and the browser never talks to ARI. In particular, **answering here stops the mobiles
+// up, mute, keypad tones, which microphone. Bridging, hold and transfer are backend/ARI
+// concerns in the telephony project and the browser never talks to ARI.
+//
+// OUTBOUND (2026-09-14): a call this browser places arrives back here as an ordinary
+// INVITE -- owen-main rings the operator's own phone first, then the customer. It is
+// answered automatically and never shows the incoming-call card, but only when this tab
+// asked for a call to that very number moments ago (`lib/outboundIntent.ts`). In particular, **answering here stops the mobiles
 // ringing all by itself**: `hybrid_ring_and_bridge` in owen-main hangs up every other leg
 // before it bridges the winner (its own test, `test_first_to_answer_is_bridged_and_the_
 // rest_are_torn_down`, asserts the losers are dropped BEFORE the bridge is created). There
 // is nothing to implement at this end, and implementing something would be a second,
 // competing answer to a question already settled.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Web } from 'sip.js'
 import { ApiError } from './api'
+import { applySpeaker, micConstraint } from './audioDevices'
+import { claimOutboundIntent } from './outboundIntent'
+import { createSipUser, type SipUser } from './sipUser'
 import { SoftphoneLease } from './softphoneLease'
 import { fetchSoftphoneCredentials, type SoftphoneCredentials } from './softphoneApi'
 
@@ -44,7 +51,18 @@ export type SoftphoneStatus =
   /** Could not register, and is not retrying. `error` says why. */
   | 'failed'
 
-export type CallPhase = 'idle' | 'ringing' | 'in-call'
+/** `connecting`: our own outbound leg, being answered automatically -- never a card. */
+export type CallPhase = 'idle' | 'ringing' | 'connecting' | 'in-call'
+
+export type CallDirection = 'inbound' | 'outbound'
+
+/** The call that just ended, for the in-call window's after-call view. */
+export type EndedCall = {
+  peer: string | null
+  direction: CallDirection
+  durationMs: number
+  endedAt: number
+}
 
 export type SoftphoneState = {
   status: SoftphoneStatus
@@ -59,14 +77,30 @@ export type SoftphoneState = {
   dialed: string | null
   answeredAt: number | null
   muted: boolean
+  /** Who started the live call. Null while idle. */
+  direction: CallDirection | null
+  /** The last call this browser was on, once it has ended. Cleared by the next call. */
+  lastCall: EndedCall | null
 }
 
-const IDLE: Pick<SoftphoneState, 'phase' | 'peer' | 'dialed' | 'answeredAt' | 'muted'> = {
+const IDLE: Pick<SoftphoneState,
+  'phase' | 'peer' | 'dialed' | 'answeredAt' | 'muted' | 'direction'> = {
   phase: 'idle',
   peer: null,
   dialed: null,
   answeredAt: null,
   muted: false,
+  direction: null,
+}
+
+/** Back to idle, remembering the call that just ended if it was ever connected. Safe to
+ *  apply twice (hang up, then SIP.js's own hangup callback): the second sees no call. */
+function ended(s: SoftphoneState): SoftphoneState {
+  const lastCall = s.answeredAt !== null && s.direction !== null
+    ? { peer: s.peer, direction: s.direction, durationMs: Date.now() - s.answeredAt,
+        endedAt: Date.now() }
+    : s.lastCall
+  return { ...s, ...IDLE, lastCall }
 }
 
 /** Remember the user's own choice across reloads. Per browser, never sent anywhere. */
@@ -147,10 +181,14 @@ export function useSoftphone() {
     status: 'off',
     error: null,
     operator: null,
+    lastCall: null,
     ...IDLE,
   })
 
-  const userRef = useRef<Web.SimpleUser | null>(null)
+  const userRef = useRef<SipUser | null>(null)
+  // The media options object SIP.js reads its constraints from on every answer. Held so
+  // the saved microphone can be put in it just before a call is answered.
+  const mediaRef = useRef<{ constraints: { audio: boolean; video: false } } | null>(null)
   const leaseRef = useRef<SoftphoneLease | null>(null)
   const expiresAtRef = useRef<number>(0)
   const retryRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; attempt: number }>({
@@ -250,9 +288,17 @@ export function useSoftphone() {
       }
 
       expiresAtRef.current = creds.sip.expires_at * 1000
-      const user = new Web.SimpleUser(creds.sip.wss_url, {
+      // SIP.js types `audio` as a boolean, but hands it straight to getUserMedia, which
+      // takes a constraint object -- how the saved microphone is applied (owen-main does
+      // the same).
+      const media = {
+        constraints: { audio: micConstraint() as unknown as boolean, video: false as const },
+        remote: { audio: remoteAudio() },
+      }
+      mediaRef.current = media
+      const user = createSipUser(creds.sip.wss_url, {
         aor: `sip:${creds.sip.username}@${creds.sip.domain}`,
-        media: { constraints: { audio: true, video: false }, remote: { audio: remoteAudio() } },
+        media,
         userAgentOptions: {
           authorizationUsername: creds.sip.authorization_username,
           authorizationPassword: creds.sip.password,
@@ -300,21 +346,41 @@ export function useSoftphone() {
             const session = (userRef.current as unknown as { session?: RemoteIdentity })
               ?.session
             const identity = session?.remoteIdentity
-            patch({
+            const peer = identity?.uri?.user || null
+            // Our own outbound leg? Only if this tab asked for a call to THIS number
+            // within the TTL -- single-shot, so the next INVITE is a real call again.
+            if (claimOutboundIntent(peer)) {
+              setState((s) => ({
+                ...s, phase: 'connecting', peer, dialed: identity?.displayName || null,
+                answeredAt: null, muted: false, direction: 'outbound', error: null,
+                lastCall: null,
+              }))
+              phaseRef.current = 'connecting'
+              void answerOwnCall()
+              return
+            }
+            setState((s) => ({
+              ...s,
               phase: 'ringing',
-              peer: identity?.uri?.user || null,
+              peer,
               dialed: identity?.displayName || null,
               answeredAt: null,
               muted: false,
+              direction: 'inbound',
               error: null,
-            })
+            }))
+            phaseRef.current = 'ringing'
           },
           onCallAnswered: () => {
-            patch({ phase: 'in-call', answeredAt: Date.now(), muted: false })
+            setState((s) => ({ ...s, phase: 'in-call', answeredAt: Date.now(), muted: false,
+              lastCall: null }))
+            phaseRef.current = 'in-call'
             watchMedia()
+            void applySpeaker(remoteAudio())
           },
           onCallHangup: () => {
-            patch({ ...IDLE })
+            phaseRef.current = 'idle'
+            setState(ended)
           },
         },
       })
@@ -394,9 +460,40 @@ export function useSoftphone() {
 
   // --- the controls -------------------------------------------------------------
 
+  /** Put the saved microphone into the constraints SIP.js is about to answer with. */
+  const loadSavedMicrophone = useCallback(() => {
+    if (mediaRef.current) mediaRef.current.constraints.audio = micConstraint() as unknown as boolean
+  }, [])
+
+  /**
+   * Answer the leg owen-main rang for a call THIS tab placed. A failure here is almost
+   * always the microphone, and it must be said as what it is -- owen-main's own history:
+   * falling through to the incoming-call card hid a blocked microphone behind a phantom
+   * "incoming call" for the number just dialled, for an entire afternoon.
+   */
+  const answerOwnCall = useCallback(async () => {
+    const user = userRef.current
+    if (!user) return
+    loadSavedMicrophone()
+    try {
+      await user.answer()
+    } catch (e) {
+      phaseRef.current = 'idle'
+      patch({
+        ...IDLE,
+        error:
+          'Could not connect your call — ' +
+          ((e as Error)?.message || 'the microphone could not be opened') +
+          '. Check the microphone permission for this site, then call again.',
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patch])
+
   const answer = useCallback(async () => {
     const user = userRef.current
     if (!user) return
+    loadSavedMicrophone()
     try {
       await user.answer()
     } catch (e) {
@@ -411,7 +508,7 @@ export function useSoftphone() {
           '. The call is still ringing the other phones.',
       })
     }
-  }, [patch])
+  }, [patch, loadSavedMicrophone])
 
   const decline = useCallback(async () => {
     const user = userRef.current
@@ -434,9 +531,54 @@ export function useSoftphone() {
       // server-bridged leg. The user's intent is to leave, so always return to idle --
       // letting that reject escape once left an in-call panel on screen forever.
     } finally {
-      patch({ ...IDLE })
+      phaseRef.current = 'idle'
+      setState(ended)
     }
-  }, [patch])
+  }, [])
+
+  /**
+   * One keypad press, sent down the call as a DTMF tone (an IVR, an extension). True if
+   * SIP.js took it. The tone the operator HEARS is played separately (`lib/dtmfTone.ts`),
+   * because an RFC 2833 tone is sent to the far end and never played back locally.
+   */
+  const sendDtmf = useCallback(async (digit: string): Promise<boolean> => {
+    const user = userRef.current
+    if (!user || !/^[0-9*#]$/.test(digit)) return false
+    try {
+      await user.sendDTMF(digit)
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  /**
+   * Switch the live call to the microphone just chosen. The new track replaces the old
+   * one on the call's audio sender -- no renegotiation -- and inherits the mute state,
+   * so switching devices can never silently unmute somebody.
+   */
+  const switchMicrophone = useCallback(async (): Promise<boolean> => {
+    loadSavedMicrophone()
+    const session = (userRef.current as unknown as { session?: SdhSession })?.session
+    const pc = session?.sessionDescriptionHandler?.peerConnection
+    const sender = pc?.getSenders().find((x) => x.track?.kind === 'audio')
+    if (!sender) return false
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraint() })
+      const track = stream.getAudioTracks()[0]
+      if (!track) return false
+      track.enabled = sender.track?.enabled ?? true
+      const old = sender.track
+      await sender.replaceTrack(track)
+      old?.stop()
+      return true
+    } catch {
+      return false
+    }
+  }, [loadSavedMicrophone])
+
+  /** Route call audio to the speaker just chosen. */
+  const switchSpeaker = useCallback(() => applySpeaker(remoteAudio()), [])
 
   const toggleMute = useCallback(() => {
     const user = userRef.current
@@ -553,7 +695,15 @@ export function useSoftphone() {
     }
   }, [])
 
-  return { state, setOnline, answer, decline, hangup, toggleMute, takeOver: () => setOnline(true) }
+  /** The after-call view was closed. */
+  const dismissLastCall = useCallback(() => {
+    setState((s) => (s.lastCall ? { ...s, lastCall: null } : s))
+  }, [])
+
+  return {
+    state, setOnline, answer, decline, hangup, toggleMute, sendDtmf, switchMicrophone,
+    switchSpeaker, dismissLastCall, takeOver: () => setOnline(true),
+  }
 }
 
 export type SoftphoneApi = ReturnType<typeof useSoftphone>

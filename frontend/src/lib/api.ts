@@ -1482,3 +1482,33 @@ export const unlinkCompanyCamProject = (opportunityId: number, projectId: string
   send<{ unlinked: string }>(
     `/api/opportunities/${opportunityId}/companycam/projects/${encodeURIComponent(projectId)}`,
     'DELETE')
+
+/* ---------------------------------------------------------------------------
+ * Placing a call that rings THIS browser first (2026-09-14).
+ *
+ * `ringBrowser` asks owen-main to ring the signed-in user's own browser phone rather
+ * than the binding's default operator; the server names the operator from the session,
+ * never from the request. Do not call these directly from a screen: go through
+ * `useCallLauncher` (lib/callLauncher.ts), which marks the outbound intent BEFORE the
+ * request leaves so the browser answers its own leg instead of showing "Incoming call".
+ * ---------------------------------------------------------------------------
+ */
+export type DialPlaced = CallPlaced & {
+  /** The number as the server normalised it (`+1XXXXXXXXXX`), null when it refused it. */
+  number: string | null
+  contact_id?: number | null
+  contact_name?: string | null
+  conversation_id?: number | null
+  number_thread_id?: number | null
+}
+
+/** The Conversations dialer: any number. A contact's number is their call, anyone
+ *  else's is logged on its number-only thread. Never creates a contact. */
+export const dialNumber = (number: string, ringBrowser: boolean) =>
+  send<DialPlaced>('/api/calls/dial', 'POST', { number, ring_browser: ringBrowser })
+
+export const callThreadRinging = (t: ThreadRef, ringBrowser: boolean) =>
+  send<CallPlaced>(`${threadPath(t)}/call`, 'POST', { ring_browser: ringBrowser })
+
+export const callContactRinging = (contactId: number, ringBrowser: boolean) =>
+  send<CallPlaced>(`/api/contacts/${contactId}/call`, 'POST', { ring_browser: ringBrowser })
