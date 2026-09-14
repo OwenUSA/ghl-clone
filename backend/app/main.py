@@ -4517,31 +4517,60 @@ def send_to_conversation(conv_id: int, body: MessageSend,
     return _send_to_contact(db, contact, body, principal)
 
 
-def _dial(number: str) -> tuple[dict | None, crmlink.LinkResult | None]:
+class CallOptions(BaseModel):
+    """The optional body of every "place a call" route (2026-09-14).
+
+    `ring_browser`: ring the SIGNED-IN USER'S OWN browser phone first, instead of the
+    binding's default operator. The browser sends it only while its phone is
+    registered, so the leg owen-main rings first is the tab that pressed Call, and
+    that tab answers it by itself (`frontend/src/lib/outboundIntent.ts`).
+
+    It is a flag, not an operator name. Who gets rung is the principal's own email —
+    the identity `/api/softphone/credentials` registers that browser as — and never a
+    value the client chose: naming somebody else's operator would ring their desk
+    with a call they did not place.
+    """
+
+    ring_browser: bool = False
+
+
+def _operator_for(principal: auth.Principal, opts: CallOptions | None) -> str | None:
+    """owen-main slugs whatever it is given with the same `operator_slug` its
+    credential minting uses, so the email rings exactly the endpoint the browser
+    registered as. None keeps owen-main's default (the binding's operator)."""
+    if opts is not None and opts.ring_browser and principal.email:
+        return principal.email
+    return None
+
+
+def _dial(number: str, operator: str | None = None
+          ) -> tuple[dict | None, crmlink.LinkResult | None]:
     """Ask owen-main to ring `number`. `(refusal, None)` or `(None, result)`.
 
-    The ONE dialling path, shared by a contact and a number-only thread, so calling
-    a number nobody has saved passes exactly the gates calling a contact does: the
-    CRM link must be armed here, and owen-main then applies its own kill switch,
-    `CRM_LINK_ALLOWLIST` (empty allows nothing), the bound-DID check and its block
-    list. Nothing on this side widens or skips any of them.
+    The ONE dialling path, shared by a contact, a number-only thread and the
+    Conversations dialer, so calling a number nobody has saved passes exactly the
+    gates calling a contact does: the CRM link must be armed here, and owen-main
+    then applies its own kill switch, `CRM_LINK_ALLOWLIST` (empty allows nothing),
+    the bound-DID check and its block list. Nothing on this side widens or skips
+    any of them.
     """
     if not crmlink.configured():
         return {"placed": False, "id": None,
                 "reason": "Calling is not switched on — this CRM is not connected "
                           "to the phone system yet."}, None
-    result = crmlink.place_call(to_number=number)
+    result = crmlink.place_call(to_number=number, operator=operator)
     if not result.ok:
         return {"placed": False, "id": None, "reason": result.reason}, None
     return None, result
 
 
-def _place_call(db: Session, contact: Contact) -> dict:
+def _place_call(db: Session, contact: Contact, operator: str | None = None) -> dict:
     """Ring the customer from the bound DID, via owen-main.
 
-    There is no browser softphone and there does not need to be: owen-main rings an
-    operator's phone first, then the customer, and bridges the two legs. The button
-    in the thread header starts that; the conversation happens on real handsets.
+    owen-main rings an operator's phone first, then the customer, and bridges the two
+    legs. With `operator` set (the caller's own browser phone, `CallOptions`) the
+    first leg rings the tab that pressed Call, which answers it by itself; without it,
+    owen-main rings the binding's default operator exactly as it always has.
 
     Refusals are answered 200 with `placed: false` and a sentence, not a 4xx. The
     caller is a person who pressed a button, the outcome is a business rule rather
@@ -4558,7 +4587,7 @@ def _place_call(db: Session, contact: Contact) -> dict:
     if contact.dnd:
         return {"placed": False, "id": None,
                 "reason": "This contact is on Do Not Disturb."}
-    refused, result = _dial(contact.phone)
+    refused, result = _dial(contact.phone, operator)
     if refused:
         return refused
 
@@ -4579,8 +4608,7 @@ def _place_call(db: Session, contact: Contact) -> dict:
     ev = ConversationEvent(
         conversation_id=conv.id, type=EventType.CALL,
         direction=Direction.OUTBOUND, occurred_at=datetime.now(UTC),
-        body="Outbound call placed from %s. Ringing an operator, then the customer."
-             % crmlink.current().from_number,
+        body=_placed_body(),
         provider_ref=linkedid or None,
     )
     db.add(ev)
@@ -4592,9 +4620,16 @@ def _place_call(db: Session, contact: Contact) -> dict:
                       % (format_phone(contact.phone) or contact.phone)}
 
 
+# The outbound-call row's body. One sentence for every path that places a call.
+def _placed_body() -> str:
+    return ("Outbound call placed from %s. Ringing an operator, then the customer."
+            % crmlink.current().from_number)
+
+
 @app.post("/api/contacts/{contact_id}/call")
-def call_contact(contact_id: int, db: Session = Depends(get_db),
-                 _: auth.Principal = auth.ANY_USER):
+def call_contact(contact_id: int, body: CallOptions | None = None,
+                 db: Session = Depends(get_db),
+                 principal: auth.Principal = auth.ANY_USER):
     """Place a call to a contact.
 
     ANY_USER: a TECH may send a customer a message (CLAUDE.md), and ringing the
@@ -4603,12 +4638,13 @@ def call_contact(contact_id: int, db: Session = Depends(get_db),
     contact = db.get(Contact, contact_id)
     if not contact:
         raise HTTPException(404, "contact not found")
-    return _place_call(db, contact)
+    return _place_call(db, contact, _operator_for(principal, body))
 
 
 @app.post("/api/conversations/{conv_id}/call")
-def call_conversation(conv_id: int, db: Session = Depends(get_db),
-                      _: auth.Principal = auth.ANY_USER):
+def call_conversation(conv_id: int, body: CallOptions | None = None,
+                      db: Session = Depends(get_db),
+                      principal: auth.Principal = auth.ANY_USER):
     """The shape the thread header's phone button uses."""
     conv = db.get(Conversation, conv_id)
     if not conv:
@@ -4616,7 +4652,93 @@ def call_conversation(conv_id: int, db: Session = Depends(get_db),
     contact = db.get(Contact, conv.contact_id)
     if not contact:
         raise HTTPException(404, "conversation has no contact")
-    return _place_call(db, contact)
+    return _place_call(db, contact, _operator_for(principal, body))
+
+
+class DialIn(CallOptions):
+    number: str = Field(max_length=40)
+
+
+# Only North American numbers are dialled from the CRM: the dialer formats and
+# validates a 10-digit NANP number, and the bound DID is a US BulkVS line. owen-main's
+# allowlist still has the last word on which of those may actually be rung.
+_DIALABLE_CHARS = re.compile(r"^[\d\s().+-]*$")
+
+
+def dial_problem(raw: str) -> tuple[str | None, str | None]:
+    """`(e164, None)` for a number the dialer may ring, else `(None, sentence)`.
+
+    The same rules, in the same words, as `dialProblem` in `frontend/src/lib/dialPad.ts`
+    — the browser explains before Call is pressed, this is the gate. Not
+    `phones.normalize_phone`: its sentences are about SAVING a contact's number
+    ("extensions are not stored...") and it accepts every country.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None, "Enter a number to call — 10 digits, area code first."
+    if not _DIALABLE_CHARS.match(text):
+        return None, ("A number to call has only digits. Star and pound are for menus "
+                      "once the call connects.")
+    digits = re.sub(r"\D", "", text)
+    if text.startswith("+") and not digits.startswith("1"):
+        return None, ("Only US and Canadian numbers can be called from here — "
+                      "enter 10 digits, area code first.")
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return None, ("Only US and Canadian numbers can be called from here — "
+                      "enter 10 digits, area code first."
+                      if len(digits) > 10 else
+                      "That number is too short — enter all 10 digits, area code first.")
+    if digits[0] in "01" or digits[3] in "01":
+        return None, ("That is not a valid US number — an area code and an exchange "
+                      "cannot start with 0 or 1.")
+    return "+1" + digits, None
+
+
+@app.post("/api/calls/dial")
+def dial_number(body: DialIn, db: Session = Depends(get_db),
+                principal: auth.Principal = auth.ANY_USER):
+    """Call ANY number — the Conversations page's "Call a number" dialer (2026-09-14).
+
+    Not a second dialling path. The number is normalised, then:
+
+      * a CONTACT holds it (last ten digits, lowest id — `contact_holding`): this is
+        `POST /api/contacts/{id}/call`, byte for byte, DND refusal included;
+      * nobody holds it: `_dial`, and only once owen-main has ACCEPTED the call is its
+        number-only thread found or created and the call logged there, exactly as
+        `POST /api/number-threads/{id}/call` logs one. No contact is ever created.
+
+    Every refusal is a 200 with `placed: false` and a sentence, like the routes it
+    reuses, and writes nothing — not even an empty thread for a number that was never
+    rung.
+    """
+    number, problem = dial_problem(body.number)
+    if problem:
+        return {"placed": False, "id": None, "number": None, "reason": problem}
+    if number_threads.phone_key(number) == number_threads.phone_key(
+            crmlink.current().from_number):
+        return {"placed": False, "id": None, "number": number,
+                "reason": "That is this CRM's own number — it cannot call itself."}
+
+    operator = _operator_for(principal, body)
+    contact = number_threads.contact_holding(db, number)
+    if contact is not None:
+        out = _place_call(db, contact, operator)
+        return {**out, "number": number, "contact_id": contact.id,
+                "contact_name": contact.name or None, "number_thread_id": None}
+
+    refused, result = _dial(number, operator)
+    if refused:
+        return {**refused, "number": number, "contact_id": None,
+                "contact_name": None, "number_thread_id": None}
+    thread, _created = number_threads.thread_for_number(db, number)
+    ev = _log_number_call(db, thread, result)
+    return {"placed": True, "id": ev.id, "number": number, "contact_id": None,
+            "contact_name": None, "conversation_id": None,
+            "number_thread_id": thread.id,
+            "reason": "Calling %s now — your phone will ring first."
+                      % (format_phone(number) or number)}
 
 
 class ConversationPatch(BaseModel):
@@ -4735,21 +4857,14 @@ def send_to_number_thread(thread_id: int, body: MessageSend,
             "delivery_detail": ev.delivery_detail}
 
 
-@app.post("/api/number-threads/{thread_id}/call")
-def call_number_thread(thread_id: int, db: Session = Depends(get_db),
-                       _: auth.Principal = auth.ANY_USER):
-    """Ring the number from the bound DID, through the same `_dial` a contact call
-    uses — owen-main's allowlist and block list apply unchanged."""
-    t = _number_thread(db, thread_id)
-    refused, result = _dial(t.phone)
-    if refused:
-        return refused
+def _log_number_call(db: Session, t: NumberThread,
+                     result: crmlink.LinkResult) -> NumberThreadEvent:
+    """Record an outbound call owen-main accepted, on a number-only thread."""
     linkedid = str((result.data or {}).get("linkedid") or "")
     ev = NumberThreadEvent(
         number_thread_id=t.id, type=EventType.CALL, direction=Direction.OUTBOUND,
         occurred_at=datetime.now(UTC),
-        body="Outbound call placed from %s. Ringing an operator, then the customer."
-             % crmlink.current().from_number,
+        body=_placed_body(),
         provider_ref=linkedid or None,
         source_system=automations.SENT_SOURCE_SYSTEM,
         source_number=crmlink.current().from_number,
@@ -4758,6 +4873,20 @@ def call_number_thread(thread_id: int, db: Session = Depends(get_db),
     t.last_event_at = ev.occurred_at
     db.commit()
     db.refresh(ev)
+    return ev
+
+
+@app.post("/api/number-threads/{thread_id}/call")
+def call_number_thread(thread_id: int, body: CallOptions | None = None,
+                       db: Session = Depends(get_db),
+                       principal: auth.Principal = auth.ANY_USER):
+    """Ring the number from the bound DID, through the same `_dial` a contact call
+    uses — owen-main's allowlist and block list apply unchanged."""
+    t = _number_thread(db, thread_id)
+    refused, result = _dial(t.phone, _operator_for(principal, body))
+    if refused:
+        return refused
+    ev = _log_number_call(db, t, result)
     return {"placed": True, "id": ev.id, "number_thread_id": t.id,
             "reason": "Calling %s now — your phone will ring first."
                       % (format_phone(t.phone) or t.phone)}
