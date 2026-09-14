@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sidebar } from './components/Sidebar'
 import { SearchPalette } from './components/SearchPalette'
 import { Softphone } from './components/Softphone'
+import { StatusIndicator } from './components/StatusIndicator'
 import { SoftphoneProvider } from './lib/softphoneContext'
 import { ContactsPage } from './pages/ContactsPage'
 import { ConversationsPage } from './pages/ConversationsPage'
@@ -122,10 +123,14 @@ export default function App() {
   // exist exactly once), and a call rings the browser rather than a screen -- the
   // incoming card has to appear whatever page is open. Nothing about it belongs to
   // Conversations. See components/Softphone.tsx.
+  //
+  // The status dot sits beside it for the same reason (2026-09-14): it is on every page,
+  // top right, and it reads the one softphone rather than starting another.
   return (
     <SoftphoneProvider>
     <div className="flex h-screen w-screen overflow-hidden">
       <Softphone />
+      <StatusIndicator />
       <Sidebar
         active={active}
         onNavigate={setActive}

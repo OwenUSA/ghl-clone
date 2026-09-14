@@ -23,3 +23,13 @@ body {
     sans-serif;
   overflow: hidden; /* GHL pins the document; an inner pane scrolls */
 }
+
+/* The status dot's live state (components/StatusIndicator.tsx): GHL's green phone button,
+   with a soft ring so a call in progress is noticed without being loud. */
+@keyframes ghl-live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(23, 124, 73, 0.45); }
+  70% { box-shadow: 0 0 0 8px rgba(23, 124, 73, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(23, 124, 73, 0); }
+}
+.ghl-live-pulse { animation: ghl-live-pulse 2s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ghl-live-pulse { animation: none; } }

@@ -3,7 +3,8 @@
 Asserted against source, like `test_frontend_layout.py`: there is no JS test runner in
 this repo. These are the three things that would be silently wrong rather than broken:
 
-  1. the softphone is mounted ONCE, globally — not inside a page;
+  1. the softphone is mounted ONCE, globally — not inside a page (and so is the status
+     dot that now carries its registration state, `test_connection_status_ui.py`);
   2. it stays out of the Conversations view, which another branch is rewriting right now;
   3. every registration state the hook can produce has a sentence written for it, because
      a blank status badge is exactly the "is my browser actually a phone?" ambiguity this
@@ -67,17 +68,21 @@ def test_no_page_owns_the_softphone():
 
 
 def test_every_registration_state_has_something_to_say():
-    """The dock is the whole answer to 'can this browser take a call right now'. A status
-    the hook can reach but the dock has no wording for renders an empty badge, which reads
-    as 'fine' — the exact ambiguity this replaces."""
+    """The status dot's hover card is the whole answer to 'can this browser take a call right
+    now'. A status the hook can reach but the card has no wording for renders an empty row,
+    which reads as 'fine' — the exact ambiguity this replaces.
+
+    The wording moved from the floating dock (Softphone.tsx) to `lib/connectionStatus.ts`
+    when the owner replaced the dock with the top-right dot on 2026-09-14."""
     hook = read("lib", "softphone.ts")
-    ui = read("components", "Softphone.tsx")
+    ui = read("lib", "connectionStatus.ts")
 
     union = hook.split("export type SoftphoneStatus =", 1)[1].split("export type CallPhase", 1)[0]
     states = set(re.findall(r"^\s*\|\s*'([a-z-]+)'", union, re.MULTILINE))
     assert len(states) >= 6, f"the status union no longer parses ({states})"
 
-    described = set(re.findall(r"^\s{2}'?([a-z-]+)'?:\s*\{", ui, re.MULTILINE))
+    phone = ui.split("export function phoneCheck(", 1)[1].split("\nexport function", 1)[0]
+    described = set(re.findall(r"case '([a-z-]+)':", phone))
     missing = states - described
     assert not missing, f"no wording for the softphone status(es) {sorted(missing)}"
 
@@ -107,7 +112,8 @@ def test_a_dropped_registration_says_so_rather_than_staying_green():
 def test_the_credential_password_is_never_rendered_or_stored():
     """It is a real SIP digest password. It goes to SIP.js and nowhere else — not to a
     log, not to localStorage, not into the DOM."""
-    for name in ("lib/softphone.ts", "lib/softphoneApi.ts", "components/Softphone.tsx"):
+    for name in ("lib/softphone.ts", "lib/softphoneApi.ts", "components/Softphone.tsx",
+                 "components/StatusIndicator.tsx", "lib/connectionStatus.ts"):
         source = read(*name.split("/"))
         for leak in ("console.log", "console.debug", "console.info"):
             assert leak not in source, f"{name} logs from the softphone path ({leak})"
