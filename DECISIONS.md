@@ -3759,3 +3759,13 @@ phone_number}` — shaped from CompanyCam's public docs, unwrapped); whether `GE
 list was read); whether photo URIs are signed/expiring and whether the image host wants the token;
 how fast a just-created project becomes searchable; CompanyCam's rate limits (429 is retried with
 `Retry-After`, pages are 0.25 s apart).
+
+### Migration `c4e8a2f6b913`, on `a7d4c2e9f130`
+
+Written after `feature/opportunity-checklist` merged (e69a9ae), on the single head it left. Four
+CREATE TABLEs and their plain `op.create_index`es, nothing else — no ALTER, no DROP, no UPDATE, no
+batch mode. `tests/test_companycam_migration.py` stands a throwaway SQLite up at `a7d4c2e9f130`
+with production-shaped rows, upgrades, and asserts every pre-existing table has identical columns
+and identical rows, exactly the four new tables appear and are empty, the server defaults fill,
+a card delete cascades its link and request rows with foreign keys enforced, and a downgrade /
+upgrade round trip is clean.
