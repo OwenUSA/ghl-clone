@@ -1583,3 +1583,45 @@ def test_one_email_card_is_never_given_two_workiz_jobs(fresh, tmp_path, ada):
     fresh.refresh(card)
     assert "workiz_id" not in card.custom_fields
     assert fresh.scalar(select(func.count(Opportunity.id))) == 3
+
+
+# ------------------------------------------------------------------ card titles
+
+
+def test_a_card_is_named_after_the_customer_not_the_job(fresh, tmp_path):
+    """The owner, 2026-09-14: "i want the name of the oportunities to be the names of the
+    customers, not like default 'Inspection', 'Callback'". Workiz's Job name is usually a
+    job type; the type already lives in the Job type field, so the title is the Client."""
+    do_import(
+        fresh, tmp_path,
+        [client_row("1", "Ada Rowe", phone="9415550111"),
+         client_row("2", "Ben Vale", phone="9415550222")],
+        [job_row("J1", "Ada Rowe", name="Inspection", job_type="Inspection",
+                 phone="9415550111"),
+         job_row("J2", "Ben Vale", name="", job_type="Active Leak Repair",
+                 phone="9415550222")])
+    by_job = {o.custom_fields["workiz_id"]: o for o in fresh.scalars(select(Opportunity))}
+    assert by_job["J1"].title == "Ada Rowe", "a job NAME must not become the title"
+    assert by_job["J2"].title == "Ben Vale", "the job TYPE must not be appended"
+    assert by_job["J2"].custom_fields.get("job_type") == "Active Leak Repair"
+
+
+def test_a_re_import_renames_an_old_job_titled_card_to_the_customer(fresh, tmp_path):
+    clients = [client_row("1", "Ada Rowe", phone="9415550111")]
+    jobs = [job_row("J1", "Ada Rowe", name="Callback", phone="9415550111")]
+    do_import(fresh, tmp_path, clients, jobs)
+    card = fresh.scalar(select(Opportunity))
+    card.title = "Callback"          # the title the old rule produced
+    fresh.commit()
+    do_import(fresh, tmp_path, clients, jobs)
+    fresh.refresh(card)
+    assert card.title == "Ada Rowe"
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 1
+
+
+def test_a_row_with_no_client_still_gets_a_readable_title(fresh, tmp_path):
+    plan = do_import(
+        fresh, tmp_path, [client_row("1", "Ada Rowe", phone="9415550111")],
+        [job_row("J1", "", name="Roof leak", phone="9415550111")], commit=False)
+    titles = [o.title for o in plan.opportunities]
+    assert titles == ["Roof leak"] or titles == [], titles

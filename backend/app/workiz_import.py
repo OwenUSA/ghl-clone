@@ -964,11 +964,13 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
                 plan.skipped.append(Skip("jobs", job_id, str(e)))
                 continue
 
-            name = clean(row.get("Job name"))
-            if not name:
-                # The measured GHL convention is "<NAME> - <something>".
-                name = "%s - %s" % (clean(row.get("Client")) or "Workiz job",
-                                    clean(row.get("Type")) or "Job")
+            # The card is named after the CUSTOMER, never the job (the owner, 2026-09-14:
+            # "i want the name of the oportunities to be the names of the customers, not
+            # like default 'Inspection', 'Callback'"). Workiz's own "Job name" is usually
+            # a job type, and the type already lives in the Job type field. Only a row
+            # with no Client at all falls back to the job name.
+            name = (clean(row.get("Client")) or clean(row.get("Job name"))
+                    or "Workiz job %s" % job_id)
             job_type = clean(row.get("Type")) or None
 
             existing = existing_opps.get(job_id) or []
