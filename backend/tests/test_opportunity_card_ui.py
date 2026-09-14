@@ -203,7 +203,10 @@ def test_icons_that_open_the_modal_ask_for_their_tab_first():
 def test_call_and_conversations_do_their_own_thing():
     source = _read(*CARD.split("/"))
     call = source.split("const call = async () =>", 1)[1].split("\n  }\n", 1)[0]
-    assert "callContact(o.contact_id)" in call and "onOpen" not in call
+    # The contact's own call route, through the call launcher since 2026-09-14 (it rings
+    # this browser first when its phone is Ready; test_dialer_ui.py fences the launcher).
+    assert "callContactRinging(contactId, ringBrowser)" in call and "launch(" in call
+    assert "onOpen" not in call
     convs = source.split("const conversations = async () =>", 1)[1].split("\n  }\n", 1)[0]
     assert "openRecord('conversations'" in convs and "onOpen" not in convs
     assert "canOpenRecords() &&" in source, (

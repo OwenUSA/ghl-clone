@@ -780,8 +780,10 @@ def test_the_page_selects_by_key_and_shows_the_number_thread_affordances():
     assert "useState<string | null>(null)" in page and "c.key === active" in page
     assert "c.id === active" not in page, "a row selected by id collides across kinds"
     # Every thread action goes through the row-addressed helpers.
+    # (Calls use `callThreadRinging(current, ...)` since 2026-09-14 — the same row-addressed
+    # route, through the call launcher; see test_dialer_ui.py.)
     for helper in ("listThreadEvents(", "patchThread(", "deleteThread(", "sendToThread(",
-                   "callThread("):
+                   "callThreadRinging(current"):
         assert helper in page, helper
     assert "`/api/number-threads/${t.id}`" in api
     # Not-a-contact marker on the row and in the header; Add as contact in the header
