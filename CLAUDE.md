@@ -227,6 +227,12 @@ uv run python -m app.workiz_import --json | jq     # the same numbers, for a mac
   in the CRM by hand have no `workiz_id`, which is expected.
 - **It has never been run against production.** See the 2026-09-11 entry in
   `DECISIONS.md` for what a human must check first.
+- **A job whose customer is not in the clients file makes its own contact**
+  (2026-09-14). It has no `workiz_id`; it carries `workiz_from_jobs` and a re-run finds
+  it by Job #, then phone, then email. Opportunities the export no longer mentions are
+  listed and left untouched. A new Workiz AHS job attaches to the ONE AHS email card
+  (`created_by` "AHS email", `ahs_job_id` set, no `workiz_id`) for the same customer
+  within 3 days — that is a contract with ahsmail. See `DECISIONS.md`.
 
 ## Schema changes go through Alembic
 
