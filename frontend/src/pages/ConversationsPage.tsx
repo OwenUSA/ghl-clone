@@ -7,9 +7,10 @@ import {
   FromQuo, NotAContactPill, NumberDetailsPanel, canAddContact, prefillFromQuo,
 } from '../components/NumberDetailsPanel'
 import { AddContactDialog } from '../components/AddContactDialog'
+import { CallRecordingPlayer } from '../components/CallRecordingPlayer'
 import {
   IconCalendar, IconChat, IconChevronDown, IconClock, IconEye, IconFilter,
-  IconFunnel, IconInbox, IconMail, IconPhone, IconPlay, IconPlus, IconSearch, IconSort,
+  IconFunnel, IconInbox, IconMail, IconPhone, IconPlus, IconSearch, IconSort,
   IconStar, IconStarFilled, IconTrash, IconUser, IconUsers,
 } from '../components/Icon'
 import {
@@ -24,6 +25,7 @@ import {
   unreadTabCount, type InboxScope, type RailKey,
 } from '../lib/inbox'
 import { sendSentence } from '../lib/sendOutcome'
+import { hasRecording } from '../lib/callPlayer'
 import { formatPhone } from '../lib/phone'
 
 /**
@@ -127,8 +129,6 @@ const dayLabel = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 const timeLabel = (iso: string) =>
   new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-const fmtDur = (s: number) =>
-  `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 
 function IconBtn({
   children, title, onClick, size = 24, disabled = false,
@@ -407,24 +407,17 @@ function EventBubble({ e }: { e: ThreadEvent }) {
           {e.type === 'CALL' ? (
             <div>
               {/* measured: "Call completed" 14px/400 rgb(16,24,40), then a player
-                  row with play, waveform, 0:00 / 0:13, 1x, volume, download */}
+                  row: play, seek bar, 0:00 / 0:13, 1x. A call with no recording
+                  gets no player at all — never a dead "0:00 / 0:00". */}
               <div className="flex items-center gap-1"
                 style={{ fontSize: 14, fontWeight: 400, color: 'rgb(16,24,40)' }}>
                 <IconPhone size={14} color={CALL_TONE[e.call_status ?? ''] ?? 'rgb(102,112,133)'} />
                 {callLabel(e)}
               </div>
-              <div className="mt-2 flex items-center gap-2">
-                <IconPlay size={26} color="rgb(21,112,239)" />
-                <span style={{ letterSpacing: -1, color: 'rgb(152,162,179)', fontSize: 12 }}>
-                  ▁▃▅▂▇▃▅▁▆▂▄▁▃
-                </span>
-                <span style={{ fontSize: 12, color: 'rgb(71,84,103)' }}>
-                  0:00 / {e.duration_seconds != null ? fmtDur(e.duration_seconds) : '0:00'}
-                </span>
-                <span style={{ fontSize: 12, color: 'rgb(71,84,103)' }}>1x</span>
-              </div>
-              <audio controls src={e.recording_url ?? undefined}
-                style={{ marginTop: 6, height: 28, width: 280 }} />
+              {hasRecording(e) && (
+                <CallRecordingPlayer src={e.recording_url as string}
+                  knownDuration={e.duration_seconds} />
+              )}
               {e.transcript && (
                 // Quo transcribes its calls; the words are part of the record.
                 <details style={{ marginTop: 6, fontSize: 13, color: 'rgb(71,84,103)' }}>

@@ -48,8 +48,9 @@ over BulkVS and only BulkVS. See `ConversationsPage.tsx`, which says so on scree
 in any thread that holds a mirrored event.
 """
 import logging
+import re
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Response
 
 from . import auth, crmlink
 
@@ -64,9 +65,58 @@ router = APIRouter(prefix="/api/openphone", tags=["openphone"])
 RECORDINGS_PATH = "/api/openphone/recordings"
 
 
+# ---- seeking (2026-09-14) -------------------------------------------------------
+#
+# The thread's player has a seek bar, and Chrome will not move `currentTime` on a
+# media response that does not honour HTTP Range: it restarts from 0. Measured in a
+# real Chromium against a full-body 200 with no Accept-Ranges — what this route used
+# to answer — and again against this route once it honoured Range. Since the bytes are already
+# held in full (see `crmlink.fetch_openphone_recording`), answering a Range request
+# is a slice, not a stream.
+#
+# A seek is a second request, and it travels CRM -> owen-main -> Quo again. Nothing is
+# cached here on purpose: a cache would keep playing audio after owen-main or Quo went
+# away, and `test_an_openphone_outage_leaves_the_thread_rendering` pins that it stops.
+# The browser may still reuse what it has (`Cache-Control: private, max-age=300`).
+_RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
+
+
+def audio_response(audio: bytes, content_type: str, range_header: str | None) -> Response:
+    """200 with the whole file, or 206 with the one byte range asked for.
+
+    `bytes=a-b`, `bytes=a-` and `bytes=-n` are honoured. A range past the end is
+    416; a header this does not understand (several ranges, other units) gets the
+    whole file, which is always a correct answer to a Range request.
+    """
+    total = len(audio)
+    headers = {"Cache-Control": "private, max-age=300",
+               "Accept-Ranges": "bytes"}
+    media_type = content_type or "audio/mpeg"
+    match = _RANGE.match((range_header or "").strip())
+    if not match or match.groups() == ("", ""):
+        return Response(content=audio, media_type=media_type, headers=headers)
+    first, last = match.groups()
+    if first == "":
+        length = int(last)
+        if length == 0:
+            return Response(status_code=416, headers={**headers,
+                            "Content-Range": "bytes */%d" % total})
+        start, end = max(0, total - length), total - 1
+    else:
+        start = int(first)
+        end = min(int(last), total - 1) if last else total - 1
+    if start >= total or start > end:
+        return Response(status_code=416, headers={**headers,
+                        "Content-Range": "bytes */%d" % total})
+    headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, total)
+    return Response(content=audio[start:end + 1], status_code=206, media_type=media_type,
+                    headers=headers)
+
+
 @router.get("/recordings/{call_id}")
 def stream_recording(call_id: str,
-                     _: auth.Principal = auth.ANY_USER) -> Response:
+                     _: auth.Principal = auth.ANY_USER,
+                     range_header: str | None = Header(None, alias="Range")) -> Response:
     """Play one mirrored OpenPhone call recording.
 
     ANY_USER, matching the rest of the thread: a TECH who can read a conversation
@@ -92,8 +142,7 @@ def stream_recording(call_id: str,
         # `private` because this is one customer's call audio: it must not sit in a
         # shared cache. The short max-age lets the player scrub without re-fetching
         # the whole file back through three hops.
-        return Response(content=audio, media_type=content_type or "audio/mpeg",
-                        headers={"Cache-Control": "private, max-age=300"})
+        return audio_response(audio, content_type, range_header)
 
     # A LinkResult: owen-main answered, or could not be reached.
     if result.status == 404:

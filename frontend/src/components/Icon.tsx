@@ -140,6 +140,13 @@ export const IconPlay = make(
     <path d="M10 8.5v7l5.5-3.5-5.5-3.5z" />
   </>,
 )
+/** The pause twin of IconPlay: same ring, two bars. The call-recording player. */
+export const IconPause = make(
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M10 9v6M14 9v6" />
+  </>,
+)
 export const IconImage = make(
   <>
     <rect x="3" y="3" width="18" height="18" rx="2" />

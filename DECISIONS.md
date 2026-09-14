@@ -3380,3 +3380,41 @@ Opportunities dropdown/card look already rebuilt (white, 1px rgb(234,236,240), 8
 soft shadow). Colours are the dock's own. The dot sits at `top: 9px; right: 16px` because this
 app has no global top bar — GHL's icon row sits in the page header's top strip, and ours is
 pinned into the same strip of every page header.
+
+## 2026-09-14 — Quo call recordings play: a real player, and the 499 blanks repaired
+
+**What was wrong (measured on production, read-only).** All 499 mirrored Quo calls had
+`recording_url = NULL` (296 on contact threads, 203 on number-only threads), so the `<audio>`
+under each had no `src` and read "0:00 / 0:00". Quo's `GET /v1/call-recordings/{id}` answers
+`{"data": [ ... ]}` — a list — and owen-main treated it as one dict. Above that sat a player
+row that was pure decoration: a play icon wired to nothing, a `▁▃▅▂▇` glyph "waveform", a
+hard-coded time and "1x".
+
+**owen-main** (`feature/quo-recordings`) reads the list (`openphone_client.pick_recording`),
+so the poll and the webhook send `recording_url` from now on, and gains
+`python -m app.integrations.openphone.manage recordings [--commit]`: a dry run by default that
+re-sends, for each mirrored call WITH audio, one enrichment under the call's SAME dedupe key.
+This CRM already fills a blank `recording_url` on a repeat delivery (`ENRICHABLE_FIELDS`,
+`_duplicate_event` looks in both `conversation_events` and `number_thread_events`), so **no
+change was needed here for the repair** — `test_call_player.py` now pins it on both thread
+kinds, including that nothing but the blank is written.
+
+**This CRM:**
+
+- `components/CallRecordingPlayer.tsx` + `lib/callPlayer.ts`: play/pause, a plain seek bar,
+  elapsed / total, 1x → 1.5x → 2x. One `<audio>` per call, `preload="none"` and **no `src`
+  until play is pressed**. No player at all without a `recording_url`. A 404/502 from the
+  stream replaces the row with "Recording unavailable". The native `<audio controls>` is gone.
+- `GET /api/openphone/recordings/{id}` now honours **HTTP Range** (206 / 416,
+  `Accept-Ranges: bytes`). Chrome will not seek a media response without it — measured in
+  headless Chromium: the seek bar restarted the audio at 0 against a full-body 200 and
+  landed at 0:10 of 0:20 once the route answered 206. Each seek is one more CRM → owen-main
+  → Quo round trip. **Deliberately not cached server-side**: a cache would keep audio
+  playing after owen-main or Quo went away, which the outage test pins must not happen.
+
+**Assumptions the screenshots do not settle (overrulable):** the seek bar is a native range
+input tinted GHL blue (the reference shows a waveform, which the brief ruled out as fake);
+a pause icon (ring + two bars) mirrors the existing play icon; pressing play on one call
+pauses any other call that is playing; a finished recording shows its full length with the
+play icon, and pressing play restarts it; before loading, "total" is the event's own
+`duration_seconds`, replaced by the media's real length once it loads.
