@@ -75,7 +75,10 @@ export function useAudioDevices(active: boolean) {
     try {
       const list = await navigator.mediaDevices.enumerateDevices()
       const pick = (kind: MediaDeviceKind, fallback: string) =>
-        list.filter((d) => d.kind === kind && d.deviceId)
+        // 'default' and 'communications' are aliases for a device already listed, and
+        // "System default" is offered separately.
+        list.filter((d) => d.kind === kind && d.deviceId && d.deviceId !== 'default'
+          && d.deviceId !== 'communications')
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `${fallback} ${i + 1}` }))
       setInputs(pick('audioinput', 'Microphone'))
       setOutputs(pick('audiooutput', 'Speaker'))

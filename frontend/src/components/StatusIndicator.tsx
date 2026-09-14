@@ -150,6 +150,26 @@ export function StatusIndicator() {
     if (closeTimer.current) clearTimeout(closeTimer.current)
   }, [])
 
+  // A press or focus anywhere else closes the card. `onBlur` alone is not enough: the
+  // card's own buttons change under the pointer (Switch on → nothing while connecting,
+  // and the call row appears), and a focused button that UNMOUNTS never fires a blur, so
+  // the card stayed open over everything — including the in-call window beneath it.
+  useEffect(() => {
+    if (!open) return
+    const outside = (e: Event) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node | null)) {
+        setFocused(false)
+        setHovered(false)
+      }
+    }
+    document.addEventListener('pointerdown', outside, true)
+    document.addEventListener('focusin', outside, true)
+    return () => {
+      document.removeEventListener('pointerdown', outside, true)
+      document.removeEventListener('focusin', outside, true)
+    }
+  }, [open])
+
   const inCall = state.phase === 'in-call'
   const contact = useCaller(state.peer, inCall)
 
@@ -283,7 +303,12 @@ export function StatusIndicator() {
 
           <Row check={phone}>
             {!inCall && action && (
-              <Button tone={action.online ? 'primary' : 'plain'} onClick={() => setOnline(action.online)}>
+              <Button tone={action.online ? 'primary' : 'plain'} onClick={() => {
+                setOnline(action.online)
+                // This button is about to be replaced or removed, taking focus with it
+                // and no blur — so the card is held open by the pointer alone from here.
+                setFocused(false)
+              }}>
                 {action.label}
               </Button>
             )}

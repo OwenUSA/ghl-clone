@@ -177,11 +177,12 @@ export function InCallWindow({ user }: { user: Me }) {
         <div className="min-w-0 flex-1">
           <div data-testid="call-title" className="truncate"
             style={{ fontSize: 14, fontWeight: 600, color: INK }}>{title}</div>
-          <div className="flex items-center" style={{ gap: 6, fontSize: 12, color: MUTED,
-            fontVariantNumeric: 'tabular-nums' }}>
-            {contactName && number && <span className="truncate">{number}</span>}
-            {contactName && number && <span aria-hidden>·</span>}
-            <span>{direction === 'outbound' ? 'Outbound' : 'Inbound'}</span>
+          {contactName && number && (
+            <div className="truncate" style={{ fontSize: 12, color: MUTED }}>{number}</div>
+          )}
+          <div className="flex items-center" style={{ gap: 4, fontSize: 12, color: MUTED,
+            whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            <span>{direction === 'outbound' ? 'Outbound call' : 'Inbound call'}</span>
             <span aria-hidden>·</span>
             {live && state.answeredAt && <Ticker since={state.answeredAt} />}
             {after && <span data-testid="call-duration">Ended · {formatCallDuration(after.durationMs)}</span>}

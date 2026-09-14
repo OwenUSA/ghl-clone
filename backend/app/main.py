@@ -4693,6 +4693,8 @@ def dial_problem(raw: str) -> tuple[str | None, str | None]:
     if digits[0] in "01" or digits[3] in "01":
         return None, ("That is not a valid US number — an area code and an exchange "
                       "cannot start with 0 or 1.")
+    if number_threads.phone_key(crmlink.current().from_number) == digits:
+        return None, "That is this CRM's own number — it cannot call itself."
     return "+1" + digits, None
 
 
@@ -4716,10 +4718,6 @@ def dial_number(body: DialIn, db: Session = Depends(get_db),
     number, problem = dial_problem(body.number)
     if problem:
         return {"placed": False, "id": None, "number": None, "reason": problem}
-    if number_threads.phone_key(number) == number_threads.phone_key(
-            crmlink.current().from_number):
-        return {"placed": False, "id": None, "number": number,
-                "reason": "That is this CRM's own number — it cannot call itself."}
 
     operator = _operator_for(principal, body)
     contact = number_threads.contact_holding(db, number)
