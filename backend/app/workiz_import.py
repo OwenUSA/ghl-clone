@@ -151,7 +151,9 @@ AHS_STAGES = [
     "New Lead",
     "Inspection",
     "Request the Approval (AHS)",
-    "Approved- Repair Schedule",
+    # Split by the owner on 2026-09-14: approval and scheduling the repair are two steps.
+    "Approved",
+    "Repair Scheduled",
     "Repair in Process",
     "Submit The Invoice",
     "Call Back",
@@ -207,7 +209,10 @@ STAGE_FOR = {
         # rows. The alternative reading files them under "Request the Approval
         # (AHS)"; both are defensible and neither is in the export.
         FOLLOW_UP: "Call Back",
-        SCHEDULED: "Approved- Repair Schedule",
+        # "Approved- Repair Schedule" was split into "Approved" and "Repair Scheduled"
+        # (the owner, 2026-09-14). Workiz's repair-schedule status is the second step;
+        # nothing in Workiz maps to "Approved" - the team moves cards there.
+        SCHEDULED: "Repair Scheduled",
         CALL_BACK: "Call Back",
         INVOICE: "Submit The Invoice",
     },
@@ -563,6 +568,10 @@ class Plan:
     dropped_cancelled: int = 0
     pipelines_to_create: list[str] = field(default_factory=list)
     stages_to_create: list[tuple[str, str]] = field(default_factory=list)
+    # Columns the routing needs that an EXISTING pipeline does not have. The import never
+    # creates these: the board is the owner's configuration, edited in Pipelines, and a
+    # renamed column must not silently come back as a duplicate. A real run refuses.
+    missing_stages: list[tuple[str, str]] = field(default_factory=list)
     stage_fixes: list[StageFix] = field(default_factory=list)
     job_type_options: list[str] = field(default_factory=list)
     job_type_action: str = "unchanged"
@@ -751,12 +760,13 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
             plan.stages_to_create.extend((name, s) for s in stages)
             continue
         have = {s.name for s in p.stages}
-        # Only the stages the routing table actually needs are added to a pipeline
-        # that already exists. The owner's board is his configuration; an import is
-        # not the place to impose a column list on it.
-        for stage_name in stages:
-            if stage_name not in have and stage_name in STAGE_FOR[name].values():
-                plan.stages_to_create.append((name, stage_name))
+        # A pipeline that already exists is the owner's configuration. The import never
+        # adds a column to it: if the routing needs a column it does not have (for
+        # example after the owner renamed one in Pipelines), that is reported and a real
+        # run refuses, so a rename can never resurrect the old column as a duplicate.
+        for stage_name in dict.fromkeys(STAGE_FOR[name].values()):
+            if stage_name not in have:
+                plan.missing_stages.append((name, stage_name))
 
     plan.stage_fixes = plan_stage_fixes(db, pipelines.get(AHS))
 
@@ -1626,7 +1636,10 @@ def render(plan: Plan, counts: dict | None, *, committed: bool) -> str:
         say("  create pipeline  %s" % name)
     for pipeline_name, stage_name in plan.stages_to_create:
         say("  create stage     %s / %s" % (pipeline_name, stage_name))
-    if not plan.pipelines_to_create and not plan.stages_to_create:
+    for pipeline_name, stage_name in plan.missing_stages:
+        say("  MISSING column  %s / %s  - add or rename it in Opportunities > Pipelines;"
+            " a real run refuses until it exists" % (pipeline_name, stage_name))
+    if not (plan.pipelines_to_create or plan.stages_to_create or plan.missing_stages):
         say("  both pipelines and every stage the routing needs already exist")
 
     say("")
@@ -1757,6 +1770,7 @@ def as_json(plan: Plan, counts: dict | None) -> dict:
     return {
         "pipelines_to_create": plan.pipelines_to_create,
         "stages_to_create": [list(s) for s in plan.stages_to_create],
+        "missing_stages": [list(s) for s in plan.missing_stages],
         "stage_fixes": [{"action": f.action, "stage": f.name,
                          "new_name": f.new_name, "why": f.detail}
                         for f in plan.stage_fixes],
@@ -1837,6 +1851,13 @@ def run(clients_path: str, jobs_path: str, *, commit: bool,
 
         plan = build_plan(db, clients, jobs)
         counts = None
+        if commit and plan.missing_stages:
+            db.rollback()
+            for pipeline_name, stage_name in plan.missing_stages:
+                print("REFUSED: pipeline %r has no column %r, which the import routes jobs "
+                      "to. Add or rename it in Opportunities > Pipelines, then run again. "
+                      "Nothing was written." % (pipeline_name, stage_name), file=sys.stderr)
+            return 9
         if commit:
             try:
                 counts = apply_plan(db, plan)

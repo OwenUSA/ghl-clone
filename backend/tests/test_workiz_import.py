@@ -145,7 +145,7 @@ ROUTING = [
      "Request the Approval (AHS)", "open"),
     ("In Progress (Request Approval  )", "Google", wi.RETAIL, "Estimate Sent", "open"),
     ("In Progress (Repair Schedule)", "AHS", wi.AHS,
-     "Approved- Repair Schedule", "open"),
+     "Repair Scheduled", "open"),
     ("In Progress (Repair Schedule)", "Google", wi.RETAIL, "Scheduled", "open"),
     ("In Progress (Callback)", "AHS", wi.AHS, "Call Back", "open"),
     ("In Progress (Callback)", "Google", wi.RETAIL, "Follow Up", "open"),
@@ -662,7 +662,7 @@ def ahs_board():
     db.add(p)
     db.flush()
     names = ["New Lead", "Inspection", "Request the Approval (AHS)",
-             "Approved- Repair Schedule", "Repair in Process", "Submit The Invoice",
+             "Repair Scheduled", "Repair in Process", "Submit The Invoice",
              "Call Back", "Call Back", "AHS Upgrades", "Submit Invoices"]
     stages = []
     for position, name in enumerate(names):
@@ -1625,3 +1625,41 @@ def test_a_row_with_no_client_still_gets_a_readable_title(fresh, tmp_path):
         [job_row("J1", "", name="Roof leak", phone="9415550111")], commit=False)
     titles = [o.title for o in plan.opportunities]
     assert titles == ["Roof leak"] or titles == [], titles
+
+
+# ------------------------------------------------------------------ the owner's board is his
+
+
+def test_a_missing_column_on_an_existing_board_is_reported_and_a_real_run_refuses(
+        fresh, tmp_path):
+    """The owner split "Approved- Repair Schedule" (2026-09-14). If the board lacks a
+    column the routing needs, the import must never create it - it would come back as a
+    duplicate of a column he renamed. Dry run lists it; a real run writes nothing."""
+    p = Pipeline(name=wi.AHS, position=0)
+    fresh.add(p)
+    fresh.flush()
+    for i, name in enumerate(["New Lead", "Inspection", "Request the Approval (AHS)",
+                              "Approved- Repair Schedule", "Repair in Process",
+                              "Submit The Invoice", "Call Back"]):
+        fresh.add(Stage(pipeline_id=p.id, name=name, position=i))
+    fresh.commit()
+    pipeline_id = p.id
+    clients = [client_row("1", "Ada Rowe", phone="9415550111")]
+    jobs = [job_row("J1", "Ada Rowe", status="In Progress (Repair Schedule)",
+                    phone="9415550111")]
+    plan = do_import(fresh, tmp_path, clients, jobs, commit=False)
+    assert (wi.AHS, "Repair Scheduled") in plan.missing_stages
+    assert (wi.AHS, "Repair Scheduled") not in plan.stages_to_create
+    assert "MISSING column" in wi.render(plan, None, committed=False)
+    fresh.rollback()
+    fresh.close()
+
+    cp, jp = write_csvs(tmp_path, clients, jobs)
+    assert wi.run(cp, jp, commit=True, stream=io.StringIO()) == 9
+    with SessionLocal() as check:
+        names = [s.name for s in check.scalars(
+            select(Stage).where(Stage.pipeline_id == pipeline_id))]
+        assert "Repair Scheduled" not in names, "the import never adds a column"
+        assert names.count("Approved- Repair Schedule") == 1
+        assert check.scalar(select(func.count(Opportunity.id))) == 0
+        assert check.scalar(select(func.count(Contact.id))) == 0
