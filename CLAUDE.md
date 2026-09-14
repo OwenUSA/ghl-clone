@@ -151,6 +151,15 @@ the reserved read-only namespace `ahs_job_*` (not `ahs_` — "AHS claim number" 
 field). The Workiz importer finds these cards by `created_by = "AHS email"` + `ahs_job_id` + no
 `workiz_id`. Off by default on owen-main (`CRM_LINK_EMAIL_JOBS_ENABLED`). See DECISIONS.md.
 
+## The call Checklist (2026-09-14)
+
+The Checklist is custom fields in one tab named "Checklist", with three per-question
+settings on `custom_field_defs` (`script`, `linked_field`, `details_when`; a details answer
+is stored under `<key>__details`). Create it with `uv run python -m app.checklist_seed`
+(dry run; `--commit` writes; idempotent, never undoes the owner's edits). Add opportunity
+is GoHighLevel's modal (`components/AddOpportunityModal.tsx`): contact required in the UI,
+not in the API. AHS card titles are name-first. See DECISIONS.md.
+
 ## Answering a call in the browser (the softphone)
 
 The CRM can be a ring destination. `+19544829099` already rings two mobiles in parallel

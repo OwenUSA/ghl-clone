@@ -274,7 +274,7 @@ export function AddOpportunityDialog({
                   {sectionHeading('Contact details')}
                   <div className="grid grid-cols-2 gap-x-3">
                     {field(<>
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
                         <Label required>Primary contact name</Label>
                         {/* The "+ New" the old dialog had, kept: a caller who is not on
                             file must not stop the job. Same Add Contact dialog. */}
@@ -436,7 +436,10 @@ export function AddOpportunityDialog({
                         fields={group.fields}
                         answers={answers}
                         heading={null}
-                        columns={2}
+                        // The Checklist is read top to bottom as a call script: one
+                        // column keeps its order, where two left holes beside a
+                        // question that spans the row.
+                        columns={isChecklistGroup(group.group.name) ? 1 : 2}
                         linked={linked}
                         onChange={setAnswers}
                       />

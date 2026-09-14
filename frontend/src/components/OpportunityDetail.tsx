@@ -731,7 +731,8 @@ export function OpportunityDetail({
                         answers={form.answers}
                         hideEmpty={hideEmpty}
                         heading={null}
-                        columns={2}
+                        // One column for the Checklist, read in order as a call script.
+                        columns={isChecklistGroup(group.group.name) ? 1 : 2}
                         disabled={!canEdit}
                         disabledReason={why}
                         linked={linked}

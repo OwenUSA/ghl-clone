@@ -3507,3 +3507,96 @@ re-applies everything the importer always writes (stage, status, value, source, 
 title — now whitespace-collapsed — and contacts from the clients file). It never creates a
 second card for a Job # it already imported, never deletes, and does not touch cards made by
 hand, AHS email cards it has not paired, or cards whose Job # the export no longer mentions.
+
+## AMENDMENT (2026-09-14): a call Checklist on every opportunity, and GoHighLevel's Add new opportunity modal
+
+The owner's decisions, implemented as given. Branch `feature/opportunity-checklist`.
+
+**The Checklist is ordinary custom fields in ONE custom tab named "Checklist"**, so the owner
+rewords, reorders, adds and archives its questions himself in Settings → Custom Fields. It
+stores ANSWERS in `opportunities.custom_fields`, exactly like every other job question, and
+every rule of the 2026-09-11 section still holds: nothing answered is lost when a question is
+edited or archived, and nothing blocks creating or saving a card.
+
+### What this AMENDS, explicitly
+
+- **"Five types: text, number, dropdown, date, yes/no" (2026-09-11)** — a sixth, `paragraph`
+  (multi-line text, 5000 characters). Still no multi-select.
+- **"Answers are … NOT on the board card" (2026-09-11, upheld 2026-09-13)** — still no
+  answer on the card. The card gains ONE small COUNT at the right of its icon row, "3/16"
+  beside a clipboard tick (green when complete), only when the card's pipeline asks at least
+  one Checklist question. M counts only the questions attached to THAT card's pipeline
+  (AHS 16, Retail 13); a click opens the modal on the Checklist tab.
+- **"Custom-field groups … None are seeded" (2026-09-13)** — the Checklist tab and its 16
+  questions are created by a management command, `python -m app.checklist_seed` (dry run by
+  default, `--commit` writes), NOT by a migration. It is idempotent on fixed `checklist_*`
+  keys: a key that exists is left exactly as it is, so a re-run never duplicates and never
+  undoes the owner's later edits. It refuses, writing nothing, on a missing or ambiguous
+  pipeline name, two tabs called "Checklist", a `checklist_*` key held by a field of another
+  type, or an unmigrated database. `job_type` stays in Opportunity details.
+- **The Add opportunity dialog ("Optional — an opportunity can be filed without a contact")**
+  is replaced by GoHighLevel's **Add new opportunity** modal (refs/round3/38),
+  `components/AddOpportunityModal.tsx`, in the edit modal's family. **Primary contact is
+  REQUIRED in the modal**; the API is unchanged, so the AHS relay, the Workiz import and the
+  CLI still create cards with no contact. `POST /api/opportunities` additionally accepts
+  `status`, `owner_id`, `follower_ids`, `business_name`, `source` (all optional), so one Create
+  files the card with its checklist answers.
+- **AHS card titles (2026-09-14 AHS amendment)** are now `"<Customer Name> - <job id>
+  <service>"` ("Savannah Vanwyk - 84745849 ROOF"). The Workiz pairing contract is unchanged
+  (`created_by = "AHS email"`, `ahs_job_id`, no `workiz_id`). Existing production cards are
+  not retitled — the operator does that; a repeat delivery never touches a title.
+
+### Question settings — three nullable columns (migration `a7d4c2e9f130`)
+
+On `custom_field_defs`, each a SETTING on the question, never an answer:
+
+- `script` TEXT — any question; drawn under the question in the modal.
+- `linked_field` VARCHAR(40) — yes/no only: `contact_email` or `opportunity_address`. The
+  modal draws the REAL value editable beside a "Verified" tick. The inputs are the modal's own
+  Primary email and Address state, so editing them saves through the contact PATCH and the
+  detail PATCH with those endpoints' validation and role rules (a TECH gets them disabled and
+  the API refuses with 403; a bad email is a 422 and nothing moves). Nothing is copied into
+  the answers.
+- `details_when` JSON — dropdown only: the choices that open a details box. Its answer is
+  stored beside the main one under `"<key>__details"` (`slug_for` collapses underscores, so
+  no derived key can collide) and follows every `merge_answers` rule of its field: kept when
+  not sent, kept when archived, refused on a pipeline that does not ask the field.
+
+**Why columns, not the existing `options` JSON:** `options` is a list of strings every client
+reads as the dropdown's choices (browser, CLI, CSV); changing its shape would break them, and
+putting settings inside it would make a setting look like a choice. A setting on the wrong
+type is refused (400), not ignored. Retiring a dropdown choice prunes it from `details_when`.
+Migration: three `op.add_column`, all nullable, no default, no backfill, `down_revision =
+b3e9a7c51d28`; proven on a throwaway SQLite at that head with production-shaped rows
+(`test_checklist.py`).
+
+### Judgement calls, all overrulable
+
+- **The card badge looks for a tab NAMED "Checklist"** (case-insensitive). Renaming the tab
+  removes the badge; its "N / M answered" heading follows the same rule. A per-group flag would
+  have been a second migration for one tab.
+- **"Answered" = not blank; `false` counts.** "No, not explained yet" is a choice the
+  dispatcher made. A details box is not counted as a question.
+- **A linked yes/no is a tick: ticked = Yes, unticked = no answer.** A plain yes/no (14, 15)
+  keeps the existing --/Yes/No select, so "No" stays expressible.
+- **The Checklist tab is ONE column**, read top to bottom as a call script; two columns left
+  holes beside questions that span the row. Other custom tabs keep two.
+- **Choosing a non-trigger option hides the details box and keeps what was typed.** Clearing
+  is explicit, as everywhere in custom fields.
+- **The Add modal names the card after the contact** when a contact is picked and no name
+  has been typed (GoHighLevel's behaviour); a typed name is never replaced.
+- **The Add modal sends only the chosen pipeline's answers** (`answersFor`), so answering an
+  AHS-only question and then switching to Retail does not turn Create into a refusal.
+- **A changed Primary email/phone is saved on the contact BEFORE the card is created**, so a
+  refused email stops before any card exists.
+- **The board follows the new card's status** after Create (the modal has a Status now).
+
+### Screenshot assumptions (screenshot 38 shows only the top of Opportunity details)
+
+The Checklist nav entry, the "N / M answered" heading text (13px, grey, right of the tab
+heading), the script's style (13px rgb(102,112,133) under the label), the "Verified" tick box
+beside the input, the address split (street full width, then City / State / Zip), the
+"Details" box, the "+ New" text link beside the contact label and the "New contact" row at the
+foot of the contact list, the Address group and custom fields below Business name / Source,
+the error sentence left of Cancel, and the card badge are ours, built from the edit modal's
+and the card's existing parts. The Settings → Custom Fields editor remains OUR design.

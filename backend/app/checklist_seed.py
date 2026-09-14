@@ -189,8 +189,8 @@ def _print(report: dict) -> None:
     print("MODE: %s" % ("DRY RUN — nothing was written" if dry else "COMMIT"))
     g = report["group"]
     print("tab %r: %s" % (g["name"], "exists, reused" if g["action"] == "exists" else verb))
-    print("questions: %d to create, %d already exist (left exactly as they are)"
-          % (report["created"], report["exists"]))
+    print("questions: %d %s, %d already exist (left exactly as they are)"
+          % (report["created"], "to create" if dry else "created", report["exists"]))
     for i, f in enumerate(report["fields"], start=1):
         extra = []
         if f.get("options"):
