@@ -45,6 +45,18 @@ a reserved, read-only namespace alongside `owen_*` (see `custom_fields.py`), so 
 API cannot let anybody edit the key the next import depends on. A record created in
 the CRM by hand has no `workiz_id`; that is expected and is never an error.
 
+Two records have no `workiz_id` of their own to be found by (2026-09-14, DECISIONS.md):
+
+* **A customer who is in the jobs file but not the clients file** gets a contact made
+  from the job row, carrying `workiz_from_jobs` — the Job #s it came from. A re-run
+  finds it by those, then by phone, then by email. See `plan_job_row_contacts`.
+* **An AHS email card** (made by the ahsmail intake) is paired with the Workiz job
+  for the same customer and week, and from then on carries that job's `workiz_id`.
+  See `match_ahs_email_cards`.
+
+Opportunities whose `workiz_id` the export no longer mentions are REPORTED and left
+exactly as they are.
+
 ## What it will not do
 
 It never deletes a contact, an opportunity or an appointment, and it never deletes a
@@ -100,6 +112,24 @@ WORKIZ_ID = custom_fields.IMPORT_PREFIX + "id"
 # included. Written so a re-run can still recognise a record whose base changed, and
 # so a human can trace a merged contact back to the export.
 WORKIZ_MERGED = custom_fields.IMPORT_PREFIX + "merged_ids"
+# The Job #s a contact was made from when its customer is NOT in the clients file
+# (2026-09-14). Such a contact has no Client #, so it has no `workiz_id`; this list is
+# what a re-run recognises it by first, before it falls back to the phone and then
+# the email. Also what tells "the importer made this from a job row" (update it in
+# full) apart from "a contact that was already here" (fill its blanks only).
+WORKIZ_FROM_JOBS = custom_fields.IMPORT_PREFIX + "from_jobs"
+# The internal key a job-row contact is filed under inside one plan. Never stored,
+# and it cannot collide with a Client #.
+JOB_ROW_KEY = "job-row:"
+
+# The contract with the AHS email intake (the ahsmail agent, owner decision Q15,
+# 2026-09-13). A card it makes carries exactly these two facts; a third — no
+# `workiz_id` — is what says it has not been paired with a Workiz job yet. Pinned by
+# tests: change one on either side and pairing silently stops.
+AHS_EMAIL_CREATED_BY = "AHS email"
+AHS_JOB_ID = "ahs_job_id"
+# How far apart the email card and the Workiz job's `Job Created` may be, either side.
+AHS_MATCH_WINDOW = timedelta(days=3)
 
 # ---------------------------------------------------------------- pipelines
 
@@ -455,8 +485,30 @@ class ContactPlan:
 
 
 @dataclass
+class JobRowContactPlan:
+    """A customer who is in the jobs file but not in the clients file.
+
+    Built from the job row(s) themselves. There is no Client #, so no `workiz_id`.
+    """
+    key: str                # JOB_ROW_KEY + the lowest Job #; plan-internal only
+    job_ids: list[str]      # Job #s — the only thing the report shows
+    first_name: str
+    last_name: str
+    email: str | None
+    phone: str | None
+    source: str | None
+    address: dict
+    existing_id: int | None = None
+    # True when the match is a contact this importer did not make from a job row (a
+    # contact typed in by hand, say). Only its blanks are filled — it is somebody
+    # else's record, and the job row is not a better source than a human.
+    adopt: bool = False
+
+
+@dataclass
 class OppPlan:
     workiz_id: str
+    # The Client # of the owning contact, or a JobRowContactPlan.key.
     client_workiz_id: str
     title: str
     pipeline: str
@@ -467,6 +519,10 @@ class OppPlan:
     job_type: str | None
     created_at: datetime | None
     existing_id: int | None = None
+    # The deal is a card the AHS email intake made (see `match_ahs_email_cards`).
+    # Its stage, status and value follow Workiz like any other; its title, creator,
+    # creation date and contact are the email's, and are kept.
+    email_card: bool = False
 
 
 @dataclass
@@ -501,6 +557,14 @@ class Plan:
     job_type_action: str = "unchanged"
     calendar_action: str = "unchanged"
     contacts: list[ContactPlan] = field(default_factory=list)
+    job_row_contacts: list[JobRowContactPlan] = field(default_factory=list)
+    # Job #s of opportunities already in the CRM that this export does not mention.
+    # Reported, never touched.
+    absent_opportunities: list[str] = field(default_factory=list)
+    # (Job #, card id) — Workiz AHS jobs attached to an AHS email card.
+    ahs_attached: list[tuple[str, int]] = field(default_factory=list)
+    # (Job #, why) — new Workiz AHS jobs that got their own card instead.
+    ahs_unmatched: list[tuple[str, str]] = field(default_factory=list)
     opportunities: list[OppPlan] = field(default_factory=list)
     appointments: list[ApptPlan] = field(default_factory=list)
     past_appointments: int = 0
@@ -582,6 +646,51 @@ def merge_note(base: dict, others: list[dict]) -> str | None:
     ])
 
 
+# ---------------------------------------------------------------- job-row customers
+
+
+def _newest_first(rows: list[dict]) -> list[dict]:
+    """Newest `Job Created` first, then Job #. The latest job carries the customer's
+    most recent details. An unreadable date sorts last rather than raising — the
+    opportunity for that row reports it."""
+    def when(row):
+        try:
+            moment = parse_dt(row.get("Job Created"))
+        except ValueError:
+            moment = None
+        return -moment.timestamp() if moment else float("inf")
+    return sorted(sorted(rows, key=lambda r: clean(r.get("Job #"))), key=when)
+
+
+def group_job_rows(rows: list[dict]) -> tuple[list[list[dict]], list[dict]]:
+    """Job rows whose customer is not in the clients file, grouped into people.
+
+    Same identity rule as `merge_groups`: the last ten digits of the phone. A row
+    with no usable phone joins the phone group that carries its email, or groups on
+    the email alone. A row with neither has nothing to find its customer by on a
+    re-run, so it is returned separately to be skipped.
+    """
+    groups: dict[str, list[dict]] = defaultdict(list)
+    group_for_email: dict[str, str] = {}
+    unmatchable = []
+    for row in rows:
+        phone = last10(row.get("Phone"))
+        if phone:
+            groups["p:" + phone].append(row)
+            email = clean(row.get("Email")).casefold()
+            if email:
+                group_for_email.setdefault(email, "p:" + phone)
+    for row in rows:
+        if last10(row.get("Phone")):
+            continue
+        email = clean(row.get("Email")).casefold()
+        if not email:
+            unmatchable.append(row)
+            continue
+        groups[group_for_email.setdefault(email, "e:" + email)].append(row)
+    return [groups[k] for k in sorted(groups)], unmatchable
+
+
 # ---------------------------------------------------------------- the builder
 
 
@@ -595,17 +704,31 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
     # — a few hundred rows in a single-tenant CRM — reading them is cheaper than
     # maintaining two queries.
     existing_contacts = {}
+    # For job-row customers, who have no Client # to be found by: every contact by
+    # the Job #s it was made from, by phone and by email.
+    contacts_by_job: dict[str, list[Contact]] = defaultdict(list)
+    contacts_by_phone: dict[str, list[Contact]] = defaultdict(list)
+    contacts_by_email: dict[str, list[Contact]] = defaultdict(list)
     for c in db.scalars(select(Contact)).all():
         wid = (c.custom_fields or {}).get(WORKIZ_ID)
         if wid:
             existing_contacts.setdefault(str(wid), []).append(c)
         for merged in (c.custom_fields or {}).get(WORKIZ_MERGED) or []:
             existing_contacts.setdefault(str(merged), []).append(c)
+        for job_id in (c.custom_fields or {}).get(WORKIZ_FROM_JOBS) or []:
+            contacts_by_job[str(job_id)].append(c)
+        if last10(c.phone):
+            contacts_by_phone[last10(c.phone)].append(c)
+        if clean(c.email):
+            contacts_by_email[clean(c.email).casefold()].append(c)
     existing_opps = {}
+    email_cards = []
     for o in db.scalars(select(Opportunity)).all():
         wid = (o.custom_fields or {}).get(WORKIZ_ID)
         if wid:
             existing_opps.setdefault(str(wid), []).append(o)
+        elif is_email_card(o):
+            email_cards.append(o)
 
     pipelines = {p.name: p for p in db.scalars(select(Pipeline)).all()}
 
@@ -677,6 +800,8 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
     jobs_for: dict[str, list[dict]] = defaultdict(list)
     has_any_job: set[str] = set()
     seen_job_ids: set[str] = set()
+    # Live jobs whose customer is in no client record: they make their own contact.
+    unmatched: list[dict] = []
     for row in jobs:
         job_id = clean(row.get("Job #"))
         if not job_id:
@@ -713,10 +838,12 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
                         "matches none — not guessed" % len(named)))
                 continue
             else:
+                # A customer created in Workiz after the clients file was exported.
+                # The owner's decision (2026-09-14): make the contact from the job
+                # row. A cancelled one is still nothing at all — there is no client
+                # record to keep, so there is nothing to make a contact of.
                 if not dropped:
-                    plan.skipped.append(Skip(
-                        "jobs", job_id,
-                        "no client record matches its phone or its name"))
+                    unmatched.append(row)
                 continue
         elif named and owner not in named and not dropped:
             plan.conflicts.append(
@@ -772,6 +899,14 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
         existing = existing_contacts.get(wid) or []
         for merged in (clean(r.get("Client #")) for r in others):
             existing = existing or existing_contacts.get(merged) or []
+        # A customer an earlier run made from a job row, now in a newer clients
+        # file: take that contact over rather than making a second copy of them.
+        for row in rows:
+            if existing:
+                break
+            phone = last10(row.get("Phone"))
+            existing = [c for c in contacts_by_phone.get(phone, [])
+                        if made_from_job_rows(c)] if phone else []
         unique = {c.id: c for c in existing}
         if len(unique) > 1:
             plan.conflicts.append(
@@ -794,8 +929,26 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
             existing_id=min(unique) if unique else None,
         ))
 
+    # --- contacts from job rows ----------------------------------------------
+    plan_job_row_contacts(plan, unmatched, jobs_for, contacts_by_job,
+                          contacts_by_phone, contacts_by_email)
+
+    # --- opportunities the export no longer mentions --------------------------
+    # Compared with EVERY Job # in the file — cancelled, skipped and duplicated rows
+    # included — so this lists only what the export is silent about. Left untouched
+    # by the owner's decision (2026-09-14); nothing below reads this list.
+    in_export = {clean(row.get("Job #")) for row in jobs}
+    plan.absent_opportunities = sorted(wid for wid in existing_opps
+                                       if wid not in in_export)
+
     # --- opportunities and appointments --------------------------------------
     now = datetime.now(UTC)
+    # Who each job's customer is, for matching an AHS email card to them: the
+    # contact the plan resolved to, and every phone known for that customer.
+    planned = {cp.workiz_id: (cp.existing_id, cp.phone) for cp in plan.contacts}
+    planned.update((jp.key, (jp.existing_id, jp.phone))
+                   for jp in plan.job_row_contacts)
+    customer_of: dict[str, tuple[int | None, set[str]]] = {}
     for client_wid, rows in jobs_for.items():
         for row in sorted(rows, key=lambda r: clean(r.get("Job #"))):
             job_id = clean(row.get("Job #"))
@@ -819,6 +972,7 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
             job_type = clean(row.get("Type")) or None
 
             existing = existing_opps.get(job_id) or []
+            current = min(existing, key=lambda o: o.id) if existing else None
             if len({o.id for o in existing}) > 1:
                 plan.conflicts.append(
                     "Job %s already matches %d opportunities; the lowest id is "
@@ -837,8 +991,14 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
                 source=(clean(row.get("Source"))[:120] or None),
                 job_type=job_type,
                 created_at=created_at,
-                existing_id=min(o.id for o in existing) if existing else None,
+                existing_id=current.id if current else None,
+                email_card=current is not None and is_email_card(current),
             ))
+            contact_id, contact_phone = planned.get(client_wid, (None, None))
+            phones = {last10(r.get("Phone")) for r in group_for.get(client_wid, [])}
+            phones |= {last10(row.get("Phone")), last10(contact_phone)}
+            phones.discard(None)
+            customer_of[job_id] = (contact_id, phones)
 
             if starts_at is None:
                 continue
@@ -853,7 +1013,171 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
                 job_workiz_id=job_id, title=name[:255],
                 starts_at=starts_at, ends_at=ends_at))
 
+    match_ahs_email_cards(plan, email_cards, customer_of)
     return plan
+
+
+def is_email_card(o: Opportunity) -> bool:
+    """A card the AHS email intake made. The contract with ahsmail, part one."""
+    return (o.created_by == AHS_EMAIL_CREATED_BY
+            and bool((o.custom_fields or {}).get(AHS_JOB_ID)))
+
+
+def match_ahs_email_cards(plan: Plan, email_cards: list[Opportunity],
+                          customer_of: dict[str, tuple[int | None, set[str]]]
+                          ) -> None:
+    """Attach a new Workiz AHS job to the card an AHS email already made for it.
+
+    Owner decision Q15 (2026-09-13). AHS jobs arrive twice — from the warranty
+    company's email (ahsmail) and from a later Workiz export — and the Workiz row
+    carries no AHS job number, so the two can only be paired by WHO and WHEN:
+
+      * the card was made by the email intake (`created_by` "AHS email") and holds
+        an `ahs_job_id`, and has NO `workiz_id` yet — a card already paired with a
+        Workiz job is never paired again;
+      * it belongs to the same customer: the contact this job resolved to, or a
+        contact whose phone matches on the last ten digits;
+      * it was created within `AHS_MATCH_WINDOW` of the job's `Job Created`, either
+        side.
+
+    EXACTLY one such card: the job attaches to it. None, or more than one: the job
+    gets its own card as it always has, and is listed for a human. A card that is
+    the only candidate of two jobs attaches to neither — pairing both would merge
+    two jobs into one card. Nothing here merges or deletes a card.
+    """
+    free = [o for o in email_cards
+            if is_email_card(o) and not (o.custom_fields or {}).get(WORKIZ_ID)]
+    only_candidate: dict[str, Opportunity] = {}
+    for op in plan.opportunities:
+        if op.existing_id is not None or op.pipeline != AHS:
+            continue
+        if op.created_at is None:
+            plan.ahs_unmatched.append(
+                (op.workiz_id, "no Job Created date to match an email card by"))
+            continue
+        contact_id, phones = customer_of.get(op.workiz_id, (None, set()))
+        candidates = [
+            o for o in free
+            if ((contact_id is not None and o.contact_id == contact_id)
+                or (o.contact is not None and last10(o.contact.phone) in phones))
+            and abs(_as_utc(o.created_at) - op.created_at) <= AHS_MATCH_WINDOW]
+        if len(candidates) == 1:
+            only_candidate[op.workiz_id] = candidates[0]
+        else:
+            plan.ahs_unmatched.append((op.workiz_id, (
+                "no email card for this customer within %d days"
+                % AHS_MATCH_WINDOW.days) if not candidates else (
+                "%d email cards match — not guessed" % len(candidates))))
+
+    claimed = Counter(o.id for o in only_candidate.values())
+    by_job = {op.workiz_id: op for op in plan.opportunities}
+    for job_id, card in sorted(only_candidate.items()):
+        if claimed[card.id] > 1:
+            plan.ahs_unmatched.append((job_id, (
+                "its one email card is also the only match for %d other Workiz "
+                "job(s) — not guessed" % (claimed[card.id] - 1))))
+            continue
+        op = by_job[job_id]
+        op.existing_id = card.id
+        op.email_card = True
+        plan.ahs_attached.append((job_id, card.id))
+    plan.ahs_unmatched.sort()
+
+
+def made_from_job_rows(c: Contact) -> bool:
+    """A contact this importer created from a job row, and nobody else's record."""
+    blob = c.custom_fields or {}
+    return (c.created_by == "Workiz import" and WORKIZ_FROM_JOBS in blob
+            and not blob.get(WORKIZ_ID))
+
+
+def plan_job_row_contacts(plan: Plan, unmatched: list[dict],
+                          jobs_for: dict[str, list[dict]],
+                          by_job: dict[str, list[Contact]],
+                          by_phone: dict[str, list[Contact]],
+                          by_email: dict[str, list[Contact]]) -> None:
+    """One contact per new customer, made from their job row(s).
+
+    How a re-run finds it — there is no Client #, so no `workiz_id`:
+
+      1. by Job #: the contact's `workiz_from_jobs` lists the job rows it was made
+         from, so it is found even after somebody corrects its phone in the CRM;
+      2. by the last ten digits of the phone, the identity rule everywhere else;
+      3. by email, case-insensitively, when the rows carry no usable phone.
+
+    A contact this importer made from a job row is updated in full. Any other match
+    — a contact typed in by hand, or one that arrived with an inbound call — gets
+    the opportunity and has only its blanks filled.
+    """
+    groups, unmatchable = group_job_rows(unmatched)
+    for row in unmatchable:
+        plan.skipped.append(Skip(
+            "jobs", clean(row.get("Job #")),
+            "no client record matches it, and it has no usable phone and no email "
+            "to make a contact from"))
+
+    # Two groups that land on one existing contact are one customer — two plans for
+    # one row would overwrite each other on every run — so rows are gathered by
+    # what they resolved to before anything is planned.
+    gathered: dict[tuple, list[dict]] = {}
+    matched: dict[tuple, tuple[int | None, bool]] = {}
+    for n, rows in enumerate(groups):
+        candidates: dict[int, Contact] = {}
+        for lookup in (
+                lambda r: by_job.get(clean(r.get("Job #")), []),
+                lambda r: by_phone.get(last10(r.get("Phone")), []),
+                lambda r: by_email.get(clean(r.get("Email")).casefold(), [])):
+            for row in rows:
+                candidates.update((c.id, c) for c in lookup(row))
+            if candidates:
+                break
+        own = [cid for cid, c in candidates.items() if made_from_job_rows(c)]
+        chosen = min(own or candidates) if candidates else None
+        if len(candidates) > 1:
+            plan.conflicts.append(
+                "Job(s) %s: the customer is not in the clients file and matches %d "
+                "contacts (ids %s). Contact %d gets the job; the others are LEFT "
+                "ALONE for a human." % (
+                    " / ".join(clean(r.get("Job #")) for r in rows),
+                    len(candidates), ", ".join(str(i) for i in sorted(candidates)),
+                    chosen))
+        key = ("contact", chosen) if chosen is not None else ("new", n)
+        gathered.setdefault(key, []).extend(rows)
+        matched[key] = (chosen, chosen is not None
+                        and not made_from_job_rows(candidates[chosen]))
+
+    for key, rows in gathered.items():
+        chosen, adopt = matched[key]
+        rows = _newest_first(rows)
+        job_ids = sorted(clean(r.get("Job #")) for r in rows)
+
+        def pick(column: str, _rows=rows) -> str:
+            """The newest non-empty value — the customer's latest details."""
+            for row in _rows:
+                if clean(row.get(column)):
+                    return clean(row.get(column))
+            return ""
+
+        first, last = split_name(pick("Client"))
+        phones = [r for r in rows if last10(r.get("Phone"))]
+        # The whole address from ONE row, never a street from one job and a ZIP
+        # from another.
+        with_address = [r for r in rows if any(address_from_job(r).values())]
+        cp = JobRowContactPlan(
+            key=JOB_ROW_KEY + job_ids[0],
+            job_ids=job_ids,
+            first_name=first[:120],
+            last_name=last[:120],
+            email=pick("Email")[:255] or None,
+            phone=store_phone(clean(phones[0].get("Phone")) if phones
+                              else pick("Phone") or None),
+            source=pick("Source")[:120] or None,
+            address=address_from_job(with_address[0] if with_address else {}),
+            existing_id=chosen,
+            adopt=adopt,
+        )
+        plan.job_row_contacts.append(cp)
+        jobs_for[cp.key].extend(rows)
 
 
 def plan_stage_fixes(db: Session, ahs: Pipeline | None) -> list[StageFix]:
@@ -1106,6 +1430,36 @@ def apply_plan(db: Session, plan: Plan) -> dict:
             counts["merge_notes"] += 1
     db.flush()
 
+    # --- contacts from job rows ----------------------------------------------
+    for jp in plan.job_row_contacts:
+        c = db.get(Contact, jp.existing_id) if jp.existing_id else None
+        if c is None:
+            c = Contact(created_by="Workiz import")
+            db.add(c)
+            counts["contacts_created_from_job_rows"] += 1
+        else:
+            counts["contacts_updated_from_job_rows"] += 1
+        values = {"first_name": jp.first_name, "last_name": jp.last_name,
+                  "email": jp.email, "phone": jp.phone, "source": jp.source,
+                  **jp.address}
+        if jp.adopt and (c.first_name or c.last_name):
+            # A name is one value, not two blanks: never give "Jane" a surname.
+            del values["first_name"], values["last_name"]
+        for attr, value in values.items():
+            if not jp.adopt or (value and not getattr(c, attr)):
+                _set(c, attr, value)
+        # It has a job, so it is a Customer — even a hand-made contact filed as a
+        # Lead. Any other type somebody chose is theirs and is left alone.
+        if not jp.adopt or c.contact_type in (None, "", "Lead"):
+            _set(c, "contact_type", "Customer")
+        blob = dict(c.custom_fields or {})
+        blob[WORKIZ_FROM_JOBS] = sorted(
+            set(blob.get(WORKIZ_FROM_JOBS) or []) | set(jp.job_ids))
+        _set(c, "custom_fields", blob)
+        db.flush()
+        contacts[jp.key] = c
+    db.flush()
+
     # --- opportunities --------------------------------------------------------
     positions = Counter()
     opportunities: dict[str, Opportunity] = {}
@@ -1127,13 +1481,20 @@ def apply_plan(db: Session, plan: Plan) -> dict:
             counts["opportunities_updated"] += 1
             _set(o, "pipeline_id", stage.pipeline_id)
             _set(o, "stage_id", stage.id)
-        _set(o, "title", op.title)
-        _set(o, "contact_id", contact.id if contact else None)
+        if op.email_card:
+            # The email's card: its title, creator, creation date, `ahs_job_id`
+            # and notes stay as the intake wrote them. A contact is only filled in.
+            counts["opportunities_on_email_cards"] += 1
+            if o.contact_id is None and contact is not None:
+                _set(o, "contact_id", contact.id)
+        else:
+            _set(o, "title", op.title)
+            _set(o, "contact_id", contact.id if contact else None)
+            _set(o, "created_by", "Workiz import")
         _set(o, "value_cents", op.value_cents)
         _set(o, "status", op.status)
         _set(o, "source", op.source)
-        _set(o, "created_by", "Workiz import")
-        if op.created_at is not None:
+        if op.created_at is not None and not op.email_card:
             # The board and the dashboard filter on creation date. Without this,
             # 340 deals spanning two years all look like they were created today.
             _set(o, "created_at", op.created_at)
@@ -1278,6 +1639,22 @@ def render(plan: Plan, counts: dict | None, *, committed: bool) -> str:
     say("  %-6d merge notes to write" % len(merged))
 
     say("")
+    say("Contacts from job rows (customer not in the clients file)")
+    to_create = [c for c in plan.job_row_contacts if c.existing_id is None]
+    to_update = [c for c in plan.job_row_contacts if c.existing_id is not None]
+    say("  %-6d contacts to create from job rows (customer not in the clients file)"
+        % len(to_create))
+    for c in to_create:
+        say("        jobs %s" % " / ".join(c.job_ids))
+    say("  %-6d contacts from job rows already in the CRM — updated, not duplicated"
+        % len(to_update))
+    for c in to_update:
+        say("        jobs %s  (contact id %d%s)" % (
+            " / ".join(c.job_ids), c.existing_id,
+            "; not made by this importer, so only its blanks are filled"
+            if c.adopt else ""))
+
+    say("")
     say("Opportunities")
     created = sum(1 for o in plan.opportunities if o.existing_id is None)
     say("  %-6d in total (%d to create, %d to update)"
@@ -1291,6 +1668,23 @@ def render(plan: Plan, counts: dict | None, *, committed: bool) -> str:
         say("  %-26s %d" % (name, by_pipeline[name]))
     total = sum(o.value_cents for o in plan.opportunities)
     say("  value %d cents ($%s)" % (total, format(Decimal(total) / 100, ",.2f")))
+
+    say("")
+    say("Opportunities absent from this export")
+    say("  %-6d opportunities in the CRM carry a %s that is not in this export — "
+        "left untouched" % (len(plan.absent_opportunities), WORKIZ_ID))
+    if plan.absent_opportunities:
+        say("        jobs %s" % " / ".join(plan.absent_opportunities))
+
+    say("")
+    say("AHS email cards")
+    say("  %-6d Workiz AHS jobs attached to email cards" % len(plan.ahs_attached))
+    for job_id, card_id in plan.ahs_attached:
+        say("        job %-10s -> opportunity id %d" % (job_id, card_id))
+    say("  %-6d AHS jobs not matched to an email card — each gets its own card"
+        % len(plan.ahs_unmatched))
+    for job_id, why in plan.ahs_unmatched:
+        say("        job %-10s %s" % (job_id, why))
 
     say("")
     say("Appointments")
@@ -1348,6 +1742,22 @@ def as_json(plan: Plan, counts: dict | None) -> dict:
             "merged": sum(1 for c in plan.contacts if len(c.merged_ids) > 1),
             "records_collapsed": sum(len(c.merged_ids) - 1 for c in plan.contacts),
             "by_type": dict(Counter(c.contact_type for c in plan.contacts)),
+        },
+        "job_row_contacts": {
+            "create": [c.job_ids for c in plan.job_row_contacts
+                       if c.existing_id is None],
+            "update": [{"jobs": c.job_ids, "contact_id": c.existing_id,
+                        "blanks_only": c.adopt}
+                       for c in plan.job_row_contacts if c.existing_id is not None],
+        },
+        "absent_opportunities": {
+            "count": len(plan.absent_opportunities),
+            "jobs": plan.absent_opportunities,
+            "action": "left untouched",
+        },
+        "ahs_email_cards": {
+            "attached": [{"job": j, "opportunity_id": i} for j, i in plan.ahs_attached],
+            "not_matched": [{"job": j, "why": w} for j, w in plan.ahs_unmatched],
         },
         "opportunities": {
             "total": len(plan.opportunities),

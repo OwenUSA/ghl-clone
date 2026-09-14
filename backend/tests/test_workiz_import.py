@@ -39,6 +39,7 @@ from app.models import (
     EventType,
     Job,
     Opportunity,
+    OpportunityNote,
     Pipeline,
     Role,
     Stage,
@@ -77,10 +78,11 @@ def client_row(number, name, *, email="", address="", phone="", ad_source=""):
 
 def job_row(number, client, *, status="Done", source="AHS", total="100.00",
             job_type="Roof Repair", phone="", scheduled=PAST, end=PAST,
-            created=PAST, name="", city="", state="", zip_code="", address=""):
+            created=PAST, name="", city="", state="", zip_code="", address="",
+            email=""):
     return {"Job #": number, "Job name": name, "Client": client, "Tags": "",
             "Type": job_type, "Job Created": created, "Scheduled": scheduled,
-            "End": end, "Phone": phone, "Email": "", "Status": status, "Tech": "",
+            "End": end, "Phone": phone, "Email": email, "Status": status, "Tech": "",
             "Created by": "Office", "Address": address, "City": city,
             "State": state, "Zip code": zip_code, "Total": total, "Source": source,
             "Lead Created Date": "", "Job origin": "New"}
@@ -1005,10 +1007,13 @@ def test_the_json_report_is_machine_readable_and_just_as_quiet(fresh, tmp_path):
 # ------------------------------------------------------------------ resolution
 
 
-def test_a_job_whose_client_matches_nothing_is_skipped_and_named(fresh, tmp_path):
+def test_a_job_whose_client_matches_nothing_and_has_no_phone_or_email_is_skipped(
+        fresh, tmp_path):
+    """Until 2026-09-14 every such job was skipped; now only one with nothing to
+    make a contact from is (see "job-row customers" below)."""
     plan = do_import(fresh, tmp_path,
                      [client_row("1", "Ada Rowe", phone="9415550111")],
-                     [job_row("J9", "Nobody At All", phone="8135559999")])
+                     [job_row("J9", "Nobody At All", phone="")])
     assert fresh.scalar(select(func.count(Opportunity.id))) == 0
     assert [(s.ident, "no client record" in s.reason) for s in plan.skipped] == \
         [("J9", True)]
@@ -1134,3 +1139,447 @@ def test_the_defaults_point_at_the_export_and_not_at_the_repository(fresh):
     assert os.path.basename(wi.DEFAULT_CLIENTS) == "workiz_clients.csv"
     assert os.path.basename(wi.DEFAULT_JOBS) == "workiz_jobs.csv"
     assert os.path.isabs(wi.DEFAULT_CLIENTS)
+
+
+# ------------------------------------------------------------------ job-row customers
+#
+# A customer created in Workiz after the clients file was exported is in the jobs
+# file only. The owner's decision (2026-09-14): make the contact from the job row.
+
+
+NEW_CUSTOMER = {"phone": "(813) 555-9999", "email": "nia@example.test",
+                "address": "5 Oak Ln", "city": "Sarasota", "state": "FL",
+                "zip_code": "34236", "source": "Google"}
+
+
+def test_a_job_whose_customer_is_not_in_the_clients_file_makes_its_own_contact(
+        fresh, tmp_path):
+    plan = do_import(fresh, tmp_path,
+                     [client_row("1", "Ada Rowe", phone="9415550111")],
+                     [job_row("J9", "Nia Q Park", **NEW_CUSTOMER)])
+
+    assert plan.skipped == []
+    assert fresh.scalar(select(func.count(Contact.id))) == 2
+    nia = fresh.scalar(select(Contact).where(Contact.email == "nia@example.test"))
+    assert (nia.first_name, nia.last_name) == ("Nia Q", "Park")
+    assert nia.phone == "+18135559999", "normalised by the shared helper"
+    assert (nia.address_street, nia.address_city, nia.address_state,
+            nia.address_postal_code) == ("5 Oak Ln", "Sarasota", "FL", "34236")
+    assert nia.contact_type == "Customer"
+    assert nia.source == "Google"
+    assert nia.created_by == "Workiz import"
+    # No Client #, so no workiz_id: the Job # it came from is what a re-run finds.
+    assert nia.custom_fields == {"workiz_from_jobs": ["J9"]}
+
+    opp = fresh.scalar(select(Opportunity))
+    assert opp.contact_id == nia.id
+    assert opp.custom_fields["workiz_id"] == "J9"
+
+
+def test_a_second_run_finds_the_job_row_contact_and_creates_nothing(fresh, tmp_path):
+    clients = [client_row("1", "Ada Rowe", phone="9415550111")]
+    jobs = [job_row("J9", "Nia Park", **NEW_CUSTOMER),
+            job_row("J1", "Ada Rowe", phone="9415550111")]
+    do_import(fresh, tmp_path, clients, jobs)
+    first = dump(fresh)
+
+    plan = do_import(fresh, tmp_path, clients, jobs)
+    assert [c.existing_id for c in plan.job_row_contacts] == [
+        fresh.scalar(select(Contact.id).where(Contact.email == "nia@example.test"))]
+    assert dump(fresh) == first, "byte-for-byte the same rows, timestamps included"
+    assert fresh.scalar(select(func.count(Contact.id))) == 2
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 2
+
+
+def test_a_re_run_finds_the_job_row_contact_by_job_number_after_its_phone_changed(
+        fresh, tmp_path):
+    """Found by `workiz_from_jobs` first — phone and email are only fallbacks, and
+    here both were corrected by hand in the CRM."""
+    jobs = [job_row("J9", "Nia Park", **NEW_CUSTOMER)]
+    do_import(fresh, tmp_path, [], jobs)
+    nia = fresh.scalar(select(Contact))
+    nia.phone = "+17275550000"
+    nia.email = "nia.park@example.test"
+    fresh.commit()
+
+    do_import(fresh, tmp_path, [], jobs)
+    assert fresh.scalar(select(func.count(Contact.id))) == 1
+    assert fresh.scalar(select(Opportunity)).contact_id == nia.id
+
+
+def test_two_jobs_for_one_new_customer_make_one_contact_and_two_opportunities(
+        fresh, tmp_path):
+    same = dict(NEW_CUSTOMER)
+    same["phone"] = "+1 813 555 9999"       # the same line, written differently
+    plan = do_import(fresh, tmp_path, [client_row("1", "Ada Rowe", phone="9415550111")],
+                     [job_row("J9", "Nia Park", **NEW_CUSTOMER),
+                      job_row("J8", "Nia Park", **same)])
+
+    assert [c.job_ids for c in plan.job_row_contacts] == [["J8", "J9"]]
+    nia = fresh.scalar(select(Contact).where(Contact.email == "nia@example.test"))
+    assert fresh.scalar(select(func.count(Contact.id))) == 2
+    assert sorted(o.custom_fields["workiz_id"] for o in fresh.scalars(
+        select(Opportunity).where(Opportunity.contact_id == nia.id))) == ["J8", "J9"]
+    assert nia.custom_fields["workiz_from_jobs"] == ["J8", "J9"]
+
+
+def test_a_job_row_with_no_phone_joins_the_customer_that_has_its_email(
+        fresh, tmp_path):
+    no_phone = dict(NEW_CUSTOMER, phone="")
+    do_import(fresh, tmp_path, [],
+              [job_row("J9", "Nia Park", **NEW_CUSTOMER),
+               job_row("J8", "Nia Park", **no_phone)])
+    assert fresh.scalar(select(func.count(Contact.id))) == 1
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 2
+
+
+def test_a_job_row_with_neither_phone_nor_email_is_skipped_and_reported(
+        fresh, tmp_path):
+    plan = do_import(fresh, tmp_path,
+                     [client_row("1", "Ada Rowe", phone="9415550111")],
+                     [job_row("J9", "Nobody At All", phone="", address="1 Elm St")])
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 0
+    assert fresh.scalar(select(func.count(Contact.id))) == 1, "only Ada"
+    assert [(s.ident, s.reason) for s in plan.skipped] == [
+        ("J9", ("no client record matches it, and it has no usable phone and no "
+                "email to make a contact from"))]
+    text = wi.render(plan, None, committed=False)
+    assert "J9" in text and "no usable phone and no email" in text
+
+
+def test_a_job_row_customer_already_in_the_crm_by_hand_gets_the_job_not_a_twin(
+        fresh, tmp_path):
+    """A contact typed in by hand (or saved from an inbound call) is the same
+    person. It gets the deal and only its blanks are filled — its name is a human's
+    and stays."""
+    fresh.add(Contact(first_name="Nia", last_name="P.", phone="+18135559999",
+                      contact_type="Lead", source="Referral",
+                      address_street="PO Box 7"))
+    fresh.commit()
+    plan = do_import(fresh, tmp_path, [], [job_row("J9", "Nia Park", **NEW_CUSTOMER)])
+
+    assert [c.adopt for c in plan.job_row_contacts] == [True]
+    assert fresh.scalar(select(func.count(Contact.id))) == 1
+    nia = fresh.scalar(select(Contact))
+    assert (nia.first_name, nia.last_name) == ("Nia", "P."), "the human's name kept"
+    assert nia.email == "nia@example.test", "a blank was filled"
+    assert nia.address_city == "Sarasota"
+    assert (nia.source, nia.address_street) == ("Referral", "PO Box 7"), \
+        "a value a human entered is never replaced by the job row's"
+    assert nia.contact_type == "Customer"
+    assert fresh.scalar(select(Opportunity)).contact_id == nia.id
+
+    first = dump(fresh)
+    do_import(fresh, tmp_path, [], [job_row("J9", "Nia Park", **NEW_CUSTOMER)])
+    assert dump(fresh) == first
+
+
+def test_a_newer_clients_file_takes_over_the_job_row_contact(fresh, tmp_path):
+    """When the customer does turn up in a clients file, they get their Client # on
+    the same contact — not a second copy of them."""
+    jobs = [job_row("J9", "Nia Park", **NEW_CUSTOMER)]
+    do_import(fresh, tmp_path, [], jobs)
+    nia_id = fresh.scalar(select(Contact.id))
+
+    do_import(fresh, tmp_path,
+              [client_row("50", "Nia Park", phone="8135559999",
+                          email="nia@example.test")], jobs)
+    assert fresh.scalar(select(func.count(Contact.id))) == 1
+    nia = fresh.get(Contact, nia_id)
+    assert nia.custom_fields["workiz_id"] == "50"
+    assert fresh.scalar(select(Opportunity)).contact_id == nia_id
+
+
+def test_a_cancelled_job_for_an_unknown_customer_still_creates_nothing(
+        fresh, tmp_path):
+    plan = do_import(fresh, tmp_path, [],
+                     [job_row("J9", "Nia Park", status="Canceled", **NEW_CUSTOMER)])
+    assert fresh.scalar(select(func.count(Contact.id))) == 0
+    assert plan.job_row_contacts == [] and plan.skipped == []
+
+
+def test_the_job_row_report_lists_job_numbers_and_no_customer_data(fresh, tmp_path):
+    plan = do_import(fresh, tmp_path,
+                     [client_row("1", "Ada Rowe", phone="9415550111")],
+                     [job_row("FRPT4G", "Nia Park", **NEW_CUSTOMER),
+                      job_row("PHDWN2", "Nia Park", **NEW_CUSTOMER),
+                      job_row("63YP1X", "Omar Lake", phone="7275550123")],
+                     commit=False)
+    text = wi.render(plan, None, committed=False)
+    assert ("2      contacts to create from job rows (customer not in the clients "
+            "file)") in text
+    assert "jobs FRPT4G / PHDWN2" in text and "jobs 63YP1X" in text
+    payload = wi.as_json(plan, None)
+    assert payload["job_row_contacts"]["create"] == [["63YP1X"], ["FRPT4G", "PHDWN2"]]
+
+    import json as _json
+    blob = text + _json.dumps(payload, default=str)
+    for secret in ("Nia", "Park", "Omar", "Lake", "nia@example.test", "Oak Ln",
+                   "Sarasota", "34236", "8135559999", "555-9999", "7275550123"):
+        assert secret not in blob, "%r leaked into the report" % secret
+
+
+# ------------------------------------------------------------------ absent from export
+
+
+def opp_row(db, workiz_id):
+    """Every column of one opportunity, as the database holds it."""
+    db.expire_all()
+    o = next(o for o in db.scalars(select(Opportunity)).all()
+             if (o.custom_fields or {}).get("workiz_id") == workiz_id)
+    return tuple(getattr(o, c.key) for c in Opportunity.__table__.columns)
+
+
+def test_opportunities_the_export_no_longer_mentions_are_listed_and_untouched(
+        fresh, tmp_path):
+    clients = [client_row("1", "Ada Rowe", phone="9415550111")]
+    do_import(fresh, tmp_path, clients,
+              [job_row("J1", "Ada Rowe", phone="9415550111"),
+               job_row("J2", "Ada Rowe", phone="9415550111", status="Submitted",
+                       total="300.00"),
+               job_row("J3", "Ada Rowe", phone="9415550111")])
+    before = opp_row(fresh, "J2")
+
+    # The newer export: J2 is gone, J3 is now cancelled (so it IS in the export).
+    newer = [job_row("J1", "Ada Rowe", phone="9415550111", total="999.00"),
+             job_row("J3", "Ada Rowe", phone="9415550111", status="Canceled")]
+    plan = do_import(fresh, tmp_path, clients, newer, commit=False)
+    assert plan.absent_opportunities == ["J2"]
+    text = wi.render(plan, None, committed=False)
+    assert ("1      opportunities in the CRM carry a workiz_id that is not in this "
+            "export — left untouched") in text
+    assert "jobs J2" in text
+    assert wi.as_json(plan, None)["absent_opportunities"]["jobs"] == ["J2"]
+
+    wi.apply_plan(fresh, plan)
+    fresh.commit()
+    assert opp_row(fresh, "J2") == before, "byte-identical after a real run"
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 3
+
+
+def test_a_dry_run_with_new_customers_and_absent_deals_writes_nothing(
+        fresh, tmp_path):
+    clients = [client_row("1", "Ada Rowe", phone="9415550111")]
+    do_import(fresh, tmp_path, clients,
+              [job_row("J1", "Ada Rowe", phone="9415550111"),
+               job_row("J2", "Ada Rowe", phone="9415550111")])
+    fresh.close()
+    path = engine.url.database
+
+    def digest():
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+    before = digest()
+    cp, jp = write_csvs(tmp_path, clients,
+                        [job_row("J1", "Ada Rowe", phone="9415550111"),
+                         job_row("J9", "Nia Park", scheduled=SOON, end=SOON_END,
+                                 **NEW_CUSTOMER)])
+    out = io.StringIO()
+    assert wi.run(cp, jp, commit=False, stream=out) == 0
+    assert "jobs J9" in out.getvalue() and "jobs J2" in out.getvalue()
+    assert digest() == before, "a dry run changed the database file"
+
+
+def test_a_job_row_customer_with_a_future_visit_queues_nothing(fresh, tmp_path):
+    fresh.close()
+    cp, jp = write_csvs(tmp_path, [],
+                        [job_row("J9", "Nia Park", status="Submitted", scheduled=SOON,
+                                 end=SOON_END, **NEW_CUSTOMER)])
+    assert wi.run(cp, jp, commit=True, stream=io.StringIO()) == 0
+    with SessionLocal() as check:
+        assert check.scalar(select(func.count(Contact.id))) == 1
+        assert check.scalar(select(func.count(Appointment.id))) == 1, "it booked"
+        assert check.scalars(select(Job)).all() == []
+
+
+# ------------------------------------------------------------------ AHS email cards
+#
+# Owner decision Q15 (2026-09-13): an AHS job arrives from the warranty company's
+# email (ahsmail makes the card) AND later from Workiz, which carries no AHS job
+# number. The contract with ahsmail is three facts on the card: created_by
+# "AHS email", custom_fields.ahs_job_id set, and no custom_fields.workiz_id.
+
+JOB_MADE = datetime.now(UTC) - timedelta(days=10)
+ADA = client_row("1", "Ada Rowe", phone="9415550111")
+
+
+def ahs_job(number="J7", **kw):
+    kw.setdefault("phone", "9415550111")
+    kw.setdefault("status", "In Progress (Inspections)")
+    kw.setdefault("total", "900.00")
+    return job_row(number, "Ada Rowe", source="AHS", created=wz(JOB_MADE), **kw)
+
+
+def email_card(db, *, contact=None, days=1.0, created_by="AHS email",
+               ahs_job_id="AHS-5521", workiz_id=None, title="AHS 5521 - Ada Rowe"):
+    """A card exactly as the ahsmail intake makes one, on the AHS board."""
+    stage = db.scalar(select(Stage).join(Pipeline).where(
+        Pipeline.name == wi.AHS, Stage.name == "New Lead"))
+    blob = {}
+    if ahs_job_id is not None:
+        blob["ahs_job_id"] = ahs_job_id
+    if workiz_id is not None:
+        blob["workiz_id"] = workiz_id
+    o = Opportunity(title=title, pipeline_id=stage.pipeline_id, stage_id=stage.id,
+                    contact_id=contact.id if contact else None, created_by=created_by,
+                    created_at=JOB_MADE + timedelta(days=days), custom_fields=blob,
+                    value_cents=0, status="open", position=0)
+    db.add(o)
+    db.flush()
+    db.add(OpportunityNote(opportunity_id=o.id, body="AHS says: leak over garage"))
+    db.commit()
+    return o
+
+
+@pytest.fixture()
+def ada(fresh, tmp_path):
+    """Ada imported (so both boards exist), with no jobs yet."""
+    do_import(fresh, tmp_path, [ADA], [])
+    return fresh.scalar(select(Contact))
+
+
+def test_the_ahs_email_contract_is_these_three_facts():
+    """Changing one of these on either side silently stops every pairing."""
+    assert wi.AHS_EMAIL_CREATED_BY == "AHS email"
+    assert wi.AHS_JOB_ID == "ahs_job_id"
+    assert wi.WORKIZ_ID == "workiz_id"
+    assert timedelta(days=3) == wi.AHS_MATCH_WINDOW
+
+
+def test_exactly_one_email_card_gets_the_workiz_job(fresh, tmp_path, ada):
+    card = email_card(fresh, contact=ada, days=-2.5)
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+
+    assert plan.ahs_attached == [("J7", card.id)] and plan.ahs_unmatched == []
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 1, "no second card"
+    fresh.refresh(card)
+    assert card.custom_fields == {"ahs_job_id": "AHS-5521", "workiz_id": "J7",
+                                  wi.JOB_TYPE_KEY: "Roof Repair"}
+    assert fresh.get(Stage, card.stage_id).name == "Inspection"
+    assert (card.value_cents, card.status) == (90000, "open")
+    # The email's own facts are kept.
+    assert card.created_by == "AHS email"
+    assert card.title == "AHS 5521 - Ada Rowe"
+    assert abs((as_utc(card.created_at) - (JOB_MADE - timedelta(days=2.5)))
+               .total_seconds()) < 1
+    assert [n.body for n in fresh.scalars(select(OpportunityNote))] == [
+        "AHS says: leak over garage"]
+    assert ("1      Workiz AHS jobs attached to email cards"
+            in wi.render(plan, None, committed=False))
+
+
+def test_a_re_run_after_attaching_changes_nothing(fresh, tmp_path, ada):
+    email_card(fresh, contact=ada)
+    do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    first = dump(fresh)
+    notes = [(n.id, n.body, n.updated_at) for n in fresh.scalars(select(OpportunityNote))]
+
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    assert plan.ahs_attached == [] and plan.ahs_unmatched == []
+    assert dump(fresh) == first
+    assert [(n.id, n.body, n.updated_at)
+            for n in fresh.scalars(select(OpportunityNote))] == notes
+
+
+def test_no_email_card_means_a_new_card_and_a_line_in_the_report(
+        fresh, tmp_path, ada):
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 1
+    assert fresh.scalar(select(Opportunity)).created_by == "Workiz import"
+    assert plan.ahs_attached == []
+    assert plan.ahs_unmatched == [("J7", "no email card for this customer within 3 days")]
+    text = wi.render(plan, None, committed=False)
+    assert "0      Workiz AHS jobs attached to email cards" in text
+    assert "AHS jobs not matched to an email card" in text and "J7" in text
+
+
+def test_two_email_cards_means_a_new_card_and_says_how_many(fresh, tmp_path, ada):
+    a = email_card(fresh, contact=ada, days=1, ahs_job_id="AHS-1")
+    b = email_card(fresh, contact=ada, days=-1, ahs_job_id="AHS-2")
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 3, "never merged"
+    assert plan.ahs_unmatched == [("J7", "2 email cards match — not guessed")]
+    for card in (a, b):
+        fresh.refresh(card)
+        assert "workiz_id" not in card.custom_fields
+    assert "2 email cards match" in wi.render(plan, None, committed=False)
+
+
+@pytest.mark.parametrize("days", [3.5, -3.5, 30])
+def test_an_email_card_outside_the_three_day_window_is_not_matched(
+        fresh, tmp_path, ada, days):
+    card = email_card(fresh, contact=ada, days=days)
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 2
+    fresh.refresh(card)
+    assert "workiz_id" not in card.custom_fields
+    assert [j for j, _ in plan.ahs_unmatched] == ["J7"]
+
+
+def test_a_retail_job_never_matches_an_email_card(fresh, tmp_path, ada):
+    card = email_card(fresh, contact=ada)
+    retail = ahs_job()
+    retail["Source"] = "Google"
+    plan = do_import(fresh, tmp_path, [ADA], [retail])
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 2
+    fresh.refresh(card)
+    assert "workiz_id" not in card.custom_fields
+    assert plan.ahs_attached == [] and plan.ahs_unmatched == []
+
+
+def test_a_card_that_already_has_a_workiz_id_is_never_re_attached(
+        fresh, tmp_path, ada):
+    card = email_card(fresh, contact=ada, workiz_id="OLD1")
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 2
+    fresh.refresh(card)
+    assert card.custom_fields["workiz_id"] == "OLD1"
+    assert plan.ahs_attached == []
+
+
+@pytest.mark.parametrize("broken", [{"created_by": "Workiz import"},
+                                    {"created_by": None},
+                                    {"ahs_job_id": None},
+                                    {"ahs_job_id": ""}])
+def test_a_card_missing_one_contract_fact_is_not_an_email_card(
+        fresh, tmp_path, ada, broken):
+    card = email_card(fresh, contact=ada, **broken)
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    assert plan.ahs_attached == []
+    fresh.refresh(card)
+    assert "workiz_id" not in (card.custom_fields or {})
+
+
+def test_an_email_card_on_another_contact_with_the_same_phone_is_matched(
+        fresh, tmp_path, ada):
+    """The importer's phone rule: the intake may have saved its own contact."""
+    other = Contact(first_name="A", last_name="Rowe", phone="(941) 555-0111")
+    fresh.add(other)
+    fresh.commit()
+    card = email_card(fresh, contact=other)
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    assert plan.ahs_attached == [("J7", card.id)]
+    fresh.refresh(card)
+    assert card.contact_id == other.id, "its contact is the intake's, and is kept"
+
+
+def test_an_email_card_for_a_different_customer_is_not_matched(fresh, tmp_path, ada):
+    ben = Contact(first_name="Ben", last_name="Vale", phone="+19415550222")
+    fresh.add(ben)
+    fresh.commit()
+    email_card(fresh, contact=ben)
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job()])
+    assert plan.ahs_attached == []
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 2
+
+
+def test_one_email_card_is_never_given_two_workiz_jobs(fresh, tmp_path, ada):
+    card = email_card(fresh, contact=ada)
+    plan = do_import(fresh, tmp_path, [ADA], [ahs_job("J7"), ahs_job("J8")])
+    assert plan.ahs_attached == []
+    assert sorted(j for j, _ in plan.ahs_unmatched) == ["J7", "J8"]
+    fresh.refresh(card)
+    assert "workiz_id" not in card.custom_fields
+    assert fresh.scalar(select(func.count(Opportunity.id))) == 3

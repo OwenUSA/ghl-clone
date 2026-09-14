@@ -3162,3 +3162,74 @@ database: the header holds the number, the button and the measured icon row with
 the panel off screen; a longer header was tried first and did. The measured
 geometry of the list, header and composer is untouched for a contact thread; the star in the
 header now works for both kinds.
+
+## AMENDMENT (2026-09-14): a Workiz job whose customer is not in the clients file makes its own contact — and AHS jobs pair with their email card
+
+AMENDS "The Workiz import — the real business data arrives (2026-09-11)". A dry run of the
+owner's newer jobs export (416 jobs) against the original clients file skipped 4 jobs with
+"no client record matches its phone or its name": customers created in Workiz after the
+clients file was exported. **Owner's decision: make the contact from the job row.**
+
+### What this overrides
+
+- **"no client record matches" is no longer a skip.** The job row's `Client`, `Phone`
+  (through `store_phone`), `Email`, `Address` / `City` / `State` / `Zip code` and `Source`
+  make a contact, `contact_type` Customer. Jobs sharing the last ten digits of a phone are one
+  customer (one contact, one opportunity each); a row with no usable phone joins the group
+  that carries its email, or groups on the email. **A row with neither is still skipped**,
+  with its reason — there is nothing a re-run could find it by.
+- A cancelled job for such a customer is still nothing at all (unchanged, and deliberately
+  so: there is no client record to keep).
+
+### How a re-run finds a job-row contact — there is no `workiz_id`
+
+A job-row contact has no Client #. It carries `custom_fields.workiz_from_jobs` — the Job #s
+it was made from, in the reserved read-only `workiz_*` namespace (`Contact.custom_fields` is
+not writable through the API at all). A re-run looks for the customer in this order:
+
+1. a contact whose `workiz_from_jobs` holds one of the jobs — survives a phone corrected by hand;
+2. a contact with the same last ten phone digits (the identity rule everywhere else);
+3. a contact with the same email, case-insensitively.
+
+A contact **this importer made from a job row** (`created_by` "Workiz import", `workiz_from_jobs`
+set, no `workiz_id`) is updated in full. **Any other match — a contact typed in by hand, or
+saved from an inbound call — gets the deal and only its blanks filled**; its name is a human's
+and is never overwritten, and a Lead becomes a Customer. Several matches: the importer's own
+contact wins, else the lowest id, and the rest are listed under Conflicts. When the customer
+later turns up in a newer clients file, that Client # is written onto the same contact rather
+than creating a twin.
+
+### Opportunities the export no longer mentions — left untouched
+
+The dry run lists every CRM opportunity whose `workiz_id` is not a Job # anywhere in the file
+(cancelled, skipped and duplicate rows count as present), by Job # only. **The owner decided
+to leave them alone**; nothing reads that list. Not addressed, and worth a human's eye: a job
+that WAS imported open and is now **cancelled** in the export is also left exactly as it was,
+because a cancelled row still imports as nothing.
+
+### AHS jobs arrive twice — owner decision Q15 (2026-09-13)
+
+AHS jobs come from the warranty company's email (the ahsmail intake makes the card) AND from
+later Workiz exports, whose AHS rows carry no AHS job number. When a Workiz job routes to the
+AHS board and no opportunity has its `workiz_id`, the importer looks for a card that is:
+
+- **`created_by` = "AHS email"**, **`custom_fields.ahs_job_id` set**, and **no
+  `custom_fields.workiz_id`** — these three facts are the contract with ahsmail, pinned as
+  constants (`AHS_EMAIL_CREATED_BY`, `AHS_JOB_ID`) and by fixture tests;
+- for the same customer: the contact the job resolved to, or any contact whose phone matches on
+  the last ten digits;
+- created within **3 days either side** of the job's `Job Created`.
+
+**Exactly one** such card: the job's `workiz_id` is written onto it and its pipeline, stage,
+status, value, source and Job type follow Workiz as usual. Its title, `created_by`, `created_at`,
+contact (filled only if empty), `ahs_job_id` and its notes are the email's and are kept — on
+every later run too. **None, or more than one**: the job gets its own card as before and is
+listed under "AHS jobs not matched to an email card" (Job # and why; for several, how many).
+A card that is the only candidate of **two** Workiz jobs attaches to neither — pairing both
+would merge two jobs into one card. Nothing merges or deletes a card; a card that already has
+a `workiz_id` is never paired again. A job with no `Job Created` date is listed, not matched.
+
+Smaller calls, all overrulable: the window is measured against the card's `created_at` (the
+email's arrival as ahsmail records it); a future-dated Workiz visit on a paired card books its
+appointment in "Workiz Jobs (imported)" exactly as any imported job does, whether or not
+ahsmail booked one. No migration: everything lives in existing JSON columns.
