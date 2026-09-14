@@ -17,6 +17,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from . import (
+    ahs_jobs,
     auth,
     automations,
     crmlink,
@@ -1884,6 +1885,43 @@ def ingest_delivery_receipt(body: DeliveryReceipt, db: Session = Depends(get_db)
         # relay needs to tell "we applied it" from "we already knew better".
         "advanced": ev.delivery_status is not before,
     }
+
+
+# ---------- American Home Shield work orders (2026-09-14) ----------
+#
+# owen-main posts every AHS work order it parses out of the Dispatch mailbox here, as
+# its own queued job beside (never instead of) its GoHighLevel relay. The logic is in
+# app/ahs_jobs.py; these two routes are the transaction. Same machine token and the
+# same `events:write` scope as `/api/events`: the same account on the same machine,
+# delivering the same kind of feed, and a second scope would only be a second token
+# for the owner to mint and rotate. Per-pipeline access: the AHS board must be
+# visible to the token's user (`pipeline_access.can_see`), or the request is refused
+# as if the board did not exist.
+
+@app.post("/api/ahs-jobs", status_code=201)
+def ingest_ahs_job(body: ahs_jobs.AhsJobIn, response: Response,
+                   db: Session = Depends(get_db),
+                   principal: auth.Principal = auth.EVENTS_INGEST):
+    """One AHS work order -> one contact (matched or created), one open card in
+    Dream Team Roofing AHS / New Lead, and its work order as a note. A repeat
+    `ahs_job_id` answers 200 with the card that exists and writes nothing."""
+    code, out = ahs_jobs.deliver_job(db, body, principal)
+    if code == 201:
+        db.commit()
+    response.status_code = code
+    return out
+
+
+@app.post("/api/ahs-jobs/cancellations")
+def ingest_ahs_cancellation(body: ahs_jobs.AhsCancellationIn,
+                            db: Session = Depends(get_db),
+                            principal: auth.Principal = auth.EVENTS_INGEST):
+    """Note the cancellation on that job's card and leave the card open. No card
+    for the job answers `outcome: no_card` and writes nothing."""
+    out = ahs_jobs.deliver_cancellation(db, body, principal)
+    if out["outcome"] == "noted":
+        db.commit()
+    return out
 
 
 class AppointmentCreate(BaseModel):

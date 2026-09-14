@@ -141,6 +141,16 @@ the whole history onto the contact's thread (`app/number_threads.py`). The misse
 auto text-back is **off**. Converting the old auto-created contacts back:
 `uv run python -m app.convert_auto_contacts` (dry run; `--commit` writes). See DECISIONS.md.
 
+## AHS work-order emails become cards (2026-09-14)
+
+owen-main posts each American Home Shield work order it parses to `POST /api/ahs-jobs` (and
+cancellations to `/api/ahs-jobs/cancellations`), with the `events:write` token. One card per
+AHS job in Dream Team Roofing AHS / New Lead, the contact matched or **created**, the work order
+as a staff-only note, **nothing enqueued**. `custom_fields.ahs_job_id` is the idempotency key and
+the reserved read-only namespace `ahs_job_*` (not `ahs_` — "AHS claim number" is the owner's own
+field). The Workiz importer finds these cards by `created_by = "AHS email"` + `ahs_job_id` + no
+`workiz_id`. Off by default on owen-main (`CRM_LINK_EMAIL_JOBS_ENABLED`). See DECISIONS.md.
+
 ## Answering a call in the browser (the softphone)
 
 The CRM can be a ring destination. `+19544829099` already rings two mobiles in parallel
