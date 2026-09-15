@@ -140,20 +140,22 @@ def test_the_mms_split_reads_owen_mains_exact_wording():
 @node
 def test_refused_shows_the_sentence_and_failed_offers_a_retry():
     got = run_js("""
+        const OPTED = 'This number has opted out of texts (they replied STOP). Nothing was sent.'
         const ev = (status, body = 'hi', direction = 'OUTBOUND', type = 'SMS') =>
           ({ status, e: { direction, type, delivery_status: status, body } })
         out([
-          outc.deliveryExplanation('REFUSED', 'This number has opted out of texts (they replied STOP). Nothing was sent.'),
+          outc.deliveryExplanation('REFUSED', OPTED),
           outc.deliveryExplanation('FAILED', 'could not reach the phone system'),
           outc.deliveryExplanation('FAILED', null),
           outc.deliveryExplanation('QUEUED', null),
           outc.deliveryExplanation('DELIVERED', null),
           outc.deliveryExplanation('LOGGED_ONLY', null),
-          ['FAILED', 'REFUSED', 'QUEUED', 'SENT', 'DELIVERED', 'LOGGED_ONLY'].map((s) => outc.canRetry(ev(s).e)),
+          ['FAILED', 'REFUSED', 'QUEUED', 'SENT', 'DELIVERED', 'LOGGED_ONLY']
+            .map((s) => outc.canRetry(ev(s).e)),
           outc.canRetry(ev('FAILED', '  ').e),
           outc.canRetry(ev('FAILED', 'hi', 'INBOUND').e),
           outc.sendSentence('failed: could not reach the phone system'),
-          outc.sendSentence('refused: This number has opted out of texts (they replied STOP). Nothing was sent.'),
+          outc.sendSentence('refused: ' + OPTED),
         ])
     """)
     assert "opted out" in got[0] and "retry" not in got[0].lower()

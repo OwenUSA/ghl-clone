@@ -78,7 +78,8 @@ def serve(port: int, db_path: str, record: str, token_file: str) -> None:
                                  "from_number": crmlink.current().from_number}) + "\n")
         if to_number == OPTED_OUT:
             # owen-main's own words, through the CRM's real translation.
-            return crmlink.LinkResult(False, 409, crmlink._human("this contact has opted out of SMS"))
+            return crmlink.LinkResult(False, 409,
+                                      crmlink._human("this contact has opted out of SMS"))
         if to_number == UNREACHABLE:
             return crmlink.LinkResult(False, 0, "could not reach the phone system")
         return crmlink.LinkResult(True, 200, "", {"ok": True, "status": "queued",
@@ -274,7 +275,8 @@ def run(shots: Path, keep: bool) -> int:
             composer = page.get_by_placeholder("Type a message")
             composer.fill("Are you home Tuesday?")
             composer.press("Enter")
-            expect(page.get_by_text("Are you home Tuesday?", exact=True)).to_be_visible(timeout=5000)
+            expect(page.get_by_text("Are you home Tuesday?", exact=True)
+                   ).to_be_visible(timeout=5000)
             checks.ok(texts()[-1]["to_number"] == STRANGER and len(texts()) == n_before + 3,
                       "the composer on a number thread sends through the same transport")
 
@@ -284,7 +286,8 @@ def run(shots: Path, keep: bool) -> int:
             dlg.locator("#new-message-body").fill("We can be there Tuesday")
             dlg.get_by_role("button", name="Send", exact=True).click()
             expect(dlg).to_be_hidden(timeout=5000)
-            expect(page.locator("div.truncate", has_text="Jane Doe").first).to_be_visible(timeout=5000)
+            expect(page.locator("div.truncate", has_text="Jane Doe").first
+                   ).to_be_visible(timeout=5000)
             checks.ok(texts()[-1]["to_number"] == JANE
                       and db_count("select count(*) from contacts") == contacts0
                       and db_count("select count(*) from number_threads") == 1,
@@ -297,7 +300,8 @@ def run(shots: Path, keep: bool) -> int:
             dlg.locator("#new-message-body").fill("Promo you did not ask for")
             dlg.get_by_role("button", name="Send", exact=True).click()
             expect(dlg).to_be_hidden(timeout=5000)
-            expect(page.get_by_text("Promo you did not ask for", exact=True)).to_be_visible(timeout=5000)
+            expect(page.get_by_text("Promo you did not ask for", exact=True)
+                   ).to_be_visible(timeout=5000)
             detail = page.get_by_test_id("delivery-detail").last
             checks.ok(page.get_by_test_id("delivery-status").last.get_attribute("data-status")
                       == "REFUSED" and "opted out" in detail.inner_text()
@@ -328,7 +332,8 @@ def run(shots: Path, keep: bool) -> int:
                       "Retry sends the same text once more, as a new message")
 
             # ---- inbound from an unknown number: no contact, unread, MMS note -----------
-            feed("/api/events", {"type": "SMS", "direction": "INBOUND", "from_number": "+13055550123",
+            feed("/api/events", {"type": "SMS", "direction": "INBOUND",
+                                 "from_number": "+13055550123",
                                  "body": "Here is the leak [2 attachments — view in OWEN]",
                                  "provider_ref": "in-1", "source_system": "BulkVS",
                                  "source_number": "+19544829099"})
