@@ -16,6 +16,7 @@ only — the real export is customer data.
 import hashlib
 import io
 import json
+from datetime import timedelta
 
 import pytest
 from app import workiz_import as wi
@@ -203,13 +204,15 @@ def test_the_first_mapped_technician_in_job_order_wins(crew, tmp_path):
 # ------------------------------------------------------------------ appointments
 
 
-def test_only_a_future_appointment_is_assigned(crew, tmp_path):
-    imp(crew, tmp_path, jobs(ada="Antonio Brown", cy="Antonio Brown"))
-    # J3 is in the past: still no appointment at all, and its names are on the card.
-    assert visit(crew, "J3") is None
-    assert card(crew, "J3").custom_fields["workiz_tech"] == ["Antonio Brown"]
+def test_a_past_appointment_is_assigned_too(crew, tmp_path):
+    """The owner, 2026-09-15: technicians see their history once they have logins."""
+    imp(crew, tmp_path, jobs(ada="Antonio Brown", cy="Nicolas Perez"))
+    # J3 is in the past: it has its visit now, assigned like any other.
+    assert visit(crew, "J3").assigned_user_id == crew.nico.id
+    assert card(crew, "J3").custom_fields["workiz_tech"] == ["Nicolas Perez"]
+    assert card(crew, "J3").custom_fields["workiz_tech_assigned_user_id"] == crew.nico.id
     assert visit(crew, "J1").assigned_user_id == crew.antonio.id
-    assert crew.scalar(select(func.count(Appointment.id))) == 2  # J1 and J2 only
+    assert crew.scalar(select(func.count(Appointment.id))) == 3
     assert crew.scalar(select(func.count(Job.id))) == 0
 
 
@@ -297,10 +300,25 @@ def test_a_person_assigning_the_same_tech_is_left_as_theirs(crew, tmp_path):
     assert visit(crew, "J1").assigned_user_id == crew.antonio.id
 
 
-def test_a_future_visit_that_has_become_past_is_no_longer_touched(crew, tmp_path):
+def test_a_visit_that_has_become_past_still_follows_workiz(crew, tmp_path):
+    """Reverses the 2026-09-15 Tech rule "past visits are never touched" (same day,
+    the owner's calendar decision): a past visit's assignment follows the same rule."""
     imp(crew, tmp_path, jobs(ada="Antonio Brown"))
-    imp(crew, tmp_path, jobs(ada="Nicolas Perez", ada_future=False))
+    plan = imp(crew, tmp_path, jobs(ada="Nicolas Perez", ada_future=False))
+    assert action_of(plan, "J1") == "reassign"
+    assert visit(crew, "J1").assigned_user_id == crew.nico.id
+
+
+def test_a_visit_a_person_moved_is_not_reassigned_either(crew, tmp_path):
+    """Left alone means left alone: its assignee is not touched, and it is reported."""
+    imp(crew, tmp_path, jobs(ada="Antonio Brown"))
+    v = visit(crew, "J1")
+    v.ends_at = v.ends_at + timedelta(hours=1)
+    crew.commit()
+    plan = imp(crew, tmp_path, jobs(ada="Nicolas Perez"))
+    assert action_of(plan, "J1") == "skipped"
     assert visit(crew, "J1").assigned_user_id == crew.antonio.id
+    assert wi.technicians_json(plan)["appointments"]["skipped"] == ["J1"]
 
 
 @pytest.mark.parametrize("current,marker,target,expected", [
@@ -332,7 +350,7 @@ def test_the_card_owner_never_changes(crew, tmp_path):
     assert card(crew, "J2").owner_id is None
 
 
-def test_a_restricted_tech_sees_the_assigned_future_job_and_not_an_unassigned_one(
+def test_a_restricted_tech_sees_her_assigned_jobs_past_and_future_and_no_other(
         crew, tmp_path):
     tess = person(crew, "Tess Tech", "tess@dtr.test", only_assigned=True)
     crew.commit()
@@ -345,12 +363,12 @@ def test_a_restricted_tech_sees_the_assigned_future_job_and_not_an_unassigned_on
     with TestClient(app) as c:
         c.headers["Authorization"] = "Bearer " + plain
         board = {o["id"] for o in c.get("/api/opportunities").json()}
-        # J1: her future visit. J2: Antonio's. J3: her name, but in the past, so no
-        # appointment — the access rule has nothing to see it by, which is the brief.
-        assert board == {ids["J1"]}
+        # J1: her future visit. J2: Antonio's. J3: her name, in the past — since
+        # 2026-09-15 it has its visit, assigned to her, so her history is hers to see.
+        assert board == {ids["J1"], ids["J3"]}
         assert c.get("/api/opportunities/%d" % ids["J1"]).status_code == 200
         assert c.get("/api/opportunities/%d" % ids["J2"]).status_code == 404
-        assert c.get("/api/opportunities/%d" % ids["J3"]).status_code == 404
+        assert c.get("/api/opportunities/%d" % ids["J3"]).status_code == 200
         # She reads her technicians on the card like anyone who can see it.
         assert c.get("/api/opportunities/%d" % ids["J1"]).json()[
             "custom_fields"]["workiz_tech"] == ["Tess Tech"]

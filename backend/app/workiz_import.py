@@ -71,12 +71,24 @@ follows the clients file exactly as before; nothing here changed it.
 
 The card carries the job's technician names as `workiz_tech` (read-only, shown in the
 modal as "Workiz technician(s)"). A name maps to a CRM user through `--tech-map`, else
-to the ONE active person whose full name matches; nobody is ever created. A FUTURE
-appointment stays on "Workiz Jobs (imported)" and is assigned to the first mapped
+to the ONE active person whose full name matches; nobody is ever created. The job's
+appointment — past or future — stays on "Workiz Jobs (imported)" and is assigned to the first mapped
 technician. `workiz_tech_assigned_user_id` on the card records the importer's own
 assignment: a re-import follows Workiz only while the appointment still holds it, so a
 person's assignment — or a person clearing it — is never overwritten, only reported
 (`tech_assignment`). Card OWNERS are never touched. See `plan_technicians`.
+
+## Every scheduled job is on the calendar, past or future (2026-09-15)
+
+Every non-cancelled job with a `Scheduled` time has exactly ONE appointment on "Workiz
+Jobs (imported)" — a job finished last March as much as one booked for next week, so
+the calendar shows the business's real history. A re-import MOVES it when Workiz's
+times changed, and CANCELS it (status, never a delete) when the job is now cancelled
+or has no scheduled time. `workiz_appointment` on the card records what this importer
+last wrote to that row; a row that no longer matches it was changed by a person and is
+left alone entirely, and reported (`importer_appointment`). Past or future, it is
+written through the ORM like every other row here — never `on_appointment_booked` — so
+the jobs-table guard below still sees zero new rows.
 
 ## What it will not do
 
@@ -153,6 +165,12 @@ WORKIZ_TECH = custom_fields.IMPORT_PREFIX + "tech"
 # On the card rather than the appointment because an appointment has no JSON column,
 # and the brief allows no new one; one card has one Workiz-calendar appointment.
 WORKIZ_TECH_ASSIGNED = custom_fields.IMPORT_PREFIX + "tech_assigned_user_id"
+# What this importer last wrote to the card's Workiz-calendar appointment (2026-09-15):
+# `{"id", "starts_at", "ends_at", "status", "title"}`. The record that the row is the
+# importer's and unedited — a re-import may move, retitle or cancel it only while the
+# row still says exactly this. On the card for the same reason as the tech marker:
+# an appointment has no JSON column, and no migration was allowed for one.
+WORKIZ_APPOINTMENT = custom_fields.IMPORT_PREFIX + "appointment"
 
 # The contract with the AHS email intake (the ahsmail agent, owner decision Q15,
 # 2026-09-13). A card it makes carries exactly these two facts; a third — no
@@ -626,6 +644,24 @@ class ApptPlan:
     # What the assignment step will do: see `tech_assignment`. Worked out against the
     # database when the plan is built, and again against the row when it is written.
     tech_action: str = "none"
+    # --- the visit itself (2026-09-15) ---
+    # create / move / restore / retitle / unchanged / manual (see APPOINTMENT_ACTIONS).
+    action: str = "create"
+    past: bool = False
+    # Made by an earlier import that kept no `workiz_appointment` record: adopted.
+    legacy: bool = False
+    why: str = ""           # for `manual`: what a person changed
+
+
+@dataclass
+class ApptCancel:
+    """A job that is cancelled or unscheduled in Workiz, and still has a visit."""
+    job_workiz_id: str
+    card_id: int
+    reason: str             # "cancelled in Workiz" / "no Scheduled time in Workiz"
+    action: str = "cancel"  # cancel / unchanged (already cancelled) / manual
+    legacy: bool = False
+    why: str = ""
 
 
 @dataclass
@@ -676,8 +712,10 @@ class Plan:
     # (Job #, why) — new Workiz AHS jobs that got their own card instead.
     ahs_unmatched: list[tuple[str, str]] = field(default_factory=list)
     opportunities: list[OppPlan] = field(default_factory=list)
+    # One per job with a Scheduled time, past or future (2026-09-15).
     appointments: list[ApptPlan] = field(default_factory=list)
-    past_appointments: int = 0
+    # Visits of jobs that are now cancelled or unscheduled in Workiz.
+    appointment_cancels: list[ApptCancel] = field(default_factory=list)
     # --- technicians (2026-09-15) ---
     tech_mappings: list[TechMapping] = field(default_factory=list)
     # Map file entries whose name is on none of this run's cards.
@@ -928,6 +966,7 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict], *,
     seen_job_ids: set[str] = set()
     # Live jobs whose customer is in no client record: they make their own contact.
     unmatched: list[dict] = []
+    cancelled_job_ids: list[str] = []
     for row in jobs:
         job_id = clean(row.get("Job #"))
         if not job_id:
@@ -941,6 +980,10 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict], *,
         raw_status = clean(row.get("Status"))
         key = status_key(raw_status)
         dropped = key in DROPPED_STATUSES
+        if dropped:
+            # Whoever its client is: a card an earlier run made for it may hold a
+            # visit that now has to be cancelled (2026-09-15).
+            cancelled_job_ids.append(job_id)
         if not dropped and key not in STATUS_MAP:
             plan.skipped.append(Skip(
                 "jobs", job_id,
@@ -1068,7 +1111,8 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict], *,
                                        if wid not in in_export)
 
     # --- opportunities and appointments --------------------------------------
-    now = datetime.now(UTC)
+    # Job # -> (starts, ends) for every job that has a Scheduled time.
+    scheduled: dict[str, tuple[datetime, datetime]] = {}
     # Who each job's customer is, for matching an AHS email card to them: the
     # contact the plan resolved to, and every phone known for that customer.
     planned = {cp.workiz_id: (cp.existing_id, cp.phone) for cp in plan.contacts}
@@ -1134,18 +1178,14 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict], *,
 
             if starts_at is None:
                 continue
-            if starts_at <= now:
-                # The whole point: an import must not book, or remind anybody about,
-                # a visit that already happened.
-                plan.past_appointments += 1
-                continue
+            # Past or future (the owner, 2026-09-15: "the calendar shows ALL our
+            # appointments"). A multi-day job keeps its real end on a later date.
             if ends_at is None or ends_at <= starts_at:
                 ends_at = starts_at + DEFAULT_VISIT
-            plan.appointments.append(ApptPlan(
-                job_workiz_id=job_id, title=name[:255],
-                starts_at=starts_at, ends_at=ends_at))
+            scheduled[job_id] = (starts_at, ends_at)
 
     match_ahs_email_cards(plan, email_cards, customer_of)
+    plan_appointments(db, plan, scheduled, cancelled_job_ids, existing_opps, opps_by_id)
     plan_technicians(db, plan, tech_map, opps_by_id)
     return plan
 
@@ -1222,7 +1262,7 @@ def match_ahs_email_cards(plan: Plan, email_cards: list[Opportunity],
 
 def tech_assignment(current: int | None, marker: int | None,
                     target: int | None) -> str:
-    """What the import does to one future Workiz appointment's `assigned_user_id`.
+    """What the import does to one Workiz appointment's `assigned_user_id`.
 
     `current` is the appointment's assignee now, `marker` the card's
     `workiz_tech_assigned_user_id` (who THIS importer last assigned it to) and `target`
@@ -1268,10 +1308,162 @@ TECH_ACTIONS = [
 
 def _import_appointment(db: Session, opportunity_id: int,
                         calendar_id: int) -> Appointment | None:
-    """The card's visit on the Workiz calendar — the one row this importer writes."""
+    """The card's first visit on the Workiz calendar — where an earlier import that
+    kept no `workiz_appointment` record put the one row it wrote."""
     return db.scalars(select(Appointment).where(
         Appointment.opportunity_id == opportunity_id,
         Appointment.calendar_id == calendar_id).order_by(Appointment.id)).first()
+
+
+# ---------------------------------------------------------------- appointments
+
+
+def _iso(moment: datetime) -> str:
+    """One spelling of an instant, whichever database handed it back."""
+    return _as_utc(moment).astimezone(UTC).isoformat()
+
+
+def appointment_record(a: Appointment) -> dict:
+    """What `workiz_appointment` on the card says about the row just written."""
+    return {"id": a.id, "starts_at": _iso(a.starts_at), "ends_at": _iso(a.ends_at),
+            "status": a.status, "title": a.title}
+
+
+def _changed_by_a_person(a: Appointment, record: dict) -> list[str]:
+    """What differs between the row and what the importer last wrote to it."""
+    changed = []
+    if _iso(a.starts_at) != record.get("starts_at") or \
+            _iso(a.ends_at) != record.get("ends_at"):
+        changed.append("its time")
+    if a.status != record.get("status"):
+        changed.append("its status (%s)" % a.status)
+    if a.title != record.get("title"):
+        changed.append("its title")
+    return changed
+
+
+def importer_appointment(db: Session, card: Opportunity | None,
+                         calendar: Calendar | None
+                         ) -> tuple[Appointment | None, str, str]:
+    """The card's Workiz visit, and whether this importer may write to it.
+
+    Returns `(row, state, why)`:
+
+      none     no visit — the importer may create one
+      owned    the row `workiz_appointment` names, still exactly as the importer left
+               it (time, status, title)
+      legacy   no record yet: the card's first visit on the Workiz calendar, which an
+               earlier import made — status "confirmed" and none of the things only a
+               person or an AI agent writes (notes, description, location, agent).
+               Adopted; the record is written with this run.
+      manual   a person changed it (or made it): LEFT ALONE entirely, and reported.
+               `why` says what. The importer never creates a second visit beside it.
+
+    Who assigned it is NOT part of this: that has its own record and its own rule
+    (`tech_assignment`), and a person assigning a technician is not a reason to stop
+    following Workiz's times.
+    """
+    if card is None or calendar is None:
+        return None, "none", ""
+    record = (card.custom_fields or {}).get(WORKIZ_APPOINTMENT)
+    a = db.get(Appointment, record["id"]) if isinstance(record, dict) and \
+        isinstance(record.get("id"), int) else None
+    if a is not None:
+        if a.opportunity_id != card.id or a.calendar_id != calendar.id:
+            return a, "manual", "moved to another %s by a person" % (
+                "card" if a.opportunity_id != card.id else "calendar")
+        changed = _changed_by_a_person(a, record)
+        if changed:
+            return a, "manual", "a person changed %s" % " and ".join(changed)
+        return a, "owned", ""
+    a = _import_appointment(db, card.id, calendar.id)
+    if a is None:
+        return None, "none", ""
+    if (a.status == "confirmed" and not a.notes and not a.description
+            and not a.location and a.ai_agent_id is None):
+        return a, "legacy", ""
+    return a, "manual", ("on the Workiz calendar with no import record, and "
+                         "status %s or notes, a description, a location or an AI "
+                         "agent a person gave it" % a.status)
+
+
+def appointment_action(a: Appointment | None, starts_at: datetime, ends_at: datetime,
+                       title: str) -> str:
+    """What writing a scheduled job does to the visit the importer may write to."""
+    if a is None:
+        return "create"
+    if a.status != "confirmed":
+        return "restore"
+    if _iso(a.starts_at) != _iso(starts_at) or _iso(a.ends_at) != _iso(ends_at):
+        return "move"
+    if a.title != title:
+        return "retitle"
+    return "unchanged"
+
+
+# The report's order, and each action's words.
+APPOINTMENT_ACTIONS = [
+    ("move", "to move: Workiz's scheduled time or end changed"),
+    ("restore", "to restore: the importer had cancelled it and Workiz schedules it again"),
+    ("retitle", "to retitle to the customer's name, as on the card"),
+    ("cancel", "to cancel (status, never deleted): cancelled or unscheduled in Workiz"),
+    ("manual", "changed by a person since the import wrote it — LEFT ALONE"),
+    ("unchanged", "unchanged"),
+]
+
+
+def plan_appointments(db: Session, plan: Plan,
+                      scheduled: dict[str, tuple[datetime, datetime]],
+                      cancelled_job_ids: list[str],
+                      existing_opps: dict[str, list[Opportunity]],
+                      opps_by_id: dict[int, Opportunity]) -> None:
+    """One visit per scheduled job, past or future; cancel the ones Workiz dropped.
+
+    The owner's decision (2026-09-15, DECISIONS.md). Decided against the database here
+    for the report, and again against each row when it is written.
+    """
+    now = datetime.now(UTC)
+    calendar = db.scalar(select(Calendar).where(Calendar.name == IMPORT_CALENDAR))
+    for op in plan.opportunities:
+        card = opps_by_id.get(op.existing_id) if op.existing_id else None
+        a, state, why = importer_appointment(db, card, calendar)
+        if op.workiz_id not in scheduled:
+            if a is not None:
+                plan.appointment_cancels.append(_cancel_plan(
+                    op.workiz_id, card, a, state, why, "no Scheduled time in Workiz"))
+            continue
+        starts_at, ends_at = scheduled[op.workiz_id]
+        # The visit carries the card's title: the customer's name, or an AHS email
+        # card's own name-first title, which the import keeps.
+        title = card.title if op.email_card and card is not None else op.title
+        ap = ApptPlan(job_workiz_id=op.workiz_id, title=title, starts_at=starts_at,
+                      ends_at=ends_at, past=starts_at <= now, legacy=state == "legacy")
+        if state == "manual":
+            ap.action, ap.why = "manual", why
+        else:
+            ap.action = appointment_action(a, starts_at, ends_at, title)
+        plan.appointments.append(ap)
+
+    for job_id in dict.fromkeys(cancelled_job_ids):
+        cards = existing_opps.get(job_id) or []
+        if not cards:
+            continue
+        card = min(cards, key=lambda o: o.id)
+        a, state, why = importer_appointment(db, card, calendar)
+        if a is not None:
+            plan.appointment_cancels.append(_cancel_plan(
+                job_id, card, a, state, why, "cancelled in Workiz"))
+
+
+def _cancel_plan(job_id: str, card: Opportunity, a: Appointment, state: str, why: str,
+                 reason: str) -> ApptCancel:
+    c = ApptCancel(job_workiz_id=job_id, card_id=card.id, reason=reason,
+                   legacy=state == "legacy", why=why)
+    if state == "manual":
+        c.action = "manual"
+    elif a.status == "cancelled":
+        c.action = "unchanged"
+    return c
 
 
 def resolve_techs(db: Session, names: dict[str, str],
@@ -1321,10 +1513,11 @@ def resolve_techs(db: Session, names: dict[str, str],
 
 def plan_technicians(db: Session, plan: Plan, tech_map: dict[str, str | None] | None,
                      opps_by_id: dict[int, Opportunity]) -> None:
-    """The `Tech` column: names on the card, and who each future visit is assigned to.
+    """The `Tech` column: names on the card, and who each visit is assigned to.
 
     The owner's decision (2026-09-15, DECISIONS.md): card OWNERS never change. The
-    job's future appointment stays on the Workiz calendar and is ASSIGNED to the first
+    job's appointment — past or future, so a technician sees their history — stays
+    on the Workiz calendar and is ASSIGNED to the first
     technician that maps to a CRM user; see `tech_assignment` for when a re-import may
     change or clear that, and when it leaves a person's choice alone.
     """
@@ -1355,9 +1548,12 @@ def plan_technicians(db: Session, plan: Plan, tech_map: dict[str, str | None] | 
         op = by_job[ap.job_workiz_id]
         ap.assign_to = next((resolved[tech_key(n)].user_id for n in op.techs
                              if resolved[tech_key(n)].user_id is not None), None)
+        if ap.action == "manual":
+            # A visit a person changed is left alone entirely — its assignee too.
+            ap.tech_action = "skipped"
+            continue
         card = opps_by_id.get(op.existing_id) if op.existing_id else None
-        appt = (_import_appointment(db, card.id, calendar.id)
-                if card is not None and calendar is not None else None)
+        appt, _state, _why = importer_appointment(db, card, calendar)
         if appt is None:
             ap.tech_action = tech_assignment(None, None, ap.assign_to)
         else:
@@ -1802,23 +1998,35 @@ def apply_plan(db: Session, plan: Plan) -> dict:
     db.flush()
 
     # --- appointments ---------------------------------------------------------
+    # Past and future alike, and still only through the ORM: nothing here reaches
+    # `on_appointment_booked`, and the caller's jobs-table guard proves it.
     for ap in plan.appointments:
         o = opportunities.get(ap.job_workiz_id)
         if o is None:
             continue
-        a = _import_appointment(db, o.id, calendar.id)
+        # Decided again against the row itself, by the rule the plan reported: a
+        # person may have edited it between the dry run and this one.
+        a, state, _why = importer_appointment(db, o, calendar)
+        if state == "manual":
+            counts["appointments_left_alone"] += 1
+            continue
+        title = o.title
         created = a is None
+        action = appointment_action(a, ap.starts_at, ap.ends_at, title)
         if created:
             a = Appointment(opportunity_id=o.id, calendar_id=calendar.id)
             db.add(a)
-            counts["appointments_created"] += 1
+            counts["appointments_created_%s" % ("past" if ap.past else "future")] += 1
         else:
-            counts["appointments_updated"] += 1
-        _set(a, "title", ap.title)
+            counts["appointments_" + {"move": "moved", "restore": "restored",
+                                      "retitle": "retitled",
+                                      "unchanged": "unchanged"}[action]] += 1
+        _set(a, "title", title)
         _set(a, "contact_id", o.contact_id)
         _set(a, "starts_at", ap.starts_at)
         _set(a, "ends_at", ap.ends_at)
         _set(a, "status", "confirmed")
+        db.flush()
 
         # The technician (2026-09-15). Decided again here, against the row itself, by
         # the same rule the plan reported. The card's owner is never touched.
@@ -1839,6 +2047,27 @@ def apply_plan(db: Session, plan: Plan) -> dict:
             counts["appointments_tech_" + action] += 1
         elif action in ("manual", "already"):
             counts["appointments_tech_left_alone"] += 1
+        blob[WORKIZ_APPOINTMENT] = appointment_record(a)
+        _set(o, "custom_fields", blob)
+    db.flush()
+
+    # --- visits of jobs Workiz cancelled or unscheduled -----------------------
+    for c in plan.appointment_cancels:
+        o = db.get(Opportunity, c.card_id)
+        a, state, _why = importer_appointment(db, o, calendar)
+        if a is None:
+            continue
+        if state == "manual":
+            counts["appointments_left_alone"] += 1
+            continue
+        if a.status != "cancelled":
+            # A status, never a delete (CLAUDE.md: DELETE /api/appointments is a
+            # cancel too). The assignee stays, so the history still says who it was.
+            _set(a, "status", "cancelled")
+            counts["appointments_cancelled"] += 1
+        db.flush()
+        blob = dict(o.custom_fields or {})
+        blob[WORKIZ_APPOINTMENT] = appointment_record(a)
         _set(o, "custom_fields", blob)
     db.flush()
     return dict(counts)
@@ -2005,12 +2234,7 @@ def render(plan: Plan, counts: dict | None, *, committed: bool) -> str:
     for job_id, why in plan.ahs_unmatched:
         say("        job %-10s %s" % (job_id, why))
 
-    say("")
-    say("Appointments")
-    say("  %-6d to create or update — every one is in the FUTURE" % len(plan.appointments))
-    say("  %-6d jobs scheduled in the past: NO appointment, and no reminder"
-        % plan.past_appointments)
-    say("  reminders scheduled: 0, always. This importer cannot enqueue a job.")
+    render_appointments(plan, say)
 
     render_technicians(plan, say)
 
@@ -2048,6 +2272,69 @@ def render(plan: Plan, counts: dict | None, *, committed: bool) -> str:
     return "\n".join(out)
 
 
+def appointments_json(plan: Plan) -> dict:
+    """The appointment plan as Job #s. The text report and `--json` both read this."""
+    appts, cancels = plan.appointments, plan.appointment_cancels
+    out = {
+        "create_past": sorted(a.job_workiz_id for a in appts
+                              if a.action == "create" and a.past),
+        "create_future": sorted(a.job_workiz_id for a in appts
+                                if a.action == "create" and not a.past),
+    }
+    for action, _words in APPOINTMENT_ACTIONS:
+        if action == "cancel":
+            out["cancel"] = [{"job": c.job_workiz_id, "why": c.reason}
+                             for c in sorted(cancels, key=lambda c: c.job_workiz_id)
+                             if c.action == "cancel"]
+        elif action == "manual":
+            out["manual"] = sorted(
+                [{"job": a.job_workiz_id, "why": a.why} for a in appts
+                 if a.action == "manual"]
+                + [{"job": c.job_workiz_id, "why": "%s; %s" % (c.reason, c.why)}
+                   for c in cancels if c.action == "manual"], key=lambda m: m["job"])
+        elif action == "unchanged":
+            out["unchanged"] = sorted(
+                [a.job_workiz_id for a in appts if a.action == "unchanged"]
+                + [c.job_workiz_id for c in cancels if c.action == "unchanged"])
+        else:
+            out[action] = sorted(a.job_workiz_id for a in appts if a.action == action)
+    out["adopted_from_an_earlier_import"] = sorted(
+        [a.job_workiz_id for a in appts if a.legacy and a.action != "manual"]
+        + [c.job_workiz_id for c in cancels if c.legacy and c.action != "manual"])
+    return out
+
+
+def render_appointments(plan: Plan, say) -> None:
+    """Counts and Job #s, like every other section. No customer data."""
+    got = appointments_json(plan)
+    say("")
+    say("Appointments (one per scheduled job, past or future, on %r)" % IMPORT_CALENDAR)
+    creates = got["create_past"] + got["create_future"]
+    say("  %-6d to create — %d in the past, %d in the future" % (
+        len(creates), len(got["create_past"]), len(got["create_future"])))
+    if got["create_past"]:
+        say("        past jobs %s" % " / ".join(got["create_past"]))
+    if got["create_future"]:
+        say("        future jobs %s" % " / ".join(got["create_future"]))
+    for action, words in APPOINTMENT_ACTIONS:
+        items = got[action]
+        say("  %-6d %s" % (len(items), words))
+        if action == "unchanged" or not items:
+            continue
+        if action in ("cancel", "manual"):
+            for item in items:
+                say("        job %-10s %s" % (item["job"], item["why"]))
+        else:
+            say("        jobs %s" % " / ".join(items))
+    adopted = got["adopted_from_an_earlier_import"]
+    say("  %-6d of those made by an earlier import that kept no record — adopted, "
+        "and recorded from this run on" % len(adopted))
+    if adopted:
+        say("        jobs %s" % " / ".join(adopted))
+    say("  reminders scheduled: 0, always. This importer cannot enqueue a job, and a "
+        "past visit is never booked through the API.")
+
+
 def render_technicians(plan: Plan, say) -> None:
     """The `Tech` column. Workiz technician names, CRM staff, counts and Job #s only."""
     say("")
@@ -2073,8 +2360,8 @@ def render_technicians(plan: Plan, say) -> None:
         % len(plan.tech_names_cleared))
     if plan.tech_names_cleared:
         say("        jobs %s" % " / ".join(sorted(plan.tech_names_cleared)))
-    say("  Future appointments (%d) — each stays on %r" % (len(plan.appointments),
-                                                        IMPORT_CALENDAR))
+    say("  Appointments, past and future (%d) — each stays on %r" % (
+        len(plan.appointments), IMPORT_CALENDAR))
     for action, words in TECH_ACTIONS:
         jobs = sorted(a.job_workiz_id for a in plan.appointments
                       if a.tech_action == action)
@@ -2083,6 +2370,12 @@ def render_technicians(plan: Plan, say) -> None:
             say("          jobs %s" % " / ".join(jobs))
     say("    %-5d no mapped technician and nothing to clear" % sum(
         1 for a in plan.appointments if a.tech_action == "none"))
+    skipped = sorted(a.job_workiz_id for a in plan.appointments
+                     if a.tech_action == "skipped")
+    say("    %-5d not looked at: a person changed the visit (see Appointments)"
+        % len(skipped))
+    if skipped:
+        say("          jobs %s" % " / ".join(skipped))
 
 
 def technicians_json(plan: Plan) -> dict:
@@ -2098,7 +2391,7 @@ def technicians_json(plan: Plan) -> dict:
         "appointments": {
             action: sorted(a.job_workiz_id for a in plan.appointments
                            if a.tech_action == action)
-            for action in [a for a, _ in TECH_ACTIONS] + ["none"]},
+            for action in [a for a, _ in TECH_ACTIONS] + ["none", "skipped"]},
     }
 
 
@@ -2145,9 +2438,7 @@ def as_json(plan: Plan, counts: dict | None) -> dict:
             "by_status": dict(Counter(o.status for o in plan.opportunities)),
             "value_cents": sum(o.value_cents for o in plan.opportunities),
         },
-        "appointments": {"create": len(plan.appointments),
-                         "past_not_created": plan.past_appointments,
-                         "reminders_enqueued": 0},
+        "appointments": {**appointments_json(plan), "reminders_enqueued": 0},
         "technicians": technicians_json(plan),
         "skipped": [{"file": s.where, "id": s.ident, "reason": s.reason}
                     for s in plan.skipped],
