@@ -161,6 +161,19 @@ class User(Base):
     # contacts.owner_id, opportunities.owner_id, appointments.assigned_user_id and
     # calendars.user_id, none of which cascade.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # GoHighLevel's "Only assigned data" (2026-09-15). On: the user sees only their own
+    # jobs and what hangs off them — see app/assigned_access.py. The API turns it on for
+    # a user CREATED as a TECH; every user that existed before the column is false,
+    # which is exactly their access before it. Ignored for an ADMIN, who always sees all.
+    only_assigned_data: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false())
+    # My Staff (2026-09-15). Shown in the staff table; stored as `store_phone` stores a
+    # contact's. NULL = none recorded.
+    phone: Mapped[str | None] = mapped_column(String(40))
+    # Set when an ADMIN creates the user or resets their password: until they choose
+    # their own, the API answers nothing but "change your password" (auth.require_auth).
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false())
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

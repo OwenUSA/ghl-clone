@@ -3886,3 +3886,163 @@ Not verified: a real SIP.js `sendDTMF` reaching Asterisk, `replaceTrack` on a li
 RTCPeerConnection when the microphone changes, `setSinkId` on real hardware, the operator leg's
 caller-ID actually arriving as the dialled number (it is owen-main's `caller_id=callee_number`,
 read from source), and owen-main ringing `operator=<email>` for a provisioned CRM user.
+
+## AMENDMENT (2026-09-15): "Only assigned data" — a technician sees and works only their own jobs — and My Staff
+
+The owner's decisions, implemented as given; the operator's addendum of the same day adds the
+My Staff screen that is this setting's home. Security work in the class of per-pipeline
+permissions (2026-09-13): every read path was enumerated and each is proven by a test.
+
+### What this AMENDS, explicitly
+
+* **"Internal notes (NOTE, INTERNAL_COMMENT) are STAFF-only" (2026-09-10) — narrowed, on the
+  record.** A TECH with "Only assigned data" on may now READ and ADD an **opportunity's own
+  notes on their own jobs** (`assigned_access.sees_opportunity_notes`). They may not edit or
+  delete one. Conversation-thread `NOTE` / `INTERNAL_COMMENT` events stay STAFF-only exactly as
+  before — including the contact's thread notes the Notes tab lists under a deal's own, which a
+  TECH is not sent — and so does an appointment's "Internal notes". A TECH still cannot see any
+  note on a job that is not theirs (404), and a TECH with the switch OFF is refused 403 as before.
+* **"Everyone reads" (Auth — BUILT).** No longer true for a user with the switch on.
+* **"A TECH … cannot edit records" (CLAUDE.md).** A restricted TECH, on their own job, may
+  answer its custom-field / Checklist questions (the answers only — the "verified" tick, not the
+  contact email or card address beside it), move its stage from the modal as well as by drag, add
+  a task and complete a task that is theirs (assigned to them or added by them).
+* **Settings gains "My Staff"**; `GET /api/users` gains `q` / `role` filters and, for an ADMIN
+  only, `phone`, `only_assigned_data`, `must_change_password` and `machine`.
+
+### The rule
+
+* **`users.only_assigned_data`**, ON by default for a user CREATED as a TECH, OFF for everyone
+  else; an ADMIN toggles it in Settings → My Staff. **An ADMIN is never restricted** (the same
+  "ADMIN always" per-pipeline access has): turning it on for an admin is refused 400, and
+  promoting a restricted user to ADMIN clears it. It is read from the user row on every request,
+  so a change applies on the next click with no re-login.
+* **"Their jobs"** = opportunities they OWN, plus opportunities with a **non-cancelled**
+  appointment on a calendar they own (`calendars.user_id`) or assigned to them
+  (`appointments.assigned_user_id`). Per-pipeline permission still applies on top: a job in a
+  pipeline they cannot access is not visible even if it is theirs.
+* Everything a restricted user can see follows from that, in `app/assigned_access.py`, which
+  returns `None` — no extra filter, byte-identical SQL — for everyone unrestricted. A lookup by id
+  of anything outside answers the same 404 a missing id answers.
+
+### Every read path, and how it is filtered
+
+`tests/test_only_assigned_data.py::AUDITED` records all 117 `/api` routes; a route added later
+fails `test_every_route_is_on_the_audited_list` until somebody records how it enforces this, and
+`test_every_route_reading_customer_records_goes_through_a_scope` checks the recorded answer is
+true in the source.
+
+| Surface | Filter |
+|---|---|
+| Board, `/api/opportunities`, saved views applied | `assigned_access.opportunities(scope)` |
+| Deal by id: modal, drag, detail PATCH, tasks, notes, photos, delete | `pipeline_access.get_opportunity` → 404 (the one chokepoint) |
+| Bulk stage / owner | `_bulk_load` through the scope → the whole request 404s |
+| Pipeline list stage `count` / `value_cents` | only their jobs, so a column header cannot show others' money |
+| Contacts list (+ total), contact by id, tags on / contact PATCH | contacts of their jobs (primary + additional) → 404 |
+| Contact panel's opportunities and appointments | only their jobs / only their calendar's visits |
+| Tag counts | over their contacts |
+| Inbox, Unread badge, thread events, mark read / star, send, call, open thread | threads of their contacts → 404; **no number-only thread at all** |
+| `/api/calls`, `/api/messages` | `_search_events(scope)`, rows and totals |
+| ctrl+K `/api/search` | all three groups over one scope, items and totals |
+| OpenPhone recording relay | only a recording on one of their threads, else the "no recording" 404, nothing fetched |
+| Incoming-call caller name | blanked for a customer not on their jobs |
+| Calendars list | calendars they own + calendars holding a visit assigned to them |
+| Appointments list / by id / edit / cancel | on their calendar or assigned to them → 404; a deal link is shown only for their job (a cancelled visit lends no title) |
+| Blocked time list / by id / edit / delete | on calendars they own → 404 |
+| CompanyCam: card projects, photo pages, image relay, contact projects | card must be their job; an image needs a link to one |
+| Dashboard, funnel, Forecast, Call report, Appointment report | **403 "…not available to a user with “Only assigned data” on — they show money and other people's work."** |
+| `ghl` CLI | only through the API (driven for real in the test) |
+
+### What a restricted user may DO, and what is refused (nothing mutated — re-read in tests)
+
+Allowed on their own job: move stage (drag, bulk, modal), answer questions (`custom_fields`),
+add notes, add tasks, complete their own tasks, text and call the customer through the existing
+guarded paths. Refused 403 on their own job: title, value, status, pipeline, owner, followers,
+source, business name, address, primary / additional contacts, the contact's details, editing or
+deleting a note, editing or deleting a task, completing someone else's task, deleting anything.
+The detail PATCH answers "a technician can answer this job's questions and move its stage, but
+not change …" naming the refused fields; the modal disables those controls with that reason.
+
+A restricted DISPATCHER is filtered exactly the same; their ROLE still decides what they may do
+with what they can see (they may edit their jobs; they cannot reach a job, contact, visit or
+block that is not theirs — 404). Creating a contact, deal, visit or block is not narrowed.
+
+### My Staff (operator addendum)
+
+* **Settings → My Staff, ADMIN only** (the tab is not drawn for anyone else, and every write is
+  `auth.ADMIN`). GoHighLevel's table (refs/round3/42): initials avatar + name; email with the user
+  id and a copy button beneath; phone; User Type (Admin / Dispatcher / Technician, drawn in the
+  screenshot's small capitals) with "Only assigned data" beneath when on; edit and deactivate
+  icons; a User Role filter; a search box (name, email, phone, id — server-side); "+ Add User";
+  Page N / Previous / Next (10 per page). **Machine accounts** (no password — the telephony feed)
+  are listed in their own table beneath and can never be given a password (400).
+* **Add / Edit User modal**, in the Create pipeline modal's style (no screenshot of GoHighLevel's
+  exists): first and last name (stored as the one `users.name`, split at the first space when
+  editing), email, phone, role, the "Only assigned data" switch (follows the role's default until
+  touched, then stays as set; drawn off and locked for Admin), and a first password on Add /
+  "Reset password" on Edit. **No per-module permissions (Q4).**
+* **Deactivate, never delete (Q1).** The trash icon deactivates: sign-in refused, `token_version`
+  bumped so every browser session ends now, every API token a PERSON holds revoked. Their name
+  stays on jobs, notes and tasks; an ADMIN reactivates (a revoked token stays revoked — they mint
+  a new one). A MACHINE account's tokens are refused while it is inactive but not revoked, and work
+  again on reactivation: a token's secret is shown once, and destroying the telephony feed's is
+  how the live credential was lost before. **An admin cannot deactivate or demote themselves
+  (400), and the last active ADMIN who can sign in can never be deactivated or demoted (409)** —
+  a token-only ADMIN does not count, since it cannot open My Staff to put things right.
+* **Forced password change (Q2).** A user created by an admin, and a password reset by an admin,
+  sets `users.must_change_password`. Until they change it, `auth.require_auth` answers every
+  request except `/api/auth/me`, `/api/auth/password` and `/api/auth/logout-all` with 403 "choose a
+  new password before doing anything else" — server-enforced, so no token can be minted and no
+  record read; the browser shows only the change-password card. The new password must differ from
+  the one given. No email invitation is sent.
+* **A new Technician gets a calendar (Q3)**, owned by them and named "<Name>", in the same
+  transaction. Never a second: a user who already owns a calendar gets none. If a calendar with
+  that exact name exists (someone else's or nobody's) it is left completely alone — handing it
+  over would give them every visit already booked on it — and theirs is "<Name> (2)", "(3)"…; the
+  response and the notice say so. Only on creation: changing a role later creates nothing.
+* **Phone on users (Q5)**, stored as `store_phone` stores a contact's, shown formatted.
+
+### Migration `b5d1e8f3a276`, on `c4e8a2f6b913` — ONE revision
+
+Three `op.add_column` on `users` and nothing else: `only_assigned_data` BOOLEAN NOT NULL
+server_default false, `phone` VARCHAR(40) NULL, `must_change_password` BOOLEAN NOT NULL
+server_default false. Every existing user — every production TECH included — keeps their access
+(false), keeps their password without being forced to change it (false), and has no phone.
+`tests/test_users_migration.py` stands a throwaway SQLite up at `c4e8a2f6b913` with users, a
+machine token, a calendar and a deal, upgrades, and asserts every table keeps its columns and rows
+byte-for-byte, `users` gains exactly the three columns reading false / NULL / false, the server
+defaults fill, the round trip is clean, and `upgrade()` is three `add_column` calls.
+
+### Judgement calls, all overrulable
+
+* A deal's ADDITIONAL contacts count as "contacts of their jobs" (the job modal already names them).
+* A cancelled visit still SHOWS on the tech's calendar (it is on their day); it only does not make
+  its deal a job, so its deal link is blanked.
+* The calendar page's Users filter offers a restricted user only themselves; the calendar list
+  holds their own calendars and any calendar with a visit assigned to them.
+* A drag on a restricted board lands above the card the tech dropped on, counting only the cards
+  they can see, so other people's cards keep their order.
+* Dashboard / Reporting are not drawn, Forecast is not drawn (not dimmed), and a restricted user
+  who opens a link to one lands on Opportunities.
+* Reporting refuses with 403 and a sentence rather than 404: the screens exist for everyone and
+  hide nothing's existence; the user needs to know why.
+
+### Screenshot assumptions (what 42 and 43 do not show)
+
+GoHighLevel's third action icon (a boxed ✕) is not built — it has no counterpart here. The
+Reactivate icon, the "Deactivated" and "Password change pending" chips, the Machine accounts
+table, the deactivate confirmation, the Add/Edit modal, the change-password card, the role-filter
+option list, the empty and no-match states, and the page size (10) are ours, in the Pipelines
+screen's and pipeline modal's style. Settings keeps its existing tab row (My Staff is a tab there)
+rather than GoHighLevel's separate Settings sidebar in screenshot 43.
+
+### What the operator must do on production
+
+1. Rehearse, then `./deploy.sh --with-migrations` (revision `b5d1e8f3a276`).
+2. **Every existing user stays OFF.** Turn "Only assigned data" on, in Settings → My Staff, for
+   each technician who should be limited. Before doing so, make sure their jobs are theirs: set
+   them as the OWNER of their cards, or book their visits on a calendar they own / assign the
+   visits to them — a restricted tech with neither sees an empty board.
+3. Existing technicians have no calendar of their own unless one was made; creating one is only
+   automatic for users added through My Staff.
+4. Nobody existing is forced to change a password; resetting one in My Staff forces it.

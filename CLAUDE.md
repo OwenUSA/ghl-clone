@@ -391,3 +391,17 @@ found while building this.
   save and stored as text. See the 2026-09-13 Book appointment amendment in `DECISIONS.md`.
 - `Opportunity.custom_fields.owen_call_id` is a live join key to the telephony project.
   Never delete opportunities as a side effect of tidying something else.
+
+## "Only assigned data" and My Staff (2026-09-15)
+
+A per-user switch (`users.only_assigned_data`, ON by default for a new TECH, never for an ADMIN)
+limits a user to THEIR JOBS — deals they own, or with a non-cancelled visit on their calendar or
+assigned to them — and to those jobs' contacts, threads (no number-only threads), calendar entries,
+blocked time, tasks, notes and photos; Dashboard, Reporting and Forecast answer 403. **Every route
+that reads a customer record goes through `app/assigned_access.py`** (by id: 404, never 403), and
+`test_only_assigned_data.py` enumerates EVERY `/api` route — add one without recording how it
+enforces this and that test fails. A restricted TECH may answer questions, move the stage, add notes
+(opportunity notes only — thread notes stay STAFF) and tasks, and complete their own tasks, on their
+own job. Settings → **My Staff** (ADMIN) manages users: deactivate never deletes, an admin-set
+password forces a change at next sign-in (`auth.PASSWORD_CHANGE_PATHS`, server-enforced), a new
+technician gets a calendar, and the last active admin cannot be removed. See DECISIONS.md.

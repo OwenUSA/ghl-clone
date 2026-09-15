@@ -14,10 +14,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select, update
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from . import (
     ahs_jobs,
+    assigned_access,
     auth,
     automations,
     companycam,
@@ -256,8 +257,11 @@ def list_contacts(
     q: str | None = None,
     sort: str = "created_at",
     order: Literal["asc", "desc"] = "desc",
-    _: auth.Principal = auth.ANY_USER):
-    stmt = select(Contact)
+    principal: auth.Principal = auth.ANY_USER):
+    # "Only assigned data": the contacts of the reader's jobs, and no others — in the
+    # rows and in `total` alike.
+    stmt = assigned_access.contacts(select(Contact),
+                                    assigned_access.scope(db, principal))
     if q:
         # contains() + escape=, not a bare "%s" pattern: typing a % into the box
         # used to match every row here while narrowing to nothing in the palette,
@@ -327,13 +331,20 @@ def list_contacts(
     )
 
 
-def _contact_detail(c: Contact, hidden: set[int]) -> dict:
+def _contact_detail(c: Contact, s: assigned_access.Scope) -> dict:
     """Shape mirrors the measured Contact Details panel.
 
-    `hidden` is REQUIRED, with no default, on purpose: this payload lists the
-    contact's opportunities, and a caller that forgot to pass the pipelines the
-    reader cannot access would leak those deals' titles. See pipeline_access.py.
+    `s` is REQUIRED, with no default, on purpose: this payload lists the contact's
+    opportunities and appointments, and a caller that forgot to pass what the reader
+    may see would leak deal titles from pipelines they cannot access
+    (pipeline_access.py) or from jobs that are not theirs (assigned_access.py).
     """
+    theirs = {a.id for a in c.appointments}
+    if s.restricted:
+        # Only the visits on the reader's own calendar, as the Calendars page shows.
+        theirs = set(object_session(c).scalars(select(Appointment.id).where(
+            Appointment.contact_id == c.id,
+            assigned_access.appointment_is_theirs(s.user_id))).all())
     return {
         "id": c.id,
         "name": c.name,
@@ -369,13 +380,13 @@ def _contact_detail(c: Contact, hidden: set[int]) -> dict:
         # are about to be detached before anyone confirms. Reading them back out of
         # the 409's prose would tie the panel to the wording of an error message.
         "opportunities": [{"id": o.id, "title": o.title} for o in c.opportunities
-                          if o.pipeline_id not in hidden],
+                          if s.sees_job(o)],
         # Same reason, added 2026-09-11: the delete refuses over appointments too,
         # and the panel has to say which bookings are about to lose their customer
         # before anyone confirms.
         "appointments": [{"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
                           "status": a.status, "location": a.location}
-                         for a in c.appointments],
+                         for a in c.appointments if a.id in theirs],
         "custom_fields": c.custom_fields or {},
     }
 
@@ -383,10 +394,8 @@ def _contact_detail(c: Contact, hidden: set[int]) -> dict:
 @app.get("/api/contacts/{contact_id}")
 def get_contact(contact_id: int, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.ANY_USER):
-    c = db.get(Contact, contact_id)
-    if not c:
-        raise HTTPException(404, "contact not found")
-    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
+    c = assigned_access.get_contact(db, principal, contact_id)
+    return _contact_detail(c, assigned_access.scope(db, principal))
 
 
 # Deliberately loose: one @, something either side, a dot in the domain. Enough to
@@ -456,9 +465,7 @@ class ContactPatch(BaseModel):
 def update_contact(contact_id: int, body: ContactPatch,
                    db: Session = Depends(get_db),
                    principal: auth.Principal = auth.STAFF):
-    c = db.get(Contact, contact_id)
-    if not c:
-        raise HTTPException(404, "contact not found")
+    c = assigned_access.get_contact(db, principal, contact_id)
     if body.owner_id is not None and not db.get(User, body.owner_id):
         raise HTTPException(400, "unknown owner_id")
     # exclude_unset so an omitted field is left alone rather than nulled.
@@ -468,7 +475,7 @@ def update_contact(contact_id: int, body: ContactPatch,
     db.refresh(c)
     # A phone edited to a number that has a number-only thread adopts it, in the
     # commit above (number_threads.adopt_on_flush); this only reports it.
-    return {**_contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal)),
+    return {**_contact_detail(c, assigned_access.scope(db, principal)),
             **_adopted(db, c)}
 
 
@@ -479,9 +486,7 @@ class TagBody(BaseModel):
 @app.post("/api/contacts/{contact_id}/tags", status_code=201)
 def add_tag(contact_id: int, body: TagBody, db: Session = Depends(get_db),
             principal: auth.Principal = auth.STAFF):
-    c = db.get(Contact, contact_id)
-    if not c:
-        raise HTTPException(404, "contact not found")
+    c = assigned_access.get_contact(db, principal, contact_id)
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "tag name is required")
@@ -494,38 +499,39 @@ def add_tag(contact_id: int, body: TagBody, db: Session = Depends(get_db),
         db.add(ContactTag(contact_id=c.id, tag_id=tag.id))
     db.commit()
     db.refresh(c)
-    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
+    return _contact_detail(c, assigned_access.scope(db, principal))
 
 
 @app.delete("/api/contacts/{contact_id}/tags/{tag_id}")
 def remove_tag(contact_id: int, tag_id: int, db: Session = Depends(get_db),
                principal: auth.Principal = auth.STAFF):
-    c = db.get(Contact, contact_id)
-    if not c:
-        raise HTTPException(404, "contact not found")
+    c = assigned_access.get_contact(db, principal, contact_id)
     link = db.scalar(select(ContactTag).where(
         ContactTag.contact_id == contact_id, ContactTag.tag_id == tag_id))
     if link:
         db.delete(link)
         db.commit()
         db.refresh(c)
-    return _contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal))
+    return _contact_detail(c, assigned_access.scope(db, principal))
 
 
 # ---------- opportunities ----------
 
-def _pipeline_public(db: Session, p: Pipeline) -> dict:
+def _pipeline_public(db: Session, p: Pipeline, s: assigned_access.Scope) -> dict:
     """One pipeline as every screen reads it: the board, the Pipelines list, the
     modal, the Dashboard selectors and the `ghl` CLI.
 
     `count`/`value_cents` per stage are every deal in the stage, every status —
-    the figures the Dashboard funnel and the Forecast have always quoted.
+    the figures the Dashboard funnel and the Forecast have always quoted. For a
+    reader with "Only assigned data" on they are THEIR jobs in the stage, so a
+    column header cannot say how much money sits in other people's cards.
     """
     totals = {
         stage_id: (n, int(v)) for stage_id, n, v in db.execute(
-            select(Opportunity.stage_id, func.count(Opportunity.id),
-                   func.coalesce(func.sum(Opportunity.value_cents), 0))
-            .where(Opportunity.pipeline_id == p.id)
+            assigned_access.opportunities(
+                select(Opportunity.stage_id, func.count(Opportunity.id),
+                       func.coalesce(func.sum(Opportunity.value_cents), 0))
+                .where(Opportunity.pipeline_id == p.id), s)
             .group_by(Opportunity.stage_id)).all()}
     stages = []
     for s in sorted(p.stages, key=lambda s: (s.position, s.id)):
@@ -555,9 +561,9 @@ def list_pipelines(db: Session = Depends(get_db),
                    principal: auth.Principal = auth.ANY_USER):
     """In `position` order, which the Pipelines tab's drag sets and the board's
     selector follows. A pipeline the caller may not access is simply absent."""
-    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
-    return [_pipeline_public(db, p) for p in _ordered_pipelines(db)
-            if p.id not in hidden]
+    s = assigned_access.scope(db, principal)
+    return [_pipeline_public(db, p, s) for p in _ordered_pipelines(db)
+            if p.id not in s.hidden]
 
 
 # ---------- pipeline structure ----------
@@ -787,7 +793,7 @@ def _delete_stage_moving_deals(db: Session, principal: auth.Principal, s: Stage,
 
 @app.post("/api/pipelines", status_code=201)
 def create_pipeline(body: PipelineBody, db: Session = Depends(get_db),
-                    _: auth.Principal = auth.STAFF):
+                    principal: auth.Principal = auth.STAFF):
     """Create a pipeline with every setting the modal shows, in one request.
 
     Without `stages` a pipeline still starts EMPTY — the API does not guess at a
@@ -808,7 +814,7 @@ def create_pipeline(body: PipelineBody, db: Session = Depends(get_db),
         db.add(_new_stage(p.id, i, st, st.name))
     db.commit()
     db.refresh(p)
-    return _pipeline_public(db, p)
+    return _pipeline_public(db, p, assigned_access.scope(db, principal))
 
 
 @app.patch("/api/pipelines/{pipeline_id}")
@@ -871,7 +877,8 @@ def update_pipeline(pipeline_id: int, body: PipelinePatch,
     _touch(p)
     db.commit()
     db.refresh(p)
-    return {**_pipeline_public(db, p), "moved": moved}
+    return {**_pipeline_public(db, p, assigned_access.scope(db, principal)),
+            "moved": moved}
 
 
 @app.post("/api/pipelines/reorder")
@@ -899,7 +906,8 @@ def reorder_pipelines(body: PipelineReorder, db: Session = Depends(get_db),
     for i, pid in enumerate(order):
         by_id[pid].position = i
     db.commit()
-    return [_pipeline_public(db, by_id[pid]) for pid in order if pid not in hidden]
+    s = assigned_access.scope(db, principal)
+    return [_pipeline_public(db, by_id[pid], s) for pid in order if pid not in hidden]
 
 
 @app.post("/api/pipelines/{pipeline_id}/duplicate", status_code=201)
@@ -939,7 +947,7 @@ def duplicate_pipeline(pipeline_id: int, db: Session = Depends(get_db),
         db.add(PipelinePermission(pipeline_id=copy.id, user_id=grant.user_id))
     db.commit()
     db.refresh(copy)
-    return _pipeline_public(db, copy)
+    return _pipeline_public(db, copy, assigned_access.scope(db, principal))
 
 
 @app.get("/api/pipelines/{pipeline_id}/permissions")
@@ -1371,12 +1379,13 @@ def list_opportunities(
     which board the deal is filed on.
 
     Deals in a pipeline the caller cannot access are never listed. Naming such a
-    pipeline returns `[]`, exactly what naming one that does not exist returns.
+    pipeline returns `[]`, exactly what naming one that does not exist returns. With
+    "Only assigned data" on, only the caller's own jobs are listed (assigned_access).
     """
-    stmt = pipeline_access.visible_opportunities(
+    stmt = assigned_access.opportunities(
         select(Opportunity).options(selectinload(Opportunity.contact),
                                     selectinload(Opportunity.owner)),
-        pipeline_access.hidden_pipeline_ids(db, principal))
+        assigned_access.scope(db, principal))
     if pipeline_id is not None:
         stmt = stmt.where(Opportunity.pipeline_id == pipeline_id)
     if status != "all":
@@ -1434,7 +1443,16 @@ def move_opportunity(opp_id: int, body: OpportunityMove,
         select(Opportunity)
         .where(Opportunity.stage_id == body.stage_id, Opportunity.id != o.id)
         .order_by(Opportunity.position, Opportunity.id)).all()
-    ordered = [*siblings[:body.position], o, *siblings[body.position:]]
+    at = body.position
+    s = assigned_access.scope(db, principal)
+    if s.restricted:
+        # The caller's board shows only their own cards, so the position they dropped
+        # at counts THEIR cards. Land just before the card they dropped above (or
+        # after the last one they can see), so other people's cards keep their order.
+        mine = [i for i, sib in enumerate(siblings) if s.sees_job(sib)]
+        at = (mine[body.position] if body.position < len(mine)
+              else (mine[-1] + 1 if mine else len(siblings)))
+    ordered = [*siblings[:at], o, *siblings[at:]]
     for i, s in enumerate(ordered):
         s.position = i
     # ...and re-pack the stage it LEFT. Only the destination was packed before, so a
@@ -1489,7 +1507,7 @@ def create_contact(body: ContactCreate, db: Session = Depends(get_db),
     outcome = automations.on_contact_created(db, c)
     db.commit()
     db.refresh(c)
-    return {**_contact_detail(c, pipeline_access.hidden_pipeline_ids(db, principal)),
+    return {**_contact_detail(c, assigned_access.scope(db, principal)),
             "automation": outcome, **_adopted(db, c)}
 
 
@@ -2012,11 +2030,12 @@ class AppointmentCreate(BaseModel):
 def _check_appointment_opportunity(db: Session, principal: auth.Principal,
                                    opp_id: int | None) -> None:
     """A deal the caller cannot access is answered exactly like one that does not
-    exist — a booking must not be a way to probe for a hidden deal's id."""
+    exist — a booking must not be a way to probe for a hidden deal's id, whether it
+    is hidden by its pipeline or by "Only assigned data"."""
     if opp_id is None:
         return
     o = db.get(Opportunity, opp_id)
-    if o is None or not pipeline_access.can_see(db, principal, o.pipeline_id):
+    if o is None or not assigned_access.scope(db, principal).sees_job(o):
         raise HTTPException(404, "opportunity %s not found" % opp_id)
 
 
@@ -2141,7 +2160,8 @@ def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
     contact = None
     if body.contact_id is not None:
         contact = db.get(Contact, body.contact_id)
-        if contact is None:
+        if contact is None or not assigned_access.scope(db, principal).sees_contact(
+                contact.id):
             raise HTTPException(404, "contact %s not found" % body.contact_id)
     calendar = None
     if body.calendar_id is not None:
@@ -2332,13 +2352,35 @@ class OpportunityPatch(BaseModel):
     _address = field_validator(*OPPORTUNITY_ADDRESS, mode="after")(_blank_to_none)
 
 
+# What a TECH with "Only assigned data" on may send to the detail PATCH, on their own
+# job (2026-09-15): the answers to its questions — the Checklist's ticks included —
+# and its stage. Not the title, value, status, pipeline, owner, followers, source,
+# business name, address or contacts; the card's address beside a "verified" tick is
+# the address, so it is refused here like any other address edit.
+TECH_JOB_FIELDS = {"custom_fields", "stage_id"}
+
+
 @app.patch("/api/opportunities/{opp_id}/detail")
 def update_opportunity(opp_id: int, body: OpportunityPatch,
                        db: Session = Depends(get_db),
-                       principal: auth.Principal = auth.STAFF):
+                       principal: auth.Principal = auth.ANY_USER):
+    """STAFF edit a deal. A TECH may only answer its questions and move its stage, and
+    only on their own job with "Only assigned data" on; every other TECH request is
+    refused exactly as the STAFF gate this route had refused it."""
+    data = body.model_dump(exclude_unset=True)
+    if principal.role is Role.TECH:
+        if not assigned_access.tech_on_own_job(principal):
+            raise HTTPException(403, "role TECH may not do this")
+        # Resolved FIRST, so a job that is not theirs is the same 404 as a missing one
+        # whatever the body holds.
+        pipeline_access.get_opportunity(db, principal, opp_id)
+        refused = sorted(set(data) - TECH_JOB_FIELDS)
+        if refused:
+            raise HTTPException(403, "a technician can answer this job's questions and "
+                                     "move its stage, but not change %s"
+                                % ", ".join(refused))
     o = pipeline_access.get_opportunity(db, principal, opp_id)
 
-    data = body.model_dump(exclude_unset=True)
     if "title" in data:
         data["title"] = _clean_opportunity_title(data["title"])
     if "contact_id" in data:
@@ -2538,9 +2580,10 @@ def _bulk_load(db: Session, principal: auth.Principal,
     404 sentence, so a selection cannot be used to probe for one.
     """
     unique = list(dict.fromkeys(ids))
-    rows = db.scalars(pipeline_access.visible_opportunities(
+    # A deal that is not one of a restricted caller's jobs resolves as missing too.
+    rows = db.scalars(assigned_access.opportunities(
         select(Opportunity).where(Opportunity.id.in_(unique)),
-        pipeline_access.hidden_pipeline_ids(db, principal))).all()
+        assigned_access.scope(db, principal))).all()
     found = {o.id: o for o in rows}
     missing = [str(i) for i in unique if i not in found]
     if missing:
@@ -2794,7 +2837,12 @@ def list_conversations(
     Neither narrows a role's view: this endpoint is ANY_USER and returns the
     whole team inbox by default, exactly as before.
     """
-    stmt = select(Conversation).options(selectinload(Conversation.contact))
+    # "Only assigned data": the threads of the contacts on the caller's jobs, and no
+    # number-only thread at all (below). Every other control narrows WITHIN that, so
+    # the Unread badge is still counted over exactly the list it labels.
+    s = assigned_access.scope(db, principal)
+    stmt = assigned_access.conversations(
+        select(Conversation).options(selectinload(Conversation.contact)), s)
     if tab == "unread":
         stmt = stmt.where(Conversation.unread_count > 0)
     elif tab == "starred":
@@ -2849,7 +2897,7 @@ def list_conversations(
     #            the team inbox and in nobody's own — like a contact nobody owns;
     #   q        the number (by the shared digits rule) and Quo's name, which is
     #            what the row shows in place of a contact name.
-    if assigned != "me":
+    if assigned != "me" and not s.restricted:
         out.extend(_number_thread_rows(db, tab=tab, q=q))
         out.sort(key=lambda r: automations.as_utc(r["last_event_at"]),
                  reverse=not oldest)
@@ -2927,6 +2975,7 @@ def conversation_events(
     CONVERSATION_TYPES contains INTERNAL_COMMENT, so the measured "Conversations"
     filter is one of the places that has to narrow.
     """
+    assigned_access.get_conversation(db, principal, conv_id)
     return _thread_events(ConversationEvent,
                           ConversationEvent.conversation_id == conv_id,
                           db, filter, principal)
@@ -2976,6 +3025,8 @@ def _thread_events(model, parent_clause, db: Session, filter: str,
 
 @app.get("/api/users")
 def list_users(db: Session = Depends(get_db),
+               q: str | None = None,
+               role: Literal["ADMIN", "DISPATCHER", "TECH"] | None = None,
                principal: auth.Principal = auth.ANY_USER):
     """Every signed-in user can see the roster; only an ADMIN sees email addresses.
 
@@ -2984,12 +3035,31 @@ def list_users(db: Session = Depends(get_db),
     would break those screens for a dispatcher. The original exposure being closed
     here is *unauthenticated* access to the staff list, not staff seeing each other.
     """
-    rows = db.scalars(select(User).order_by(User.id)).all()
+    stmt = select(User).order_by(User.id)
     is_admin = principal.role is Role.ADMIN
-    return [{"id": u.id, "name": u.name, "role": u.role.value,
-             "is_active": u.is_active,
-             "email": u.email if is_admin else None}
-            for u in rows]
+    if is_admin and role:
+        stmt = stmt.where(User.role == Role[role])
+    if is_admin and q and q.strip():
+        # My Staff's search box: name, email, phone or id — what GoHighLevel's says.
+        text = q.strip()
+        terms = [User.name.ilike(contains(text), escape=LIKE_ESCAPE),
+                 User.email.ilike(contains(text), escape=LIKE_ESCAPE),
+                 User.phone.ilike(contains(text), escape=LIKE_ESCAPE)]
+        if text.isdigit() and len(text) < 7:
+            # A short number is an id — the ids shown under each email — not a
+            # fragment of every phone number that happens to contain that digit.
+            terms = [User.id == int(text)]
+        elif phone_match.looks_like_phone(text):
+            terms.append(phone_match.phone_clause(User.phone, text))
+        stmt = stmt.where(or_(*terms))
+    rows = db.scalars(stmt).all()
+    if not is_admin:
+        return [{"id": u.id, "name": u.name, "role": u.role.value,
+                 "is_active": u.is_active, "email": None, "only_assigned_data": None}
+                for u in rows]
+    # My Staff reads this: everything an admin manages. Email, phone and who is
+    # restricted are ADMIN-only, like email always was.
+    return [_user_public(u) for u in rows]
 
 
 @app.get("/api/calendars")
@@ -3001,10 +3071,11 @@ def list_calendars(db: Session = Depends(get_db),
     The calendar itself is not a pipeline's and stays listed; only the link to a
     pipeline the caller cannot access is blanked, so it is not named.
     """
-    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
-    rows = db.scalars(
+    s = assigned_access.scope(db, principal)
+    hidden = s.hidden
+    rows = db.scalars(assigned_access.calendars(
         select(Calendar).options(selectinload(Calendar.user),
-                                 selectinload(Calendar.pipeline))
+                                 selectinload(Calendar.pipeline)), s)
         .order_by(Calendar.id)).all()
     return [{"id": c.id, "name": c.name, "color": c.color,
              "user_id": c.user_id, "user_name": c.user.name if c.user else None,
@@ -3105,7 +3176,7 @@ def _status_rollup(opps) -> dict:
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
               start: datetime | None = None, end: datetime | None = None,
-              principal: auth.Principal = auth.STAFF):
+              principal: auth.Principal = assigned_access.REPORTING):
     """Measured GHL dashboard cards: Opportunity status (Won/Open/Lost + total),
     Opportunity value (Total vs Won revenue), Conversion rate.
 
@@ -3117,6 +3188,7 @@ def dashboard(db: Session = Depends(get_db), pipeline_id: int | None = None,
     uses, so the forecast cannot publish a conversion rate the Dashboard disagrees
     with.
     """
+    assigned_access.refuse_reporting(principal)
     hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     return _status_rollup(
             _opportunities_in_range(db, pipeline_id, start, end, hidden)) | {
@@ -3172,7 +3244,9 @@ def dashboard_funnel(db: Session = Depends(get_db), pipeline_id: int | None = No
       the middle of the donut is the donut.
 
     A pipeline the caller cannot access is answered like one that does not exist.
+    With "Only assigned data" on, the card refuses like the rest of the Dashboard.
     """
+    assigned_access.refuse_reporting(principal)
     hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     stmt = select(Pipeline).options(selectinload(Pipeline.stages))
     if pipeline_id:
@@ -3242,7 +3316,7 @@ def _weighted(open_value_cents: int, conversion_rate: float) -> int:
 
 @app.get("/api/forecast")
 def forecast(pipeline_id: int, db: Session = Depends(get_db),
-             principal: auth.Principal = auth.STAFF):
+             principal: auth.Principal = assigned_access.REPORTING):
     """Projected revenue by stage for one pipeline.
 
     OUR design — GHL's own Forecast tab was never opened on the live account, so
@@ -3273,6 +3347,7 @@ def forecast(pipeline_id: int, db: Session = Depends(get_db),
     STAFF, matching `/api/dashboard`, whose aggregates this repeats. A pipeline
     the caller cannot access is a 404 like one that does not exist.
     """
+    assigned_access.refuse_reporting(principal)
     p = pipeline_access.get_pipeline(db, principal, pipeline_id)
 
     opps = list(db.scalars(
@@ -3357,9 +3432,12 @@ def list_appointments(
     principal: auth.Principal = auth.ANY_USER):
     """Range + filters mirror GHL's measured "Manage view" panel:
     View by type (All / Appointments / Blocked slots) and per-user filtering."""
-    stmt = select(Appointment).options(selectinload(Appointment.contact),
-                                selectinload(Appointment.calendar),
-                                selectinload(Appointment.opportunity))
+    s = assigned_access.scope(db, principal)
+    # "Only assigned data": the visits on the caller's own calendar or assigned to them.
+    stmt = assigned_access.appointments(
+        select(Appointment).options(selectinload(Appointment.contact),
+                                    selectinload(Appointment.calendar),
+                                    selectinload(Appointment.opportunity)), s)
     if start:
         stmt = stmt.where(Appointment.ends_at >= _utc(start))
     if end:
@@ -3384,14 +3462,13 @@ def list_appointments(
     # A booking stays on the calendar whatever deal it is for — it is a visit, not
     # a deal. Only the link to a deal in a pipeline the reader cannot access is
     # blanked, so the deal's title does not leak through the calendar.
-    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     return [{"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
              "ends_at": _aware(a.ends_at), "status": a.status,
              "assigned_user_id": a.assigned_user_id,
              "calendar_id": a.calendar_id,
              "calendar_name": a.calendar.name if a.calendar else None,
              "color": a.calendar.color if a.calendar else "#004eeb",
-             **_appointment_deal(a, hidden),
+             **_appointment_deal(a, s),
              "location": a.location,
              "contact_name": a.contact.name if a.contact else None} for a in rows]
 
@@ -3409,7 +3486,7 @@ def report_calls(
     start: datetime | None = None,
     end: datetime | None = None,
     direction: Literal["all", "INBOUND", "OUTBOUND"] = "INBOUND",
-    principal: auth.Principal = auth.STAFF):
+    principal: auth.Principal = assigned_access.REPORTING):
     """Measured Call report: Incoming/Outgoing toggle, "Call by status",
     "First-time calls by status", avg + total duration, "Top call sources"
     (Source | Total calls | Won deals | Avg duration).
@@ -3422,6 +3499,7 @@ def report_calls(
     `won_at`), so the deals are not themselves date-filtered — the window selects
     the callers, not the wins.
     """
+    assigned_access.refuse_reporting(principal)
     stmt = (select(ConversationEvent, Conversation, Contact)
             .join(Conversation, ConversationEvent.conversation_id == Conversation.id)
             .join(Contact, Conversation.contact_id == Contact.id)
@@ -3524,9 +3602,10 @@ def report_appointments(
     start: datetime | None = None,
     end: datetime | None = None,
     calendar_ids: str | None = None,
-    _: auth.Principal = auth.STAFF):
+    principal: auth.Principal = assigned_access.REPORTING):
     """Measured Appointment report: status tiles (Booked, Confirmed, Cancelled,
     New, Showed, No-show, Invalid, Rescheduled) plus Channel / Source breakdown."""
+    assigned_access.refuse_reporting(principal)
     stmt = (select(Appointment, Contact)
             .join(Contact, Appointment.contact_id == Contact.id, isouter=True))
     if start:
@@ -3588,15 +3667,17 @@ def _aware(dt: datetime | None) -> datetime | None:
     return None if dt is None else auth.as_aware(dt)
 
 
-def _appointment_deal(a: Appointment, hidden: set[int]) -> dict:
-    """The deal a booking is for, or nothing if the reader may not see that deal."""
-    if a.opportunity is None or a.opportunity.pipeline_id in hidden:
+def _appointment_deal(a: Appointment, s: assigned_access.Scope) -> dict:
+    """The deal a booking is for, or nothing if the reader may not see that deal —
+    a pipeline they cannot access, or (Only assigned data) a job that is not theirs,
+    which a CANCELLED visit on their calendar does not make it."""
+    if not s.sees_job(a.opportunity):
         return {"opportunity_id": None, "opportunity_title": None}
     return {"opportunity_id": a.opportunity_id,
             "opportunity_title": a.opportunity.title}
 
 
-def _appointment_detail(a: Appointment, hidden: set[int],
+def _appointment_detail(a: Appointment, s: assigned_access.Scope,
                         principal: auth.Principal) -> dict:
     sees_notes = auth.sees_internal(principal)
     return {"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
@@ -3614,18 +3695,15 @@ def _appointment_detail(a: Appointment, hidden: set[int],
             "calendar_name": a.calendar.name if a.calendar else None,
             # Both directions of the link are readable: the deal lists its visits,
             # and the visit names its deal — when the reader may see the deal.
-            **_appointment_deal(a, hidden),
+            **_appointment_deal(a, s),
             "assigned_user_id": a.assigned_user_id}
 
 
 @app.get("/api/appointments/{appointment_id}")
 def get_appointment(appointment_id: int, db: Session = Depends(get_db),
                     principal: auth.Principal = auth.ANY_USER):
-    a = db.get(Appointment, appointment_id)
-    if not a:
-        raise HTTPException(404, "appointment not found")
-    return _appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal),
-                               principal)
+    a = assigned_access.get_appointment(db, principal, appointment_id)
+    return _appointment_detail(a, assigned_access.scope(db, principal), principal)
 
 
 class AppointmentPatch(BaseModel):
@@ -3700,9 +3778,7 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
     off, and reviving the booking would then find its keys taken. The jobs are
     retired here instead, and re-queued if the booking comes back.
     """
-    a = db.get(Appointment, appointment_id)
-    if not a:
-        raise HTTPException(404, "appointment not found")
+    a = assigned_access.get_appointment(db, principal, appointment_id)
 
     data = body.model_dump(exclude_unset=True)
     allow_blocked = data.pop("allow_blocked_time", False)
@@ -3736,7 +3812,7 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
     if location_kind is not None or "location" in data:
         opp_id = data.get("opportunity_id", a.opportunity_id)
         deal = db.get(Opportunity, opp_id) if opp_id is not None else None
-        if deal is not None and not pipeline_access.can_see(db, principal, deal.pipeline_id):
+        if deal is not None and not assigned_access.scope(db, principal).sees_job(deal):
             # A deal in a pipeline this user cannot access lends the booking nothing:
             # its address must not surface through the calendar.
             deal = None
@@ -3783,14 +3859,13 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
 
     db.commit()
     db.refresh(a)
-    return {**_appointment_detail(a, pipeline_access.hidden_pipeline_ids(db, principal),
-                                  principal),
+    return {**_appointment_detail(a, assigned_access.scope(db, principal), principal),
             "automation": outcome}
 
 
 @app.delete("/api/appointments/{appointment_id}")
 def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
-                       _: auth.Principal = auth.STAFF):
+                       principal: auth.Principal = auth.STAFF):
     """Cancel, not delete.
 
     The row survives: GHL's own Appointment report has a Cancelled tile, so a
@@ -3808,9 +3883,7 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
     "is not queued" are different things to the dispatcher reading
     `ghl jobs list --status pending`, and only the second one is true here.
     """
-    a = db.get(Appointment, appointment_id)
-    if not a:
-        raise HTTPException(404, "appointment not found")
+    a = assigned_access.get_appointment(db, principal, appointment_id)
     a.status = "cancelled"
     dropped = _drop_pending_reminders(db, a.id)
     db.commit()
@@ -3865,11 +3938,14 @@ def list_blocked_times(
     end: datetime | None = None,
     calendar_ids: str | None = None,
     user_ids: str | None = None,
-    _: auth.Principal = auth.ANY_USER):
+    principal: auth.Principal = auth.ANY_USER):
     """Everything overlapping the window — the same shape of range query the
     calendar grid asks `/api/appointments` for. `user_ids` selects the blocks on
-    those users' calendars, which is what the Users filter means for a block."""
-    stmt = select(BlockedTime).options(selectinload(BlockedTime.calendar))
+    those users' calendars, which is what the Users filter means for a block.
+    With "Only assigned data" on, only the blocks on the caller's own calendars."""
+    stmt = assigned_access.blocked_times(
+        select(BlockedTime).options(selectinload(BlockedTime.calendar)),
+        assigned_access.scope(db, principal))
     if start:
         stmt = stmt.where(BlockedTime.ends_at >= _utc(start))
     if end:
@@ -3888,11 +3964,8 @@ def list_blocked_times(
 
 @app.get("/api/blocked-times/{blocked_id}")
 def get_blocked_time(blocked_id: int, db: Session = Depends(get_db),
-                     _: auth.Principal = auth.ANY_USER):
-    b = db.get(BlockedTime, blocked_id)
-    if b is None:
-        raise HTTPException(404, "blocked off time not found")
-    return _blocked_row(b)
+                     principal: auth.Principal = auth.ANY_USER):
+    return _blocked_row(assigned_access.get_blocked_time(db, principal, blocked_id))
 
 
 @app.post("/api/blocked-times", status_code=201)
@@ -3916,10 +3989,8 @@ def create_blocked_time(body: BlockedTimeIn, db: Session = Depends(get_db),
 @app.patch("/api/blocked-times/{blocked_id}")
 def update_blocked_time(blocked_id: int, body: BlockedTimePatch,
                         db: Session = Depends(get_db),
-                        _: auth.Principal = auth.STAFF):
-    b = db.get(BlockedTime, blocked_id)
-    if b is None:
-        raise HTTPException(404, "blocked off time not found")
+                        principal: auth.Principal = auth.STAFF):
+    b = assigned_access.get_blocked_time(db, principal, blocked_id)
     data = body.model_dump(exclude_unset=True)
     if "title" in data:
         data["title"] = _clean_blocked_title(data["title"] or "")
@@ -3947,10 +4018,8 @@ def update_blocked_time(blocked_id: int, body: BlockedTimePatch,
 
 @app.delete("/api/blocked-times/{blocked_id}")
 def delete_blocked_time(blocked_id: int, db: Session = Depends(get_db),
-                        _: auth.Principal = auth.STAFF):
-    b = db.get(BlockedTime, blocked_id)
-    if b is None:
-        raise HTTPException(404, "blocked off time not found")
+                        principal: auth.Principal = auth.STAFF):
+    b = assigned_access.get_blocked_time(db, principal, blocked_id)
     db.delete(b)
     db.commit()
     return {"deleted": blocked_id}
@@ -4119,18 +4188,21 @@ def delete_opportunity(opp_id: int, db: Session = Depends(get_db),
 # the call/message", across every thread at once — which is what a CLI needs and
 # what /api/conversations/{id}/events cannot do.
 
-def _search_events(db: Session, *, types: set[EventType],
+def _search_events(db: Session, s: assigned_access.Scope, *, types: set[EventType],
                    start: datetime | None = None, end: datetime | None = None,
                    direction: str = "all", contact_id: int | None = None,
                    q: str | None = None, extra=None,
                    page: int = 1, page_size: int = 50,
                    order: str = "desc") -> tuple[list, int]:
-    """Shared by /api/calls and /api/messages — same query, different projection."""
-    stmt = (select(ConversationEvent, Contact)
-            .join(Conversation,
-                  Conversation.id == ConversationEvent.conversation_id)
-            .join(Contact, Contact.id == Conversation.contact_id)
-            .where(ConversationEvent.type.in_(types)))
+    """Shared by /api/calls and /api/messages — same query, different projection.
+    `s` is required: with "Only assigned data" on, only the threads of the contacts
+    on the caller's jobs are searched, in the rows and in `total` alike."""
+    stmt = assigned_access.contacts(
+        select(ConversationEvent, Contact)
+        .join(Conversation,
+              Conversation.id == ConversationEvent.conversation_id)
+        .join(Contact, Contact.id == Conversation.contact_id)
+        .where(ConversationEvent.type.in_(types)), s)
 
     if start:
         stmt = stmt.where(ConversationEvent.occurred_at >= start)
@@ -4178,7 +4250,7 @@ def list_calls(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     order: Literal["asc", "desc"] = "desc",
-    _: auth.Principal = auth.ANY_USER,
+    principal: auth.Principal = auth.ANY_USER,
 ):
     """Search calls across every conversation.
 
@@ -4203,7 +4275,8 @@ def list_calls(
         extra.append(ConversationEvent.recording_url.is_(None))
 
     rows, total = _search_events(
-        db, types={EventType.CALL}, start=start, end=end, direction=direction,
+        db, assigned_access.scope(db, principal), types={EventType.CALL},
+        start=start, end=end, direction=direction,
         contact_id=contact_id, q=q, extra=extra, page=page, page_size=page_size,
         order=order)
 
@@ -4272,7 +4345,8 @@ def list_messages(
         extra.append(ConversationEvent.delivery_status == wanted)
 
     rows, total = _search_events(
-        db, types=types, start=start, end=end, direction=direction,
+        db, assigned_access.scope(db, principal), types=types,
+        start=start, end=end, direction=direction,
         contact_id=contact_id, q=q, extra=extra, page=page, page_size=page_size,
         order=order)
 
@@ -4325,7 +4399,8 @@ def _snippet(body: str | None, q: str, width: int = 90) -> str:
         "…" if end < len(text) else "")
 
 
-def _search_contacts(db: Session, term: str, limit: int) -> tuple[list, int]:
+def _search_contacts(db: Session, term: str, limit: int,
+                     s: assigned_access.Scope) -> tuple[list, int]:
     """Name, email, phone -- the three things anyone types to find a person.
 
     `first_name + " " + last_name` is matched as well as the columns separately,
@@ -4333,13 +4408,13 @@ def _search_contacts(db: Session, term: str, limit: int) -> tuple[list, int]:
     same rendering (`||` on both Postgres and SQLite), as GET /api/contacts.
     """
     like = contains(term)
-    stmt = select(Contact).where(or_(
+    stmt = assigned_access.contacts(select(Contact).where(or_(
         Contact.first_name.ilike(like, escape=LIKE_ESCAPE),
         Contact.last_name.ilike(like, escape=LIKE_ESCAPE),
         (Contact.first_name + " " + Contact.last_name).ilike(
             like, escape=LIKE_ESCAPE),
         Contact.email.ilike(like, escape=LIKE_ESCAPE),
-        Contact.phone.ilike(like, escape=LIKE_ESCAPE)))
+        Contact.phone.ilike(like, escape=LIKE_ESCAPE))), s)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
         stmt.order_by(Contact.first_name, Contact.last_name, Contact.id)
@@ -4349,18 +4424,18 @@ def _search_contacts(db: Session, term: str, limit: int) -> tuple[list, int]:
 
 
 def _search_opportunities(db: Session, term: str, limit: int,
-                          hidden: set[int]) -> tuple[list, int]:
+                          s: assigned_access.Scope) -> tuple[list, int]:
     """Title, or the job's street or city (2026-09-14). Every status, not just
     open: a palette is how you go back to a deal you already won or lost, so
     `status` rides along and the row says which.
 
     Deals in a pipeline the reader cannot access are neither listed nor counted in
     `total` — a total of 3 above two rows would say a third exists."""
-    stmt = pipeline_access.visible_opportunities(
+    stmt = assigned_access.opportunities(
         select(Opportunity)
         .options(selectinload(Opportunity.stage),
                  selectinload(Opportunity.contact))
-        .where(_opportunity_text_match(term)), hidden)
+        .where(_opportunity_text_match(term)), s)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
         stmt.order_by(Opportunity.updated_at.desc(), Opportunity.id.desc())
@@ -4375,7 +4450,7 @@ def _search_opportunities(db: Session, term: str, limit: int,
 
 
 def _search_messages(db: Session, term: str, limit: int,
-                     types: set[EventType]) -> tuple[list, int]:
+                     types: set[EventType], s: assigned_access.Scope) -> tuple[list, int]:
     """Message BODIES, so a thread can be found by something said in it.
 
     The result identifies the thread it belongs to (`conversation_id` plus the
@@ -4384,13 +4459,13 @@ def _search_messages(db: Session, term: str, limit: int,
 
     Subject lines are NOT matched: the owner asked for bodies. Cheap to add later.
     """
-    stmt = (select(ConversationEvent, Contact)
-            .join(Conversation,
-                  Conversation.id == ConversationEvent.conversation_id)
-            .join(Contact, Contact.id == Conversation.contact_id)
-            .where(ConversationEvent.type.in_(types),
-                   ConversationEvent.body.ilike(contains(term),
-                                                escape=LIKE_ESCAPE)))
+    stmt = assigned_access.contacts(
+        select(ConversationEvent, Contact)
+        .join(Conversation,
+              Conversation.id == ConversationEvent.conversation_id)
+        .join(Contact, Contact.id == Conversation.contact_id)
+        .where(ConversationEvent.type.in_(types),
+               ConversationEvent.body.ilike(contains(term), escape=LIKE_ESCAPE)), s)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.execute(
         stmt.order_by(ConversationEvent.occurred_at.desc(),
@@ -4430,13 +4505,15 @@ def search(
         types -= INTERNAL_TYPES
 
     if term:
-        found = [("contacts", "Contacts", _search_contacts(db, term, limit)),
+        # One scope for all three groups: with "Only assigned data" on, a restricted
+        # user finds only their jobs, their jobs' contacts and those contacts'
+        # threads — in the items AND in every `total`.
+        s = assigned_access.scope(db, principal)
+        found = [("contacts", "Contacts", _search_contacts(db, term, limit, s)),
                  ("opportunities", "Opportunities",
-                  _search_opportunities(
-                      db, term, limit,
-                      pipeline_access.hidden_pipeline_ids(db, principal))),
+                  _search_opportunities(db, term, limit, s)),
                  ("messages", "Messages",
-                  _search_messages(db, term, limit, types))]
+                  _search_messages(db, term, limit, types, s))]
     else:
         found = [(k, label, ([], 0)) for k, label in
                  (("contacts", "Contacts"), ("opportunities", "Opportunities"),
@@ -4497,9 +4574,7 @@ def send_to_contact(contact_id: int, body: MessageSend,
     LoggingTransport is the only transport, this records the intent and
     transmits nothing — `delivery_status` comes back LOGGED_ONLY.
     """
-    contact = db.get(Contact, contact_id)
-    if not contact:
-        raise HTTPException(404, "contact not found")
+    contact = assigned_access.get_contact(db, principal, contact_id)
     return _send_to_contact(db, contact, body, principal)
 
 
@@ -4508,9 +4583,7 @@ def send_to_conversation(conv_id: int, body: MessageSend,
                          db: Session = Depends(get_db),
                          principal: auth.Principal = auth.ANY_USER):
     """Send on an open thread — the shape the Conversations composer uses."""
-    conv = db.get(Conversation, conv_id)
-    if not conv:
-        raise HTTPException(404, "conversation not found")
+    conv = assigned_access.get_conversation(db, principal, conv_id)
     contact = db.get(Contact, conv.contact_id)
     if not contact:
         raise HTTPException(404, "conversation has no contact")
@@ -4635,9 +4708,7 @@ def call_contact(contact_id: int, body: CallOptions | None = None,
     ANY_USER: a TECH may send a customer a message (CLAUDE.md), and ringing the
     customer they are already texting is the same kind of act, not a wider one.
     """
-    contact = db.get(Contact, contact_id)
-    if not contact:
-        raise HTTPException(404, "contact not found")
+    contact = assigned_access.get_contact(db, principal, contact_id)
     return _place_call(db, contact, _operator_for(principal, body))
 
 
@@ -4646,9 +4717,7 @@ def call_conversation(conv_id: int, body: CallOptions | None = None,
                       db: Session = Depends(get_db),
                       principal: auth.Principal = auth.ANY_USER):
     """The shape the thread header's phone button uses."""
-    conv = db.get(Conversation, conv_id)
-    if not conv:
-        raise HTTPException(404, "conversation not found")
+    conv = assigned_access.get_conversation(db, principal, conv_id)
     contact = db.get(Contact, conv.contact_id)
     if not contact:
         raise HTTPException(404, "conversation has no contact")
@@ -4698,6 +4767,10 @@ def dial_problem(raw: str) -> tuple[str | None, str | None]:
     return "+1" + digits, None
 
 
+ONLY_THEIR_CUSTOMERS = ("With “Only assigned data” on you can call the customers on your own "
+                        "jobs, and this number is not one of them.")
+
+
 @app.post("/api/calls/dial")
 def dial_number(body: DialIn, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.ANY_USER):
@@ -4721,6 +4794,14 @@ def dial_number(body: DialIn, db: Session = Depends(get_db),
 
     operator = _operator_for(principal, body)
     contact = number_threads.contact_holding(db, number)
+    s = assigned_access.scope(db, principal)
+    if s.restricted and (contact is None or not s.sees_contact(contact.id)):
+        # "Only assigned data" (2026-09-15): the dialer rings only the customers on the
+        # caller's own jobs. The same sentence whether or not someone else's contact
+        # holds the number, so it cannot be used to find out; nothing is written.
+        return {"placed": False, "id": None, "number": number, "contact_id": None,
+                "contact_name": None, "number_thread_id": None,
+                "reason": ONLY_THEIR_CUSTOMERS}
     if contact is not None:
         out = _place_call(db, contact, operator)
         return {**out, "number": number, "contact_id": contact.id,
@@ -4747,10 +4828,8 @@ class ConversationPatch(BaseModel):
 @app.patch("/api/conversations/{conv_id}")
 def update_conversation(conv_id: int, body: ConversationPatch,
                         db: Session = Depends(get_db),
-                        _: auth.Principal = auth.ANY_USER):
-    conv = db.get(Conversation, conv_id)
-    if not conv:
-        raise HTTPException(404, "conversation not found")
+                        principal: auth.Principal = auth.ANY_USER):
+    conv = assigned_access.get_conversation(db, principal, conv_id)
     data = body.model_dump(exclude_unset=True)
     if "read" in data:
         conv.unread_count = 0 if data["read"] else max(1, conv.unread_count)
@@ -4773,7 +4852,10 @@ def update_conversation(conv_id: int, body: ConversationPatch,
 # to do. What differs is only what cannot exist: there is no contact, so there is no
 # DND to honour and no email to send.
 
-def _number_thread(db: Session, thread_id: int) -> NumberThread:
+def _number_thread(db: Session, principal: auth.Principal, thread_id: int) -> NumberThread:
+    """404 for a missing thread — and for any number thread at all when the caller has
+    "Only assigned data" on: a number nobody has saved is nobody's job."""
+    assigned_access.refuse_number_threads(principal)
     t = db.get(NumberThread, thread_id)
     if not t:
         raise HTTPException(404, "number thread not found")
@@ -4782,8 +4864,8 @@ def _number_thread(db: Session, thread_id: int) -> NumberThread:
 
 @app.get("/api/number-threads/{thread_id}")
 def get_number_thread(thread_id: int, db: Session = Depends(get_db),
-                      _: auth.Principal = auth.ANY_USER):
-    t = _number_thread(db, thread_id)
+                      principal: auth.Principal = auth.ANY_USER):
+    t = _number_thread(db, principal, thread_id)
     return _number_thread_row(t, _number_event_counts(db, t.id).get(t.id, 0))
 
 
@@ -4793,7 +4875,7 @@ def number_thread_events(thread_id: int, db: Session = Depends(get_db),
                          principal: auth.Principal = auth.ANY_USER):
     """The thread view. Internal notes follow the STAFF-only rule exactly as on a
     contact thread — the same function builds both."""
-    _number_thread(db, thread_id)
+    _number_thread(db, principal, thread_id)
     return _thread_events(NumberThreadEvent,
                           NumberThreadEvent.number_thread_id == thread_id,
                           db, filter, principal)
@@ -4802,9 +4884,9 @@ def number_thread_events(thread_id: int, db: Session = Depends(get_db),
 @app.patch("/api/number-threads/{thread_id}")
 def update_number_thread(thread_id: int, body: ConversationPatch,
                          db: Session = Depends(get_db),
-                         _: auth.Principal = auth.ANY_USER):
+                         principal: auth.Principal = auth.ANY_USER):
     """Read / unread / star — `PATCH /api/conversations/{id}`'s rule, verbatim."""
-    t = _number_thread(db, thread_id)
+    t = _number_thread(db, principal, thread_id)
     data = body.model_dump(exclude_unset=True)
     if "read" in data:
         t.unread_count = 0 if data["read"] else max(1, t.unread_count)
@@ -4817,10 +4899,10 @@ def update_number_thread(thread_id: int, body: ConversationPatch,
 
 @app.delete("/api/number-threads/{thread_id}")
 def delete_number_thread(thread_id: int, db: Session = Depends(get_db),
-                         _: auth.Principal = auth.ADMIN):
+                         principal: auth.Principal = auth.ADMIN):
     """Delete the thread and its events. ADMIN, like a contact thread's delete.
     There is no contact to keep, so there is nothing else to leave alone."""
-    t = _number_thread(db, thread_id)
+    t = _number_thread(db, principal, thread_id)
     events = _number_event_counts(db, t.id).get(t.id, 0)
     phone = t.phone
     db.delete(t)
@@ -4834,7 +4916,7 @@ def send_to_number_thread(thread_id: int, body: MessageSend,
                           principal: auth.Principal = auth.ANY_USER):
     """Text the number, or note on its thread — through the SAME transport a contact
     text uses, so it is logged, refused or queued exactly as that would be."""
-    t = _number_thread(db, thread_id)
+    t = _number_thread(db, principal, thread_id)
     if not body.body.strip():
         raise HTTPException(400, "a message needs a body")
     type_ = EventType[body.type]
@@ -4880,7 +4962,7 @@ def call_number_thread(thread_id: int, body: CallOptions | None = None,
                        principal: auth.Principal = auth.ANY_USER):
     """Ring the number from the bound DID, through the same `_dial` a contact call
     uses — owen-main's allowlist and block list apply unchanged."""
-    t = _number_thread(db, thread_id)
+    t = _number_thread(db, principal, thread_id)
     refused, result = _dial(t.phone, _operator_for(principal, body))
     if refused:
         return refused
@@ -4894,9 +4976,12 @@ def call_number_thread(thread_id: int, body: CallOptions | None = None,
 
 @app.get("/api/tags")
 def list_tags(db: Session = Depends(get_db),
-              _: auth.Principal = auth.ANY_USER):
-    counts = dict(db.execute(
-        select(ContactTag.tag_id, func.count()).group_by(ContactTag.tag_id)).all())
+              principal: auth.Principal = auth.ANY_USER):
+    # With "Only assigned data" on, a count is of the caller's own contacts: how many
+    # people carry a tag across the whole book is not theirs to know.
+    counts = dict(db.execute(assigned_access.contacts(
+        select(ContactTag.tag_id, func.count()), assigned_access.scope(db, principal),
+        ContactTag.contact_id).group_by(ContactTag.tag_id)).all())
     rows = db.scalars(select(Tag).order_by(Tag.name)).all()
     return sorted(
         [{"id": t.id, "name": t.name, "color": t.color,
@@ -4967,17 +5052,61 @@ class TokenCreate(BaseModel):
 
 
 class UserCreate(BaseModel):
-    email: str
-    name: str
+    email: str = Field(max_length=255)
+    name: str = Field(max_length=120)
     password: str
     role: Literal["ADMIN", "DISPATCHER", "TECH"] = "TECH"
+    # GoHighLevel's "Only assigned data". Omitted: ON for a TECH, OFF for anyone else —
+    # the owner's default (2026-09-15). Never ON for an ADMIN.
+    only_assigned_data: bool | None = None
+    phone: str | None = Field(None, max_length=40)
+
+    _phone = field_validator("phone", mode="after")(
+        lambda v: store_phone(_blank_to_none(v)))
 
 
 class UserPatch(BaseModel):
-    name: str | None = None
+    name: str | None = Field(None, max_length=120)
+    email: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=40)
     role: Literal["ADMIN", "DISPATCHER", "TECH"] | None = None
     is_active: bool | None = None
     password: str | None = None
+    only_assigned_data: bool | None = None
+
+    _phone = field_validator("phone", mode="after")(
+        lambda v: store_phone(_blank_to_none(v)))
+
+
+ADMIN_NEVER_RESTRICTED = ("an admin always sees everything — “Only assigned data” "
+                          "applies to dispatchers and technicians")
+MACHINE_NO_LOGIN = ("this is a machine account (an API token with no password, e.g. the "
+                    "telephony feed) — it can never be given a password to sign in with")
+
+
+def is_machine_account(u: User) -> bool:
+    """No password: it exists to own an API token (`app.bootstrap --machine`). A human
+    with no password yet is set up with `app.bootstrap set-password`, not My Staff."""
+    return not u.password_hash
+
+
+def _clean_staff_name(name: str | None) -> str:
+    cleaned = " ".join((name or "").split())
+    if not cleaned:
+        raise HTTPException(400, "a user needs a name")
+    return cleaned
+
+
+def _clean_staff_email(db: Session, email: str | None, exclude_id: int | None = None) -> str:
+    cleaned = (email or "").strip().lower()
+    if not EMAIL_RE.match(cleaned):
+        raise HTTPException(400, "not a valid email address")
+    clash = select(User.id).where(func.lower(User.email) == cleaned)
+    if exclude_id is not None:
+        clash = clash.where(User.id != exclude_id)
+    if db.scalar(clash) is not None:
+        raise HTTPException(400, "a user with that email already exists")
+    return cleaned
 
 
 # Failed-login throttle. In-process and reset by a restart, which is proportionate
@@ -4994,7 +5123,11 @@ _MAX_TRACKED = 1000
 
 def _user_public(u: User) -> dict:
     return {"id": u.id, "name": u.name, "email": u.email,
-            "role": u.role.value, "is_active": u.is_active}
+            "role": u.role.value, "is_active": u.is_active,
+            "only_assigned_data": bool(u.only_assigned_data),
+            "phone": u.phone, "phone_display": format_phone(u.phone),
+            "must_change_password": bool(u.must_change_password),
+            "machine": is_machine_account(u)}
 
 
 def _issue_session(response: Response, user: User) -> None:
@@ -5119,8 +5252,12 @@ def change_password(body: PasswordChange, response: Response,
         raise HTTPException(403, "current password is incorrect")
     if len(body.new_password) < 8:
         raise HTTPException(400, "password must be at least 8 characters")
+    if body.new_password == body.current_password:
+        raise HTTPException(400, "choose a password different from the current one")
 
     user.password_hash = auth.hash_password(body.new_password)
+    # The admin-set password is gone, so the forced change is done (My Staff).
+    user.must_change_password = False
     # Everything issued under the old password stops working immediately.
     user.token_version += 1
     db.commit()
@@ -5192,41 +5329,131 @@ def revoke_token(token_id: int, db: Session = Depends(get_db),
     return {"ok": True, "id": token_id}
 
 
+def _technician_calendar(db: Session, u: User) -> dict:
+    """A new TECHNICIAN's own calendar (My Staff, 2026-09-15), so a visit can be booked
+    on it and "Only assigned data" has a calendar to show them.
+
+    * Never a second one: a user who already owns a calendar keeps it and gets none.
+    * Named "<Name>". If a calendar of that exact name already exists — someone else's,
+      or nobody's — it is left completely alone (handing it to the new user would give
+      them every visit already booked on it) and the new one is "<Name> (2)", "(3)"...
+    """
+    owned = db.scalar(select(Calendar).where(Calendar.user_id == u.id))
+    if owned is not None:
+        return {"id": owned.id, "name": owned.name, "created": False}
+    name, n = u.name, 1
+    while db.scalar(select(Calendar.id).where(func.lower(Calendar.name) == name.lower())):
+        n += 1
+        name = "%s (%d)" % (u.name, n)
+    cal = Calendar(name=name[:160], user_id=u.id)
+    db.add(cal)
+    db.flush()
+    return {"id": cal.id, "name": cal.name, "created": True,
+            "renamed_from": u.name if name != u.name else None}
+
+
+def _active_admins(db: Session) -> int:
+    """Admins who can sign in and manage staff: active, and not machine accounts (no
+    password) — a token-only ADMIN cannot open My Staff to put things right."""
+    return db.scalar(select(func.count(User.id)).where(
+        User.role == Role.ADMIN, User.is_active.is_(True),
+        User.password_hash != "")) or 0
+
+
 @app.post("/api/users", status_code=201)
 def create_user(body: UserCreate, db: Session = Depends(get_db),
                 _: auth.Principal = auth.ADMIN):
-    email = body.email.strip().lower()
-    if db.scalar(select(User).where(func.lower(User.email) == email)):
-        raise HTTPException(400, "a user with that email already exists")
+    """My Staff's "+ Add User". The admin types a FIRST password; the user must replace
+    it at their first sign-in (`must_change_password`). No email invitation is sent.
+    A technician gets their own calendar in the same transaction."""
+    email = _clean_staff_email(db, body.email)
+    name = _clean_staff_name(body.name)
     if len(body.password) < 8:
         raise HTTPException(400, "password must be at least 8 characters")
-    u = User(email=email, name=body.name, role=Role[body.role],
-             password_hash=auth.hash_password(body.password))
+    restricted = (body.role == "TECH" if body.only_assigned_data is None
+                  else body.only_assigned_data)
+    if restricted and body.role == "ADMIN":
+        raise HTTPException(400, ADMIN_NEVER_RESTRICTED)
+    u = User(email=email, name=name, role=Role[body.role],
+             password_hash=auth.hash_password(body.password),
+             only_assigned_data=restricted, phone=body.phone,
+             must_change_password=True)
     db.add(u)
+    db.flush()
+    calendar = _technician_calendar(db, u) if u.role is Role.TECH else None
     db.commit()
     db.refresh(u)
-    return _user_public(u)
+    return {**_user_public(u), "calendar": calendar}
 
 
 @app.patch("/api/users/{user_id}")
 def update_user(user_id: int, body: UserPatch, db: Session = Depends(get_db),
-                _: auth.Principal = auth.ADMIN):
+                principal: auth.Principal = auth.ADMIN):
+    """My Staff's Edit, Deactivate and Reactivate. Nothing here deletes a user.
+
+    * Deactivating ends every browser session now (token_version) and revokes every
+      API token a PERSON holds; their name stays on every job, note and task.
+      A MACHINE account's tokens are refused while it is inactive but not destroyed —
+      a token's secret is shown once, and destroying the telephony feed's is how the
+      live credential was lost before (DECISIONS.md).
+    * An admin cannot deactivate or demote themselves, and the last active ADMIN can
+      never be deactivated or demoted.
+    * A password set here is a RESET: the user must choose their own at next sign-in.
+      A machine account can never be given one.
+    """
     u = db.get(User, user_id)
     if u is None:
         raise HTTPException(404, "user not found")
     data = body.model_dump(exclude_unset=True)
+    for key in ("name", "email", "role", "is_active", "only_assigned_data"):
+        if key in data and data[key] is None:
+            data.pop(key)
 
+    if "name" in data:
+        data["name"] = _clean_staff_name(data["name"])
+    if "email" in data:
+        data["email"] = _clean_staff_email(db, data["email"], exclude_id=u.id)
     password = data.pop("password", None)
     if password is not None:
+        if is_machine_account(u):
+            raise HTTPException(400, MACHINE_NO_LOGIN)
         if len(password) < 8:
             raise HTTPException(400, "password must be at least 8 characters")
-        u.password_hash = auth.hash_password(password)
     if "role" in data:
         data["role"] = Role[data["role"]]
+    new_role = data.get("role", u.role)
+    deactivating = data.get("is_active") is False and u.is_active
+    demoting = u.role is Role.ADMIN and new_role is not Role.ADMIN
+
+    # Checked before anything is written, so a refusal changes nothing.
+    if u.id == principal.user_id and deactivating:
+        raise HTTPException(400, "you cannot deactivate your own account")
+    if u.id == principal.user_id and demoting:
+        raise HTTPException(400, "you cannot change your own role away from admin")
+    if ((deactivating or demoting) and u.role is Role.ADMIN and u.is_active
+            and not is_machine_account(u) and _active_admins(db) <= 1):
+        raise HTTPException(409, "%s is the last active admin — make someone else an "
+                                 "admin first" % u.name)
+    if new_role is Role.ADMIN:
+        if data.get("only_assigned_data"):
+            raise HTTPException(400, ADMIN_NEVER_RESTRICTED)
+        # Promoted to ADMIN: the switch means nothing there, so it is cleared rather
+        # than left to silently re-apply on a later demotion.
+        data["only_assigned_data"] = False
+
+    if password is not None:
+        u.password_hash = auth.hash_password(password)
+        u.must_change_password = True
     for k, v in data.items():
         setattr(u, k, v)
+    if deactivating and not is_machine_account(u):
+        now = datetime.now(UTC)
+        for token in db.scalars(select(ApiToken).where(
+                ApiToken.user_id == u.id, ApiToken.revoked_at.is_(None))).all():
+            token.revoked_at = now
 
     # A demotion or deactivation must take effect now, not in up to 15 minutes.
+    # "Only assigned data" is read per request (auth.Principal), so it needs no bump.
     if password is not None or "role" in data or "is_active" in data:
         u.token_version += 1
     db.commit()

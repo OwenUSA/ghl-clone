@@ -235,6 +235,14 @@ class Principal:
     kind: Literal["cookie", "pat"]
     scopes: frozenset[str]        # empty = unrestricted, the role governs
     token_id: int | None = None
+    # The user's "Only assigned data" switch (2026-09-15), read off the same row the
+    # credential was resolved against, so a change applies on the next request.
+    # app/assigned_access.py decides what it means; an ADMIN is never restricted.
+    only_assigned: bool = False
+    # My Staff (2026-09-15): an ADMIN created this user or reset their password, and
+    # they have not chosen their own yet. `require_auth` then refuses everything but
+    # PASSWORD_CHANGE_PATHS — server-enforced, not just a screen.
+    must_change_password: bool = False
 
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -242,6 +250,12 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 # Paths reachable without any credential. Small on purpose — everything not listed
 # here is protected, including any route added in the future.
 EXEMPT = {"/api/health", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout"}
+
+# What a user who must change their password may still reach: who am I, change it, and
+# sign out everywhere. Everything else answers MUST_CHANGE_PASSWORD (403).
+PASSWORD_CHANGE_PATHS = {"/api/auth/me", "/api/auth/password", "/api/auth/logout-all"}
+MUST_CHANGE_PASSWORD = ("choose a new password before doing anything else — an admin set "
+                        "the one you signed in with")
 
 # Scoped tokens are blocked from the admin surface unless they carry "admin".
 _ADMIN_PREFIXES = ("/api/users", "/api/jobs")
@@ -311,7 +325,9 @@ def current_principal(request: Request,
             return Principal(user_id=user.id, email=user.email, name=user.name,
                              role=user.role, kind="pat",
                              scopes=frozenset(token.scopes.split()),
-                             token_id=token.id)
+                             token_id=token.id,
+                             only_assigned=bool(user.only_assigned_data),
+                             must_change_password=bool(user.must_change_password))
         # A non-PAT bearer is an access JWT — the CLI never sends one, but curl might.
         payload = decode_token(raw, "access")
         return _principal_from_jwt(db, payload, request, csrf=False)
@@ -336,7 +352,9 @@ def _principal_from_jwt(db: Session, payload: dict, request: Request,
     if csrf:
         check_csrf(request)
     return Principal(user_id=user.id, email=user.email, name=user.name,
-                     role=user.role, kind="cookie", scopes=frozenset())
+                     role=user.role, kind="cookie", scopes=frozenset(),
+                     only_assigned=bool(user.only_assigned_data),
+                     must_change_password=bool(user.must_change_password))
 
 
 # ---------- the gate ----------
@@ -361,6 +379,8 @@ def require_auth(request: Request,
         return
     if principal is None:
         raise HTTPException(401, "authentication required")
+    if principal.must_change_password and path not in PASSWORD_CHANGE_PATHS:
+        raise HTTPException(403, MUST_CHANGE_PASSWORD)
     if not _scope_allows(principal.scopes, request.method, path):
         raise HTTPException(403, "token scope does not allow this endpoint")
 

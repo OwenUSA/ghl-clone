@@ -69,8 +69,16 @@ def get_stage(db: Session, principal: auth.Principal, stage_id: int) -> Stage:
 
 
 def get_opportunity(db: Session, principal: auth.Principal, opp_id: int) -> Opportunity:
-    """404, never 403: a 403 would confirm the deal exists."""
+    """404, never 403: a 403 would confirm the deal exists.
+
+    Also the chokepoint for "Only assigned data" (2026-09-15): a restricted user asking
+    for a deal that is not one of their jobs gets this same 404 — so every route that
+    resolves a deal here (the modal, drag, tasks, notes, photos, delete) is covered."""
+    from . import assigned_access
     o = db.get(Opportunity, opp_id)
     if o is None or not can_see(db, principal, o.pipeline_id):
+        raise HTTPException(404, "opportunity not found")
+    if assigned_access.restricted(principal) and not assigned_access.scope(
+            db, principal).sees_job(o):
         raise HTTPException(404, "opportunity not found")
     return o

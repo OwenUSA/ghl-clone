@@ -50,9 +50,13 @@ in any thread that holds a mirrored event.
 import logging
 import re
 
-from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from . import auth, crmlink
+from . import assigned_access, auth, crmlink
+from .db import get_db
+from .models import Conversation, ConversationEvent
 
 log = logging.getLogger("openphone")
 
@@ -115,8 +119,9 @@ def audio_response(audio: bytes, content_type: str, range_header: str | None) ->
 
 @router.get("/recordings/{call_id}")
 def stream_recording(call_id: str,
-                     _: auth.Principal = auth.ANY_USER,
-                     range_header: str | None = Header(None, alias="Range")) -> Response:
+                     principal: auth.Principal = auth.ANY_USER,
+                     range_header: str | None = Header(None, alias="Range"),
+                     db: Session = Depends(get_db)) -> Response:
     """Play one mirrored OpenPhone call recording.
 
     ANY_USER, matching the rest of the thread: a TECH who can read a conversation
@@ -133,6 +138,17 @@ def stream_recording(call_id: str,
         call, and not worth a retry.
       * **502** — owen-main or OpenPhone could not be reached. Might work later.
     """
+    if assigned_access.restricted(principal):
+        # "Only assigned data" (2026-09-15): only a recording on a thread the reader can
+        # open — a contact on one of their jobs. Checked before anything is fetched,
+        # and answered as the "no recording" 404 so a call id cannot be probed.
+        visible = assigned_access.contacts(
+            select(ConversationEvent.id)
+            .join(Conversation, Conversation.id == ConversationEvent.conversation_id)
+            .where(ConversationEvent.recording_url == "%s/%s" % (RECORDINGS_PATH, call_id)),
+            assigned_access.scope(db, principal), Conversation.contact_id)
+        if db.scalar(visible.limit(1)) is None:
+            raise HTTPException(404, "there is no recording for that call")
     if not crmlink.configured():
         raise HTTPException(503, "the phone link is not configured")
 

@@ -43,13 +43,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import auth, companycam, pipeline_access
+from . import assigned_access, auth, companycam, pipeline_access
 from .db import get_db
 from .models import (
     CompanyCamLink,
     CompanyCamProjectRequest,
     CompanyCamReviewItem,
-    Contact,
     Opportunity,
     Pipeline,
 )
@@ -179,12 +178,11 @@ def companycam_photo_image(photo_id: str, variant: Literal["thumbnail", "web"],
                             "photo not found" if exc.kind == "not_found"
                             else companycam.UNAVAILABLE) from None
     project_id = str(photo.get("project_id") or "")
-    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
-    stmt = _active_links(select(CompanyCamLink.id).join(
+    # Linked to a card the reader can see: a pipeline they can access and, with "Only
+    # assigned data" on, one of their own jobs.
+    stmt = assigned_access.opportunities(_active_links(select(CompanyCamLink.id).join(
         Opportunity, Opportunity.id == CompanyCamLink.opportunity_id).where(
-        CompanyCamLink.project_id == project_id))
-    if hidden:
-        stmt = stmt.where(Opportunity.pipeline_id.not_in(hidden))
+        CompanyCamLink.project_id == project_id)), assigned_access.scope(db, principal))
     if not project_id or db.scalar(stmt.limit(1)) is None:
         raise HTTPException(404, "photo not found")
     uri = companycam.preferred_uri(photo, variant)
@@ -205,15 +203,13 @@ def companycam_projects_for_contact(contact_id: int, db: Session = Depends(get_d
                                     principal: auth.Principal = auth.ANY_USER):
     """Every project linked to this customer's cards that the reader can see. Names
     come from the link rows, so the panel costs CompanyCam nothing."""
-    if db.get(Contact, contact_id) is None:
-        raise HTTPException(404, "contact not found")
+    assigned_access.get_contact(db, principal, contact_id)
     if not companycam.enabled():
         return {"state": "off", "projects": []}
-    hidden = pipeline_access.hidden_pipeline_ids(db, principal)
     stmt = _active_links(select(CompanyCamLink, Opportunity).join(
         Opportunity, Opportunity.id == CompanyCamLink.opportunity_id).where(
         Opportunity.contact_id == contact_id))
-    stmt = pipeline_access.visible_opportunities(stmt, hidden)
+    stmt = assigned_access.opportunities(stmt, assigned_access.scope(db, principal))
     projects: dict[str, dict] = {}
     for link, o in db.execute(stmt.order_by(CompanyCamLink.id.desc())).all():
         p = projects.setdefault(link.project_id, {

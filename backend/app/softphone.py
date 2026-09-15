@@ -51,7 +51,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import auth, phone_match
+from . import assigned_access, auth, phone_match
 from .db import get_db
 from .models import Contact
 
@@ -226,6 +226,11 @@ def softphone_caller(number: str = Query(default="", max_length=40),
     be able to stop somebody answering the phone.
     """
     contact = find_contact(db, number)
+    if contact is not None and not assigned_access.scope(db, principal).sees_contact(
+            contact.id):
+        # "Only assigned data" (2026-09-15): a customer who is not on the reader's jobs
+        # rings as a bare number, exactly like an unknown one.
+        contact = None
     return {
         "number": number,
         "contact": None if contact is None else {

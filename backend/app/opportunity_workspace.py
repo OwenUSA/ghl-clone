@@ -16,6 +16,11 @@ Four rules carry the weight, and each is asserted by a test rather than intended
   (DECISIONS.md, 2026-09-10) and the same predicate (`auth.sees_internal`). A TECH
   asking for them by name gets 403 and a write that would create one it cannot read
   is refused; the board's note count is left out of a TECH's payload altogether.
+  AMENDED 2026-09-15, narrowly: a TECH with "Only assigned data" on may READ and ADD
+  a deal's OWN notes on their own jobs (`assigned_access.sees_opportunity_notes`) —
+  never edit or delete one, and never the contact's thread notes listed beneath.
+* **A TECH on their own job** (same amendment) may add a task and complete a task
+  that is theirs — assigned to them or made by them. Nothing else on a task.
 * **Nothing here deletes an opportunity, a contact or an appointment.**
 """
 from datetime import UTC, datetime
@@ -25,7 +30,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from . import auth, automations, custom_fields, pipeline_access
+from . import assigned_access, auth, automations, custom_fields, pipeline_access
 from .db import get_db
 from .models import (
     Contact,
@@ -40,6 +45,7 @@ from .models import (
     OpportunityFollower,
     OpportunityNote,
     OpportunityTask,
+    Role,
     Tag,
     User,
     utcnow,
@@ -67,27 +73,45 @@ def _get_opportunity(db: Session, principal: auth.Principal, opp_id: int) -> Opp
 
 
 def _get_task(db: Session, principal: auth.Principal, task_id: int) -> OpportunityTask:
+    """The task, or 404 — also when its deal is hidden by its pipeline or, with "Only
+    assigned data" on, is not one of the caller's jobs (pipeline_access resolves both)."""
     t = db.get(OpportunityTask, task_id)
-    if t is None or not pipeline_access.can_see(
-            db, principal, db.scalar(select(Opportunity.pipeline_id).where(
-                Opportunity.id == t.opportunity_id))):
+    if t is None:
         raise HTTPException(404, "task not found")
+    try:
+        pipeline_access.get_opportunity(db, principal, t.opportunity_id)
+    except HTTPException:
+        raise HTTPException(404, "task not found") from None
     return t
 
 
 def _get_note(db: Session, principal: auth.Principal, note_id: int) -> OpportunityNote:
     n = db.get(OpportunityNote, note_id)
-    if n is None or not pipeline_access.can_see(
-            db, principal, db.scalar(select(Opportunity.pipeline_id).where(
-                Opportunity.id == n.opportunity_id))):
+    if n is None:
         raise HTTPException(404, "note not found")
+    try:
+        pipeline_access.get_opportunity(db, principal, n.opportunity_id)
+    except HTTPException:
+        raise HTTPException(404, "note not found") from None
     return n
 
 
 def _refuse_notes(principal: auth.Principal, verb: str) -> None:
-    if not auth.sees_internal(principal):
-        raise HTTPException(403, "role %s may not %s internal notes" % (
-            principal.role.value, verb))
+    """STAFF read, write, edit and delete a deal's notes. A restricted TECH may read
+    and add them on their own jobs (2026-09-15) — `verb` "read"/"write" only."""
+    if auth.sees_internal(principal):
+        return
+    if verb in ("read", "write") and assigned_access.sees_opportunity_notes(principal):
+        return
+    raise HTTPException(403, "role %s may not %s internal notes" % (
+        principal.role.value, verb))
+
+
+def _refuse_tech(principal: auth.Principal) -> None:
+    """The STAFF gate these task routes had, with the owner's one opening: a TECH with
+    "Only assigned data" on, whose job the route then resolves (404 if not theirs)."""
+    if principal.role is Role.TECH and not assigned_access.tech_on_own_job(principal):
+        raise HTTPException(403, "role TECH may not do this")
 
 
 def _aware(dt: datetime | None) -> datetime | None:
@@ -272,12 +296,14 @@ def list_tasks(opp_id: int, db: Session = Depends(get_db),
 
 @router.post("/api/opportunities/{opp_id}/tasks", status_code=201)
 def create_task(opp_id: int, body: TaskCreate, db: Session = Depends(get_db),
-                principal: auth.Principal = auth.STAFF):
-    """STAFF. A TECH cannot edit records (CLAUDE.md), and a task is one.
+                principal: auth.Principal = auth.ANY_USER):
+    """STAFF. A TECH cannot edit records (CLAUDE.md), and a task is one — except a
+    TECH with "Only assigned data" on, adding one to their own job (2026-09-15).
 
     Enqueues NOTHING. There is no reminder and no assignee notification — the
     owner's rule — and `test_opportunity_workspace.py` counts the jobs table.
     """
+    _refuse_tech(principal)
     o = _get_opportunity(db, principal, opp_id)
     _check_assignee(db, body.assigned_user_id)
     t = OpportunityTask(opportunity_id=o.id, contact_id=o.contact_id,
@@ -294,9 +320,18 @@ def create_task(opp_id: int, body: TaskCreate, db: Session = Depends(get_db),
 
 @router.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, body: TaskPatch, db: Session = Depends(get_db),
-                principal: auth.Principal = auth.STAFF):
+                principal: auth.Principal = auth.ANY_USER):
+    _refuse_tech(principal)
     t = _get_task(db, principal, task_id)
     data = body.model_dump(exclude_unset=True)
+    if principal.role is Role.TECH:
+        # Their own job (resolved above), and only to tick off or reopen a task that
+        # is THEIRS: assigned to them, or one they added.
+        if set(data) - {"done"}:
+            raise HTTPException(403, "a technician can complete a task, not edit it")
+        if principal.user_id not in (t.assigned_user_id, t.created_by_id):
+            raise HTTPException(403, "a technician can complete only their own tasks "
+                                     "— this one is assigned to someone else")
     if "title" in data:
         t.title = _clean_task_title(data["title"])
     if "description" in data:
@@ -321,7 +356,8 @@ def delete_task(task_id: int, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.STAFF):
     """STAFF, not ADMIN: a task is the team's own to-do, not a customer record,
     and making a dispatcher ask an admin to remove a typo would be friction for
-    nothing. Overrulable — see DECISIONS.md."""
+    nothing. Overrulable — see DECISIONS.md. A TECH may not delete one, on their
+    own job or anywhere (2026-09-15)."""
     t = _get_task(db, principal, task_id)
     db.delete(t)
     db.commit()
@@ -378,12 +414,17 @@ def list_notes(opp_id: int, db: Session = Depends(get_db),
                        .where(OpportunityNote.opportunity_id == opp_id)
                        .order_by(OpportunityNote.created_at.desc(),
                                  OpportunityNote.id.desc())).all()
+    # The contact's THREAD notes stay STAFF-only (2026-09-15 changes deal notes only).
+    thread_notes = (contact_note_events(db, o.contact_id)
+                    if auth.sees_internal(principal) else [])
     return {
         "notes": [_note_out(n) for n in notes],
         "contact_notes": [
             {"id": e.id, "conversation_id": e.conversation_id, "body": e.body or "",
              "occurred_at": _aware(e.occurred_at)}
-            for e in contact_note_events(db, o.contact_id)],
+            for e in thread_notes],
+        # What the Notes tab may offer this reader beside each note.
+        "can_edit": auth.sees_internal(principal),
     }
 
 
@@ -403,7 +444,9 @@ def create_note(opp_id: int, body: NoteBody, db: Session = Depends(get_db),
 @router.patch("/api/opportunity-notes/{note_id}")
 def update_note(note_id: int, body: NoteBody, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.ANY_USER):
-    _refuse_notes(principal, "write")
+    # "edit", not "write": a technician may ADD a note on their own job, never
+    # change one (2026-09-15). For STAFF the two are the same.
+    _refuse_notes(principal, "edit")
     n = _get_note(db, principal, note_id)
     n.body = _clean_note(body.body)
     db.commit()
@@ -425,7 +468,7 @@ def delete_note(note_id: int, db: Session = Depends(get_db),
 
 @router.post("/api/contacts/{contact_id}/conversation")
 def open_contact_conversation(contact_id: int, db: Session = Depends(get_db),
-                              _: auth.Principal = auth.ANY_USER):
+                              principal: auth.Principal = auth.ANY_USER):
     """The contact's thread id, creating the empty thread if there is none yet.
 
     Creating a thread writes one `conversations` row and no event: nothing is sent
@@ -433,9 +476,9 @@ def open_contact_conversation(contact_id: int, db: Session = Depends(get_db),
     find-or-create the composer and the call button already share, so a contact
     never ends up with two threads.
     """
-    contact = db.get(Contact, contact_id)
-    if not contact:
-        raise HTTPException(404, "contact not found")
+    # "Only assigned data": a contact not on the caller's jobs is a 404, and no thread
+    # is created for it.
+    assigned_access.get_contact(db, principal, contact_id)
     existed = db.scalar(select(Conversation.id).where(
         Conversation.contact_id == contact_id)) is not None
     conv = automations.thread_for(db, contact_id)
@@ -463,7 +506,8 @@ def card_extras(db: Session, opps: list[Opportunity],
     * `notes_count` / `note_previews` — this deal's notes plus the contact's thread
       NOTE events, exactly what the Notes tab lists. **Absent for a TECH**: the
       keys are not sent at all, so no count of a note they cannot read leaves the
-      server.
+      server. A TECH with "Only assigned data" on (2026-09-15) reads their own
+      jobs' deal notes, so they get the count of exactly those — no thread notes.
     """
     if not opps:
         return {}
@@ -486,16 +530,17 @@ def card_extras(db: Session, opps: list[Opportunity],
         .group_by(OpportunityTask.opportunity_id)).all())
 
     staff = auth.sees_internal(principal)
+    reads_deal_notes = assigned_access.sees_opportunity_notes(principal)
     deal_notes: dict[int, list[str]] = {}
     contact_notes: dict[int, list[str]] = {}
-    if staff:
+    if reads_deal_notes:
         for opp_id, body in db.execute(
                 select(OpportunityNote.opportunity_id, OpportunityNote.body)
                 .where(OpportunityNote.opportunity_id.in_(opp_ids))
                 .order_by(OpportunityNote.created_at.desc(),
                           OpportunityNote.id.desc())).all():
             deal_notes.setdefault(opp_id, []).append(first_line(body))
-        if contact_ids:
+        if staff and contact_ids:
             for contact_id, body in db.execute(
                     select(Conversation.contact_id, ConversationEvent.body)
                     .join(Conversation,
@@ -518,7 +563,7 @@ def card_extras(db: Session, opps: list[Opportunity],
                "open_tasks_count": open_tasks.get(o.id, 0),
                "checklist": custom_fields.progress(defs, checklist_groups, o.pipeline_id,
                                                    o.custom_fields)}
-        if staff:
+        if reads_deal_notes:
             lines = deal_notes.get(o.id, []) + (
                 contact_notes.get(o.contact_id, []) if o.contact_id else [])
             row["notes_count"] = len(lines)
