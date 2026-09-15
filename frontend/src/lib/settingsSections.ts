@@ -11,7 +11,13 @@ export const SETTINGS_SECTIONS = [
   { key: 'custom-fields', label: 'Custom Fields', path: '/settings/custom-fields' },
   // ADMIN only: SettingsPage does not draw it for anyone else (2026-09-14).
   { key: 'companycam', label: 'CompanyCam', path: '/settings/companycam' },
+  // ADMIN only, like CompanyCam (2026-09-15): GoHighLevel's staff list, and the home of
+  // each user's "Only assigned data" switch.
+  { key: 'my-staff', label: 'My Staff', path: '/settings/my-staff' },
 ] as const
+
+/** Sections only an ADMIN is shown. SettingsPage does not draw their tabs for anyone else. */
+export const ADMIN_SECTIONS: readonly string[] = ['companycam', 'my-staff']
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]['key']
 

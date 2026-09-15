@@ -1512,3 +1512,48 @@ export const callThreadRinging = (t: ThreadRef, ringBrowser: boolean) =>
 
 export const callContactRinging = (contactId: number, ringBrowser: boolean) =>
   send<CallPlaced>(`/api/contacts/${contactId}/call`, 'POST', { ring_browser: ringBrowser })
+
+// ---------------- My Staff (2026-09-15) ----------------
+
+/** A user as My Staff reads it — what `GET /api/users` answers an ADMIN. */
+export type StaffUser = {
+  id: number
+  name: string
+  email: string
+  role: 'ADMIN' | 'DISPATCHER' | 'TECH'
+  is_active: boolean
+  only_assigned_data: boolean
+  phone: string | null
+  phone_display: string | null
+  must_change_password: boolean
+  /** No password: a token-only account (the telephony feed). Never made a login. */
+  machine: boolean
+}
+
+export type StaffCalendar = {
+  id: number; name: string; created: boolean; renamed_from?: string | null
+}
+
+export const listStaff = (params: { q?: string; role?: string } = {}) => {
+  const sp = new URLSearchParams()
+  if (params.q?.trim()) sp.set('q', params.q.trim())
+  if (params.role) sp.set('role', params.role)
+  const query = sp.toString()
+  return get<StaffUser[]>('/api/users' + (query ? '?' + query : ''))
+}
+
+export type StaffCreate = {
+  name: string; email: string; phone: string | null; role: string
+  password: string; only_assigned_data: boolean
+}
+
+export const createStaffUser = (body: StaffCreate) =>
+  send<StaffUser & { calendar: StaffCalendar | null }>('/api/users', 'POST', body)
+
+export type StaffPatch = Partial<{
+  name: string; email: string; phone: string | null; role: string
+  is_active: boolean; only_assigned_data: boolean; password: string
+}>
+
+export const patchStaffUser = (id: number, body: StaffPatch) =>
+  send<StaffUser>(`/api/users/${id}`, 'PATCH', body)

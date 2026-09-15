@@ -14,6 +14,7 @@ import {
   queryWindow, rangeLabel, shiftAnchor, slotAt, visibleDays,
   type CalendarView,
 } from '../lib/calendarGrid'
+import { isRestricted } from '../lib/access'
 
 /**
  * Measured from captures/diag_cal.png + captures/calendars/ (1440x900):
@@ -481,6 +482,9 @@ export function CalendarsPage({ user }: { user: Me }) {
               title="Users"
               count={selectedUsers.length}
               items={(users.data ?? [])
+                // "Only assigned data": their own day is the only one they can see, so
+                // the Users filter offers only them (every other user would filter to nothing).
+                .filter((u) => !isRestricted(user) || u.id === user.id)
                 .filter((u) => u.name.toLowerCase().includes(filterQ.toLowerCase()))
                 .map((u) => ({ id: u.id, label: u.name }))}
               selected={selectedUsers}

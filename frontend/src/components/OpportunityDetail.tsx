@@ -40,6 +40,7 @@ import {
   PRIMARY, PRIMARY_BUTTON, PRIMARY_TINT, Select, TEXT, dead, footerStamp,
 } from './opportunity/ui'
 import type { Me } from '../lib/auth'
+import { techOnOwnJob } from '../lib/access'
 
 /**
  * The opportunity modal — GoHighLevel's "Edit "<name>"" dialog, rebuilt from the
@@ -248,8 +249,19 @@ export function OpportunityDetail({
   const canEdit = user.role !== 'TECH'
   const canDelete = user.role === 'ADMIN'
   const canBook = user.role !== 'TECH'
-  const seesNotes = user.role !== 'TECH'
-  const why = 'Your role cannot edit opportunities'
+  // "Only assigned data" (2026-09-15): a technician on their own job — and it IS their
+  // own, or the server would have answered 404 — answers its questions, moves its stage
+  // and reads and adds its notes. Nothing else here; the server refuses the rest.
+  const techJob = techOnOwnJob(user)
+  const canAnswer = canEdit || techJob
+  const canStage = canEdit || techJob
+  const seesNotes = user.role !== 'TECH' || techJob
+  // A field a technician cannot change reads as read-only, like the Select's disabled look.
+  const readOnly: React.CSSProperties = canEdit ? {} : { backgroundColor: 'rgb(249,250,251)',
+    cursor: 'not-allowed' }
+  const why = techJob
+    ? 'A technician can answer this job’s questions and change its stage, not its other details'
+    : 'Your role cannot edit opportunities'
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['opportunities'] })
@@ -355,7 +367,7 @@ export function OpportunityDetail({
             || (form.phone != null && form.phone !== (contact.data?.phone ?? ''))
           const dirty = Object.keys(body).length > 0 || contactDirty
           const problem = !form.title.trim() ? 'Opportunity name is required'
-            : !form.contact ? 'Choose a primary contact'
+            : !form.contact && canEdit ? 'Choose a primary contact'
               : form.stageId == null ? `Choose a stage in ${current?.name ?? 'the new pipeline'}`
                 : badProbability ? 'Probability is a whole number from 0 to 100'
                   : null
@@ -371,9 +383,11 @@ export function OpportunityDetail({
           const linked: LinkedValues = {
             email: { value: email, onChange: (v) => set('email', v),
               disabled: !form.contact || !canEdit,
+              reason: canEdit ? undefined : 'A technician can tick this, not change the contact’s email',
               hint: form.contact ? null : 'Choose a primary contact to record an email.' },
             address: { value: form.address, onChange: (v) => set('address', v),
-              disabled: !canEdit },
+              disabled: !canEdit,
+              reason: canEdit ? undefined : 'A technician can tick this, not change the job’s address' },
           }
 
           return (
@@ -476,7 +490,15 @@ export function OpportunityDetail({
                   )}
 
                   {tab === 'details' && (
-                    <fieldset disabled={!canEdit} title={canEdit ? undefined : why}>
+                    <fieldset disabled={!canAnswer} title={canAnswer ? undefined : why}>
+                      {techJob && (
+                        <div role="note" data-tech-job-note
+                          style={{ fontSize: 13, color: MUTED, backgroundColor: PRIMARY_TINT,
+                            borderRadius: 8, padding: '8px 12px', marginBottom: 16 }}>
+                          You can answer this job’s questions and change its stage. Its other
+                          details are read-only for a technician.
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-x-3">
                         <div style={{ marginBottom: 16 }}>
                           <Label required>Primary contact name</Label>
@@ -491,7 +513,7 @@ export function OpportunityDetail({
                             <Label>Primary email</Label>
                             <input value={email} aria-label="Primary email" placeholder="Enter email"
                               disabled={!form.contact || !canEdit}
-                              onChange={(e) => set('email', e.target.value)} style={INPUT} />
+                              onChange={(e) => set('email', e.target.value)} style={{ ...INPUT, ...readOnly }} />
                           </div>
                         )}
                         {shows(phone) && (
@@ -499,7 +521,7 @@ export function OpportunityDetail({
                             <Label>Primary phone</Label>
                             <input value={phone} aria-label="Primary phone" placeholder="Enter phone"
                               disabled={!form.contact || !canEdit}
-                              onChange={(e) => set('phone', e.target.value)} style={INPUT} />
+                              onChange={(e) => set('phone', e.target.value)} style={{ ...INPUT, ...readOnly }} />
                           </div>
                         )}
                         {(!hideEmpty || form.additional.length > 0) && (
@@ -521,8 +543,9 @@ export function OpportunityDetail({
                       <div style={{ marginBottom: 16 }}>
                         <Label required>Opportunity name</Label>
                         <input value={form.title} maxLength={120} aria-label="Opportunity name"
+                          disabled={!canEdit} title={canEdit ? undefined : why}
                           placeholder="Enter opportunity name"
-                          onChange={(e) => set('title', e.target.value)} style={INPUT} />
+                          onChange={(e) => set('title', e.target.value)} style={{ ...INPUT, ...readOnly }} />
                       </div>
 
                       <div className="grid grid-cols-2 gap-x-3">
@@ -543,7 +566,7 @@ export function OpportunityDetail({
                         </div>
                         <div style={{ marginBottom: 16 }}>
                           <Label required={moved}>Stage</Label>
-                          <Select value={form.stageId ?? ''} ariaLabel="Stage" disabled={!canEdit}
+                          <Select value={form.stageId ?? ''} ariaLabel="Stage" disabled={!canStage}
                             onChange={(v) => set('stageId', v ? Number(v) : null)}>
                             {form.stageId == null && <option value="">Select stage</option>}
                             {(current?.stages ?? []).map((s) => (
@@ -571,9 +594,10 @@ export function OpportunityDetail({
                             <span className="pointer-events-none absolute"
                               style={{ left: 12, top: 17, fontSize: 14, color: TEXT }}>$</span>
                             <input type="number" min={0} step="0.01" value={form.value}
+                              disabled={!canEdit} title={canEdit ? undefined : why}
                               aria-label="Value" placeholder="0"
                               onChange={(e) => set('value', e.target.value)}
-                              style={{ ...INPUT, paddingLeft: 26 }} />
+                              style={{ ...INPUT, paddingLeft: 26, ...readOnly }} />
                           </div>
                           {/* centsFromDollars( is what Update sends — see changes(). */}
                         </div>
@@ -583,9 +607,10 @@ export function OpportunityDetail({
                             <div className="relative">
                               <input type="number" min={0} max={100} step={1}
                                 value={form.probability} aria-label="Probability"
+                                disabled={!canEdit} title={canEdit ? undefined : why}
                                 placeholder="Enter probability"
                                 onChange={(e) => set('probability', e.target.value)}
-                                style={{ ...INPUT, paddingRight: 30 }} />
+                                style={{ ...INPUT, paddingRight: 30, ...readOnly }} />
                               <span className="pointer-events-none absolute"
                                 style={{ right: 12, top: 17, fontSize: 14, color: FAINT }}>%</span>
                             </div>
@@ -618,22 +643,28 @@ export function OpportunityDetail({
                           <div style={{ marginBottom: 16 }}>
                             <Label>Business name</Label>
                             <input value={form.businessName} aria-label="Business name"
+                              disabled={!canEdit} title={canEdit ? undefined : why}
                               placeholder="Enter business name"
-                              onChange={(e) => set('businessName', e.target.value)} style={INPUT} />
+                              onChange={(e) => set('businessName', e.target.value)}
+                              style={{ ...INPUT, ...readOnly }} />
                           </div>
                         )}
                         {shows(form.source) && (
                           <div style={{ marginBottom: 16 }}>
                             <Label>Source</Label>
                             <input value={form.source} aria-label="Source" placeholder="Enter source"
-                              onChange={(e) => set('source', e.target.value)} style={INPUT} />
+                              disabled={!canEdit} title={canEdit ? undefined : why}
+                              onChange={(e) => set('source', e.target.value)}
+                              style={{ ...INPUT, ...readOnly }} />
                           </div>
                         )}
                         {shows(form.closeDate) && (
                           <div style={{ marginBottom: 16 }}>
                             <Label>Expected close date</Label>
                             <input type="date" value={form.closeDate} aria-label="Expected close date"
-                              onChange={(e) => set('closeDate', e.target.value)} style={INPUT} />
+                              disabled={!canEdit} title={canEdit ? undefined : why}
+                              onChange={(e) => set('closeDate', e.target.value)}
+                              style={{ ...INPUT, ...readOnly }} />
                           </div>
                         )}
                         {(!hideEmpty || tags.length > 0) && (
@@ -673,7 +704,7 @@ export function OpportunityDetail({
                         hideEmpty={hideEmpty}
                         heading={null}
                         columns={2}
-                        disabled={!canEdit}
+                        disabled={!canAnswer}
                         disabledReason={why}
                         linked={linked}
                         onChange={(next) => set('answers', next)}
@@ -708,11 +739,12 @@ export function OpportunityDetail({
                                   gridColumn: key === 'address_street' ? 'span 2' : undefined }}>
                                   <Label>{label}</Label>
                                   <input value={form.address[key]} aria-label={label} maxLength={max}
+                                    disabled={!canEdit} title={canEdit ? undefined : why}
                                     // The contact's value, greyed, while the card has none.
                                     placeholder={fallback?.[key] || placeholder}
                                     onChange={(e) => set('address',
                                       { ...form.address, [key]: e.target.value })}
-                                    style={INPUT} />
+                                    style={{ ...INPUT, ...readOnly }} />
                                 </div>
                               ))}
                           </div>
@@ -736,7 +768,7 @@ export function OpportunityDetail({
                         heading={null}
                         // One column for the Checklist, read in order as a call script.
                         columns={isChecklistGroup(group.group.name) ? 1 : 2}
-                        disabled={!canEdit}
+                        disabled={!canAnswer}
                         disabledReason={why}
                         linked={linked}
                         onChange={(next) => set('answers', next)}
@@ -751,7 +783,7 @@ export function OpportunityDetail({
                   {tab === 'tasks' && (
                     <TasksTab opportunityId={o.id} user={user} startAdding={request.adding} />
                   )}
-                  {tab === 'notes' && seesNotes && <NotesTab opportunityId={o.id} />}
+                  {tab === 'notes' && seesNotes && <NotesTab opportunityId={o.id} user={user} />}
                   {tab === 'associated' && (
                     <AssociatedTab o={o} onOpenAppointment={setOpenAppointment} />
                   )}
@@ -804,10 +836,10 @@ export function OpportunityDetail({
                         <button
                           type="button"
                           onClick={() => { setError(null); save.mutate() }}
-                          disabled={!canEdit || !dirty || !!problem || save.isPending}
-                          title={!canEdit ? why : problem ?? undefined}
+                          disabled={!canAnswer || !dirty || !!problem || save.isPending}
+                          title={!canAnswer ? why : problem ?? undefined}
                           style={{ ...PRIMARY_BUTTON, width: 115,
-                            ...dead(canEdit && dirty && !problem && !save.isPending) }}
+                            ...dead(canAnswer && dirty && !problem && !save.isPending) }}
                         >
                           {save.isPending ? 'Updating…' : 'Update'}
                         </button>

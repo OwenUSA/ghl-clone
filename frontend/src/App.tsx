@@ -15,6 +15,8 @@ import { ReportingPage } from './pages/ReportingPage'
 import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { me } from './lib/auth'
+import { viewFor } from './lib/access'
+import { ChangePasswordScreen } from './pages/ChangePasswordScreen'
 import { viewFromPath } from './lib/settingsSections'
 import type { Focus } from './lib/focus'
 import { registerOpenRecord } from './lib/openRecord'
@@ -119,6 +121,16 @@ export default function App() {
 
   const user = session.data.user
 
+  // My Staff (2026-09-15): an admin created this account or reset its password. The API
+  // answers nothing else until a new one is chosen, so nothing else is drawn either.
+  if (user.must_change_password) {
+    return <ChangePasswordScreen user={user} onChanged={() => session.refetch()} />
+  }
+
+  // "Only assigned data": Dashboard and Reporting are not a restricted user's to open —
+  // including the landing view and a pasted link — so they land on their jobs.
+  const view = viewFor(user, active)
+
   // The softphone is mounted HERE, around the whole shell, for two reasons: a
   // registration is scarce (the operator AOR holds one contact, so the hook must
   // exist exactly once), and a call rings the browser rather than a screen -- the
@@ -135,7 +147,7 @@ export default function App() {
       {/* The one in-call window, for every call this browser is on (2026-09-14). */}
       <InCallWindow user={user} />
       <Sidebar
-        active={active}
+        active={view}
         onNavigate={setActive}
         onOpenSearch={() => setSearchOpen(true)}
         user={user}
@@ -143,30 +155,32 @@ export default function App() {
       {searchOpen && (
         <SearchPalette onClose={() => setSearchOpen(false)} onOpen={openRecord} />
       )}
-      {active === 'contacts' ? (
+      {view === 'contacts' ? (
         <ContactsPage user={user} focus={focusFor('contacts')} />
-      ) : active === 'conversations' ? (
+      ) : view === 'conversations' ? (
         <ConversationsPage user={user} focus={focusFor('conversations')} />
-      ) : active === 'opportunities' ? (
+      ) : view === 'opportunities' ? (
         <OpportunitiesPage
           user={user}
           focus={focusFor('opportunities')}
           onNavigate={setActive}
         />
-      ) : active === 'calendars' ? (
+      ) : view === 'calendars' ? (
         <CalendarsPage user={user} />
-      ) : active === 'dashboard' ? (
+      ) : view === 'dashboard' ? (
         <DashboardPage />
-      ) : active === 'reporting' ? (
+      ) : view === 'reporting' ? (
         <ReportingPage />
-      ) : active === 'settings' ? (
+      ) : view === 'settings' ? (
         <SettingsPage user={user} />
       ) : (
         // Every sidebar key above renders a real page. Payments was the last
         // key that fell through to a "not built yet" card, and it went with the
         // nav row on 2026-09-10, so this branch is now only reachable by an
         // unknown key -- send that to the landing view rather than a blank pane.
-        <DashboardPage />
+        viewFor(user, 'dashboard') === 'dashboard'
+          ? <DashboardPage />
+          : <OpportunitiesPage user={user} focus={null} onNavigate={setActive} />
       )}
     </div>
     </SoftphoneProvider>

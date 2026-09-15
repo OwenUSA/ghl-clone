@@ -5,6 +5,7 @@ import {
   type OpportunityTask, type TaskInput,
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
+import { techOnOwnJob } from '../../lib/access'
 import {
   AddBar, BODY, BORDER, BUTTON, DIVIDER, ErrorLine, FAINT, HEADING, INPUT, KebabMenu,
   Label, MUTED, PRIMARY, PRIMARY_BUTTON, Select, dead, noteStamp,
@@ -19,6 +20,10 @@ import {
  * not done. It notifies NOBODY: the server enqueues no job for any task write.
  * Reading is open to every role; writing is STAFF, so a TECH sees the list with
  * the controls dead and a reason, never a form that 403s (d1f7c50, b943f4b).
+ *
+ * "Only assigned data" (2026-09-15): a technician on their own job may ADD a task and
+ * tick off or reopen a task that is theirs — assigned to them or added by them. No
+ * edit, no delete, and someone else's task stays dead with the reason.
  */
 
 type Draft = { title: string; description: string; due: string; assignee: string }
@@ -102,13 +107,21 @@ export function TasksTab({ opportunityId, user, startAdding = false }: {
 }) {
   const qc = useQueryClient()
   const canWrite = user.role !== 'TECH'
+  const techJob = techOnOwnJob(user)
+  const canAdd = canWrite || techJob
   const why = 'Your role cannot add or change tasks'
+  const mine = (t: OpportunityTask) =>
+    t.assigned_user_id === user.id || t.created_by_id === user.id
+  const canTick = (t: OpportunityTask) => canWrite || (techJob && mine(t))
+  const tickWhy = techJob
+    ? 'A technician can complete only their own tasks — this one is someone else’s'
+    : why
   const tasks = useQuery({
     queryKey: ['opportunity-tasks', opportunityId],
     queryFn: () => listTasks(opportunityId),
   })
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
-  const [adding, setAdding] = useState(startAdding && canWrite)
+  const [adding, setAdding] = useState(startAdding && canAdd)
   const [editing, setEditing] = useState<number | null>(null)
   const [confirming, setConfirming] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -156,12 +169,12 @@ export function TasksTab({ opportunityId, user, startAdding = false }: {
           <input
             type="checkbox"
             checked={t.done}
-            disabled={!canWrite || busy}
-            title={canWrite ? (t.done ? 'Reopen this task' : 'Mark as done') : why}
+            disabled={!canTick(t) || busy}
+            title={canTick(t) ? (t.done ? 'Reopen this task' : 'Mark as done') : tickWhy}
             aria-label={(t.done ? 'Reopen ' : 'Complete ') + t.title}
             onChange={() => save.mutate({ id: t.id, body: { done: !t.done } })}
             style={{ marginTop: 3, width: 16, height: 16, accentColor: PRIMARY,
-              ...dead(canWrite) }}
+              ...dead(canTick(t)) }}
           />
           <div className="min-w-0 flex-1">
             <div style={{ fontSize: 14, fontWeight: 500, color: BODY,
@@ -215,7 +228,7 @@ export function TasksTab({ opportunityId, user, startAdding = false }: {
           <TaskForm initial={EMPTY} users={staff} busy={busy} saveLabel="Add task"
             onCancel={() => setAdding(false)} onSave={(d) => add.mutate(d)} />
         ) : (
-          <AddBar label="Add task" disabled={!canWrite} title={canWrite ? undefined : why}
+          <AddBar label="Add task" disabled={!canAdd} title={canAdd ? undefined : why}
             onClick={() => { setError(null); setAdding(true) }} />
         )}
       </div>

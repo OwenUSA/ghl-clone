@@ -11,6 +11,7 @@ import {
   AddBar, BODY, BORDER, BUTTON, DIVIDER, ErrorLine, FAINT, HEADING, INPUT, KebabMenu,
   MUTED, PRIMARY, PRIMARY_BUTTON, dead, noteStamp, useDismiss,
 } from './ui'
+import type { Me } from '../../lib/auth'
 
 /**
  * The Notes tab, from the owner's screenshot 22.
@@ -28,8 +29,10 @@ import {
  * GoHighLevel's small chip left of ⋮ counts a note's associations. This app has
  * no note associations, so the chip is NOT drawn (listed as not built).
  *
- * STAFF only: the modal does not offer this tab to a TECH at all, and the server
- * answers a TECH 403 on every note route regardless.
+ * STAFF read, add, edit and delete. A technician with "Only assigned data" on reads and
+ * ADDS notes on their own job (2026-09-15) and gets no ⋮ — the server refuses them an
+ * edit or a delete, and never sends them the contact's thread notes. Any other TECH is
+ * not offered this tab at all, and the server answers them 403 on every note route.
  */
 const CLAMP_LINES = 7
 
@@ -112,7 +115,9 @@ function IconButton({ label, active, onClick, children }: {
   )
 }
 
-export function NotesTab({ opportunityId }: { opportunityId: number }) {
+export function NotesTab({ opportunityId, user }: { opportunityId: number; user: Me }) {
+  // Edit and Delete are STAFF-only on every path, whatever this tab is shown to.
+  const canChange = user.role !== 'TECH'
   const qc = useQueryClient()
   const notes = useQuery({
     queryKey: ['opportunity-notes', opportunityId],
@@ -294,10 +299,10 @@ export function NotesTab({ opportunityId }: { opportunityId: number }) {
         <NoteCard
           key={row.kind + row.id}
           row={row}
-          onEdit={row.kind === 'deal' ? () => {
+          onEdit={row.kind === 'deal' && canChange ? () => {
             setError(null); setEditing(row.id); setEditDraft(row.body)
           } : undefined}
-          onDelete={row.kind === 'deal' ? () => {
+          onDelete={row.kind === 'deal' && canChange ? () => {
             setError(null); setConfirming(row.id)
           } : undefined}
         />

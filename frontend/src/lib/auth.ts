@@ -13,6 +13,13 @@ export type Me = {
   email: string | null
   role: 'ADMIN' | 'DISPATCHER' | 'TECH'
   is_active: boolean
+  /** GoHighLevel's "Only assigned data" (2026-09-15). Ignored for an ADMIN. */
+  only_assigned_data?: boolean
+  phone?: string | null
+  /** An admin set this user's password; nothing else works until they change it. */
+  must_change_password?: boolean
+  /** No password: a token-only account such as the telephony feed. */
+  machine?: boolean
 }
 
 export type ApiToken = {

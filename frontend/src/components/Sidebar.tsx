@@ -15,6 +15,7 @@ import {
   IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
 } from './Icon'
 import { logout } from '../lib/auth'
+import { navKeys } from '../lib/access'
 
 const PRIMARY = [
   { key: 'dashboard', label: 'Dashboard', Icon: IconGrid },
@@ -54,8 +55,11 @@ export function Sidebar({
   onNavigate: (key: string) => void
   /** Opens the ctrl+K palette. The row used to be an inert <div>. */
   onOpenSearch: () => void
-  user?: { name: string; role: string }
+  user?: { name: string; role: string; only_assigned_data?: boolean | null }
 }) {
+  // "Only assigned data" (2026-09-15): Dashboard and Reporting are not drawn at all for
+  // a restricted user — they show money and other people's work, and the API refuses.
+  const shown = navKeys(user, PRIMARY.map((p) => p.key))
   return (
     <aside
       className="relative flex flex-col shrink-0"
@@ -119,7 +123,7 @@ export function Sidebar({
       </div>
 
       <nav className="flex-1 overflow-y-auto px-0 pt-2">
-        {PRIMARY.map((item) => {
+        {PRIMARY.filter((item) => shown.includes(item.key)).map((item) => {
           const isActive = item.key === active
           return (
             <button

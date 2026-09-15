@@ -79,9 +79,12 @@ const TICK: React.CSSProperties = {
 /** The real values a linked yes/no draws beside its tick. */
 export type LinkedValues = {
   email: { value: string; onChange: (v: string) => void; disabled: boolean
+    /** Why the value beside the tick is locked when the tick itself is not. */
+    reason?: string
     /** Why the email cannot be typed yet (no contact chosen), shown under it. */
     hint?: string | null }
-  address: { value: AddressForm; onChange: (v: AddressForm) => void; disabled: boolean }
+  address: { value: AddressForm; onChange: (v: AddressForm) => void; disabled: boolean
+    reason?: string }
 }
 
 const HEADING = {
@@ -166,7 +169,8 @@ export function CustomFieldAnswers({
               {linked && (
                 <input value={linked.email.value} aria-label={def.label + ': email'}
                   placeholder="Enter email" type="email"
-                  disabled={disabled || linked.email.disabled} title={title}
+                  disabled={disabled || linked.email.disabled}
+                  title={title ?? (linked.email.disabled ? linked.email.reason : undefined)}
                   onChange={(e) => linked.email.onChange(e.target.value)}
                   style={disabled || linked.email.disabled ? READONLY : INPUT} />
               )}
@@ -186,7 +190,8 @@ export function CustomFieldAnswers({
               {linked && (
                 <input value={linked.address.value.address_street}
                   aria-label={def.label + ': Street address'} placeholder="Street address"
-                  maxLength={255} disabled={off} title={title}
+                  maxLength={255} disabled={off}
+                  title={title ?? (linked.address.disabled ? linked.address.reason : undefined)}
                   onChange={(e) => linked.address.onChange(
                     { ...linked.address.value, address_street: e.target.value })}
                   style={off ? READONLY : INPUT} />
@@ -200,7 +205,8 @@ export function CustomFieldAnswers({
                 ([k, label, , max]) => (
                   <input key={k} value={linked.address.value[k]} maxLength={max}
                     aria-label={def.label + ': ' + label} placeholder={label}
-                    disabled={off} title={title}
+                    disabled={off}
+                    title={title ?? (linked.address.disabled ? linked.address.reason : undefined)}
                     onChange={(e) => linked.address.onChange(
                       { ...linked.address.value, [k]: e.target.value })}
                     style={off ? READONLY : INPUT} />

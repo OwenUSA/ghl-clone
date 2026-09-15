@@ -2,7 +2,10 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CompanyCamSettings } from '../components/CompanyCamSettings'
 import { CustomFieldsPanel } from '../components/CustomFieldsPanel'
-import { SETTINGS_SECTIONS, sectionFromPath, type SettingsSection } from '../lib/settingsSections'
+import { MyStaffPanel } from '../components/MyStaffPanel'
+import {
+  ADMIN_SECTIONS, SETTINGS_SECTIONS, sectionFromPath, type SettingsSection,
+} from '../lib/settingsSections'
 import {
   changePassword,
   createToken,
@@ -55,7 +58,7 @@ export function SettingsPage({ user }: { user: Me }) {
         </div>
         <div role="tablist" aria-label="Settings sections" className="flex gap-6"
           style={{ marginTop: 20, borderBottom: `1px solid ${LINE}` }}>
-          {SETTINGS_SECTIONS.map((s) => (s.key !== 'companycam' || user.role === 'ADMIN') && (
+          {SETTINGS_SECTIONS.map((s) => (!ADMIN_SECTIONS.includes(s.key) || user.role === 'ADMIN') && (
             <button key={s.key} role="tab" aria-selected={section === s.key}
               onClick={() => choose(s.key)}
               style={{
@@ -73,6 +76,7 @@ export function SettingsPage({ user }: { user: Me }) {
             <CustomFieldsPanel user={user} />
           </div>
         : section === 'companycam' && user.role === 'ADMIN' ? <CompanyCamSettings />
+        : section === 'my-staff' && user.role === 'ADMIN' ? <MyStaffPanel user={user} />
         : <AccountSettings />}
     </div>
   )

@@ -14,6 +14,7 @@ import { IconDownload, IconGrid, IconList, IconPlus } from '../components/Icon'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BulkActionsBar } from '../components/BulkActionsBar'
 import { ForecastPanel } from '../components/ForecastPanel'
+import { opportunityTabs } from '../lib/access'
 import { ManageSavedViews, SavedViewsRow } from '../components/SavedViews'
 import { PipelinesPanel } from '../components/PipelinesPanel'
 import { PageTabs } from '../components/PageTabs'
@@ -381,7 +382,9 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
   return (
     <div className="flex h-screen min-w-0 flex-1 flex-col" style={{ backgroundColor: 'rgb(249,250,251)' }}>
       <PageTabs title="Opportunities" label="Opportunities views" active={tab}
-        tabs={TABS.map((t) => ({
+        // "Only assigned data" (2026-09-15): Forecast is not drawn at all — it is money
+        // across other people's work, and /api/forecast refuses a restricted user.
+        tabs={opportunityTabs(user, TABS).map((t) => ({
           key: t,
           label: t,
           onSelect: () => setTab(t),
