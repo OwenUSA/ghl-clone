@@ -601,8 +601,10 @@ def test_clicking_an_appointment_opens_its_detail_panel():
     assert "setOpenAppt(id)" in page, "the handler does not open anything"
 
     # Day/Week block, month chip, and a row of the Appointment list view.
-    week_block = page.split("{buckets[i].map((a) => {", 1)[1].split("})}", 1)[0]
-    assert "onClick={(ev) => open(a.id, ev)}" in week_block, (
+    week_grid = page.split("{layouts[i].map((p) => {", 1)[1].split("})}", 1)[0]
+    assert "<AppointmentBlock key={a.id} a={a} box={box} onOpen={open} />" in week_grid
+    week_block = page.split("function AppointmentBlock(", 1)[1].split("\n}\n", 1)[0]
+    assert "onClick={(ev) => onOpen(a.id, ev)}" in week_block, (
         "a booking on the Day/Week grid still does nothing when clicked")
     # NB the chip's `title` interpolation contains "))}" — split on its closing
     # tag, not on the map's.
@@ -825,10 +827,10 @@ def test_a_cancelled_booking_is_still_drawn_but_not_as_a_live_one():
     report has a Cancelled tile, so the row is a record and the calendar keeps
     it. It has to be visibly not a live booking, or the slot reads as taken."""
     page = _read("pages", "CalendarsPage.tsx")
-    assert page.count("'line-through'") == 3, (
-        "the Day/Week block, the month chip and the list row must all show a "
-        "cancelled booking as cancelled")
-    week_block = page.split("{buckets[i].map((a) => {", 1)[1].split("})}", 1)[0]
+    assert page.count("'line-through'") == 4, (
+        "the Day/Week block, the month chip, the month's \"+N more\" list and the "
+        "list row must all show a cancelled booking as cancelled")
+    week_block = page.split("function AppointmentBlock(", 1)[1].split("\n}\n", 1)[0]
     assert "a.status === 'cancelled'" in week_block
 
 

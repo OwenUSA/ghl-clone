@@ -239,7 +239,7 @@ def test_double_clicking_an_empty_slot_books_it_and_a_booking_does_not():
         "a month day cell cannot be double-clicked to book it")
 
     # The drawn appointment in each grid must swallow the double-click.
-    hour_grid = page.split("{/* hour grid", 1)[1]
+    hour_grid = source.split("function AppointmentBlock(", 1)[1]
     for block, what in ((hour_grid, "the hour grid"), (month, "the month grid")):
         appt = block.split("<div key={a.id}", 1)[1] if "<div key={a.id}" in block \
             else block.split("data-appointment", 1)[1]

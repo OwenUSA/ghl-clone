@@ -96,19 +96,23 @@ def test_the_blocked_off_time_tab_creates_edits_and_deletes():
         "a block is deleted without being asked")
 
 
-def test_the_calendar_grid_covers_5_am_to_11_pm_and_opens_at_5_am():
+def test_the_calendar_grid_covers_the_whole_day_and_opens_at_7_am():
+    """The owner, 2026-09-15: open on 7 AM to 7 PM like Workiz (it was 5 AM). The hour
+    height that makes that fit is executed in test_calendar_layout.py."""
     page = _read("pages", "CalendarsPage.tsx")
     assert "const HOURS = Array.from({ length: 24 }, (_, i) => i)" in page, (
         "the hour grid no longer runs to 11 PM")
-    assert "const FIRST_VISIBLE_HOUR = 5" in page
-    assert "hourPane.current.scrollTop = FIRST_VISIBLE_HOUR * HOUR_PX" in page
+    grid = _read("lib", "calendarGrid.ts")
+    assert "export const FIRST_VISIBLE_HOUR = 7" in grid
+    assert "hourPane.current.scrollTop = FIRST_VISIBLE_HOUR * hourPx" in page
+    assert "setHourPx(hourPxFor(el.clientHeight))" in page
     assert "<div ref={hourPane}" in page
 
 
 def test_blocked_time_is_drawn_on_the_grid_and_distinct_from_appointments():
     page = _read("pages", "CalendarsPage.tsx")
     assert "listBlockedTimes(" in page
-    week = page.split("{blockedBuckets[i].map((b) => {", 1)[1].split("})}", 1)[0]
+    week = page.split("{layouts[i].map((p) => {", 1)[1].split("})}", 1)[0]
     assert "<BlockedBlock" in week
     block = page.split("function BlockedBlock(", 1)[1].split("\n}\n", 1)[0]
     month = page.split("{blocked[i].map((b) => (", 1)[1].split("\n                ))}", 1)[0]

@@ -160,3 +160,151 @@ export function fromInputs(dateValue: string, timeValue: string): Date | null {
   const d = new Date(+dm[1], +dm[2] - 1, +dm[3], +tm[1], +tm[2], 0, 0)
   return Number.isNaN(d.getTime()) ? null : d
 }
+
+// ---------------------------------------------------------------------------
+// Laying out the Day and Week grid (2026-09-15)
+// ---------------------------------------------------------------------------
+
+/** Anything with a start and an end: an appointment, or blocked off time. */
+export type Timed = { starts_at: string; ends_at: string }
+
+/** The height a zero-length item is drawn with, in minutes — so it can be seen. */
+export const MIN_BLOCK_MINUTES = 15
+
+/** Minutes past local midnight, by the WALL CLOCK, so a DST day still lines up
+ *  with the hour labels drawn beside it. */
+const wallMinutes = (d: Date) => d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60
+
+/**
+ * Every visible day an item touches, not only the day it starts on: a job from
+ * Monday 7:30 AM to Tuesday 5 PM is drawn on both days. `[start, end)` — ending
+ * exactly at midnight does not put it on the next day. A zero-length item belongs
+ * to the day it starts on.
+ */
+export function bucketByOverlap<T extends Timed>(days: Date[], items: T[]): T[][] {
+  return days.map((d) => {
+    const from = day(d).getTime()
+    const to = day(d, 1).getTime()
+    return items.filter((a) => {
+      const s = new Date(a.starts_at).getTime()
+      const e = new Date(a.ends_at).getTime()
+      return e > s ? s < to && e > from : s >= from && s < to
+    })
+  })
+}
+
+export type Placed<T> = {
+  item: T
+  /** Minutes past midnight of THIS day where the drawn segment starts / ends. */
+  startMin: number
+  endMin: number
+  /** Lane, how many lanes it spans, and how many lanes its overlap group has. */
+  col: number
+  span: number
+  cols: number
+  /** The item began on an earlier day / carries on into a later one. */
+  fromBefore: boolean
+  untilAfter: boolean
+}
+
+/**
+ * Side-by-side layout for one day column, the way GoHighLevel and Workiz draw it.
+ *
+ * 1. Each item is clipped to this day: a multi-day item draws from its start to
+ *    midnight on its first day, the whole day in between, and from midnight to its
+ *    end on its last day.
+ * 2. Items that overlap — directly or through a chain — form one group. Touching is
+ *    not overlapping: 12–1 and 1–3 sit in the same lane.
+ * 3. Within a group each item takes the first lane that is free when it starts
+ *    (earliest first, longest first on a tie), and the group's width is split into
+ *    as many lanes as it needed.
+ * 4. An item then widens into the lanes to its right that nothing overlapping it
+ *    uses, so a short visit beside a long one does not leave dead space.
+ *
+ * No two placed items that overlap in time share any horizontal space, so nothing
+ * is ever drawn behind another block. The height is the real duration; only a
+ * zero-length item is given MIN_BLOCK_MINUTES.
+ */
+export function layoutDay<T extends Timed>(d: Date, items: T[]): Placed<T>[] {
+  const from = day(d).getTime()
+  const to = day(d, 1).getTime()
+  const segs: Placed<T>[] = []
+  for (const item of items) {
+    const s = new Date(item.starts_at)
+    const e = new Date(item.ends_at)
+    const zero = e.getTime() <= s.getTime()
+    if (zero ? !(s.getTime() >= from && s.getTime() < to)
+             : !(s.getTime() < to && e.getTime() > from)) continue
+    const fromBefore = s.getTime() < from
+    const untilAfter = e.getTime() > to
+    const startMin = fromBefore ? 0 : wallMinutes(s)
+    let endMin = untilAfter || e.getTime() === to ? 24 * 60 : wallMinutes(e)
+    if (zero || endMin <= startMin) endMin = Math.min(24 * 60, startMin + MIN_BLOCK_MINUTES)
+    segs.push({ item, startMin, endMin, col: 0, span: 1, cols: 1, fromBefore, untilAfter })
+  }
+  segs.sort((a, b) => a.startMin - b.startMin || (b.endMin - b.startMin) - (a.endMin - a.startMin))
+
+  const overlaps = (a: Placed<T>, b: Placed<T>) => a.startMin < b.endMin && b.startMin < a.endMin
+  let group: Placed<T>[] = []
+  let groupEnd = -1
+  let laneEnds: number[] = []
+  const close = () => {
+    for (const g of group) {
+      g.cols = laneEnds.length
+      let span = 1
+      while (g.col + span < g.cols &&
+             !group.some((o) => o !== g && o.col === g.col + span && overlaps(o, g))) span++
+      g.span = span
+    }
+    group = []
+    laneEnds = []
+  }
+  for (const seg of segs) {
+    if (group.length && seg.startMin >= groupEnd) close()
+    let lane = laneEnds.findIndex((end) => end <= seg.startMin)
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(seg.endMin) } else laneEnds[lane] = seg.endMin
+    seg.col = lane
+    group.push(seg)
+    groupEnd = group.length === 1 ? seg.endMin : Math.max(groupEnd, seg.endMin)
+  }
+  if (group.length) close()
+  return segs
+}
+
+const clock = (d: Date) => {
+  const h = d.getHours() % 12 || 12
+  return `${h}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+const meridiem = (d: Date) => (d.getHours() < 12 ? 'AM' : 'PM')
+const weekday = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short' })
+
+/**
+ * A block's time range, as GoHighLevel writes it: "7:30 – 10:00 AM" when both ends
+ * share AM/PM, "11:30 AM – 1:00 PM" when they do not, and the weekday on both ends
+ * when the item runs past midnight: "Mon 7:30 AM – Tue 5:00 PM".
+ */
+export function timeRange(startIso: string, endIso: string): string {
+  const s = new Date(startIso)
+  const e = new Date(endIso)
+  if (e.getTime() <= s.getTime()) return `${clock(s)} ${meridiem(s)}`
+  // Ending exactly at the next midnight is still a same-day block ("– 12:00 AM").
+  const toMidnight = e.getTime() === day(s, 1).getTime()
+  const endLabel = `${clock(e)} ${meridiem(e)}`
+  if (!isSameDay(s, e) && !toMidnight) {
+    return `${weekday(s)} ${clock(s)} ${meridiem(s)} – ${weekday(e)} ${endLabel}`
+  }
+  return meridiem(s) === meridiem(e) && !toMidnight
+    ? `${clock(s)} – ${endLabel}`
+    : `${clock(s)} ${meridiem(s)} – ${endLabel}`
+}
+
+/** How many hours the Day and Week grid opens on without scrolling: 7 AM to 7 PM. */
+export const FIRST_VISIBLE_HOUR = 7
+export const VISIBLE_HOURS = 12
+/** Never draw an hour smaller than this, whatever the screen: below it the blocks
+ *  stop being readable, and scrolling is the better trade. */
+export const MIN_HOUR_PX = 48
+
+/** The hour height that fits 7 AM–7 PM into a pane this tall, where the screen allows. */
+export const hourPxFor = (paneHeight: number) =>
+  Math.max(MIN_HOUR_PX, Math.floor(paneHeight / VISIBLE_HOURS))
