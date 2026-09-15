@@ -87,7 +87,8 @@ export function spansRow(def: FieldDef): boolean {
  * (the Workiz import) and `ahs_job_*` (the AHS email relay, 2026-09-14). The values
  * stay on every deal untouched — `owen_call_id` is a live join key, `workiz_id` the
  * import's idempotency key and `ahs_job_id` the relay's — but the owner does not
- * want them on the screen (2026-09-13), so NOTHING in the modal renders one.
+ * want them on the screen (2026-09-13), so nothing in the modal renders one — except
+ * `workiz_tech`, read-only, by the owner's later decision (see `workizTechnicians`).
  * Mirrors `RESERVED_PREFIXES` in backend/app/custom_fields.py.
  */
 export const RESERVED_PREFIXES = ['owen_', 'workiz_', 'ahs_job_'] as const
@@ -250,4 +251,23 @@ export function answersFor(
     }
   }
   return out
+}
+
+/**
+ * The one reserved key the modal DOES draw (the owner, 2026-09-15): `workiz_tech`, the
+ * Workiz job's technician names, written by the import as a list in the job's order.
+ * Shown read-only as "Workiz technician(s)"; '' when the card has none, so "Hide empty
+ * fields" hides it. Nothing sends it back — `changedAnswers` skips every reserved key,
+ * and the server refuses a change to it.
+ */
+export const WORKIZ_TECH_KEY = 'workiz_tech'
+
+export function workizTechnicians(customFields: Record<string, unknown> | null | undefined): string {
+  const raw = customFields?.[WORKIZ_TECH_KEY]
+  const names = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []
+  return names
+    .filter((n): n is string => typeof n === 'string')
+    .map((n) => n.split(/\s+/).filter(Boolean).join(' '))
+    .filter(Boolean)
+    .join(', ')
 }

@@ -4047,3 +4047,68 @@ rather than GoHighLevel's separate Settings sidebar in screenshot 43.
 3. Existing technicians have no calendar of their own unless one was made; creating one is only
    automatic for users added through My Staff.
 4. Nobody existing is forced to change a password; resetting one in My Staff forces it.
+
+## AMENDMENT (2026-09-15): the Workiz `Tech` column lands on cards and assigns the job's appointment
+
+The owner's decision, "assign the job's appointment". AMENDS "The Workiz import — the real
+business data arrives (2026-09-11)" and, for exactly one key, the modal rule of 2026-09-13 that
+no `owen_*` / `workiz_*` field is drawn anywhere. No migration, no API route, no new column.
+
+### What the importer does with `Tech`
+
+* **Names on the card.** `custom_fields.workiz_tech` = the job's `Tech` column as a list, in the
+  export's order, whitespace collapsed; a name repeated in any case is kept once where it first
+  appears. "Sheila & Leo" is one Workiz technician (a crew) and stays one name. A re-import
+  follows Workiz; a job whose Tech is now empty loses the key. Paired AHS email cards get it too
+  (same job). Read-only through the API like every `workiz_*` key (400, nothing written).
+* **Names to users.** `--tech-map PATH`, a JSON object `{"Workiz name": "user email"}`, wins;
+  its keys match case-insensitively with whitespace collapsed; `null` leaves a name unmapped on
+  purpose even if a user has that name. Without an entry: exactly one ACTIVE user whose full name
+  equals the Workiz name, case-insensitively with whitespace collapsed. A map entry naming a
+  deactivated or unknown user, two active users with the name, or no user at all is UNMAPPED and
+  reported with the reason. Machine accounts (no password) are never matched by name. **No user
+  is ever created.** An unreadable / malformed map exits 4 before anything is planned or written.
+* **The appointment.** For a job with a FUTURE appointment (the only kind the importer books), the
+  visit is assigned to the FIRST mapped technician in job order. **It stays on "Workiz Jobs
+  (imported)"** — see below. **Card owners never change.**
+* **Whose assignment it is.** `custom_fields.workiz_tech_assigned_user_id` on the card records the
+  user this importer assigned (an appointment has no JSON column; one card has one Workiz-calendar
+  visit). A re-import may change (`reassign`) or remove (`clear`) the assignment ONLY while the
+  appointment's `assigned_user_id` still equals that record. Anything else a person did is left
+  alone and listed: assigned someone else (`manual`), cleared the importer's assignment (`manual`
+  — a person's "nobody" is a choice too), or assigned the very tech Workiz names before the
+  importer did (`already`, not recorded as the importer's, so a later removal in Workiz leaves it).
+  A tech who stops mapping (deactivated, map changed) clears only an importer-made assignment.
+  The rule is one pure function, `workiz_import.tech_assignment`, decided at plan time for the
+  report and again against the row at write time.
+* **Past visits are never touched.** A visit that was future when it was assigned and is past now
+  is not in the plan's appointments, so its assignment stays as it is.
+
+### Why the visit is not moved to the technician's own calendar
+
+Checked, and nothing needs it: "Only assigned data" already counts a non-cancelled visit
+*assigned* to the user (`appointments.assigned_user_id`) — the restricted tech's board and the
+card by id follow (proven through the API in `test_workiz_techs.py`), and the contact, thread and
+calendar list follow from the same `assigned_access` rule; the Calendars page's Users filter is by `assigned_user_id`, so the visit
+shows under the technician. Moving it would change the owner's recognised "Workiz Jobs (imported)"
+calendar and break the importer's own lookup (card + Workiz calendar), making the next run book a
+second visit. **One consequence, proposed rather than done:** a technician who filters Calendars by
+their *personal calendar* (rather than by user) does not see Workiz visits, and blocked time on
+their personal calendar does not warn about one. If that matters, the fix is in the calendar page
+(treat "my calendar" as "my calendar or assigned to me"), not in the importer.
+
+### The dry run's "Technicians" section (no customer data — Workiz tech names, staff, Job #s)
+
+Per Workiz name: how many of this run's cards carry it, and the CRM user (name, id, "by map file"
+/ "by name") or `UNMAPPED: <why>`; map entries on no card; cards carrying names / with none /
+whose names change / are cleared (Job #s); future appointments to assign / reassign / clear /
+manual left alone / already assigned by a person / unchanged (Job #s). `--json` carries the same
+under `technicians`. Written counts: `appointments_tech_assign|reassign|clear|left_alone`.
+
+### The modal
+
+"Workiz technician(s)" in Opportunity details, full width after Tags: the names joined with ", ",
+a read-only input in the disabled grey, for every role that can open the card, hidden by "Hide
+empty fields" when the card has none. `changedAnswers` still never sends a reserved key. No
+screenshot shows this field (GoHighLevel has no such data); it follows the modal's own label +
+input look. Driven in headless Chromium by `python -m tests.browser_workiz_tech`.

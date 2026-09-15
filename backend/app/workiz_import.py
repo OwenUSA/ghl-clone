@@ -65,6 +65,19 @@ cards imported before the columns existed and follows an address corrected in
 Workiz. A row with no address writes nothing to the card. The CONTACT's address
 follows the clients file exactly as before; nothing here changed it.
 
+## The Tech column assigns the job's appointment (2026-09-15)
+
+    uv run python -m app.workiz_import --tech-map techs.json   # {"Workiz name": "email"}
+
+The card carries the job's technician names as `workiz_tech` (read-only, shown in the
+modal as "Workiz technician(s)"). A name maps to a CRM user through `--tech-map`, else
+to the ONE active person whose full name matches; nobody is ever created. A FUTURE
+appointment stays on "Workiz Jobs (imported)" and is assigned to the first mapped
+technician. `workiz_tech_assigned_user_id` on the card records the importer's own
+assignment: a re-import follows Workiz only while the appointment still holds it, so a
+person's assignment — or a person clearing it — is never overwritten, only reported
+(`tech_assignment`). Card OWNERS are never touched. See `plan_technicians`.
+
 ## What it will not do
 
 It never deletes a contact, an opportunity or an appointment, and it never deletes a
@@ -102,6 +115,7 @@ from .models import (
     Opportunity,
     Pipeline,
     Stage,
+    User,
 )
 from .phones import store_phone
 
@@ -129,6 +143,16 @@ WORKIZ_FROM_JOBS = custom_fields.IMPORT_PREFIX + "from_jobs"
 # The internal key a job-row contact is filed under inside one plan. Never stored,
 # and it cannot collide with a Client #.
 JOB_ROW_KEY = "job-row:"
+# The job's Workiz technicians (2026-09-15): the `Tech` column as a list of display
+# names, in the export's order, on the CARD. Absent when the job has none. Read-only
+# through the API like every `workiz_*` key; the modal shows it as "Workiz technician(s)".
+WORKIZ_TECH = custom_fields.IMPORT_PREFIX + "tech"
+# The CRM user this importer assigned the card's future Workiz appointment to. The
+# record that the assignment is the importer's and not a person's: only while the
+# appointment's `assigned_user_id` still equals it may a re-import change or clear it.
+# On the card rather than the appointment because an appointment has no JSON column,
+# and the brief allows no new one; one card has one Workiz-calendar appointment.
+WORKIZ_TECH_ASSIGNED = custom_fields.IMPORT_PREFIX + "tech_assigned_user_id"
 
 # The contract with the AHS email intake (the ahsmail agent, owner decision Q15,
 # 2026-09-13). A card it makes carries exactly these two facts; a third — no
@@ -462,6 +486,54 @@ def address_from_job(row: dict) -> dict:
     }
 
 
+def parse_techs(raw: str | None) -> list[str]:
+    """"Antonio Brown,  Owen   Buzaglo" -> ["Antonio Brown", "Owen Buzaglo"].
+
+    Comma-separated display names, in the export's order, whitespace collapsed. A name
+    that repeats (in any case) is kept once, where it first appears. "Sheila & Leo" is
+    ONE Workiz technician — a two-person crew — and stays one name.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in (raw or "").split(","):
+        name = " ".join(part.split())
+        if name and tech_key(name) not in seen:
+            seen.add(tech_key(name))
+            out.append(name)
+    return out
+
+
+def tech_key(name: str | None) -> str:
+    """How a Workiz name is compared: case-insensitive, whitespace collapsed."""
+    return " ".join((name or "").split()).casefold()
+
+
+def load_tech_map(path: str) -> dict[str, str | None]:
+    """The `--tech-map` file: `{"Workiz name": "user email", ...}`.
+
+    A `null` value says "leave this name unmapped" and beats the name match. Raises
+    ValueError for anything else, which the entry point reports without writing.
+    """
+    with open(path, encoding="utf-8") as fh:
+        try:
+            data = json.load(fh)
+        except json.JSONDecodeError as e:
+            raise ValueError("the tech map is not valid JSON: %s" % e) from None
+    if not isinstance(data, dict):
+        raise ValueError("the tech map must be a JSON object of "
+                         "{\"Workiz name\": \"user email\"}")
+    seen: set[str] = set()
+    for name, email in data.items():
+        if email is not None and not isinstance(email, str):
+            raise ValueError("the tech map's value for %r must be an email or null" % name)
+        if not tech_key(name):
+            raise ValueError("the tech map has an entry with no name")
+        if tech_key(name) in seen:
+            raise ValueError("the tech map names %r twice" % " ".join(name.split()))
+        seen.add(tech_key(name))
+    return data
+
+
 def pipeline_for(source: str | None) -> str:
     """The owner's routing rule, and the whole of it: AHS or everything else."""
     return AHS if clean(source).upper() == "AHS" else RETAIL
@@ -539,6 +611,8 @@ class OppPlan:
     # The address of THIS job (2026-09-14): the four columns of its own row, via
     # `address_from_job`. All None when the row has none — never another job's.
     address: dict = field(default_factory=dict)
+    # The job's `Tech` column, parsed (2026-09-15). Empty clears `workiz_tech`.
+    techs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -547,6 +621,22 @@ class ApptPlan:
     title: str
     starts_at: datetime
     ends_at: datetime
+    # The CRM user the job's first MAPPED technician is, or None (2026-09-15).
+    assign_to: int | None = None
+    # What the assignment step will do: see `tech_assignment`. Worked out against the
+    # database when the plan is built, and again against the row when it is written.
+    tech_action: str = "none"
+
+
+@dataclass
+class TechMapping:
+    """One Workiz technician name, and the CRM user it resolves to (if any)."""
+    name: str               # as first seen in the export, whitespace collapsed
+    cards: int              # how many of this run's cards carry it
+    user_id: int | None
+    user_name: str | None
+    how: str                # "map file" / "name" / "UNMAPPED"
+    why: str = ""           # for UNMAPPED: the reason
 
 
 @dataclass
@@ -588,6 +678,14 @@ class Plan:
     opportunities: list[OppPlan] = field(default_factory=list)
     appointments: list[ApptPlan] = field(default_factory=list)
     past_appointments: int = 0
+    # --- technicians (2026-09-15) ---
+    tech_mappings: list[TechMapping] = field(default_factory=list)
+    # Map file entries whose name is on none of this run's cards.
+    tech_map_unused: list[str] = field(default_factory=list)
+    tech_map_given: bool = False
+    # Job #s of existing cards whose `workiz_tech` this run changes / clears.
+    tech_names_changed: list[str] = field(default_factory=list)
+    tech_names_cleared: list[str] = field(default_factory=list)
     skipped: list[Skip] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
@@ -714,8 +812,13 @@ def group_job_rows(rows: list[dict]) -> tuple[list[list[dict]], list[dict]]:
 # ---------------------------------------------------------------- the builder
 
 
-def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
-    """What the import WOULD do. Reads the database; writes nothing to it."""
+def build_plan(db: Session, clients: list[dict], jobs: list[dict], *,
+               tech_map: dict[str, str | None] | None = None) -> Plan:
+    """What the import WOULD do. Reads the database; writes nothing to it.
+
+    `tech_map` is `load_tech_map`'s result: Workiz technician name -> user email
+    (or None, "leave it unmapped").
+    """
     plan = Plan(client_rows=len(clients), job_rows=len(jobs))
 
     # --- existing rows, read once into dicts ---------------------------------
@@ -743,7 +846,9 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
             contacts_by_email[clean(c.email).casefold()].append(c)
     existing_opps = {}
     email_cards = []
+    opps_by_id: dict[int, Opportunity] = {}
     for o in db.scalars(select(Opportunity)).all():
+        opps_by_id[o.id] = o
         wid = (o.custom_fields or {}).get(WORKIZ_ID)
         if wid:
             existing_opps.setdefault(str(wid), []).append(o)
@@ -1019,6 +1124,7 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
                 existing_id=current.id if current else None,
                 email_card=current is not None and is_email_card(current),
                 address=address_from_job(row),
+                techs=parse_techs(row.get("Tech")),
             ))
             contact_id, contact_phone = planned.get(client_wid, (None, None))
             phones = {last10(r.get("Phone")) for r in group_for.get(client_wid, [])}
@@ -1040,6 +1146,7 @@ def build_plan(db: Session, clients: list[dict], jobs: list[dict]) -> Plan:
                 starts_at=starts_at, ends_at=ends_at))
 
     match_ahs_email_cards(plan, email_cards, customer_of)
+    plan_technicians(db, plan, tech_map, opps_by_id)
     return plan
 
 
@@ -1108,6 +1215,155 @@ def match_ahs_email_cards(plan: Plan, email_cards: list[Opportunity],
         op.email_card = True
         plan.ahs_attached.append((job_id, card.id))
     plan.ahs_unmatched.sort()
+
+
+# ---------------------------------------------------------------- technicians
+
+
+def tech_assignment(current: int | None, marker: int | None,
+                    target: int | None) -> str:
+    """What the import does to one future Workiz appointment's `assigned_user_id`.
+
+    `current` is the appointment's assignee now, `marker` the card's
+    `workiz_tech_assigned_user_id` (who THIS importer last assigned it to) and `target`
+    the job's first mapped technician. The assignment is the importer's only while
+    `current == marker`; anything else a person did, and a person's choice is never
+    overwritten — including a person clearing it.
+
+      assign     nobody assigned, never by the importer -> target
+      reassign   the importer's assignment, and the tech changed -> target
+      clear      the importer's assignment, and no mapped tech is left -> nobody
+      unchanged  the importer's assignment, already the target
+      already    somebody else assigned exactly the target — left alone, not recorded
+      manual     somebody else's assignment differs from what Workiz says — left alone
+      none       nothing to do
+    """
+    importer_owned = marker is not None and current == marker
+    if target is not None:
+        if current == target:
+            return "unchanged" if importer_owned else "already"
+        if importer_owned:
+            return "reassign"
+        if current is None and marker is None:
+            return "assign"
+        return "manual"
+    if importer_owned:
+        return "clear"
+    if marker is not None:
+        # The importer had assigned it, and a person has since changed or cleared it.
+        return "manual"
+    return "none"
+
+
+# The report's order, and each action's words.
+TECH_ACTIONS = [
+    ("assign", "to assign to their technician"),
+    ("reassign", "to reassign: the importer assigned it and the technician changed"),
+    ("clear", "to clear: the importer assigned it; no mapped technician now"),
+    ("manual", "assigned by a person, differently from Workiz — LEFT ALONE"),
+    ("already", "already assigned to the mapped technician by a person — left alone"),
+    ("unchanged", "unchanged"),
+]
+
+
+def _import_appointment(db: Session, opportunity_id: int,
+                        calendar_id: int) -> Appointment | None:
+    """The card's visit on the Workiz calendar — the one row this importer writes."""
+    return db.scalars(select(Appointment).where(
+        Appointment.opportunity_id == opportunity_id,
+        Appointment.calendar_id == calendar_id).order_by(Appointment.id)).first()
+
+
+def resolve_techs(db: Session, names: dict[str, str],
+                  tech_map: dict[str, str | None] | None) -> dict[str, TechMapping]:
+    """Workiz names (`tech_key` -> display name) to CRM users. Never creates a user.
+
+    1. A `--tech-map` entry wins, whatever the names say: its email must be an ACTIVE
+       user; `null` leaves the name unmapped on purpose.
+    2. Otherwise exactly one ACTIVE person (not a machine account — no password) whose
+       name equals the Workiz name, case-insensitively with whitespace collapsed.
+    Anything else is UNMAPPED, with the reason, and assigns nothing.
+    """
+    by_key = {tech_key(k): v for k, v in (tech_map or {}).items()}
+    users = db.scalars(select(User).order_by(User.id)).all()
+    by_email = {u.email.strip().casefold(): u for u in users}
+    by_name: dict[str, list[User]] = defaultdict(list)
+    for u in users:
+        if u.is_active and u.password_hash:
+            by_name[tech_key(u.name)].append(u)
+    out = {}
+    for key, name in names.items():
+        m = TechMapping(name=name, cards=0, user_id=None, user_name=None, how="UNMAPPED")
+        if key in by_key:
+            email = (by_key[key] or "").strip()
+            u = by_email.get(email.casefold()) if email else None
+            if not email:
+                m.why = "the tech map leaves it unmapped"
+            elif u is None:
+                m.why = "the tech map names %s, which is no CRM user" % email
+            elif not u.is_active:
+                m.why = "the tech map names %s, a DEACTIVATED user" % email
+            else:
+                m.user_id, m.user_name, m.how = u.id, u.name, "map file"
+        else:
+            matches = by_name.get(key, [])
+            if len(matches) == 1:
+                m.user_id, m.user_name, m.how = matches[0].id, matches[0].name, "name"
+            elif matches:
+                m.why = ("%d active users have this name (ids %s) — say which in "
+                         "--tech-map" % (len(matches),
+                                         ", ".join(str(u.id) for u in matches)))
+            else:
+                m.why = "no active user has this name — add it to --tech-map"
+        out[key] = m
+    return out
+
+
+def plan_technicians(db: Session, plan: Plan, tech_map: dict[str, str | None] | None,
+                     opps_by_id: dict[int, Opportunity]) -> None:
+    """The `Tech` column: names on the card, and who each future visit is assigned to.
+
+    The owner's decision (2026-09-15, DECISIONS.md): card OWNERS never change. The
+    job's future appointment stays on the Workiz calendar and is ASSIGNED to the first
+    technician that maps to a CRM user; see `tech_assignment` for when a re-import may
+    change or clear that, and when it leaves a person's choice alone.
+    """
+    plan.tech_map_given = tech_map is not None
+    display: dict[str, str] = {}
+    cards = Counter()
+    for op in plan.opportunities:
+        for name in op.techs:
+            display.setdefault(tech_key(name), name)
+            cards[tech_key(name)] += 1
+        card = opps_by_id.get(op.existing_id) if op.existing_id else None
+        if card is not None:
+            blob = card.custom_fields or {}
+            if op.techs and blob.get(WORKIZ_TECH) != op.techs:
+                plan.tech_names_changed.append(op.workiz_id)
+            elif not op.techs and WORKIZ_TECH in blob:
+                plan.tech_names_cleared.append(op.workiz_id)
+    resolved = resolve_techs(db, display, tech_map)
+    for key, m in resolved.items():
+        m.cards = cards[key]
+    plan.tech_mappings = sorted(resolved.values(), key=lambda m: (-m.cards, m.name))
+    plan.tech_map_unused = sorted(" ".join(k.split()) for k in (tech_map or {})
+                                  if tech_key(k) not in resolved)
+
+    calendar = db.scalar(select(Calendar).where(Calendar.name == IMPORT_CALENDAR))
+    by_job = {op.workiz_id: op for op in plan.opportunities}
+    for ap in plan.appointments:
+        op = by_job[ap.job_workiz_id]
+        ap.assign_to = next((resolved[tech_key(n)].user_id for n in op.techs
+                             if resolved[tech_key(n)].user_id is not None), None)
+        card = opps_by_id.get(op.existing_id) if op.existing_id else None
+        appt = (_import_appointment(db, card.id, calendar.id)
+                if card is not None and calendar is not None else None)
+        if appt is None:
+            ap.tech_action = tech_assignment(None, None, ap.assign_to)
+        else:
+            ap.tech_action = tech_assignment(
+                appt.assigned_user_id,
+                (card.custom_fields or {}).get(WORKIZ_TECH_ASSIGNED), ap.assign_to)
 
 
 def made_from_job_rows(c: Contact) -> bool:
@@ -1535,6 +1791,11 @@ def apply_plan(db: Session, plan: Plan) -> dict:
         blob[WORKIZ_ID] = op.workiz_id
         if op.job_type:
             blob[JOB_TYPE_KEY] = op.job_type
+        # The job's technicians follow Workiz: set, changed, or gone when it has none.
+        if op.techs:
+            blob[WORKIZ_TECH] = list(op.techs)
+        else:
+            blob.pop(WORKIZ_TECH, None)
         _set(o, "custom_fields", blob)
         db.flush()
         opportunities[op.workiz_id] = o
@@ -1545,10 +1806,9 @@ def apply_plan(db: Session, plan: Plan) -> dict:
         o = opportunities.get(ap.job_workiz_id)
         if o is None:
             continue
-        a = db.scalar(select(Appointment).where(
-            Appointment.opportunity_id == o.id,
-            Appointment.calendar_id == calendar.id))
-        if a is None:
+        a = _import_appointment(db, o.id, calendar.id)
+        created = a is None
+        if created:
             a = Appointment(opportunity_id=o.id, calendar_id=calendar.id)
             db.add(a)
             counts["appointments_created"] += 1
@@ -1559,6 +1819,27 @@ def apply_plan(db: Session, plan: Plan) -> dict:
         _set(a, "starts_at", ap.starts_at)
         _set(a, "ends_at", ap.ends_at)
         _set(a, "status", "confirmed")
+
+        # The technician (2026-09-15). Decided again here, against the row itself, by
+        # the same rule the plan reported. The card's owner is never touched.
+        blob = dict(o.custom_fields or {})
+        marker = None if created else blob.get(WORKIZ_TECH_ASSIGNED)
+        action = tech_assignment(a.assigned_user_id, marker, ap.assign_to)
+        if action in ("assign", "reassign"):
+            _set(a, "assigned_user_id", ap.assign_to)
+            blob[WORKIZ_TECH_ASSIGNED] = ap.assign_to
+        elif action == "clear":
+            _set(a, "assigned_user_id", None)
+            blob.pop(WORKIZ_TECH_ASSIGNED, None)
+        elif created:
+            # A new visit carries no assignment of the importer's; a marker left by
+            # an earlier visit of this card would otherwise claim this one's.
+            blob.pop(WORKIZ_TECH_ASSIGNED, None)
+        if action in ("assign", "reassign", "clear"):
+            counts["appointments_tech_" + action] += 1
+        elif action in ("manual", "already"):
+            counts["appointments_tech_left_alone"] += 1
+        _set(o, "custom_fields", blob)
     db.flush()
     return dict(counts)
 
@@ -1731,6 +2012,8 @@ def render(plan: Plan, counts: dict | None, *, committed: bool) -> str:
         % plan.past_appointments)
     say("  reminders scheduled: 0, always. This importer cannot enqueue a job.")
 
+    render_technicians(plan, say)
+
     say("")
     say("Skipped rows (%d)" % len(plan.skipped))
     reasons = Counter(s.reason for s in plan.skipped)
@@ -1763,6 +2046,60 @@ def render(plan: Plan, counts: dict | None, *, committed: bool) -> str:
         say("DRY RUN. Nothing above was written. Re-run with --commit to apply.")
         say("=" * 72)
     return "\n".join(out)
+
+
+def render_technicians(plan: Plan, say) -> None:
+    """The `Tech` column. Workiz technician names, CRM staff, counts and Job #s only."""
+    say("")
+    say("Technicians (Workiz `Tech` column; card owners are never changed)")
+    say("  tech map: %s" % ("given" if plan.tech_map_given else
+                            "none — names match active users' full names only"))
+    if not plan.tech_mappings:
+        say("  no card in this export has a technician")
+    for m in plan.tech_mappings:
+        say("  %-5d %-28s -> %s" % (
+            m.cards, m.name,
+            "%s (user id %d, by %s)" % (m.user_name, m.user_id, m.how)
+            if m.user_id is not None else "UNMAPPED: %s" % m.why))
+    for name in plan.tech_map_unused:
+        say("        tech map entry %r is on no card in this export" % name)
+    with_names = sum(1 for o in plan.opportunities if o.techs)
+    say("  %-5d cards carry technician names (%s)" % (with_names, WORKIZ_TECH))
+    say("  %-5d cards have no technician" % (len(plan.opportunities) - with_names))
+    say("  %-5d existing cards whose names change" % len(plan.tech_names_changed))
+    if plan.tech_names_changed:
+        say("        jobs %s" % " / ".join(sorted(plan.tech_names_changed)))
+    say("  %-5d existing cards whose names are cleared (Tech now empty)"
+        % len(plan.tech_names_cleared))
+    if plan.tech_names_cleared:
+        say("        jobs %s" % " / ".join(sorted(plan.tech_names_cleared)))
+    say("  Future appointments (%d) — each stays on %r" % (len(plan.appointments),
+                                                        IMPORT_CALENDAR))
+    for action, words in TECH_ACTIONS:
+        jobs = sorted(a.job_workiz_id for a in plan.appointments
+                      if a.tech_action == action)
+        say("    %-5d %s" % (len(jobs), words))
+        if jobs and action != "unchanged":
+            say("          jobs %s" % " / ".join(jobs))
+    say("    %-5d no mapped technician and nothing to clear" % sum(
+        1 for a in plan.appointments if a.tech_action == "none"))
+
+
+def technicians_json(plan: Plan) -> dict:
+    return {
+        "tech_map_given": plan.tech_map_given,
+        "names": [{"workiz_name": m.name, "cards": m.cards, "user_id": m.user_id,
+                   "user_name": m.user_name, "mapped_by": m.how, "why": m.why or None}
+                  for m in plan.tech_mappings],
+        "tech_map_unused": plan.tech_map_unused,
+        "cards_with_names": sum(1 for o in plan.opportunities if o.techs),
+        "cards_names_changed": sorted(plan.tech_names_changed),
+        "cards_names_cleared": sorted(plan.tech_names_cleared),
+        "appointments": {
+            action: sorted(a.job_workiz_id for a in plan.appointments
+                           if a.tech_action == action)
+            for action in [a for a, _ in TECH_ACTIONS] + ["none"]},
+    }
 
 
 def as_json(plan: Plan, counts: dict | None) -> dict:
@@ -1811,6 +2148,7 @@ def as_json(plan: Plan, counts: dict | None) -> dict:
         "appointments": {"create": len(plan.appointments),
                          "past_not_created": plan.past_appointments,
                          "reminders_enqueued": 0},
+        "technicians": technicians_json(plan),
         "skipped": [{"file": s.where, "id": s.ident, "reason": s.reason}
                     for s in plan.skipped],
         "conflicts": plan.conflicts,
@@ -1828,7 +2166,8 @@ DEFAULT_JOBS = os.path.join(os.path.expanduser("~"), "workiz", "workiz_jobs.csv"
 
 
 def run(clients_path: str, jobs_path: str, *, commit: bool,
-        stream=sys.stdout, as_json_output: bool = False) -> int:
+        stream=sys.stdout, as_json_output: bool = False,
+        tech_map_path: str | None = None) -> int:
     problems = preflight(engine)
     if problems:
         for p in problems:
@@ -1841,6 +2180,14 @@ def run(clients_path: str, jobs_path: str, *, commit: bool,
     except OSError as e:
         print("cannot read the export: %s" % e, file=sys.stderr)
         return 4
+    tech_map = None
+    if tech_map_path:
+        try:
+            tech_map = load_tech_map(tech_map_path)
+        except (OSError, ValueError) as e:
+            print("cannot read the tech map: %s. Nothing was written." % e,
+                  file=sys.stderr)
+            return 4
 
     with SessionLocal() as db:
         # The reminder guard. Counted inside the same transaction the import runs
@@ -1849,7 +2196,7 @@ def run(clients_path: str, jobs_path: str, *, commit: bool,
         # March. See the module docstring.
         jobs_before = db.scalar(select(func.count(Job.id))) or 0
 
-        plan = build_plan(db, clients, jobs)
+        plan = build_plan(db, clients, jobs, tech_map=tech_map)
         counts = None
         if commit and plan.missing_stages:
             db.rollback()
@@ -1900,9 +2247,12 @@ def main(argv=None) -> int:
                    help="actually write. Without this the database is not touched.")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="print the summary as JSON instead of text")
+    p.add_argument("--tech-map", metavar="PATH", default=None,
+                   help='JSON {"Workiz tech name": "user email", ...}; a name not in it '
+                        "maps to the one active user with that full name, if any")
     args = p.parse_args(argv)
     return run(args.clients, args.jobs, commit=args.commit,
-               as_json_output=args.as_json)
+               as_json_output=args.as_json, tech_map_path=args.tech_map)
 
 
 if __name__ == "__main__":

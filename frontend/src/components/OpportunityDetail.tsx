@@ -19,6 +19,7 @@ import {
 } from '../lib/api'
 import {
   answeredCount, changedAnswers, isChecklistGroup, isEmptyAnswer, modalSections,
+  workizTechnicians,
 } from '../lib/customFields'
 import {
   ADDRESS_FIELDS, addressChanges, addressForm, contactFallback, withContactAddress,
@@ -70,7 +71,8 @@ import { techOnOwnJob } from '../lib/access'
  *     id would be a lie.
  *   * No `owen_*` / `workiz_*` field, anywhere — his old account's fields. Their
  *     values stay on the deal untouched: Update sends only the answers that
- *     CHANGED, and the server keeps every reserved key regardless.
+ *     CHANGED, and the server keeps every reserved key regardless. ONE exception, the
+ *     owner's (2026-09-15): "Workiz technician(s)", `workiz_tech`, read-only.
  *
  * GoHighLevel opens this as a page at /opportunities/<id>; we render a dialog,
  * because there is no router (DECISIONS.md, "Deliberate deviation").
@@ -351,6 +353,7 @@ export function OpportunityDetail({
           const email = form.email ?? contact.data?.email ?? o.contact_email ?? ''
           const phone = form.phone ?? contact.data?.phone ?? o.contact_phone ?? ''
           const tags = contact.data?.tags ?? o.contact_tags
+          const workizTechs = workizTechnicians(o.custom_fields)
           // Greyed contact address while the card has none. The contact whose
           // address is offered is the one the form has chosen, once it has loaded.
           const fallback = contact.data && contact.data.id === form.contact?.id
@@ -692,6 +695,20 @@ export function OpportunityDetail({
                                     height: 26, color: TEXT }} />
                               )}
                             </div>
+                          </div>
+                        )}
+                        {/* The Workiz job's technicians (2026-09-15): written by the
+                            import, read-only for every role, and hidden like any empty
+                            field. Changed in Workiz, never here. */}
+                        {shows(workizTechs) && (
+                          <div style={{ marginBottom: 16, gridColumn: 'span 2' }}
+                            data-field="workiz-tech">
+                            <Label>Workiz technician(s)</Label>
+                            <input value={workizTechs} readOnly aria-label="Workiz technician(s)"
+                              title="Set by the Workiz import. Change the technician in Workiz."
+                              placeholder="No technician in Workiz"
+                              style={{ ...INPUT, backgroundColor: 'rgb(249,250,251)',
+                                cursor: 'default' }} />
                           </div>
                         )}
                       </div>

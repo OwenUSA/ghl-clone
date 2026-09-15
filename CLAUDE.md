@@ -283,6 +283,11 @@ uv run python -m app.workiz_import --json | jq     # the same numbers, for a mac
   `app.queue`, and it counts the `jobs` table before and after inside the
   transaction — one new row rolls the whole import back. Do not "simplify" either
   guard. Only FUTURE-dated jobs become appointments.
+- **The `Tech` column** (2026-09-15) lands on the card as read-only `workiz_tech` and assigns
+  the job's FUTURE appointment (kept on the Workiz calendar) to the first technician that maps
+  to an active user — `--tech-map techs.json` (`{"Workiz name": "email"}`), else an exact full
+  name. Owners never change; a person's assignment is never overwritten (the card's
+  `workiz_tech_assigned_user_id` says which ones are the importer's). See DECISIONS.md.
 - **`workiz_id` is the idempotency key**, in the reserved `workiz_*` namespace
   alongside `owen_*`. It is read-only through the API in every direction: editing one
   by hand makes the next import create a second copy of that customer. Records made
