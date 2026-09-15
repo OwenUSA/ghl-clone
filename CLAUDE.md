@@ -26,6 +26,10 @@ deliberately out.
   so an armed send is refused with a reason rather than delivered.)
 - **Never run `python -m app.seed` against the working database.** It calls
   `drop_all()`. It is in the `deny` list in `.claude/settings.json`.
+- **No AI agent acts by itself, and no test reaches a model provider.** Every agent is
+  created Off, Settings → AI Connections has "Pause all AI agents", and an agent's text goes
+  through the same `get_transport()` as a staff text. `tests/ai_guard.py` refuses any lookup of
+  api.anthropic.com / api.openai.com during pytest and fails the test that tried.
 
 ## Running it
 
@@ -405,3 +409,30 @@ enforces this and that test fails. A restricted TECH may answer questions, move 
 own job. Settings → **My Staff** (ADMIN) manages users: deactivate never deletes, an admin-set
 password forces a change at next sign-in (`auth.PASSWORD_CHANGE_PATHS`, server-enforced), a new
 technician gets a calendar, and the last active admin cannot be removed. See DECISIONS.md.
+
+## AI Agents, phase 1 — the foundation (2026-09-15)
+
+`backend/app/ai/` (read `__init__.py` first) and the AI Agents page. Text/Chat agents only; Voice
+exists as a value for phase 3. **Every agent is created Off**; Suggest turns every write into a
+pending suggestion staff approve (`POST /api/ai/suggestions/{id}/approve`, exactly once); Auto-pilot
+(ADMIN, confirmed) executes. Try-it runs the draft with real reads and never writes.
+
+- **Providers:** ONE interface (`providers.py`), official `anthropic` and `openai` SDKs (both on
+  `httpx2`). Tests mock at the HTTP boundary with `providers.HTTP_CLIENT_FACTORY` — see
+  `tests/ai_support.py`. Never send `temperature`/`top_p`/thinking budgets to Claude.
+- **Keys:** Fernet under `AI_SECRETS_KEY` (unset = connections cannot be saved, with a sentence).
+  Only "•••• last4" is ever returned; the key is never logged or put in a run's transcript.
+- **Every write goes through the staff services** — `main.move_to_stage`, `main.book_appointment`,
+  `main.edit_appointment`, `main.cancel_appointment_record`, `main.answer_questions`,
+  `opportunity_workspace.add_note` / `add_task`, `automations.send_outbound` — as a DISPATCHER-level
+  system principal with no user id. `actions.py` refuses anything outside the run's own contact /
+  opportunity, and the records it writes carry `ai_agent_id` ("AI: <agent name>").
+- **Triggers** (`triggers.py`) enqueue `ai_agent_run` jobs through `app.queue` from the contact branch
+  of `POST /api/events`, `automations.on_opportunity_stage_changed` and the appointment services. A
+  number no contact holds never triggers. A staff text or call (`_send_to_contact`, `_place_call`)
+  puts sleeping agents to sleep on that customer and cancels their queued runs, RELEASING the job's
+  dedupe key like `_drop_pending_reminders`. A hook never breaks the request that called it.
+- **Access:** `/api/ai/*` is ADMIN + DISPATCHER and 403 for a TECH or any restricted user; logs,
+  metrics, gaps, connections and settings are ADMIN. `test_ai_permissions.py` enumerates the router.
+- The worker runs agent runs as ordinary jobs; a failed run is logged as `error` and never retried
+  (a retry could text a customer twice). See the 2026-09-15 AI Agents amendment in `DECISIONS.md`.
