@@ -3927,7 +3927,7 @@ permissions (2026-09-13): every read path was enumerated and each is proven by a
 
 ### Every read path, and how it is filtered
 
-`tests/test_only_assigned_data.py::AUDITED` records all 117 `/api` routes; a route added later
+`tests/test_only_assigned_data.py::AUDITED` records all 118 `/api` routes; a route added later
 fails `test_every_route_is_on_the_audited_list` until somebody records how it enforces this, and
 `test_every_route_reading_customer_records_goes_through_a_scope` checks the recorded answer is
 true in the source.
@@ -3946,6 +3946,7 @@ true in the source.
 | ctrl+K `/api/search` | all three groups over one scope, items and totals |
 | OpenPhone recording relay | only a recording on one of their threads, else the "no recording" 404, nothing fetched |
 | Incoming-call caller name | blanked for a customer not on their jobs |
+| "Call a number" dialer, `POST /api/calls/dial` | rings only a number one of their contacts holds; any other number is refused 200 `placed: false` with the same sentence whether or not someone else's contact holds it, nothing rung or written |
 | Calendars list | calendars they own + calendars holding a visit assigned to them |
 | Appointments list / by id / edit / cancel | on their calendar or assigned to them → 404; a deal link is shown only for their job (a cancelled visit lends no title) |
 | Blocked time list / by id / edit / delete | on calendars they own → 404 |
