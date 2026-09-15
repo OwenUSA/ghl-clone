@@ -199,7 +199,8 @@ def _sent_source_number() -> str:
 
 def send_outbound(db: Session, contact: Contact, body: str, *,
                   type_: EventType = EventType.SMS,
-                  subject: str | None = None
+                  subject: str | None = None,
+                  ai_agent_id: int | None = None
                   ) -> tuple[ConversationEvent | None, str]:
     """One send path shared by the API and the four rules.
 
@@ -214,7 +215,7 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
         conv = thread_for(db, contact.id)
         ev = ConversationEvent(
             conversation_id=conv.id, type=type_, direction=Direction.OUTBOUND,
-            occurred_at=_utcnow(), body=body, subject=subject)
+            occurred_at=_utcnow(), body=body, subject=subject, ai_agent_id=ai_agent_id)
         db.add(ev)
         conv.last_event_at = ev.occurred_at
         db.flush()
@@ -236,7 +237,7 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
     conv = thread_for(db, contact.id)
     ev = ConversationEvent(
         conversation_id=conv.id, type=type_, direction=Direction.OUTBOUND,
-        occurred_at=_utcnow(), body=body, subject=subject,
+        occurred_at=_utcnow(), body=body, subject=subject, ai_agent_id=ai_agent_id,
         delivery_status=ref.status,
         delivery_detail=ref.detail or None,
         provider_ref=ref.provider_ref or None,
@@ -387,9 +388,15 @@ def on_appointment_booked(db: Session, appt: Appointment) -> str:
 
 def on_opportunity_stage_changed(db: Session, opp: Opportunity,
                                  old_stage_id: int) -> str:
-    """Rule 4 — stage move -> text the customer."""
+    """Rule 4 — stage move -> text the customer.
+
+    Also where an AI agent's "opportunity enters stage" trigger is asked (2026-09-15), so
+    every path that fires rule 4 — the drag, the modal, a bulk move — reaches it, and a
+    structural move (deleting a stage or pipeline), which fires no rule, does not."""
     if opp.stage_id == old_stage_id:
         return "stage unchanged"
+    from .ai import triggers as ai_triggers
+    ai_triggers.stage_entered(db, opp)
     contact = db.get(Contact, opp.contact_id) if opp.contact_id else None
     ok, why = _can_message(contact)
     if not ok:
@@ -453,9 +460,16 @@ def _h_stage_change(db: Session, payload: dict) -> None:
                      STAGE_TEXT.format(stage=stage.name if stage else "updated"))
 
 
+def _h_ai_agent_run(db: Session, payload: dict) -> None:
+    """An AI agent's queued run (2026-09-15). Never raises — see app/ai/engine.py."""
+    from .ai import engine
+    engine.handle_job(db, payload)
+
+
 HANDLERS = {
     "missed_call_textback": _h_missed_call,
     "new_lead_notify": _h_new_lead,
     "appointment_reminder": _h_appointment_reminder,
     "stage_change_notify": _h_stage_change,
+    "ai_agent_run": _h_ai_agent_run,
 }

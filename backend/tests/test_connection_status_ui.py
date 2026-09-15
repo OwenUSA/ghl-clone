@@ -283,9 +283,13 @@ def test_the_dot_is_mounted_once_in_the_shell_inside_the_provider():
 
 def test_the_dashboard_header_leaves_the_corner_to_the_dot():
     """The Dashboard is the one page whose own header puts controls in the top-right corner
-    (the range picker and its ⋮ menu). Seen in a real browser: the dot sat on the ⋮."""
+    (the range picker and its ⋮ menu). Seen in a real browser: the dot sat on the ⋮.
+    AI Agents (2026-09-15) added the alert bell one 36px step left of the dot, so the
+    corner the header leaves grew from 44 to 80."""
     dash = read("pages", "DashboardPage.tsx")
-    assert '<div className="ml-auto flex items-center gap-2" style={{ marginRight: 44 }}>' in dash
+    assert '<div className="ml-auto flex items-center gap-2" style={{ marginRight: 80 }}>' in dash
+    bell = read("components", "AiAlertBell.tsx")
+    assert "position: 'fixed', top: 9, right: 52" in bell, "the bell no longer sits beside the dot"
 
 
 def test_the_floating_card_is_gone_from_every_page():

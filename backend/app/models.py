@@ -540,6 +540,10 @@ class ConversationEvent(Base):
     # every row that predates this column has no observed source.
     source_system: Mapped[str | None] = mapped_column(String(40))
     source_number: Mapped[str | None] = mapped_column(String(40))
+    # The AI agent that wrote this event (2026-09-15), shown as "AI: <agent name>". NULL for
+    # everything a person, an automation or a feed wrote. A plain integer, not a foreign
+    # key: the column is ADDED to a live table, and an agent is archived, never deleted.
+    ai_agent_id: Mapped[int | None] = mapped_column(Integer)
 
     conversation: Mapped[Conversation] = relationship(back_populates="events")
 
@@ -615,6 +619,8 @@ class Appointment(Base):
     # typed. Resolved rather than referenced, so editing the contact's address
     # later does not move a visit that was already booked somewhere.
     location: Mapped[str | None] = mapped_column(Text)
+    # The AI agent that booked, rescheduled or cancelled this visit last (2026-09-15).
+    ai_agent_id: Mapped[int | None] = mapped_column(Integer)
 
     contact: Mapped[Contact | None] = relationship(back_populates="appointments")
     calendar: Mapped["Calendar | None"] = relationship()
@@ -787,6 +793,11 @@ class OpportunityTask(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow,
         server_default=func.now())
+    # AI Agents (2026-09-15). "normal" for every task that existed before; an escalation
+    # makes an "urgent" one. The agent that created a task, shown "AI: <agent name>".
+    priority: Mapped[str] = mapped_column(String(20), default="normal",
+                                          server_default="normal")
+    ai_agent_id: Mapped[int | None] = mapped_column(Integer)
 
     assignee: Mapped["User | None"] = relationship(foreign_keys=[assigned_user_id])
 
@@ -807,6 +818,8 @@ class OpportunityNote(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow,
         server_default=func.now())
+    # The AI agent that wrote this note (2026-09-15); `created_by_id` is then NULL.
+    ai_agent_id: Mapped[int | None] = mapped_column(Integer)
 
     author: Mapped["User | None"] = relationship()
 
@@ -917,6 +930,9 @@ class NumberThreadEvent(Base):
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
     source_system: Mapped[str | None] = mapped_column(String(40))
     source_number: Mapped[str | None] = mapped_column(String(40))
+    # Column for column with ConversationEvent (test_number_threads pins it). An agent never
+    # writes to a number-only thread — it never acts without a contact — so this stays NULL.
+    ai_agent_id: Mapped[int | None] = mapped_column(Integer)
 
     thread: Mapped[NumberThread] = relationship(back_populates="events")
 
@@ -927,7 +943,7 @@ EVENT_PAYLOAD_COLUMNS = (
     "type", "direction", "occurred_at", "body", "subject", "duration_seconds",
     "call_status", "recording_url", "transcript", "delivery_status",
     "delivery_detail", "provider_ref", "dedupe_key", "source_system",
-    "source_number",
+    "source_number", "ai_agent_id",
 )
 
 
@@ -1015,3 +1031,321 @@ class CompanyCamProjectRequest(Base):
     requested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---- AI Agents, phase 1: the foundation (2026-09-15) -------------------------------------
+#
+# GoHighLevel's AI Agents module, built so a text follow-up (phase 2), a voice receptionist
+# on owen-main (phase 3) and outbound (phase 4) are configuration plus small additions. See
+# app/ai/ and DECISIONS.md (2026-09-15, AI Agents).
+#
+# Two rules shape every table below:
+#
+#   * A run, a suggestion or a log line refers to a contact, a deal, a conversation or an
+#     appointment by a PLAIN INTEGER, never a foreign key. Logs are kept indefinitely and a
+#     contact can be deleted (DELETE /api/contacts detaches or deletes what points at it,
+#     and must not learn about a new table to keep working). A deleted subject leaves a log
+#     that still reads — the label is kept beside the id.
+#   * Nothing here holds a provider API key in clear. `ai_connections.api_key_encrypted` is
+#     a Fernet token under AI_SECRETS_KEY; only the last four characters are kept readable.
+
+class AiSettings(Base):
+    """One row (id 1): the global "Pause all AI agents" switch and the on-call phone an
+    emergency escalation texts. No row = not paused, no on-call phone."""
+    __tablename__ = "ai_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    on_call_phone: Mapped[str | None] = mapped_column(String(40))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiConnection(Base):
+    """An AI provider account: Anthropic, OpenAI, or any OpenAI-compatible server."""
+    __tablename__ = "ai_connections"
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    COMPATIBLE = "openai_compatible"
+    PROVIDERS = (ANTHROPIC, OPENAI, COMPATIBLE)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    provider: Mapped[str] = mapped_column(String(30))
+    # OpenAI-compatible only. NULL = the provider's own endpoint.
+    base_url: Mapped[str | None] = mapped_column(String(500))
+    api_key_encrypted: Mapped[str] = mapped_column(Text)
+    api_key_last4: Mapped[str] = mapped_column(String(8), default="", server_default="")
+    default_model: Mapped[str] = mapped_column(String(200))
+    # US dollars per 1M tokens, as MICRO-dollars (5.00 -> 5_000_000) so money is never a
+    # float. NULL = price unknown, and a run's cost is then unknown rather than zero.
+    price_input_micros: Mapped[int | None] = mapped_column(Integer)
+    price_output_micros: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiFolder(Base):
+    __tablename__ = "ai_folders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class AiAgent(Base):
+    """An agent. What it IS lives in `draft` (edited freely) and in its published
+    versions (frozen). What it is DOING — its mode — is a column, because switching an
+    agent off must never need a publish."""
+    __tablename__ = "ai_agents"
+    OFF = "off"
+    SUGGEST = "suggest"
+    AUTO = "auto"
+    MODES = (OFF, SUGGEST, AUTO)
+    TEXT = "text"
+    VOICE = "voice"
+    CHANNELS = (TEXT, VOICE)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    folder_id: Mapped[int | None] = mapped_column(ForeignKey("ai_folders.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(20), default=TEXT, server_default=TEXT)
+    description: Mapped[str | None] = mapped_column(Text)
+    # Every agent starts Off, and nothing but an explicit change turns one on.
+    mode: Mapped[str] = mapped_column(String(20), default=OFF, server_default=OFF)
+    draft: Mapped[dict] = mapped_column(JSONType, default=dict)
+    published_version_id: Mapped[int | None] = mapped_column(Integer)
+    draft_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    # Deleting an agent archives it: its runs, suggestions and versions still read.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AiAgentVersion(Base):
+    """An IMMUTABLE published config — the shape owen-main's `agent_versions` keeps, so a
+    voice agent's version can be pushed there as-is in phase 3. Nothing updates a row."""
+    __tablename__ = "ai_agent_versions"
+    __table_args__ = (UniqueConstraint("agent_id", "version", name="uq_ai_agent_version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("ai_agents.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    config: Mapped[dict] = mapped_column(JSONType)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    published_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiKnowledgeBase(Base):
+    __tablename__ = "ai_knowledge_bases"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AiKbItem(Base):
+    """One FAQ, article or file. A file keeps its EXTRACTED TEXT, name, type and size —
+    not its bytes: this CRM has no file store (CompanyCam photos stay in CompanyCam)."""
+    __tablename__ = "ai_kb_items"
+    FAQ = "faq"
+    ARTICLE = "article"
+    FILE = "file"
+    KINDS = (FAQ, ARTICLE, FILE)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kb_id: Mapped[int] = mapped_column(ForeignKey("ai_knowledge_bases.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    # FAQ: the question. Article: its title. File: the file name.
+    title: Mapped[str] = mapped_column(String(500))
+    # FAQ: the answer. Article: its text. File: the text extracted from it.
+    body: Mapped[str] = mapped_column(Text, default="")
+    content_type: Mapped[str | None] = mapped_column(String(120))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiKbChunk(Base):
+    """A searchable piece of an item. `terms` is the normalised word list the lexical
+    retriever matches (" roof leak warranty "), so search works the same on SQLite and
+    Postgres without an extension. An embeddings retriever can add its own table later."""
+    __tablename__ = "ai_kb_chunks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_kb_items.id", ondelete="CASCADE"), index=True)
+    kb_id: Mapped[int] = mapped_column(Integer, index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    text: Mapped[str] = mapped_column(Text)
+    terms: Mapped[str] = mapped_column(Text, default="", server_default="")
+
+
+class AiKnowledgeGap(Base):
+    """A question an agent could not answer from its knowledge, deduplicated."""
+    __tablename__ = "ai_knowledge_gaps"
+    OPEN = "open"
+    RESOLVED = "resolved"
+    DISMISSED = "dismissed"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_key: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    question: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default=OPEN, server_default=OPEN,
+                                        index=True)
+    count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    agent_id: Mapped[int | None] = mapped_column(Integer)
+    last_run_id: Mapped[int | None] = mapped_column(Integer)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    resolved_item_id: Mapped[int | None] = mapped_column(Integer)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiRun(Base):
+    """One time an agent was triggered — including the times it decided not to act."""
+    __tablename__ = "ai_runs"
+    __table_args__ = (Index("ix_ai_runs_agent_created", "agent_id", "created_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(Integer, index=True)
+    agent_name: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    version_id: Mapped[int | None] = mapped_column(Integer)
+    version: Mapped[int | None] = mapped_column(Integer)
+    # missed_call | inbound_text | stage_entered | appointment_booked |
+    # appointment_rescheduled | appointment_cancelled | manual | test
+    trigger: Mapped[str] = mapped_column(String(40))
+    trigger_ref: Mapped[str | None] = mapped_column(String(120))
+    contact_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    opportunity_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    appointment_id: Mapped[int | None] = mapped_column(Integer)
+    conversation_id: Mapped[int | None] = mapped_column(Integer)
+    subject_label: Mapped[str | None] = mapped_column(String(300))
+    mode: Mapped[str] = mapped_column(String(20))
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # queued | running | completed | escalated | refused | error | skipped | cancelled
+    outcome: Mapped[str] = mapped_column(String(20), default="queued",
+                                         server_default="queued", index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    connection_id: Mapped[int | None] = mapped_column(Integer)
+    provider: Mapped[str | None] = mapped_column(String(30))
+    model: Mapped[str | None] = mapped_column(String(200))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Micro-dollars. NULL = unknown (no price on the connection), never "free".
+    cost_micros: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    run_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    created_by_id: Mapped[int | None] = mapped_column(Integer)
+
+    steps: Mapped[list["AiRunStep"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="AiRunStep.position")
+
+
+class AiRunStep(Base):
+    """One line of a run's transcript: the prompt, a message, a tool call, its result, an
+    action taken / suggested / refused / that a test run WOULD have taken."""
+    __tablename__ = "ai_run_steps"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("ai_runs.id", ondelete="CASCADE"),
+                                        index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # system | user | assistant | tool_call | tool_result | action | note
+    kind: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str | None] = mapped_column(Text)
+    tool_name: Mapped[str | None] = mapped_column(String(60))
+    tool_call_id: Mapped[str | None] = mapped_column(String(120))
+    data: Mapped[dict | None] = mapped_column(JSONType)
+    # executed | suggested | refused | would — for kind "action"
+    action_status: Mapped[str | None] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+    run: Mapped[AiRun] = relationship(back_populates="steps")
+
+
+class AiSuggestion(Base):
+    """A write a Suggest-mode agent wanted to make, waiting for a person."""
+    __tablename__ = "ai_suggestions"
+    PENDING = "pending"
+    APPROVED = "approved"
+    DISMISSED = "dismissed"
+    FAILED = "failed"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(Integer, index=True)
+    agent_id: Mapped[int] = mapped_column(Integer, index=True)
+    action: Mapped[str] = mapped_column(String(60))
+    args: Mapped[dict] = mapped_column(JSONType, default=dict)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    contact_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    opportunity_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(20), default=PENDING,
+                                        server_default=PENDING, index=True)
+    result: Mapped[dict | None] = mapped_column(JSONType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiAgentThread(Base):
+    """An agent's state on one customer's conversation: how many texts it has sent there
+    (max messages) and whether a staff reply put it to sleep."""
+    __tablename__ = "ai_agent_threads"
+    __table_args__ = (UniqueConstraint("agent_id", "contact_id", name="uq_ai_agent_thread"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(Integer, index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    messages_sent: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    asleep_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    asleep_reason: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AiTemplate(Base):
+    """A saved agent config to start new agents from. None ship with the product."""
+    __tablename__ = "ai_templates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(Text)
+    channel: Mapped[str] = mapped_column(String(20), default="text", server_default="text")
+    config: Mapped[dict] = mapped_column(JSONType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiAlert(Base):
+    """An in-app alert — the bell. This CRM had no notification mechanism, so this is a
+    minimal one: a row per recipient, read or not. Only escalations write one today."""
+    __tablename__ = "ai_alerts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str | None] = mapped_column(Text)
+    urgent: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    run_id: Mapped[int | None] = mapped_column(Integer)
+    agent_id: Mapped[int | None] = mapped_column(Integer)
+    contact_id: Mapped[int | None] = mapped_column(Integer)
+    opportunity_id: Mapped[int | None] = mapped_column(Integer)
+    task_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

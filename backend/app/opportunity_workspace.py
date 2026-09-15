@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from . import assigned_access, auth, automations, custom_fields, pipeline_access
 from .db import get_db
@@ -254,9 +254,19 @@ class TaskPatch(BaseModel):
     done: bool | None = None
 
 
+def _ai_name(db: Session | None, agent_id: int | None) -> str | None:
+    """"AI: <agent name>" for a record an agent wrote, else None (2026-09-15)."""
+    if agent_id is None or db is None:
+        return None
+    from .ai.engine import ai_author
+    return ai_author(db, agent_id)
+
+
 def _task_out(t: OpportunityTask) -> dict:
     return {"id": t.id, "opportunity_id": t.opportunity_id,
             "contact_id": t.contact_id, "title": t.title,
+            "priority": t.priority or "normal",
+            "created_by_ai": _ai_name(object_session(t), t.ai_agent_id),
             "description": t.description, "due_at": _aware(t.due_at),
             "assigned_user_id": t.assigned_user_id,
             "assigned_user_name": t.assignee.name if t.assignee else None,
@@ -305,17 +315,27 @@ def create_task(opp_id: int, body: TaskCreate, db: Session = Depends(get_db),
     """
     _refuse_tech(principal)
     o = _get_opportunity(db, principal, opp_id)
+    t = add_task(db, o, body, created_by_id=principal.user_id)
+    db.commit()
+    db.refresh(t)
+    return _task_out(t)
+
+
+def add_task(db: Session, o: Opportunity, body: TaskCreate, *, created_by_id: int | None,
+             ai_agent_id: int | None = None, priority: str = "normal") -> OpportunityTask:
+    """Create a task, as a service (2026-09-15): the Tasks tab's route and an AI agent's
+    "create task" / "escalate" actions. Enqueues nothing. The caller commits."""
     _check_assignee(db, body.assigned_user_id)
     t = OpportunityTask(opportunity_id=o.id, contact_id=o.contact_id,
                         title=_clean_task_title(body.title),
                         description=(body.description or "").strip() or None,
                         due_at=body.due_at,
                         assigned_user_id=body.assigned_user_id,
-                        created_by_id=principal.user_id)
+                        created_by_id=created_by_id, ai_agent_id=ai_agent_id,
+                        priority=priority)
     db.add(t)
-    db.commit()
-    db.refresh(t)
-    return _task_out(t)
+    db.flush()
+    return t
 
 
 @router.patch("/api/tasks/{task_id}")
@@ -371,9 +391,11 @@ class NoteBody(BaseModel):
 
 
 def _note_out(n: OpportunityNote) -> dict:
+    ai = _ai_name(object_session(n), n.ai_agent_id)
     return {"id": n.id, "opportunity_id": n.opportunity_id, "body": n.body,
             "created_by_id": n.created_by_id,
-            "created_by": n.author.name if n.author else None,
+            "created_by": ai or (n.author.name if n.author else None),
+            "created_by_ai": ai,
             "created_at": _aware(n.created_at), "updated_at": _aware(n.updated_at)}
 
 
@@ -433,12 +455,21 @@ def create_note(opp_id: int, body: NoteBody, db: Session = Depends(get_db),
                 principal: auth.Principal = auth.ANY_USER):
     _refuse_notes(principal, "write")
     _get_opportunity(db, principal, opp_id)
-    n = OpportunityNote(opportunity_id=opp_id, body=_clean_note(body.body),
-                        created_by_id=principal.user_id)
-    db.add(n)
+    n = add_note(db, opp_id, body.body, created_by_id=principal.user_id)
     db.commit()
     db.refresh(n)
     return _note_out(n)
+
+
+def add_note(db: Session, opp_id: int, text: str, *, created_by_id: int | None,
+             ai_agent_id: int | None = None) -> OpportunityNote:
+    """Add a deal note, as a service (2026-09-15): the Notes tab's route and an AI agent's
+    "add note" action. STAFF-only to read, like every note. The caller commits."""
+    n = OpportunityNote(opportunity_id=opp_id, body=_clean_note(text),
+                        created_by_id=created_by_id, ai_agent_id=ai_agent_id)
+    db.add(n)
+    db.flush()
+    return n
 
 
 @router.patch("/api/opportunity-notes/{note_id}")

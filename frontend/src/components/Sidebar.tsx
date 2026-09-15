@@ -16,6 +16,7 @@ import {
 } from './Icon'
 import { logout } from '../lib/auth'
 import { navKeys } from '../lib/access'
+import { canOpenAiAgents } from '../lib/aiAgents'
 
 const PRIMARY = [
   { key: 'dashboard', label: 'Dashboard', Icon: IconGrid },
@@ -35,12 +36,11 @@ const PRIMARY = [
 // they are out of the product, so showing them dimmed advertised something that
 // is never coming. The Payments row went the same way on 2026-09-10; it sat in
 // PRIMARY as a real button onto a "not built yet" screen, which is a worse
-// promise than a dimmed row. The three below stay dimmed on purpose
-// (DECISIONS.md).
+// promise than a dimmed row. The two below stay dimmed on purpose
+// (DECISIONS.md); AI Agents, the third, became a real module on 2026-09-15.
 type IconCmp = (p: { size?: number; color?: string }) => React.ReactElement
 
 const SECONDARY: { label: string; Icon: IconCmp }[] = [
-  { label: 'AI Agents', Icon: IconSparkle },
   { label: 'Automation', Icon: IconPlay },
   { label: 'Media Storage', Icon: IconImage },
 ]
@@ -152,6 +152,31 @@ export function Sidebar({
 
         {/* Measured 68.8px pitch here vs 36px elsewhere */}
         <div style={{ height: 32.8 }} />
+
+        {/* AI Agents (2026-09-15) is a real module now: the first row after the divider,
+            where GoHighLevel has it (refs/round3/43). Drawn only for a user who can open
+            it — ADMIN and DISPATCHER, never a TECH or "Only assigned data" — and not at
+            all for anyone else, rather than dimmed. */}
+        {canOpenAiAgents(user) && (
+          <button
+            onClick={() => onNavigate('ai-agents')}
+            className="flex w-full items-center gap-3 text-left"
+            style={{
+              height: 36,
+              borderRadius: 6,
+              paddingLeft: 16,
+              paddingRight: 16,
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 500,
+              lineHeight: '20px',
+              backgroundColor: active === 'ai-agents' ? 'rgb(26,32,44)' : 'transparent',
+            }}
+          >
+            <IconSparkle size={18} color="#fff" />
+            AI Agents
+          </button>
+        )}
 
         {SECONDARY.map((item) => (
           <div

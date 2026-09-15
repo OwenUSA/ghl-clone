@@ -7,6 +7,7 @@ import {
   FromQuo, NotAContactPill, NumberDetailsPanel, canAddContact, prefillFromQuo,
 } from '../components/NumberDetailsPanel'
 import { AddContactDialog } from '../components/AddContactDialog'
+import { AiAuthorChip } from '../components/AiSuggestions'
 import { CallRecordingPlayer } from '../components/CallRecordingPlayer'
 import { CallNumberDialog } from '../components/CallNumberDialog'
 import {
@@ -435,6 +436,7 @@ function EventBubble({ e }: { e: ThreadEvent }) {
         <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
           {timeLabel(e.occurred_at)}
           <SourceChip e={e} />
+          <AiAuthorChip author={(e as ThreadEvent & { ai_author?: string | null }).ai_author} />
           <DeliveryNote e={e} />
         </div>
       </div>

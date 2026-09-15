@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CompanyCamSettings } from '../components/CompanyCamSettings'
 import { CustomFieldsPanel } from '../components/CustomFieldsPanel'
 import { MyStaffPanel } from '../components/MyStaffPanel'
+import { AiConnectionsSettings } from '../components/AiConnectionsSettings'
 import {
   ADMIN_SECTIONS, SETTINGS_SECTIONS, sectionFromPath, type SettingsSection,
 } from '../lib/settingsSections'
@@ -77,6 +78,7 @@ export function SettingsPage({ user }: { user: Me }) {
           </div>
         : section === 'companycam' && user.role === 'ADMIN' ? <CompanyCamSettings />
         : section === 'my-staff' && user.role === 'ADMIN' ? <MyStaffPanel user={user} />
+        : section === 'ai-connections' && user.role === 'ADMIN' ? <AiConnectionsSettings />
         : <AccountSettings />}
     </div>
   )

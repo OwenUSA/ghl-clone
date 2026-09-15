@@ -4112,3 +4112,268 @@ a read-only input in the disabled grey, for every role that can open the card, h
 empty fields" when the card has none. `changedAnswers` still never sends a reserved key. No
 screenshot shows this field (GoHighLevel has no such data); it follows the modal's own label +
 input look. Driven in headless Chromium by `python -m tests.browser_workiz_tech`.
+
+## AMENDMENT (2026-09-15): AI Agents, phase 1 — the foundation
+
+The owner wants GoHighLevel's AI Agents module, "scalable and customizable". Build order agreed
+with him: **1 Foundation (this)**, 2 text follow-up in Suggest mode, 3 voice Receptionist on
+owen-main, 4 outbound (locked). Phase 1 is built so 2–4 are configuration plus small additions.
+Branch `feature/ai-agents-foundation`, migration `d7c3a9e5f214` on `b5d1e8f3a276`. Code:
+`backend/app/ai/` (its `__init__.py` is the map), `frontend/src/pages/AiAgentsPage.tsx`,
+`frontend/src/components/ai/`, `components/AiConnectionsSettings.tsx`, `AiAlertBell.tsx`,
+`AiSuggestions.tsx`, `lib/aiAgents.ts`.
+
+### What this AMENDS, explicitly
+
+* **"Scope — v1 … Out: … AI Agents"** — AI Agents is in scope, Text/Chat agents only.
+* **"The three remaining dimmed items — AI Agents, Automation, Media Storage — were left exactly
+  as they are" (2026-09-10)** — AI Agents is a REAL sidebar row, first after the divider where
+  GoHighLevel has it (refs/round3/43), drawn only for an ADMIN or a DISPATCHER without "Only
+  assigned data"; for anyone else it is not drawn at all. Automation and Media Storage stay
+  dimmed. `test_frontend_nav.py` pins both halves.
+* **"A task notifies nobody" (2026-09-13)** — still true of every task a person or an agent's
+  "create task" makes. An agent's ESCALATION is the one exception: an **urgent** task
+  (`opportunity_tasks.priority`, new column, `normal` for every existing task) assigned to the
+  agent's escalation users, AND an in-app alert. This CRM had no notification mechanism, so a
+  minimal one was added: `ai_alerts` and a bell beside the status dot (`AiAlertBell.tsx`).
+  Only escalations write alerts today.
+* **"Rule 1, missed call → auto text back — DISABLED" (2026-09-13)** — unchanged, and the
+  worker still refuses its job. An agent's "Unanswered inbound call" trigger is a separate,
+  per-agent configuration, and every agent is created Off.
+* **"No soft delete anywhere"** — deleting an agent ARCHIVES it (`ai_agents.archived_at`): its
+  runs, versions and suggestions are log records. That rule is for this new table only.
+* **The booking, rescheduling, cancelling, stage-move, answer, note and task code paths were
+  extracted into service functions** the staff routes now call (`main.book_appointment`,
+  `edit_appointment`, `cancel_appointment_record`, `move_to_stage`, `answer_questions`,
+  `opportunity_workspace.add_note`, `add_task`). Behaviour of every route is unchanged. Four
+  pre-existing test files were edited, each for a change recorded here: `test_only_assigned_data.py`
+  (the new routes on its audit list, and its source fence accepts `book_appointment(` as the
+  scoped call), `test_frontend_nav.py` (AI Agents is live), `test_connection_status_ui.py` (the
+  Dashboard margin and the bell) and `test_pipelines_ui.py` (the new Settings section label).
+
+### The owner's decisions, as built
+
+1. **Module & roles.** A page with PageTabs: Agents · Knowledge Base · Templates · Agent Logs.
+   ADMIN: everything. DISPATCHER: opens the module, reads agents / knowledge bases / templates,
+   runs an agent by hand, approves or dismisses suggestions — and nothing else; Agent Logs is
+   not drawn for them and `/api/ai/runs`, `/metrics`, knowledge gaps, connections and settings
+   answer 403. TECH and every restricted user: **403 on every `/api/ai` route**
+   (`test_ai_permissions.py` enumerates the router).
+2. **Structured, prompt-based agents.** Name, folder, channel, description, role/persona, goals,
+   do / don't rules, knowledge bases, allowed actions, triggers, schedule (days + hours,
+   America/New_York; outside = do not run), mode, sleep-when-staff-reply (default on), wait
+   minutes, max messages per conversation, connection + model, escalation users, extra
+   instructions. `prompt.compile_prompt` assembles the system prompt DETERMINISTICALLY (fixed
+   order, no timestamp, no id, no customer data) and the builder shows it read-only.
+3. **Versioning.** Editing saves the draft; Publish writes an immutable
+   `ai_agent_versions.config` (owen-main's `agent_versions` shape — draft, version and template
+   are one dict shape, `config.py`). Runs record `version_id` / `version`. Nothing is pushed to
+   owen-main in this phase.
+4. **Channels.** `text` and `voice` exist; a Voice agent cannot be created (400 naming phase 3)
+   and the browser does not offer it. Voice-only actions (transfer_call, end_call) are in the
+   catalogue and offered to no Text agent.
+5. **AI Connections** (Settings → AI Connections, ADMIN): any number; Anthropic (official
+   `anthropic` SDK, Messages API + custom tools + tool_result loop), OpenAI and
+   OpenAI-compatible with a base URL (official `openai` SDK, chat.completions + tools), behind
+   ONE interface (`providers.py`). New Anthropic connections prefill `claude-sonnet-5`; "Load
+   models" lists what the provider lists; price per 1M input/output prefilled for known models
+   and editable. **Test** makes one minimal request and writes nothing. To Claude nothing
+   sends `temperature`, `top_p` or a thinking budget; thinking is left at the model default;
+   the system block carries `cache_control`; `refusal` and `max_tokens` end a run without
+   running any tool call from that turn; tool inputs are validated against their schema.
+   **Keys:** Fernet under `AI_SECRETS_KEY`; saving without it is refused (503) with the
+   sentence telling the operator what to set; only "•••• last4" is ever returned; a provider
+   error body is redacted before it becomes a sentence (an OpenAI 401 quotes part of the key).
+6. **Knowledge bases.** FAQs, articles, files (PDF via `pypdf`, .docx via `python-docx`). **A
+   file keeps its extracted text, name, type and size — not its bytes: this CRM has no file
+   store.** Chunked; retrieval is lexical BM25 over stored word lists (same on SQLite and
+   PostgreSQL) behind `knowledge.Retriever`, scoped to the agent's attached knowledge bases.
+   A search in which no chunk holds at least half the question's words is "nothing useful":
+   the model is told not to guess, and a knowledge gap is recorded (deduplicated on the
+   normalised question, count, last seen, run). Resolving a gap writes the FAQ. Customer facts
+   come from `get_context`, never from a knowledge base.
+7. **Triggers** (`triggers.py`): unanswered inbound call, inbound text unanswered for N minutes,
+   opportunity enters stage X, appointment booked / rescheduled / cancelled, manual. Each
+   enqueues ONE `ai_agent_run` job through `app.queue` with a dedupe key. A staff text or call
+   puts sleeping agents to sleep on that customer and cancels their queued runs, **releasing
+   the job's dedupe key** the way `_drop_pending_reminders` does. A number no contact holds
+   never triggers anything.
+8. **Actions** (`actions.py`): read context, search knowledge, send text, book / reschedule /
+   cancel appointment, fill checklist answers, add note, create task, move stage, escalate,
+   report knowledge gap. Every write goes through the staff service functions as a
+   DISPATCHER-level system principal with no user id, recorded "AI: <agent name>" through
+   `ai_agent_id` on `conversation_events`, `opportunity_notes`, `opportunity_tasks`,
+   `appointments` (and `number_thread_events`, column for column). **Off** never triggers;
+   **Suggest** turns every write into a pending suggestion executed exactly once on approval
+   (a conditional UPDATE); **Auto-pilot** is ADMIN-only and needs `confirm: true`.
+9. **Escalation:** urgent task per escalation user (on the run's opportunity, or the customer's
+   only open one), an alert each, a staff-only NOTE on the thread; **emergency** also texts the
+   on-call phone through `get_transport()` — LOGGED_ONLY / refused today.
+10. **Try-it:** the DRAFT (unsaved edits included), optionally as a chosen contact/opportunity.
+    The model and the read tools run for real; every write is a "Would: …" card; logged
+    `is_test`. ADMIN only.
+11. **Templates:** "Save as template" copies the draft; "Create agent from template". None ship.
+12. **Agent Logs & Metrics** (ADMIN): every run including skips, with version, trigger,
+    subject, mode, test flag, transcript, actions executed / suggested / refused / would with
+    reasons, connection, model, tokens (in/out/cache write/cache read), cost, latency, outcome.
+    Kept indefinitely. Metrics exclude test runs.
+
+### Safety, and how each rule is enforced (all tested)
+
+* **Nothing runs by itself after deploy.** Every agent is created Off (column default and
+  API); `ai_settings.paused` ("Pause all AI agents") is checked when a trigger fires AND
+  before every run; a paused trigger is logged, not queued.
+* **No real model call in tests or on this server.** `tests/ai_guard.py`, installed by
+  conftest.py, refuses DNS and connections to api.anthropic.com / api.openai.com and FAILS any
+  test that attempted one; `test_ai_network_guard.py` proves it catches the real SDK path.
+  Providers are mocked at the HTTP boundary (`providers.HTTP_CLIENT_FACTORY` + httpx2
+  MockTransport), so the real SDK code builds and parses every request.
+* **Agents never create contacts or opportunities:** no such action exists, and a write
+  needing a deal that does not exist is refused with the reason.
+* **Texting stays dark:** `send_text` is `automations.send_outbound` — the composer's path,
+  the same transport, DND and no-phone suppression. No new transport. OpenPhone/Quo is no
+  channel.
+* **Untrusted input:** customer texts are fenced as data in the first message; the prompt
+  says so; and it does not matter if the model obeys them anyway — every call is checked
+  server-side: schema (no extra keys, so a `contact_id` is refused), the run's own contact and
+  opportunity, per-pipeline access (a pipeline restricted to named users is hidden from
+  agents), the service's own validation. A refusal mutates nothing.
+* **A trigger never breaks the request that fired it:** each hook runs in a SAVEPOINT and
+  swallows its own failure. **An agent's own change does not trigger agents** (a contextvar
+  set while an action executes), so agents cannot loop.
+* **A failed run is never retried** (it could text a customer twice): the handler logs
+  `error` and returns.
+
+### Judgement calls, all overrulable
+
+* `get_context` does NOT include internal notes: they are the team talking to itself, and not
+  sent to a model provider.
+* A staff reply is a text, email or call a PERSON sends from the CRM (`_send_to_contact`,
+  `_place_call`). Internal notes do not count. An agent asleep on a conversation stays asleep
+  until an ADMIN wakes it (`POST /api/ai/agents/{id}/wake`); a new text does not wake it.
+  Approving a suggestion is a person's decision and is not blocked by that sleep (it is by
+  the message cap).
+* Max messages counts texts the agent actually sent on that customer's conversation; once
+  reached, runs of an agent allowed to text are skipped with the reason.
+* "Inbound text unanswered": one queued follow-up per agent per customer; the run reads the
+  latest three texts. It waits the longer of the trigger's minutes and the agent's wait time,
+  and stands down if anyone from the company texted, emailed or called since.
+* Stage-entered fires wherever rule 4 fires (drag, modal, bulk move); a structural move
+  (deleting a stage) fires nothing, as for rule 4.
+* An agent in Suggest mode suggests an escalation too — the owner's rule is "EVERY write".
+* A DISPATCHER may switch an agent OFF (the emergency stop), never on.
+* Cost: Anthropic cache writes at 1.25× and reads at 0.1× the input price; OpenAI cached
+  input at 0.5×. OpenAI prices in `pricing.KNOWN_PRICES` were the list prices known when this
+  was written — **the owner should check them**; a blank price means unknown cost ("—"), never
+  $0.
+* Manual runs are queued for the worker (not run inside the request) and ignore the wait time.
+* Deleting a knowledge base is refused while an agent's draft or published version attaches
+  it; deleting a connection is refused while a draft uses it; deleting a folder moves its
+  agents out.
+* Escalation users must be active ADMINs or unrestricted DISPATCHERs.
+
+### Screens — OURS; no GoHighLevel AI Agents screenshot exists
+
+Built in the Opportunities module's rebuilt style (PageTabs, the Pipelines list table and ⋮
+menu of refs/opps/02–03, the Create pipeline modal of refs/opps/04, the modal's left nav of
+refs/opps/22). No emoji; outline icons. Every layout assumption:
+
+* **Agents tab:** header + subtitle + "+ Create agent" (ADMIN); folders as pill filters in the
+  table toolbar ("All agents (n)", each folder, "+ New folder", Rename/Delete for the selected
+  folder); columns Agent name (description and folder beneath) · Channel · Mode chip ·
+  Published (vN or Draft, "Unpublished changes") · Triggers · Last run (time + outcome chip) ·
+  Actions ⋮ (Open, Duplicate, Move to folder, Save as template, Delete for ADMIN; a dispatcher
+  gets Open and, while the agent is on, Switch off). No pagination.
+* **Create agent:** a modal in the Create pipeline style — name, description, folder, "Start
+  from template" (only when templates exist).
+* **Builder:** full page under the tab bar. Top bar: back, name, published chip, unsaved /
+  unpublished hint, an Off / Suggest / Auto-pilot segmented control (Auto-pilot asks in a
+  confirmation dialog), Save draft, Publish (its refusal sentences shown). A 210 px left nav
+  (Basics, Persona & goals, Rules, Knowledge, Actions, Triggers, Schedule & behaviour, AI
+  connection, Escalation, Advanced, Compiled prompt, Versions), a white form card, and a 380 px
+  Try-it panel. Goals and rules are numbered rows with ↑/↓ and trash; actions and knowledge
+  bases are checkbox rows with descriptions; triggers are bordered cards with an "Add trigger"
+  select; the schedule is a switch, day toggles and from/until times; the compiled prompt is
+  monospace in a grey box. A dispatcher sees values as text, with no Save, Publish or Try-it.
+* **Try-it:** "Test as" is a contact search then an opportunity select; customer bubbles blue,
+  agent bubbles white; "Would" cards amber with the sparkle icon; a tokens · cost · latency line.
+* **Knowledge Base:** a table of knowledge bases; a knowledge base opens a page with FAQs ·
+  Articles · Files sub-tabs (counts), each a table; FAQs and articles edited in a modal, files
+  through "Upload file"; a Test search card under the table. For an ADMIN, "Knowledge gaps" is
+  a sub-tab beside "Knowledge bases" with open / resolved / dismissed pills; answering a gap
+  opens a modal.
+* **Templates:** a table with "Create agent from template" and Delete; the empty state points
+  to "Save as template".
+* **Agent Logs:** Logs / Metrics sub-tabs. Logs: agent, outcome, from/to dates, include-tests
+  filters; a table; pagination past 50 runs; a run opens an 860 px modal with 8 stat tiles, the
+  reason, the transcript (system prompt collapsed, tool calls and results as monospace blocks,
+  actions as coloured rows with a status chip) and its suggestions. Metrics: 4 KPI cards and 6
+  cards of horizontal bars plus a top-actions table, 7 / 30 / 90-day select.
+* **Settings → AI Connections:** header with "Add connection"; a card with the Pause switch
+  (confirmed) and the on-call phone; the connections table (name, provider, default model,
+  "•••• last4", prices, agents using it, edit / delete). Add/Edit modal: the Test sentence in
+  the footer left of Test / Cancel / Save; "Load models" fills a datalist; a blank price is
+  described as "Unknown — no cost shown"; an amber banner when `AI_SECRETS_KEY` is missing.
+  Settings keeps its tab row (as My Staff did) rather than GoHighLevel's settings sidebar.
+* **Alert bell:** fixed top 9 / right 52, left of the status dot; red unread badge capped 9+;
+  a 340 px dropdown; urgent items with a red left border; "Mark all as read"; a click opens
+  the opportunity, else the contact. The Dashboard header's right margin went 44 → 80 so the
+  bell does not cover its ⋮ menu.
+* **Suggestions and "Run AI agent":** in the contact panel's Actions tab (already OUR design),
+  between the delete block and the footnote, drawn only when an agent can run or something is
+  pending; in the opportunity modal as the last nav item, "AI agent", after Photos. Agents
+  offered are those on, published, with Manual in the PUBLISHED version.
+* **"AI: <agent>"** is a small chip on a thread event an agent wrote; a task an agent made
+  shows "Created by: AI: …" and an "Urgent" chip; a note reads "AI: …" as its author.
+
+### Extension points left for phases 2–4
+
+* **Phase 2 (text follow-up in Suggest):** configuration — an agent with the inbound-text or
+  missed-call trigger in Suggest mode already runs end to end. The suggestion inbox UX is the
+  addition (the API — list, approve, dismiss — exists; the UI is a minimal list).
+* **Phase 3 (voice Receptionist):** `channel = voice` exists in the schema and config;
+  `transfer_call` / `end_call` are catalogued (`VOICE`); a version's `config` is the dict to
+  push to owen-main's `agent_versions`; runs have `trigger`/`trigger_ref` for a call id. To
+  add: allow creating Voice agents, the push, and a trigger fed by owen-main.
+* **Phase 4 (outbound):** a new trigger type in `config.TRIGGERS` and a hook; the actions,
+  guards, logging and cost already apply.
+* **Embeddings:** implement `knowledge.Retriever` and point `RETRIEVER` at it (its own table).
+* **Another provider:** one `Provider` subclass in `providers.py` and one entry in `build()`.
+
+### Not built
+
+Voice agents and the owen-main push (phase 3); a polished suggestion inbox (phase 2); moving
+the Try-it "Test as" onto the shared ContactPicker; editing a knowledge-base FILE's text (upload
+it again); keeping uploaded file bytes (no file store); streaming replies in Try-it; spending
+caps (the owner said none); Anthropic server-side refusal fallbacks (not requested); a `ghl`
+CLI for agents. **No real provider has been called**: there are no keys on this server, so a
+live Anthropic / OpenAI request, real prompt-cache hits and real refusal behaviour are
+unverified.
+
+### Migration `d7c3a9e5f214`, on `b5d1e8f3a276` — ONE revision
+
+Fifteen CREATE TABLEs (`ai_settings`, `ai_connections`, `ai_folders`, `ai_agents`,
+`ai_agent_versions`, `ai_knowledge_bases`, `ai_kb_items`, `ai_kb_chunks`, `ai_knowledge_gaps`,
+`ai_runs`, `ai_run_steps`, `ai_suggestions`, `ai_agent_threads`, `ai_templates`, `ai_alerts`)
+with plain `op.create_index`es, and six ADD COLUMNs: `ai_agent_id INTEGER NULL` on
+`conversation_events`, `number_thread_events`, `opportunity_notes`, `opportunity_tasks`,
+`appointments`, and `opportunity_tasks.priority VARCHAR(20) NOT NULL DEFAULT 'normal'`. No
+ALTER of an existing column, no DROP, no UPDATE, no backfill, no batch mode in `upgrade()`.
+Runs, suggestions and alerts refer to contacts, deals, conversations and appointments by
+plain integer, so no delete path gains a foreign key to trip over. `tests/test_ai_migration.py`
+stands a SQLite up at `b5d1e8f3a276` with production-shaped rows in every touched table,
+upgrades, and asserts columns and rows unchanged, the new columns NULL / 'normal', exactly
+the fifteen tables new and empty, a clean round trip, and an `upgrade()` that only creates
+tables, creates indexes and adds columns.
+
+### What the operator must do on production, in order
+
+1. Generate the key ONCE and keep it (changing it makes every saved API key unreadable):
+   `uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+   Put `AI_SECRETS_KEY=<key>` in `.env.prod` (the API and the worker both read it).
+2. Rehearse on a copy, then `./deploy.sh --with-migrations` (revision `d7c3a9e5f214`; new
+   Python dependencies `anthropic`, `openai`, `cryptography`, `pypdf`, `python-docx` are in
+   `uv.lock`, so the image rebuild installs them).
+3. Nothing runs yet: no connection exists and every agent is Off. In Settings → AI Connections
+   add a connection and press Test; set the on-call phone if emergencies should text it.
+4. Build an agent, Try it, Publish, and only then switch it to Suggest. Auto-pilot last.

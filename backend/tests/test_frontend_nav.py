@@ -7,9 +7,10 @@ loudly and asks to be retargeted instead of passing on a coincidence.
 
 Six items were removed from the sidebar on 2026-09-09 (DECISIONS.md): Launchpad,
 Marketing, Sites, Memberships, Reputation, App Marketplace. Payments followed on
-2026-09-10. Three out-of-scope items were deliberately KEPT and are still dimmed,
-so "we removed the dead ones" and "we removed every dimmed one" are different
-states and the difference is the whole point of this file.
+2026-09-10. Three out-of-scope items were deliberately KEPT and dimmed, so "we removed
+the dead ones" and "we removed every dimmed one" are different states and the difference
+is the whole point of this file. On 2026-09-15 one of the three, AI Agents, became a real
+module: a real row, drawn only for a user who may open it. Two stay dimmed.
 """
 import re
 from pathlib import Path
@@ -25,7 +26,7 @@ LIVE = ["Dashboard", "Conversations", "Calendars", "Contacts", "Opportunities",
         "Reporting"]
 
 # Out of scope, kept visible on purpose, rendered dimmed and unclickable.
-DIMMED = ["AI Agents", "Automation", "Media Storage"]
+DIMMED = ["Automation", "Media Storage"]
 
 
 def _sidebar():
@@ -124,8 +125,9 @@ def test_payments_has_no_view_left_behind_the_removed_nav_row():
         "an unrecognised view no longer falls back to Dashboard")
 
 
-def test_the_three_kept_out_of_scope_items_are_still_present_and_dimmed():
-    """The owner kept these three. Removing them is a decision, not a tidy-up.
+def test_the_kept_out_of_scope_items_are_still_present_and_dimmed():
+    """The owner kept these. Removing them is a decision, not a tidy-up. (AI Agents was the
+    third; it is a real module since 2026-09-15 — see the test below.)
 
     Payments used to be a fourth kept item — the odd one, a real button in
     PRIMARY onto a "not built yet" screen. It was removed on 2026-09-10 at the
@@ -140,6 +142,25 @@ def test_the_three_kept_out_of_scope_items_are_still_present_and_dimmed():
     assert "rgba(255,255,255,0.35)" in dimmed_row, "the dimmed items are no longer dimmed"
     assert 'title="Out of scope for v1"' in dimmed_row, (
         "the dimmed items lost the tooltip that explains why they do nothing")
+
+
+def test_ai_agents_is_a_real_row_gated_by_the_access_rule():
+    """AI Agents (2026-09-15): a button onto the module, the first row after the divider
+    (GoHighLevel's position, refs/round3/43), drawn only when `canOpenAiAgents(user)` — so a
+    TECH or a user with "Only assigned data" on gets no row at all, not a dimmed one."""
+    source = _sidebar()
+    nav = source.split("<nav", 1)[1].split("</nav>", 1)[0]
+    block = nav.split("{canOpenAiAgents(user) && (", 1)
+    assert len(block) == 2, "the AI Agents row is not gated by canOpenAiAgents"
+    row = block[1].split("\n        )}", 1)[0]
+    assert "onNavigate('ai-agents')" in row and "AI Agents" in row
+    assert nav.index("canOpenAiAgents(user)") < nav.index("SECONDARY.map("), (
+        "AI Agents is no longer the first row after the divider")
+    assert "from '../lib/aiAgents'" in source
+    app = _code((FRONTEND / "App.tsx").read_text(encoding="utf-8"))
+    assert "view === 'ai-agents' && canOpenAiAgents(user) ?" in app, (
+        "a user who may not open AI Agents is not sent to their landing view")
+    assert "<AiAgentsPage user={user} />" in app
 
 
 def test_the_shell_keeps_settings_and_the_account_header():

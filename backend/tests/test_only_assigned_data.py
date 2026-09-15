@@ -1120,6 +1120,24 @@ AUDITED = {
     "me": "own", "change_password": "own", "create_token": "own",
     "list_tokens": "own", "revoke_token": "own", "health": "exempt",
     "connection_status": "link health, no record",
+    # AI Agents (app/ai/api.py, 2026-09-15): the whole module refuses a restricted user
+    # 403 before anything is read (`_viewer`), whatever their role — pinned by
+    # tests/test_ai_permissions.py route by route.
+    **dict.fromkeys((
+        "ai_catalogue", "ai_get_settings", "ai_put_settings", "ai_list_connections",
+        "ai_connection_names", "ai_create_connection", "ai_update_connection",
+        "ai_delete_connection", "ai_test_connection", "ai_load_models", "ai_list_folders",
+        "ai_create_folder", "ai_rename_folder", "ai_delete_folder", "ai_list_agents",
+        "ai_create_agent", "ai_get_agent", "ai_update_agent", "ai_preview_prompt",
+        "ai_publish_agent", "ai_get_version", "ai_set_mode", "ai_delete_agent",
+        "ai_duplicate_agent", "ai_try_agent", "ai_run_agent", "ai_list_templates",
+        "ai_save_template", "ai_delete_template", "ai_list_kbs", "ai_create_kb",
+        "ai_update_kb", "ai_delete_kb", "ai_list_kb_items", "ai_add_kb_item",
+        "ai_upload_kb_file", "ai_get_kb_item", "ai_update_kb_item", "ai_delete_kb_item",
+        "ai_search_kbs", "ai_list_gaps", "ai_resolve_gap", "ai_dismiss_gap", "ai_list_runs",
+        "ai_get_run", "ai_metrics", "ai_list_suggestions", "ai_approve_suggestion",
+        "ai_dismiss_suggestion", "ai_wake_agent", "ai_list_alerts", "ai_read_alert",
+        "ai_read_all_alerts"), "AI_MODULE: restricted refused 403"),
 }
 
 
@@ -1160,7 +1178,10 @@ def test_every_route_reading_customer_records_goes_through_a_scope():
     get_opportunity, a scoped helper, or is ADMIN/STAFF-refusing machinery."""
     markers = ("assigned_access", "get_opportunity", "_get_opportunity", "_get_task",
                "_get_note", "_number_thread(", "_bulk_load", "_search_events",
-               "_contact_detail", "_pipeline_public", "_appointment_detail")
+               "_contact_detail", "_pipeline_public", "_appointment_detail",
+               # 2026-09-15: the booking route's checks moved into this service (shared
+               # with AI agents); it resolves contact and deal through assigned_access.
+               "book_appointment(")
     reads = ("Contact", "Conversation", "Appointment", "Opportunity", "BlockedTime",
              "NumberThread", "OpportunityTask", "OpportunityNote", "CompanyCamLink")
     exempt = {name for name, how in AUDITED.items()

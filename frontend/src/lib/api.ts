@@ -1557,3 +1557,224 @@ export type StaffPatch = Partial<{
 
 export const patchStaffUser = (id: number, body: StaffPatch) =>
   send<StaffUser>(`/api/users/${id}`, 'PATCH', body)
+
+// ---------------- AI Agents (2026-09-15) ----------------
+//
+// Everything under /api/ai. ADMIN and DISPATCHER only (not a restricted user); the
+// server refuses the rest. No response here ever carries a provider API key: a
+// connection reads "•••• last4".
+
+import type { Draft as AiDraft } from './aiAgents'
+
+export type AiCatalogueAction = {
+  name: string; label: string; description: string; kind: string; channels: string[]; phase: number
+}
+export type AiCatalogue = {
+  actions: AiCatalogueAction[]
+  triggers: { type: string; label: string; help: string; params: Record<string, string> }[]
+  channels: { value: string; label: string; available: boolean; phase?: number }[]
+  providers: { value: string; label: string; default_model: string; needs_base_url: boolean }[]
+  known_prices: Record<string, { input: string | null; output: string | null }>
+  modes: string[]
+  days: string[]
+  timezone: string
+  secrets_configured: boolean
+  default_config: AiDraft
+}
+export const aiCatalogue = () => get<AiCatalogue>('/api/ai/catalogue')
+
+export type AiSettings = {
+  paused: boolean; on_call_phone: string | null; on_call_phone_display: string | null
+  updated_at: string | null; secrets_configured: boolean
+}
+export const aiSettings = () => get<AiSettings>('/api/ai/settings')
+export const saveAiSettings = (body: { paused?: boolean; on_call_phone?: string | null }) =>
+  send<AiSettings>('/api/ai/settings', 'PUT', body)
+
+export type AiConnection = {
+  id: number; name: string; provider: string; base_url: string | null; api_key: string
+  default_model: string; price_input: string | null; price_output: string | null
+  created_at: string | null; updated_at: string | null; agents: number
+}
+export const aiConnections = () => get<AiConnection[]>('/api/ai/connections')
+export const aiConnectionNames = () =>
+  get<{ id: number; name: string; provider: string; default_model: string }[]>('/api/ai/connection-names')
+export const createAiConnection = (body: Record<string, unknown>) =>
+  send<AiConnection>('/api/ai/connections', 'POST', body)
+export const updateAiConnection = (id: number, body: Record<string, unknown>) =>
+  send<AiConnection>(`/api/ai/connections/${id}`, 'PATCH', body)
+export const deleteAiConnection = (id: number) =>
+  send<{ deleted: number }>(`/api/ai/connections/${id}`, 'DELETE')
+export type AiProbe = {
+  provider: string; base_url?: string | null; api_key?: string | null; model?: string | null
+  connection_id?: number | null
+}
+export const testAiConnection = (body: AiProbe) =>
+  send<{ ok: boolean; sentence: string; latency_ms: number }>('/api/ai/connections/test', 'POST', body)
+export const loadAiModels = (body: AiProbe) =>
+  send<{ ok: boolean; sentence: string; models: string[] }>('/api/ai/connections/models', 'POST', body)
+
+export type AiFolder = { id: number; name: string; agents: number }
+export const aiFolders = () => get<AiFolder[]>('/api/ai/folders')
+export const createAiFolder = (name: string) => send<AiFolder>('/api/ai/folders', 'POST', { name })
+export const renameAiFolder = (id: number, name: string) =>
+  send<AiFolder>(`/api/ai/folders/${id}`, 'PATCH', { name })
+export const deleteAiFolder = (id: number) =>
+  send<{ deleted: number; agents_moved_out: number }>(`/api/ai/folders/${id}`, 'DELETE')
+
+export type AiAgentRow = {
+  id: number; name: string; description: string | null; channel: string; mode: string
+  folder_id: number | null; folder_name: string | null; published_version: number | null
+  published_at: string | null; has_unpublished_changes: boolean; last_run_at: string | null
+  last_outcome: string | null; updated_at: string | null; triggers: string[]
+  /** The PUBLISHED version's triggers — what "Run AI agent" can actually use. */
+  published_triggers?: string[]
+}
+export type AiAgentDetail = AiAgentRow & {
+  draft: AiDraft
+  compiled_prompt: string
+  publish_problems: string[]
+  versions: { id: number; version: number; published_at: string | null; published_by: string | null; current: boolean }[]
+  can_edit: boolean
+}
+export const aiAgents = () => get<AiAgentRow[]>('/api/ai/agents')
+export const aiAgent = (id: number) => get<AiAgentDetail>(`/api/ai/agents/${id}`)
+export const createAiAgent = (body: { name: string; description?: string | null; folder_id?: number | null; template_id?: number | null }) =>
+  send<AiAgentDetail>('/api/ai/agents', 'POST', { ...body, channel: 'text' })
+export const updateAiAgent = (id: number, body: { name?: string; description?: string | null; folder_id?: number | null; draft?: AiDraft }) =>
+  send<AiAgentDetail>(`/api/ai/agents/${id}`, 'PATCH', body)
+export const previewAiPrompt = (id: number, draft: AiDraft, name?: string) =>
+  send<{ compiled_prompt: string; publish_problems: string[] }>(`/api/ai/agents/${id}/compiled-prompt`, 'POST', { draft, name })
+export const publishAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/publish`, 'POST')
+export const setAiAgentMode = (id: number, mode: string, confirm = false) =>
+  send<AiAgentDetail>(`/api/ai/agents/${id}/mode`, 'POST', { mode, confirm })
+export const deleteAiAgent = (id: number) => send<{ deleted: number }>(`/api/ai/agents/${id}`, 'DELETE')
+export const duplicateAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/duplicate`, 'POST')
+
+export type AiStep = {
+  id: number; position: number; kind: string; text: string | null; tool_name: string | null
+  tool_call_id: string | null; data: Record<string, unknown> | null; action_status: string | null
+  created_at: string | null
+}
+export type AiWould = { action: string; label: string; summary: string; arguments: Record<string, unknown> }
+export type AiTokens = { input: number; output: number; cache_write: number; cache_read: number }
+export type AiTryResult = {
+  run_id: number; outcome: string; reason: string | null; reply: string; would: AiWould[]
+  tokens: AiTokens; cost: string | null; latency_ms: number | null; steps: AiStep[]
+}
+export const tryAiAgent = (id: number, body: {
+  messages: { role: 'user' | 'assistant'; content: string }[]
+  contact_id?: number | null; opportunity_id?: number | null; draft?: AiDraft
+}) => send<AiTryResult>(`/api/ai/agents/${id}/try`, 'POST', body)
+export const runAiAgent = (id: number, body: { contact_id?: number | null; opportunity_id?: number | null }) =>
+  send<{ run_id: number; outcome: string; reason: string | null; mode: string }>(`/api/ai/agents/${id}/run`, 'POST', body)
+
+export type AiTemplate = {
+  id: number; name: string; description: string | null; channel: string; created_at: string | null
+  actions: string[]; triggers: string[]
+}
+export const aiTemplates = () => get<AiTemplate[]>('/api/ai/templates')
+export const saveAiTemplate = (body: { agent_id: number; name: string; description?: string | null }) =>
+  send<{ id: number; name: string }>('/api/ai/templates', 'POST', body)
+export const deleteAiTemplate = (id: number) => send<{ deleted: number }>(`/api/ai/templates/${id}`, 'DELETE')
+
+export type AiKb = {
+  id: number; name: string; description: string | null; faqs: number; articles: number; files: number
+  agents: string[]; updated_at: string | null
+}
+export type AiKbItem = {
+  id: number; kb_id: number; kind: 'faq' | 'article' | 'file'; title: string; body: string
+  content_type: string | null; size_bytes: number | null; created_at: string | null
+  updated_at: string | null; characters: number
+}
+export const aiKbs = () => get<AiKb[]>('/api/ai/knowledge-bases')
+export const createAiKb = (body: { name: string; description?: string | null }) =>
+  send<AiKb>('/api/ai/knowledge-bases', 'POST', body)
+export const updateAiKb = (id: number, body: { name: string; description?: string | null }) =>
+  send<AiKb>(`/api/ai/knowledge-bases/${id}`, 'PATCH', body)
+export const deleteAiKb = (id: number) => send<{ deleted: number }>(`/api/ai/knowledge-bases/${id}`, 'DELETE')
+export const aiKbItems = (kbId: number) => get<AiKbItem[]>(`/api/ai/knowledge-bases/${kbId}/items`)
+export const addAiKbItem = (kbId: number, body: { kind: 'faq' | 'article'; title: string; body: string }) =>
+  send<AiKbItem>(`/api/ai/knowledge-bases/${kbId}/items`, 'POST', body)
+export const uploadAiKbFile = (kbId: number, body: { filename: string; content_type: string | null; data: string }) =>
+  send<AiKbItem>(`/api/ai/knowledge-bases/${kbId}/files`, 'POST', body)
+export const updateAiKbItem = (id: number, body: { title?: string; body?: string }) =>
+  send<AiKbItem>(`/api/ai/kb-items/${id}`, 'PATCH', body)
+export const deleteAiKbItem = (id: number) => send<{ deleted: number }>(`/api/ai/kb-items/${id}`, 'DELETE')
+export const searchAiKbs = (query: string, knowledge_base_ids: number[]) =>
+  send<{ useful: boolean; results: { item_id: number; kb_id: number; title: string; kind: string; text: string; score: number }[] }>(
+    '/api/ai/knowledge-bases/search', 'POST', { query, knowledge_base_ids })
+
+export type AiGap = {
+  id: number; question: string; status: string; count: number; first_seen_at: string | null
+  last_seen_at: string | null; last_run_id: number | null; agent_id: number | null
+  agent_name: string | null; resolved_item_id: number | null
+}
+export const aiGaps = (status = 'open') => get<AiGap[]>(`/api/ai/knowledge-gaps?status=${encodeURIComponent(status)}`)
+export const resolveAiGap = (id: number, body: { knowledge_base_id: number; answer: string; question?: string }) =>
+  send<{ id: number; status: string }>(`/api/ai/knowledge-gaps/${id}/resolve`, 'POST', body)
+export const dismissAiGap = (id: number) =>
+  send<{ id: number; status: string }>(`/api/ai/knowledge-gaps/${id}/dismiss`, 'POST')
+
+export type AiRunRow = {
+  id: number; agent_id: number; agent_name: string; version: number | null; trigger: string
+  trigger_label: string; contact_id: number | null; opportunity_id: number | null
+  appointment_id: number | null; subject: string | null; mode: string; is_test: boolean
+  outcome: string; reason: string | null; provider: string | null; model: string | null
+  tokens: AiTokens; cost: string | null; latency_ms: number | null; created_at: string | null
+  run_after: string | null; started_at: string | null; finished_at: string | null
+}
+export type AiSuggestion = {
+  id: number; run_id: number; agent_id: number; agent_name: string | null; action: string
+  label: string; summary: string; args: Record<string, unknown>; contact_id: number | null
+  opportunity_id: number | null; status: string; result: Record<string, unknown> | null
+  created_at: string | null; decided_at: string | null; contact_name?: string | null
+}
+export type AiRunDetail = AiRunRow & { steps: AiStep[]; actions: AiStep[]; suggestions: AiSuggestion[] }
+export const aiRuns = (params: {
+  agent_id?: number | null; outcome?: string; since?: string; until?: string
+  include_tests?: boolean; page?: number; page_size?: number
+}) => {
+  const sp = new URLSearchParams()
+  if (params.agent_id != null) sp.set('agent_id', String(params.agent_id))
+  if (params.outcome) sp.set('outcome', params.outcome)
+  if (params.since) sp.set('since', params.since)
+  if (params.until) sp.set('until', params.until)
+  if (params.include_tests === false) sp.set('include_tests', 'false')
+  sp.set('page', String(params.page ?? 1))
+  sp.set('page_size', String(params.page_size ?? 50))
+  return get<Page<AiRunRow>>(`/api/ai/runs?${sp}`)
+}
+export const aiRun = (id: number) => get<AiRunDetail>(`/api/ai/runs/${id}`)
+
+export type AiMetrics = {
+  days: number; runs: number
+  per_day: { day: string; runs: number; cost: string | null; cost_unknown_runs: number }[]
+  outcomes: Record<string, number>
+  per_agent: { agent_id: number; agent_name: string; runs: number; cost: string | null; cost_unknown_runs: number }[]
+  avg_latency_ms: number | null
+  top_actions: { action: string; executed: number; suggested: number; refused: number }[]
+  open_knowledge_gaps: number
+  total_cost: string | null
+}
+export const aiMetrics = (days = 30) => get<AiMetrics>(`/api/ai/metrics?days=${days}`)
+
+export const aiSuggestions = (params: { contact_id?: number; opportunity_id?: number; status?: string }) => {
+  const sp = new URLSearchParams({ status: params.status ?? 'pending' })
+  if (params.contact_id != null) sp.set('contact_id', String(params.contact_id))
+  if (params.opportunity_id != null) sp.set('opportunity_id', String(params.opportunity_id))
+  return get<AiSuggestion[]>(`/api/ai/suggestions?${sp}`)
+}
+export const approveAiSuggestion = (id: number) =>
+  send<AiSuggestion>(`/api/ai/suggestions/${id}/approve`, 'POST')
+export const dismissAiSuggestion = (id: number) =>
+  send<AiSuggestion>(`/api/ai/suggestions/${id}/dismiss`, 'POST')
+
+export type AiAlert = {
+  id: number; kind: string; title: string; body: string | null; urgent: boolean
+  run_id: number | null; agent_id: number | null; contact_id: number | null
+  opportunity_id: number | null; task_id: number | null; created_at: string | null; read: boolean
+}
+export const aiAlerts = () => get<{ unread: number; items: AiAlert[] }>('/api/ai/alerts')
+export const readAiAlert = (id: number) => send<{ id: number; read: boolean }>(`/api/ai/alerts/${id}/read`, 'POST')
+export const readAllAiAlerts = () => send<{ marked: number }>('/api/ai/alerts/read-all', 'POST')

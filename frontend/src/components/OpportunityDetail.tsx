@@ -42,6 +42,8 @@ import {
 } from './opportunity/ui'
 import type { Me } from '../lib/auth'
 import { techOnOwnJob } from '../lib/access'
+import { canOpenAiAgents } from '../lib/aiAgents'
+import { AiAgentPanel } from './AiSuggestions'
 
 /**
  * The opportunity modal — GoHighLevel's "Edit "<name>"" dialog, rebuilt from the
@@ -439,6 +441,10 @@ export function OpportunityDetail({
                       onClick={() => setTab('associated')} />
                     {/* CompanyCam job photos (2026-09-14): every role, like the card. */}
                     <NavItem label="Photos" active={tab === 'photos'} onClick={() => setTab('photos')} />
+                    {/* AI Agents (2026-09-15): only for a user who can open the module. */}
+                    {canOpenAiAgents(user) && (
+                      <NavItem label="AI agent" active={tab === 'ai'} onClick={() => setTab('ai')} />
+                    )}
                   </div>
                   {/* LINKS TO Settings → Custom Fields (brief §2). A real navigation to
                       the deep link App.tsx already honours on load (`viewFromPath`,
@@ -805,6 +811,9 @@ export function OpportunityDetail({
                     <AssociatedTab o={o} onOpenAppointment={setOpenAppointment} />
                   )}
                   {tab === 'photos' && <PhotosTab opportunityId={o.id} />}
+                  {tab === 'ai' && canOpenAiAgents(user) && (
+                    <AiAgentPanel user={user} opportunityId={o.id} contactId={o.contact_id ?? undefined} />
+                  )}
                 </div>
               </div>
 

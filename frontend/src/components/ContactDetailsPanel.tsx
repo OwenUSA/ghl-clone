@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { IconChevronDown, IconExternal } from './Icon'
 import { ProjectPhotosDialog } from './CompanyCamPhotos'
+import { AiAgentPanel } from './AiSuggestions'
 import {
   ApiError,
   PANE,
@@ -633,8 +634,12 @@ export function ContactDetailsPanel({
                 </div>
               )}
 
+              {/* AI Agents (2026-09-15): "Run AI agent" and pending suggestions, for a user
+                  who can open the module; draws nothing when there is nothing it can do. */}
+              <AiAgentPanel user={user} contactId={c.id} compact />
+
               <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 16 }}>
-                Delete is the only action in v1. GHL's own Actions tab was never
+                Delete is the only contact action in v1. GHL's own Actions tab was never
                 captured, so nothing else here would be measured parity — see
                 DECISIONS.md.
               </div>

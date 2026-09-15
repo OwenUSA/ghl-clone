@@ -34,6 +34,9 @@ from . import (
     pipeline_access,
     softphone,
 )
+from .ai import api as ai_api
+from .ai import engine as ai_engine
+from .ai import triggers as ai_triggers
 from .db import DATABASE_URL, Base, engine, get_db
 from .models import (
     ACTIVITY_TYPES,
@@ -101,6 +104,9 @@ app.include_router(opportunity_workspace.router)
 # CompanyCam job photos (2026-09-14): the Photos tab, the contact panel's projects, the
 # image relay and the admin page. See app/companycam.py and app/companycam_api.py.
 app.include_router(companycam_api.router)
+# AI Agents, phase 1 (2026-09-15): agents, knowledge, logs, suggestions, connections and the
+# alert bell, under /api/ai. STAFF-and-unrestricted to open, ADMIN to change. See app/ai/.
+app.include_router(ai_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
@@ -240,6 +246,8 @@ class EventOut(BaseModel):
     source_number: str | None = None
     # What was said on a call, when the far side transcribed it (Quo does).
     transcript: str | None = None
+    # "AI: <agent name>" when an AI agent wrote this event (2026-09-15), else null.
+    ai_author: str | None = None
 
 
 # ---------- contacts ----------
@@ -1431,6 +1439,17 @@ def move_opportunity(opp_id: int, body: OpportunityMove,
                      principal: auth.Principal = auth.ANY_USER):
     """Drag a card between stages. Mutates OUR database only."""
     o = pipeline_access.get_opportunity(db, principal, opp_id)
+    result = move_to_stage(db, principal, o, body.stage_id, body.position)
+    db.commit()
+    return result
+
+
+def move_to_stage(db: Session, principal: auth.Principal, o: Opportunity, stage_id: int,
+                  position: int) -> dict:
+    """The drag, as a service: the board's route and an AI agent's "move stage" action
+    run exactly this (2026-09-15). The caller resolved `o` through pipeline_access and
+    commits. Fires rule 4 like any stage move."""
+    body = OpportunityMove(stage_id=stage_id, position=position)
     stage = db.get(Stage, body.stage_id)
     if not stage or stage.pipeline_id != o.pipeline_id:
         raise HTTPException(400, "stage is not in this opportunity's pipeline")
@@ -1475,7 +1494,6 @@ def move_opportunity(opp_id: int, body: OpportunityMove,
             left_over.position = i
     # Rule 4: stage move -> text the customer.
     outcome = automations.on_opportunity_stage_changed(db, o, old_stage_id)
-    db.commit()
     return {"id": o.id, "stage_id": o.stage_id, "position": o.position,
             "automation": outcome}
 
@@ -1850,6 +1868,10 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
     # Rule 1 (missed call -> auto text back) is DISABLED as of 2026-09-13 and
     # answers with the reason; it is still asked so the response says so.
     outcome = automations.on_inbound_call(db, ev)
+    # AI agents (2026-09-15): an unanswered call or an inbound text on a CONTACT's thread.
+    # A number no contact holds returned above and never reaches this line.
+    if fresh:
+        ai_triggers.inbound_event(db, contact, conv, ev)
     db.commit()
     return {"id": ev.id, "conversation_id": conv.id, "contact_id": contact.id,
             "automation": outcome}
@@ -2157,6 +2179,21 @@ def _check_new_status(status: str) -> str:
 @app.post("/api/appointments", status_code=201)
 def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
                        principal: auth.Principal = auth.STAFF):
+    a, outcome = book_appointment(db, principal, body)
+    db.commit()
+    db.refresh(a)
+    return {"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
+            "ends_at": _aware(a.ends_at), "opportunity_id": a.opportunity_id,
+            "assigned_user_id": a.assigned_user_id, "status": a.status,
+            "description": a.description, "location": a.location,
+            "automation": outcome}
+
+
+def book_appointment(db: Session, principal: auth.Principal, body: AppointmentCreate,
+                     *, ai_agent_id: int | None = None) -> tuple[Appointment, str]:
+    """Book a visit, as a service: the Book appointment modal's route and an AI agent's
+    "book appointment" action run exactly this (2026-09-15). Every check the route had is
+    here; the caller commits."""
     contact = None
     if body.contact_id is not None:
         contact = db.get(Contact, body.contact_id)
@@ -2190,17 +2227,13 @@ def create_appointment(body: AppointmentCreate, db: Session = Depends(get_db),
             body.location_kind, body.location, contact,
             db.get(Opportunity, body.opportunity_id)
             if body.opportunity_id is not None else None))
+    a.ai_agent_id = ai_agent_id
     db.add(a)
     db.flush()
     # Rule 3: booked -> reminders at T-24h and T-1h. Unchanged by the new modal.
     outcome = automations.on_appointment_booked(db, a)
-    db.commit()
-    db.refresh(a)
-    return {"id": a.id, "title": a.title, "starts_at": _aware(a.starts_at),
-            "ends_at": _aware(a.ends_at), "opportunity_id": a.opportunity_id,
-            "assigned_user_id": a.assigned_user_id, "status": a.status,
-            "description": a.description, "location": a.location,
-            "automation": outcome}
+    ai_triggers.appointment_changed(db, a, "appointment_booked")
+    return a, outcome
 
 
 def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
@@ -2440,9 +2473,7 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
         # Which questions this deal is asked follows its PIPELINE — the one it is
         # moving TO when this save moves it. An answer to a question the new
         # pipeline does not ask is kept untouched by merge_answers, as always.
-        o.custom_fields = custom_fields.merge_answers(
-            db, pipeline_id=new_pipeline_id,
-            existing=o.custom_fields, incoming=data.pop("custom_fields"))
+        answer_questions(db, o, data.pop("custom_fields"), pipeline_id=new_pipeline_id)
     data.pop("custom_fields", None)
 
     old_stage_id = o.stage_id
@@ -2468,6 +2499,16 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     db.commit()
     db.refresh(o)
     return {**_opp_detail(o, db), "automation": outcome}
+
+
+def answer_questions(db: Session, o: Opportunity, answers: dict, *,
+                     pipeline_id: int | None = None) -> None:
+    """Record answers to a deal's questions, as a service (2026-09-15): the detail PATCH
+    and an AI agent's "fill checklist answers" action. `merge_answers` is the one place
+    that validates an answer against its definition and keeps every reserved key."""
+    o.custom_fields = custom_fields.merge_answers(
+        db, pipeline_id=pipeline_id or o.pipeline_id, existing=o.custom_fields,
+        incoming=answers)
 
 
 class OpportunityCreate(BaseModel):
@@ -3008,7 +3049,10 @@ def _thread_events(model, parent_clause, db: Session, filter: str,
         stmt = stmt.where(model.type.not_in(INTERNAL_TYPES))
 
     rows = db.scalars(stmt.order_by(model.occurred_at, model.id)).all()
+    authors = {aid: ai_engine.ai_author(db, aid)
+               for aid in {e.ai_agent_id for e in rows if e.ai_agent_id}}
     return [EventOut(id=e.id, type=e.type.value, direction=e.direction.value,
+                     ai_author=authors.get(e.ai_agent_id),
                      occurred_at=e.occurred_at, body=e.body, subject=e.subject,
                      duration_seconds=e.duration_seconds,
                      recording_url=e.recording_url,
@@ -3779,7 +3823,18 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
     retired here instead, and re-queued if the booking comes back.
     """
     a = assigned_access.get_appointment(db, principal, appointment_id)
+    outcome = edit_appointment(db, principal, a, body)
+    db.commit()
+    db.refresh(a)
+    return {**_appointment_detail(a, assigned_access.scope(db, principal), principal),
+            "automation": outcome}
 
+
+def edit_appointment(db: Session, principal: auth.Principal, a: Appointment,
+                     body: AppointmentPatch, *, ai_agent_id: int | None = None) -> str:
+    """Edit / reschedule a visit, as a service (2026-09-15): the appointment panel's route
+    and an AI agent's "reschedule appointment" action run exactly this, reminders and
+    all. The caller resolved `a` and commits."""
     data = body.model_dump(exclude_unset=True)
     allow_blocked = data.pop("allow_blocked_time", False)
     location_kind = data.pop("location_kind", None)
@@ -3856,11 +3911,13 @@ def update_appointment(appointment_id: int, body: AppointmentPatch,
         _drop_pending_reminders(db, a.id)
         outcome = ("reminders cancelled" if is_off
                    else automations.on_appointment_booked(db, a))
-
-    db.commit()
-    db.refresh(a)
-    return {**_appointment_detail(a, assigned_access.scope(db, principal), principal),
-            "automation": outcome}
+    if ai_agent_id is not None:
+        a.ai_agent_id = ai_agent_id
+    if is_off and not was_off and a.status == "cancelled":
+        ai_triggers.appointment_changed(db, a, "appointment_cancelled")
+    elif moved and not is_off:
+        ai_triggers.appointment_changed(db, a, "appointment_rescheduled")
+    return outcome
 
 
 @app.delete("/api/appointments/{appointment_id}")
@@ -3884,11 +3941,25 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db),
     `ghl jobs list --status pending`, and only the second one is true here.
     """
     a = assigned_access.get_appointment(db, principal, appointment_id)
-    a.status = "cancelled"
-    dropped = _drop_pending_reminders(db, a.id)
+    dropped = cancel_appointment_record(db, a)
     db.commit()
     return {"id": a.id, "status": a.status, "deleted": False,
             "reminders_cancelled": dropped}
+
+
+def cancel_appointment_record(db: Session, a: Appointment, *,
+                              ai_agent_id: int | None = None) -> int:
+    """Cancel a visit, as a service (2026-09-15): the route and an AI agent's "cancel
+    appointment" action. The row survives; its reminders are retired and their keys
+    released. Returns how many reminders were withdrawn. The caller commits."""
+    was_cancelled = a.status == "cancelled"
+    a.status = "cancelled"
+    if ai_agent_id is not None:
+        a.ai_agent_id = ai_agent_id
+    dropped = _drop_pending_reminders(db, a.id)
+    if not was_cancelled:
+        ai_triggers.appointment_changed(db, a, "appointment_cancelled")
+    return dropped
 
 
 # ---------- blocked off time ----------
@@ -4547,6 +4618,10 @@ def _send_to_contact(db: Session, contact: Contact, body: MessageSend,
         _refuse_internal(principal, "write")
     ev, reason = automations.send_outbound(
         db, contact, body.body, type_=EventType[body.type], subject=body.subject)
+    if ev is not None and EventType[body.type] not in INTERNAL_TYPES:
+        # A person answered the customer: an agent set to sleep on a staff reply stops on
+        # this conversation, and its pending follow-up is cancelled (2026-09-15).
+        ai_triggers.staff_replied(db, contact.id, "a staff member sent a message")
     db.commit()
     if ev is None:
         # 201 with suppressed=True, not an error: the request was well-formed and
@@ -4686,6 +4761,7 @@ def _place_call(db: Session, contact: Contact, operator: str | None = None) -> d
     )
     db.add(ev)
     conv.last_event_at = ev.occurred_at
+    ai_triggers.staff_replied(db, contact.id, "a staff member called the customer")
     db.commit()
     db.refresh(ev)
     return {"placed": True, "id": ev.id, "conversation_id": conv.id,

@@ -24,6 +24,11 @@ dependencies = [
     # surface now, so a plain `uv sync` has to be enough to run it.
     "typer>=0.15",
     "httpx>=0.28",
+    "anthropic>=1.6.0",
+    "openai>=3.14.0",
+    "cryptography>=50.0.1",
+    "pypdf>=6.18.1",
+    "python-docx>=1.2.0",
 ]
 
 [project.scripts]
