@@ -21,13 +21,14 @@ hands back `LoggingTransport` and this module makes no network call at all. Wiri
 the link is a deliberate act of configuration, not a consequence of deploying this
 branch.
 
-## SMS is DARK on the far side, and that is the expected answer today
+## SMS is live on the far side from 2026-09-15 — and owen-main still has the last word
 
-owen-main refuses every SMS three times over: its own `CRM_LINK_SMS_ENABLED` is
-false, the DID's `sms_enabled` is false, and the 10DLC campaign is SUBMITTED rather
-than approved. So a send today comes back 403/409 with a reason. That is not a
-failure of this code — it is the system working, and the reason is surfaced to the
-operator as a sentence. The day 10DLC is approved nothing here changes.
+The 10DLC campaign is approved and the operator switches SMS on in owen-main. From
+then on a configured link sends REAL texts. owen-main keeps its own gates: its
+`CRM_LINK_SMS_ENABLED` switch, the DID's `sms_enabled` / campaign, its allowlist, its
+block list and every STOP opt-out. A send it declines comes back 403/409 with a reason,
+recorded REFUSED with that reason turned into a sentence. Nothing here second-guesses
+which of those applies: the sentence says what owen-main actually answered.
 
 ## Every refusal is a sentence, never a wire body
 
@@ -35,7 +36,7 @@ owen-main answers a refusal two different ways: `{"detail": "<string>"}` from th
 crm-link routes themselves, and `{"detail": {"error": ..., "message": ..., "hint":
 ...}}` from its API-key layer. `_detail_text` reads both. `_human` then turns the
 handful of refusals an operator will actually hit into something a roofer can act
-on — "the number is still waiting on carrier approval" rather than
+on — "texting from the CRM is switched off in the phone system" rather than
 "CRM_LINK_SMS_ENABLED=false". Anything unrecognised passes through verbatim rather
 than being flattened into "something went wrong": a reason we did not anticipate is
 still far more use than no reason.
@@ -115,24 +116,33 @@ class LinkResult:
 
 
 # owen-main's refusals, in its own words, mapped to the owner's. Keys are matched as
-# substrings because owen-main interpolates numbers into some of them.
-_AWAITING_10DLC = ("Texting is not switched on yet — the number is still waiting "
-                   "on carrier (10DLC) approval.")
+# substrings because owen-main interpolates numbers into some of them. Each needle is
+# copied from owen-main's source (`integrations/crm/config.py` REFUSE_*,
+# `integrations/crm/api.py` send_message, `services/sms.outbound_block_reason`).
+#
+# 2026-09-15: the sentences no longer say texting is "waiting on carrier (10DLC)
+# approval" — the campaign is approved, so a switched-off answer now means somebody
+# switched it off, and the sentence says which switch.
 _NO_OPERATOR = ("No one is set up to take this call — the phone system has no "
                 "operator assigned to the number.")
 
 _HUMAN = (
-    ("CRM_LINK_SMS_ENABLED=false", _AWAITING_10DLC),
-    ("pending 10DLC registration", _AWAITING_10DLC),
+    ("CRM_LINK_SMS_ENABLED=false",
+     "Not sent — texting from the CRM is switched off in the phone system (owen-main)."),
+    ("pending 10DLC registration",
+     "Not sent — the phone system says this number is not enabled for outbound texts."),
     ("no 10DLC campaign",
-     "Texting is not switched on yet — the number has no carrier campaign assigned."),
+     "Not sent — the phone system says this number has no carrier campaign assigned."),
     ("not on CRM_LINK_ALLOWLIST",
      "This number is not on the approved list for calls and texts yet."),
-    ("has opted out", "This contact has opted out of text messages."),
+    ("has opted out",
+     "This number has opted out of texts (they replied STOP). Nothing was sent."),
     ("is blocked in OWEN", "This contact is blocked in the phone system."),
     ("not bound to the CRM", "The phone number is not linked to this CRM."),
     ("CRM_LINK_ENABLED=false",
      "The phone link is switched off in the phone system."),
+    ("destination is not a full phone number",
+     "The phone system refused it — that is not a full phone number."),
     ("telephony is not enabled",
      "The phone system is not accepting calls right now."),
     ("no operator to ring", _NO_OPERATOR),

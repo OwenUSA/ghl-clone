@@ -502,6 +502,7 @@ def test_a_reorder_inside_one_stage_never_texts_the_customer(client):
     assert _stage_change_jobs() == [], "a same-stage reorder queued a customer text"
 
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_a_move_to_another_stage_still_texts_the_customer(client):
     """The other half: guarding the reorder must not have muted the real thing."""
     s1, s2 = client.ids["stage1"], client.ids["stage2"]
@@ -699,6 +700,7 @@ def test_status_filter_actually_filters(client):
 
 # ---------------- Calendars ----------------
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_appointment_create_and_range_filter(client):
     cid = client.ids["contact"]
     start = utcnow() + timedelta(days=3)

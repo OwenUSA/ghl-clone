@@ -17,6 +17,11 @@
  */
 export function reminderSentence(automation: string): string {
   if (automation === 'unchanged') return 'Saved.'
+  // Rule 3 is OFF (owner's decision, 2026-09-15): no automatic texts at all. Said once,
+  // plainly, so nobody believes the customer will be reminded.
+  if (automation.startsWith('appointment reminder texts are off'))
+    return 'Saved. No reminder text goes to the customer — automatic reminders are off, '
+      + 'and only texts a person sends go out.'
   if (automation === 'reminders cancelled')
     return 'Saved. Any pending reminder has been withdrawn.'
   if (automation.startsWith('queued ')) {

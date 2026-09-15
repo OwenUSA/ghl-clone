@@ -151,10 +151,10 @@ def test_auto_pilot_executes_through_the_staff_path_and_records_it(world, script
     by_agent = [e for e in sms if e.ai_agent_id == aid]
     assert [e.body for e in by_agent] == ["We can come Tuesday."]
     assert by_agent[0].delivery_status.value == "LOGGED_ONLY"      # the existing transport
-    # Rule 4 fired exactly as for a staff drag: its stage-change text went out (drained),
-    # written by the automation, not by the agent.
-    assert count(Job, Job.type == "stage_change_notify") == 1
-    assert [e.ai_agent_id for e in sms if e not in by_agent] == [None]
+    # Rule 4 is asked exactly as for a staff drag — and, OFF since 2026-09-15, queues no
+    # stage-change text: the agent's own send_text is the only SMS on the thread.
+    assert count(Job, Job.type == "stage_change_notify") == 0
+    assert [e for e in sms if e not in by_agent] == []
     note = SessionLocal().scalar(select(OpportunityNote))
     assert note.ai_agent_id == aid and note.created_by_id is None
     notes = world.client("admin").get("/api/opportunities/%s/notes" % world.ids["deal"]).json()
@@ -315,7 +315,8 @@ def test_suggest_never_executes_and_approving_executes_exactly_once(world, scrip
     again = world.client("admin").post("/api/ai/suggestions/%s/approve" % move["id"])
     assert again.status_code == 409
     assert get(Opportunity, world.ids["deal"]).stage_id == world.ids["s2"]
-    assert count(Job, Job.type == "stage_change_notify") == 1        # once, not twice
+    # Rule 4 is off (2026-09-15): approving the move texts nobody by itself.
+    assert count(Job, Job.type == "stage_change_notify") == 0
 
     gone = world.client("dispatcher").post("/api/ai/suggestions/%s/dismiss" % text_s["id"])
     assert gone.json()["status"] == "dismissed"

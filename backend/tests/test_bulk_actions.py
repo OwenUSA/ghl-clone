@@ -142,6 +142,7 @@ def test_a_bulk_move_moves_exactly_the_selection_and_nothing_else(client):
         assert after[untouched] == before[untouched], untouched
 
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_a_bulk_move_notifies_once_per_opportunity_that_actually_moved(client):
     """Rule 4, per record. Not once per request, and not for a no-op."""
     o = client.ids["opps"]
@@ -160,6 +161,7 @@ def test_a_bulk_move_notifies_once_per_opportunity_that_actually_moved(client):
         "rule 4 ran for a card that never left its stage")
 
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_a_bulk_move_reports_a_suppressed_send_rather_than_skipping_the_rule(client):
     """B's contact is on DND. The rule must run and suppress, so the response says
     so — silently omitting it is indistinguishable from the rule not firing."""
@@ -172,6 +174,7 @@ def test_a_bulk_move_reports_a_suppressed_send_rather_than_skipping_the_rule(cli
     assert {p["opportunity_id"] for p in _stage_jobs()} == {o["A"]}
 
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_a_bulk_move_of_one_matches_a_single_move(client):
     """The bulk path must not be a second, subtly different implementation."""
     o = client.ids["opps"]
@@ -203,6 +206,7 @@ def test_the_destination_keeps_a_stable_order(client):
     assert [r.position for r in rows] == [0, 1, 2]
 
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_a_repeated_id_is_applied_once(client):
     o = client.ids["opps"]
     r = client.post("/api/opportunities/bulk/stage", json={

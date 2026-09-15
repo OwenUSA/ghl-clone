@@ -16,6 +16,9 @@ export const SETTINGS_SECTIONS = [
   { key: 'my-staff', label: 'My Staff', path: '/settings/my-staff' },
   // ADMIN only (2026-09-15): AI provider connections, "Pause all AI agents", the on-call phone.
   { key: 'ai-connections', label: 'AI Connections', path: '/settings/ai-connections' },
+  // Everyone, read-only (2026-09-15): the built-in rules, each On / Off with the reason.
+  // No switches — nothing texts a customer by itself.
+  { key: 'automations', label: 'Automations', path: '/settings/automations' },
 ] as const
 
 /** Sections only an ADMIN is shown. SettingsPage does not draw their tabs for anyone else. */

@@ -72,11 +72,15 @@ export function BulkActionsBar({
     onSuccess: (r) => {
       // Say what actually happened to each half of the selection. "3 moved" when
       // one of the four was already there is how a bulk action loses trust.
+      // Stage-change texts are OFF (2026-09-15): the server answers each move with the
+      // reason, so a count is only reported if the rule is ever switched back on.
       const notified = Object.values(r.automation).filter((a) => a === 'queued').length
       setNote(
         `Moved ${r.moved.length} to ${stage!.name}` +
           (r.unchanged.length ? `, ${r.unchanged.length} already there` : '') +
-          `. ${notified} customer${notified === 1 ? '' : 's'} notified.`,
+          (notified
+            ? `. ${notified} customer${notified === 1 ? '' : 's'} notified.`
+            : '. No customer was texted.'),
       )
       done()
     },

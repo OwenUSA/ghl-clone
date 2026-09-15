@@ -272,7 +272,7 @@ export function AppointmentDetailDialog({
           ? `Cancelled. ${res.reminders_cancelled} pending reminder${
               res.reminders_cancelled === 1 ? '' : 's'} withdrawn, so the customer `
             + 'will not be told the crew is coming.'
-          : 'Cancelled. There were no pending reminders to withdraw.',
+          : 'Cancelled. No reminder text was waiting — automatic reminders are off.',
       )
     },
     onError: (e: Error) => { setConfirmingCancel(false); setError(e.message) },
@@ -567,8 +567,7 @@ export function AppointmentDetailDialog({
                   Cancel <strong>{a.title}</strong>
                   {a.contact_name ? <> with <strong>{a.contact_name}</strong></> : null}
                   {' on '}<strong>{when(new Date(a.starts_at))}</strong>?
-                  {' '}This cannot be undone from here, and any reminder the customer
-                  was going to get is withdrawn with it.
+                  {' '}This cannot be undone from here.
                 </div>
                 <div className="mt-3 flex justify-end gap-2">
                   <button

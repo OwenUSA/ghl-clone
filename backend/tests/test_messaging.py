@@ -304,6 +304,7 @@ def pending_reminders(appointment_id):
     return jobs
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_rescheduling_an_appointment_schedules_new_reminders(client):
     """The bug this endpoint would otherwise ship.
 
@@ -330,6 +331,7 @@ def test_rescheduling_an_appointment_schedules_new_reminders(client):
         "the stale jobs must not still be pending"
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_cancelling_an_appointment_keeps_the_row_and_stops_the_reminders(client):
     appt = _book(client).json()
     assert len(pending_reminders(appt["id"])) == 2
@@ -573,6 +575,7 @@ def test_rescheduling_moves_it_in_the_range_query(client):
     assert row.starts_at.replace(tzinfo=UTC) == new_start
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_rescheduling_leaves_exactly_one_pending_reminder_per_offset(client):
     """The core of this task. Not "two exist" — exactly one per offset, at the
     NEW time, with the superseded ones gone from the queue."""
@@ -595,6 +598,7 @@ def test_rescheduling_leaves_exactly_one_pending_reminder_per_offset(client):
     assert at["24h"] == new_start - timedelta(hours=24), "T-24h is not at the new time"
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_rescheduling_twice_still_leaves_exactly_one_pending_reminder(client):
     appt = _book(client, hours_ahead=72).json()
     last = None
@@ -612,6 +616,7 @@ def test_rescheduling_twice_still_leaves_exactly_one_pending_reminder(client):
         "the live reminder still points at the FIRST reschedule")
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_rescheduling_back_to_the_original_time_still_leaves_a_reminder(client):
     """Undo. The dedupe key is `appt_reminder:<id>:<starts_at>:<offset>`, and
     `enqueue()` refuses a key that exists whatever its status — so retiring the
@@ -640,6 +645,7 @@ def test_rescheduling_back_to_the_original_time_still_leaves_a_reminder(client):
     assert at["1h"] == original_start - timedelta(hours=1)
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_rescheduling_into_the_next_hours_drops_the_reminder_that_cannot_fire(client):
     """A booking moved to two hours from now cannot have a T-24h reminder — that
     would fire immediately. Exactly one reminder, and it is the T-1h."""
@@ -669,6 +675,7 @@ def test_editing_only_the_title_does_not_churn_the_reminders(client):
     assert after == before, "a title edit re-queued the customer's reminders"
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_cancelling_leaves_no_pending_reminder(client):
     """A reminder for an appointment that is off must not sit in the queue. The
     handler would refuse to send it, but a dispatcher reading
@@ -697,6 +704,7 @@ def test_cancelling_through_the_edit_form_also_stops_the_reminders(client):
     assert pending_reminders(appt["id"]) == []
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_reviving_a_cancelled_appointment_queues_its_reminders_again(client):
     """The panel's Status select can go back to `confirmed`, so it must. Without
     the key release this is the undo trap again: the retired jobs hold the keys
@@ -711,6 +719,7 @@ def test_reviving_a_cancelled_appointment_queues_its_reminders_again(client):
         "a re-confirmed appointment gets no reminder at all")
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_a_reminder_already_sent_is_left_alone_by_a_reschedule(client):
     """Only `pending` jobs are superseded. A reminder that has already gone out
     is history: rewriting it would say the customer was told about a time they

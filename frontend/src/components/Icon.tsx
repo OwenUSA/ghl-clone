@@ -209,3 +209,21 @@ export const IconBackspace = make(
   </>,
 )
 export const IconClose = make(<path d="M18 6 6 18M6 6l12 12" />)
+/** Compose — "New message" in the Conversations inbox header (2026-09-15). */
+export const IconCompose = make(
+  <>
+    <path d="M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6" />
+    <path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L12 14.8l-4 1 1-4 9.4-9.2z" />
+  </>,
+)
+/** A paperclip — an MMS attachment the CRM is told about but not given. */
+export const IconPaperclip = make(
+  <path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />,
+)
+/** Retry — send a failed text again. */
+export const IconRetry = make(
+  <>
+    <path d="M3 12a9 9 0 0 1 15.5-6.2L21 8" />
+    <path d="M21 3v5h-5" />
+  </>,
+)

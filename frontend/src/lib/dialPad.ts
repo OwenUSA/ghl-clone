@@ -113,3 +113,34 @@ export function dialProblem(value: string): string | null {
   if (d === CALLING_FROM.slice(2)) return "That is this CRM's own number — it cannot call itself."
   return null
 }
+
+/**
+ * "New message" (2026-09-15): why this number cannot be TEXTED, or null when it can.
+ * The dialer's rules — the same one line, North American numbers only — in words about
+ * texting. The server's twin is `text_problem` in `backend/app/main.py`; a test runs
+ * both on the same inputs.
+ */
+export function textProblem(value: string): string | null {
+  const kept = keep(value)
+  if (!kept.replace('+', '')) return 'Enter a number to text — 10 digits, area code first.'
+  if (/[*#]/.test(kept)) return 'A number to text has only digits.'
+  const all = kept.replace(/\D/g, '')
+  if (kept.startsWith('+') && !all.startsWith('1')) {
+    return 'Only US and Canadian numbers can be texted from here — enter 10 digits, area code first.'
+  }
+  const d = nationalDigits(value)
+  if (d.length > 10) {
+    return 'Only US and Canadian numbers can be texted from here — enter 10 digits, area code first.'
+  }
+  if (d.length < 10) return 'That number is too short — enter all 10 digits, area code first.'
+  if ('01'.includes(d[0]) || '01'.includes(d[3])) {
+    return 'That is not a valid US number — an area code and an exchange cannot start with 0 or 1.'
+  }
+  if (d === CALLING_FROM.slice(2)) return "That is this CRM's own number — it cannot text itself."
+  return null
+}
+
+/** `+1XXXXXXXXXX` for a textable number, else null. What the server is sent. */
+export function normaliseTextNumber(value: string): string | null {
+  return textProblem(value) === null ? '+1' + nationalDigits(value) : null
+}

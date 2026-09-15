@@ -292,6 +292,7 @@ def test_a_tech_cannot_book_and_nothing_is_written(client):
 
 # ---------------- the reminders behave exactly as before ----------------
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_a_booking_from_the_modal_schedules_the_same_two_reminders(client):
     r = _book(client)
     appointment_id = r.json()["id"]
@@ -305,6 +306,7 @@ def test_a_booking_from_the_modal_schedules_the_same_two_reminders(client):
         assert _instant(j.run_after.isoformat()) == SOON - delta
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_rescheduling_through_the_panel_still_leaves_one_reminder_per_offset(client):
     appointment_id = _book(client).json()["id"]
     later = SOON + timedelta(days=2)
@@ -336,6 +338,7 @@ def test_editing_description_or_location_does_not_churn_the_reminders(client):
     (datetime(2027, 7, 15, 13, 30), "-04:00", 17),
     (datetime(2027, 1, 15, 13, 30), "-05:00", 18),
 ])
+@pytest.mark.usefixtures("rule_3_armed")
 def test_a_booking_at_1_30_pm_eastern_reads_back_as_1_30_pm_eastern(
         client, wall, offset, utc_hour):
     starts = wall.isoformat() + offset
@@ -455,6 +458,7 @@ def test_booking_over_blocked_time_asks_first_and_writes_nothing(client):
     assert (_count(Appointment), _jobs()) == before, "a refused booking wrote something"
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_confirming_books_over_blocked_time_with_the_usual_reminders(client):
     _block(client)
     r = _book(client, allow_blocked_time=True)
@@ -472,6 +476,7 @@ def test_blocked_time_on_another_calendar_or_touching_does_not_ask(client):
                  ends_at=(after + timedelta(hours=1)).isoformat()).status_code == 201
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_moving_a_booking_onto_blocked_time_asks_first_and_changes_nothing(client):
     later = SOON + timedelta(days=3)
     appointment_id = _book(client, starts_at=later.isoformat(),
@@ -507,6 +512,7 @@ def test_booking_from_the_opportunity_modal_still_links_the_deal(client):
     assert detail["opportunity_title"] == "Jane roof"
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_a_booking_row_is_unchanged_by_the_new_columns_when_they_are_not_sent(client):
     """The CLI's create, which sends none of the new fields, books as before."""
     r = client.post("/api/appointments", json={
