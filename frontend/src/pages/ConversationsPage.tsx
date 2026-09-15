@@ -513,7 +513,9 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   const [sending, setSending] = useState(false)
   // One place for whatever the last action wants to tell the operator: a refused
   // send, a call that is ringing, a suppression. Rendered above the composer.
-  const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null)
+  // `for` pins a note to the thread it is about (a row key), so opening another thread does
+  // not leave "Not sent…" hanging over a conversation it says nothing about.
+  const [note, setNote] = useState<{ text: string; bad: boolean; for?: string | null } | null>(null)
   const [calling, setCalling] = useState(false)
   // "Call a number" (2026-09-14): the dialer modal.
   const [dialing, setDialing] = useState(false)
@@ -719,6 +721,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   useEffect(() => {
     setConfirmDelete(false)
     setDeleteError(null)
+    setNote((n) => (n && n.for != null && n.for !== active ? null : n))
   }, [active])
 
   // `DELETE /api/conversations/{id}` is ADMIN. Mirror it here so the other two
@@ -827,7 +830,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
       // refusal, a failure, a suppression, and the stub transport's "sent" --
       // means it did not go, and is shown as a problem rather than a confirmation.
       const went = r.reason === 'queued' || r.reason === 'recorded'
-      setNote({ text: sendSentence(r.reason), bad: !went })
+      setNote({ text: sendSentence(r.reason), bad: !went, for: current.key })
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['events', active] }),
         qc.invalidateQueries({ queryKey: ['conversations'] }),
@@ -854,7 +857,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     try {
       const r = await sendToThread(current, e.body, 'SMS')
       const went = r.reason === 'queued'
-      setNote({ text: sendSentence(r.reason), bad: !went })
+      setNote({ text: sendSentence(r.reason), bad: !went, for: current.key })
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['events', active] }),
         qc.invalidateQueries({ queryKey: ['conversations'] }),
@@ -878,7 +881,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
    */
   const onNewMessageSent = async (r: NewMessageResult) => {
     setComposing(false)
-    setNote({ text: sendSentence(r.reason), bad: r.reason !== 'queued' })
+    setNote({ text: sendSentence(r.reason), bad: r.reason !== 'queued', for: r.key })
     await qc.invalidateQueries({ queryKey: ['conversations'] })
     void qc.invalidateQueries({ queryKey: ['events'] })
     setScope('team')
@@ -1410,7 +1413,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
 
             {/* composer — measured tray #F7F9FD, inner white radius 4, height 40 */}
             <div className="shrink-0" style={{ backgroundColor: '#F7F9FD', padding: 8 }}>
-              {note && (
+              {note && (note.for == null || note.for === active) && (
                 <div
                   role="status"
                   style={{

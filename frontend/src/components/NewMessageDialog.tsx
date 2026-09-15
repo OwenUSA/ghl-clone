@@ -81,13 +81,17 @@ export function NewMessageDialog({ user, onClose, onSent }: {
     }
   }
 
+  // Most important first. A restricted technician is told the rule before typing, and
+  // it stays until the number itself has something to say.
+  const restrictedLine = isRestricted(user)
+    ? 'With “Only assigned data” on you can text only the customers on your own jobs.'
+    : null
   const hint: { text: string; tone: 'muted' | 'amber' | 'red' } | null =
     refused ? { text: refused, tone: 'red' }
-      : numberProblem ? { text: numberProblem, tone: touched && number ? 'amber' : 'muted' }
-        : isRestricted(user)
-          ? { text: 'With “Only assigned data” on you can text only the customers on your own jobs.',
-            tone: 'muted' }
-          : null
+      : numberProblem && touched && number ? { text: numberProblem, tone: 'amber' }
+        : restrictedLine ? { text: restrictedLine, tone: 'muted' }
+          : numberProblem ? { text: numberProblem, tone: 'muted' }
+            : null
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center"

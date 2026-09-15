@@ -4377,3 +4377,127 @@ tables, creates indexes and adds columns.
 3. Nothing runs yet: no connection exists and every agent is Off. In Settings → AI Connections
    add a connection and press Test; set the on-call phone if emergencies should text it.
 4. Build an agent, Try it, Publish, and only then switch it to Suggest. Auto-pilot last.
+
+## AMENDMENT (2026-09-15): texting goes live — manual texts only, and "New message" to any number
+
+The 10DLC campaign is approved and the operator is switching SMS on in owen-main. From then on
+`CrmLinkTransport` → owen-main `POST /api/crm-link/messages` → BulkVS sends REAL texts. Branch
+`feature/sms-live`. **No migration** (head stays `d7c3a9e5f214`).
+
+### The owner's decisions (2026-09-15), as built
+
+1. **No automatic texts at all — only texts a person sends.** Rules 3 (appointment booked →
+   reminders at T-24h / T-1h) and 4 (stage change → text the customer) are switched OFF exactly
+   the way rule 1 was on 2026-09-13: a module flag (`APPOINTMENT_REMINDERS_ENABLED`,
+   `STAGE_CHANGE_TEXT_ENABLED`, both `False`), the `on_*` hook answers with the sentence and
+   enqueues nothing, and the worker handler refuses a job of that type already in a queue — it
+   sends nothing and logs why (a reminder queued in production before deploy is drained as
+   `done`, having sent nothing). The rules' code is kept readable behind the flags.
+   `on_opportunity_stage_changed` still asks the AI agents' "stage entered" trigger BEFORE the
+   flag: agents are Off / Suggest / Auto-pilot on their own and are not automations.
+   `_drop_pending_reminders` still retires a booking's queued reminder jobs on a reschedule or
+   cancel, so any left from before deploy are released too.
+2. **"New message" to any number** — a compose icon left of "Call a number" in the Team inbox
+   header, opening `NewMessageDialog.tsx` in the dialer's modal family. `POST /api/messages/new`
+   `{number, body}`, ANY_USER like the dialer: the number is validated by `text_problem`
+   (the dialer's rules in words about texting; the browser's `textProblem` says the same words,
+   executed against the server in a test). A number a contact holds (last ten digits, lowest id)
+   is exactly `POST /api/contacts/{id}/messages` — DND suppression included; anyone else's goes on
+   the NUMBER-ONLY thread, found or created, through `send_outbound_to_number`. **No contact is
+   ever created.** A bad number or a restricted user's refusal is a 200 with `recorded: false`
+   and a sentence, and writes nothing — not even an empty thread. After Send the page refetches
+   the inbox, widens it (Team inbox, no search, All) and opens that thread.
+3. **The composer.** Sending works on both kinds of thread. Under a bubble: QUEUED → SENT →
+   DELIVERED (a receipt on `POST /api/events/delivery` advances it on the next poll); REFUSED shows
+   owen-main's own answer as a sentence (opted out / STOP, blocked, switched off, not allowlisted)
+   and offers nothing; FAILED ("could not reach the phone system", or a carrier failure) says it
+   did not arrive and **can be retried**, with a Retry that sends the same words again as a NEW
+   message (the failed one stays — it is what happened). The copy that said texting was "waiting
+   on carrier (10DLC) approval" (`crmlink._HUMAN`, the AI escalation help, Settings → AI
+   Connections) now reads owen-main's actual answer: `CRM_LINK_SMS_ENABLED=false` is "texting from
+   the CRM is switched off in the phone system (owen-main)"; the DID's own gate is "the phone
+   system says this number is not enabled for outbound texts".
+4. **Inbound from an unknown number** lands on its number-only thread with no contact and a fresh
+   unread count (unchanged since 2026-09-13, now pinned for SMS). **What an MMS carries, read from
+   owen-main's `integrations/crm/events.py`: the words plus `"[N attachments — view in OWEN]"` and
+   NO media URLs**, and the CRM's event row has no media column. The images therefore cannot be
+   shown; the note is rendered as an attachment line ("2 attachments — view in OWEN. The phone
+   system does not pass pictures on to the CRM."). Showing them needs owen-main to relay media
+   (as it relays call recordings) and one ADD COLUMN here.
+5. **Quo (OpenPhone) is never a sender.** No route takes a `from_number` (an extra field is
+   ignored); every outbound row is stamped `BulkVS` and the DID. The dialog's "Sending from" is
+   read-only text naming (954) 482-9099.
+6. **"Only assigned data"**: New message follows the dialer — a restricted user may text only a
+   contact on their own jobs; any other number (someone else's customer or nobody's) gets the same
+   sentence and nothing is sent or written.
+
+### Every path that could send an SMS without a person pressing Send, and its state
+
+| Path | State |
+|---|---|
+| Rule 1 — missed call → text back (`POST /api/events` inbound CALL) | OFF since 2026-09-13: hook + worker refuse |
+| Rule 2 — new lead → notify team | ON, internal: a log line, texts nobody |
+| Rule 3 — appointment reminders (staff booking, the Book appointment modal, AI `book_appointment`, reschedule / revive) | **OFF**: hook + worker refuse |
+| Rule 4 — stage change (drag, modal, bulk move, AI `move_stage`, an approved suggestion) | **OFF**: hook + worker refuse; AI trigger still asked |
+| Deleting a stage / pipeline (moves deals) | never fired a rule |
+| AI agent `send_text` | per agent: Off (default) sends nothing; Suggest needs a person's Approve; Auto-pilot (ADMIN, confirmed) sends through `send_outbound`. "Pause all AI agents" stops every agent |
+| AI escalation → on-call phone (a STAFF number, not a customer) | only in Auto-pilot or on an approved suggestion, and only if an on-call phone is set |
+| Workiz import | cannot: imports neither `automations` nor `queue`; one new `jobs` row rolls the import back |
+| AHS work-order emails (`POST /api/ahs-jobs`) | cannot: nothing enqueued, no transport import |
+| OpenPhone / Quo mirror (inbound `POST /api/events`) | writes rows only; rule 1 off; an AI inbound trigger follows the agent's mode |
+| Bulk actions | no bulk text exists; bulk stage move fires rule 4, which is off |
+| `ghl` CLI | `msg send` is a person with `--yes`; `jobs` only lists |
+| CompanyCam, checklist seed, convert_auto_contacts, bootstrap | no send path |
+
+### Screens — OURS, not measured (GoHighLevel's compose screen was never captured)
+
+- New message dialog, 420 px, the Create pipeline modal's look: "New message" 16px/600 + close
+  cross; "To *" 40 px number field; the hint line (grey, amber once typed, red for a server
+  refusal); "Message *" 5-row textarea; "47 characters · 1 segment" left, "47/1600" right;
+  a bordered "Sending from (954) 482-9099" row; Cancel + blue Send with the chat icon. Ctrl/Cmd+Enter
+  sends from the message box; Enter in the number field moves to the message.
+- The compose icon is an outline pencil-on-square (`IconCompose`), 20 px, left of the dialer's
+  phone icon — GoHighLevel conventionally puts compose in this row.
+- Settings → **Automations**, for everyone, read-only: one card per rule with On / Off and the
+  reason; no switches (a switch here would either do nothing or undo the owner's decision). The
+  sidebar's dimmed "Automation" row is unchanged.
+- A composer note is pinned to the thread it is about and is not shown over another thread.
+
+### Judgement calls, all overrulable
+
+- North American numbers only, as the dialer (the DID is a US 10DLC line); "10+ digits" is read as
+  10, or 11 starting with 1.
+- The 1600-character cap (about ten segments) is ours; owen-main sets none.
+- A text to a contact on DND from New message is suppressed with the reason, like the composer,
+  rather than offered.
+- Segment arithmetic: GSM-7 160/153 with extension characters counted twice; any other character
+  makes the whole text UCS-2, 70/67 in UTF-16 units.
+
+### Tests
+
+`tests/test_sms_live.py` (behaviour, owen-main mocked at the HTTP boundary), additions to
+`test_only_assigned_data.py`, `tests/test_new_message_ui.py` (node-executed libraries and source
+wiring), `tests/test_owen_network_guard.py` + `tests/owen_guard.py` (package-wide: no test reaches
+owen-main), and `uv run python -m tests.browser_sms` (headless Chromium, throwaway SQLite, owen-main
+replaced by a recorder, 38 checks). Existing tests that pin rule 3 / rule 4 mechanics (the reminder
+dedupe trap, reschedules, cancel-withdraws, one text per real move from each path) now ask for the
+rule by name (`rule_3_armed` / `rule_4_armed` fixtures); two AI engine assertions and three
+`test_crm_link.py` expectations (E.164 `to_number`, the new refusal wording) were changed for the
+decisions above. Every text is now handed to the transport as E.164 (`automations.sms_number`), so
+owen-main's opt-out and block checks match a contact saved as "(941) 555-0101".
+
+### What the operator must verify live, after owen-main's switch
+
+1. `GET /api/health` → `"crm_link": true`; Settings → Automations shows three rules Off.
+2. **First send**: New message to a staff mobile. The bubble reads "queued"; owen-main's
+   `messages` row exists with the CRM marker; the phone receives it from (954) 482-9099.
+3. **Delivery receipt**: within a poll the bubble moves to "sent" then "delivered". If it stays
+   "queued", owen-main's `/api/crm-link/delivery-receipts` relay is not reaching
+   `POST /api/events/delivery` (check its `crm_report` jobs).
+4. **Inbound reply**: reply from that mobile. It appears on the same thread, unread; from a number
+   no contact holds it is a number-only thread and no contact is created. Send a picture: the
+   attachment line appears.
+5. **STOP**: reply STOP, then send again. The bubble reads "not sent — This number has opted out of
+   texts (they replied STOP)". Reply START (owen-main's opt-in) before further tests.
+6. A restricted technician cannot text a number outside their jobs; and a reminder job left in
+   the production queue from before deploy drains as done with no outbound row.
