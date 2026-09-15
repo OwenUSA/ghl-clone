@@ -4377,3 +4377,144 @@ tables, creates indexes and adds columns.
 3. Nothing runs yet: no connection exists and every agent is Off. In Settings → AI Connections
    add a connection and press Test; set the on-call phone if emergencies should text it.
 4. Build an agent, Try it, Publish, and only then switch it to Suggest. Auto-pilot last.
+
+## AMENDMENT (2026-09-15): every Workiz job is on the calendar, past or future, and the week view lays overlapping visits side by side
+
+The owner's decisions after comparing his Workiz week (Sep 13–19) with ours: production had 15
+scheduled jobs that week and the CRM drew 9, one of them on the wrong day, two titled
+"Inspection", and two 3–5 PM visits on Tuesday drawn one on top of the other. No migration (head
+stays `d7c3a9e5f214`), no new route.
+
+### What this AMENDS, explicitly
+
+* **"Only FUTURE jobs become appointments"** (The Workiz import, 2026-09-11) — REVERSED. Every
+  non-cancelled job with a `Scheduled` time gets exactly one appointment on "Workiz Jobs
+  (imported)", past or future. The reason that rule existed ("back-dating a booking is the shape
+  that would have produced the texts") was about going through `POST /api/appointments`. The
+  importer never does: it writes rows through the ORM, it cannot import `app.automations` or
+  `app.queue`, and `run` rolls everything back if the `jobs` table gains a row. Nothing in `app/`
+  scans the appointments table to send anything (reminders exist only as `jobs` rows made by
+  `on_appointment_booked`; the AI context reads upcoming appointments but never triggers on a
+  row). The guard test now covers a past visit and a re-import that moves and cancels.
+* **"Past visits are never touched"** (the Workiz `Tech` column, 2026-09-15) — REVERSED, same day.
+  The assignment rule (`tech_assignment`) applies to past visits too, so a technician with a login
+  sees their history ("Only assigned data" counts an assigned visit, cancelled ones excepted).
+  Dry-run wording: "Appointments, past and future (N)".
+* **The grid hours** (2026-09-13: "opens scrolled to 5 AM") — the grid opens at **7 AM**, where
+  Workiz starts, and each hour is as tall as it can be while 7 AM–7 PM fits without scrolling
+  (`hourPxFor`: pane height / 12, never below 48 px). All 24 hours are still drawn.
+* **Day and Week view were "measured and unchanged"** — the block's CONTENTS and the overlap layout
+  changed (below); the grid, header, toolbar, colours and Manage view panel did not.
+
+### The importer: one visit per scheduled job, and what it may write to
+
+* **Create** — past or future, status `confirmed`, the card's title (the customer's name; an AHS
+  email card keeps its own name-first title, and the visit carries it). A job whose End is on a
+  later date keeps its real end; no End, or End not after Scheduled, is 2 hours (unchanged).
+* **Move** — Workiz's start or end changed, past or future: the same row, new times.
+* **Retitle** — the visit's title differs from the card's (the old "Inspection" titles).
+* **Cancel** — the job is now Canceled/Cancelled in Workiz, or has no Scheduled time: status
+  `cancelled`, never a delete; the assignee stays so the history says who it was. **Restore** — the
+  importer's own cancellation, and Workiz schedules the job again: back to `confirmed`.
+* **Whose visit it is.** `custom_fields.workiz_appointment` on the CARD records what the importer
+  last wrote to its visit: `{id, starts_at, ends_at, status, title}` (on the card for the same
+  reason as `workiz_tech_assigned_user_id`: an appointment has no JSON column). The importer may
+  write to that row only while its time, status and title still equal the record. Anything else —
+  a person moved it, cancelled it, renamed it, or moved it to another calendar or card — is
+  **`manual`: left alone entirely (its assignee too) and listed with what changed**. The importer
+  never books a second visit beside a manual one. Who ASSIGNED it is not part of this test: that
+  has its own record and rule, and a dispatcher assigning a tech is not a reason to stop following
+  Workiz's times. Read-only through the API like every `workiz_*` key.
+* **Visits made before the record existed** (production today). With no record, the card's first
+  visit on the Workiz calendar is ADOPTED if it looks like the old importer's output: status
+  `confirmed`, and no notes, description, location or AI agent (the old importer wrote none of
+  those; the Book appointment modal always resolves a location). Adopted visits are listed in the
+  dry run. Anything else on that calendar with no record is `manual`. **Judgement call:** a person
+  who moved an old imported visit before this change, without touching anything else, cannot be
+  told apart and will be moved back to Workiz's time on the first run — the dry run lists every
+  move by Job # so the owner can check them first.
+* **Jobs the export no longer mentions** are still left exactly as they are (2026-09-14); only a
+  job that IS in the export, cancelled or unscheduled, cancels its visit.
+
+### The dry run's "Appointments" section (Job #s only, no customer data)
+
+```
+Appointments (one per scheduled job, past or future, on 'Workiz Jobs (imported)')
+  2      to create — 1 in the past, 1 in the future
+        past jobs OLD001
+        future jobs NEW001
+  1      to move: Workiz's scheduled time or end changed
+        jobs J2P6JO
+  0      to restore: the importer had cancelled it and Workiz schedules it again
+  1      to retitle to the customer's name, as on the card
+        jobs 9CNTDD
+  2      to cancel (status, never deleted): cancelled or unscheduled in Workiz
+        job ELK2KF     no Scheduled time in Workiz
+        job WFNSXZ     cancelled in Workiz
+  1      changed by a person since the import wrote it — LEFT ALONE
+        job N61PDL     a person changed its time
+  7      unchanged
+  1      of those made by an earlier import that kept no record — adopted, and recorded from this run on
+        jobs 9CNTDD
+  reminders scheduled: 0, always. ...
+```
+
+`--json` carries the same under `appointments` (`create_past`, `create_future`, `move`, `restore`,
+`retitle`, `cancel`, `manual`, `unchanged`, `adopted_from_an_earlier_import`). Written counts:
+`appointments_created_past|created_future|moved|restored|retitled|unchanged|cancelled|left_alone`.
+
+### The week and day view
+
+* **Side by side** (`calendarGrid.layoutDay`, executed under node in `test_calendar_layout.py`).
+  Items that overlap, directly or through a chain, form a group; each takes the first lane free
+  when it starts (earliest first, longest first on a tie); the group's width is split into as
+  many lanes as it needed; an item then widens into lanes to its right that nothing overlapping it
+  uses. Touching (12–1 and 1–3) is not overlapping. No two items that overlap in time share
+  horizontal space. Blocked off time is laid out in the same pass, so neither hides the other.
+  Workiz staggers its overlaps slightly; GoHighLevel splits the column; we split.
+* **Height = real duration.** No minimum height any more (it was 24 px, which could push a short
+  visit over the next one); a zero-length item is drawn 15 minutes tall.
+* **Past midnight / multi-day**: drawn on every day it touches — start to midnight, whole days in
+  between, midnight to end — with the squared-off edge where it continues. A carried-over segment
+  puts its words at 7 AM rather than at midnight, where nobody would see them. Its range names
+  both days: "Thu 7:30 AM – Fri 10:00 AM". Month view lists it on each day ("until 10:00 AM" on
+  the later ones). Ending exactly at midnight stays on its own day.
+* **The block** (our design, the GHL look): the title, the time RANGE ("7:30 – 10:00 AM",
+  "11:30 AM – 1:00 PM"), then, as height allows, "Job #03T4HE" and the CARD's street and city (a
+  visit with no card shows its meeting location instead). A block one line tall reads "Title,
+  range". Every line truncates with an ellipsis; hovering shows everything plus the calendar; a
+  click opens the existing appointment detail panel. `GET /api/appointments` gained
+  `opportunity_address` and `workiz_job_id`, blanked together with `opportunity_title` for a deal
+  the reader may not see.
+* **Month view** shows three chips and "+N more", which now opens a card listing every booking of
+  that day (GoHighLevel's behaviour), each opening its detail panel; Escape or a click outside
+  closes it.
+
+### Screenshot assumptions (refs/round7/57 and 58 do not show these)
+
+Neither screenshot shows a day or month view, a multi-day block's second day, a block too short
+for two lines, the "+N more" card, or the hover. All of those are built to GoHighLevel's
+convention in our existing look and are listed here. Workiz's tags (Callback, Tile Roof, AHS –
+Repair Scheduled) are not drawn: the CRM does not import Workiz tags. Very narrow lanes (three
+overlapping visits in a week column with Manage view open are ~37 px) truncate to a letter or two
+by design; closing Manage view or Day view gives them room.
+
+### Not built
+
+* **The grid is still in the browser's timezone** (the 2026-09-13 known gap). Staff are in
+  Florida, so it matches; the headless check runs in America/New_York.
+* No drag to move or resize (unchanged decision).
+
+### What the operator must do on production
+
+Nothing to migrate. After deploying, with `DATABASE_URL` on production's database and the
+latest Workiz export, exactly as every earlier import was run:
+
+    cd backend
+    uv run python -m app.workiz_import --clients <workiz_clients.csv> --jobs <workiz_jobs.csv> [--tech-map techs.json]
+    # read the Appointments section: "to move" (an old visit a person moved by hand cannot be
+    # told apart — see above), "to cancel" and "LEFT ALONE"; then the same line with --commit
+
+(Without `--clients` / `--jobs` it reads `~/workiz/workiz_clients.csv` and
+`~/workiz/workiz_jobs.csv`.) Run it again after every new export: a second run with the same
+files changes nothing.

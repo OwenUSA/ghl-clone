@@ -286,9 +286,12 @@ uv run python -m app.workiz_import --json | jq     # the same numbers, for a mac
 - **An import can never text a customer.** It does not import `app.automations` or
   `app.queue`, and it counts the `jobs` table before and after inside the
   transaction — one new row rolls the whole import back. Do not "simplify" either
-  guard. Only FUTURE-dated jobs become appointments.
+  guard. **Every scheduled job gets one appointment, past or future** (2026-09-15, reversing
+  "future only"): a re-import moves, retitles or cancels (status, never delete) only a visit
+  still exactly as the importer left it — `workiz_appointment` on the card records that — and
+  lists a visit a person changed as LEFT ALONE. Older visits with no record are adopted.
 - **The `Tech` column** (2026-09-15) lands on the card as read-only `workiz_tech` and assigns
-  the job's FUTURE appointment (kept on the Workiz calendar) to the first technician that maps
+  the job's appointment, past or future (kept on the Workiz calendar), to the first technician that maps
   to an active user — `--tech-map techs.json` (`{"Workiz name": "email"}`), else an exact full
   name. Owners never change; a person's assignment is never overwritten (the card's
   `workiz_tech_assigned_user_id` says which ones are the importer's). See DECISIONS.md.
@@ -389,6 +392,11 @@ found while building this.
   until `force=true`. Missing the appointments is what returned a raw 500 on production —
   see the 2026-09-11 amendment in `DECISIONS.md`. `DELETE /api/appointments/{id}` is a
   cancel, not a delete: the row survives and the body says `deleted: false`.
+- **The Day/Week grid lays overlapping visits side by side** (2026-09-15):
+  `calendarGrid.layoutDay` decides lanes and `bucketByOverlap` puts a multi-day job on every day
+  it touches — both executed under node in `test_calendar_layout.py`; the page must not
+  re-derive either. It opens on 7 AM–7 PM (`hourPxFor`). `uv run python -m
+  tests.browser_calendar_week` (from `backend/`) draws the measured Monday in headless Chromium.
 - **Appointment times are picked in the ACCOUNT's timezone** (America/New_York), not the
   browser's — `frontend/src/lib/accountTime.ts`, executed under node in
   `test_account_time.py`. Never format or build a booking's time with
