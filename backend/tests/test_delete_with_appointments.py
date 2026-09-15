@@ -261,6 +261,7 @@ def test_force_detaches_the_appointment_and_keeps_every_field_of_it(world):
     assert mine and mine[0]["contact_name"] is None
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_force_withdraws_the_reminders_of_the_appointments_it_detaches(world):
     """A queued reminder for a customer who no longer exists can never send —
     `_h_appointment_reminder` checks — but "could never send" and "is not queued"
@@ -389,6 +390,7 @@ def test_cancelling_an_appointment_keeps_the_row_and_says_so(world):
     assert still.json()["contact_id"] == world.ids["contact"]
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_cancelling_withdraws_the_pending_reminders_and_reports_how_many(world):
     cid = world.ids["contact"]
     booked = world.post("/api/appointments", json={

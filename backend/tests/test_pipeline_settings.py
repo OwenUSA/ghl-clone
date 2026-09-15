@@ -438,6 +438,7 @@ def test_reordering_pipelines_changes_the_order_the_board_lists(client):
 
 # ---------------- deleting a stage that holds deals ----------------
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_deleting_a_stage_moves_its_deals_byte_identical_and_queues_nothing(client):
     c = client["admin"]
     ids = c.ids

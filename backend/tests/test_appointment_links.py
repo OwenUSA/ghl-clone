@@ -227,6 +227,7 @@ def test_a_booking_bound_to_a_deal_that_does_not_exist_is_a_sentence_not_a_500(c
         "opportunity_id"] is None
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_linking_a_booking_does_not_touch_the_reminder_queue(client):
     """CLAUDE.md is explicit about how easily reminder rescheduling breaks, so
     this change stays away from it. Asserted by counting rows in `jobs`, the way

@@ -594,7 +594,7 @@ function Escalation({ admin, draft, set }: SectionProps) {
     <>
       <SectionTitle>Escalation</SectionTitle>
       <Help>Who gets an urgent task and an alert when the agent hands a conversation to a person. An emergency also
-        texts the on-call phone set in Settings → AI Connections (texting is dark until 10DLC is approved).</Help>
+        texts the on-call phone set in Settings → AI Connections, from (954) 482-9099 through the phone system.</Help>
       <div style={{ marginTop: 10 }}>
         {staff.map((u) => (
           <CheckRow key={u.id} admin={admin} checked={draft.escalation_user_ids.includes(u.id)}

@@ -616,6 +616,39 @@ def test_the_dialer_rings_only_her_customers_and_writes_nothing_otherwise(world,
     assert c["dana"].post("/api/calls/dial", json={"number": "(941) 555-7777"}).json()["placed"]
 
 
+def test_new_message_texts_only_her_customers_and_writes_nothing_otherwise(world, monkeypatch):
+    """"New message" (2026-09-15) follows the dialer's rule: a restricted technician may
+    text a customer of her own jobs, never someone else's customer or an unknown number."""
+    ids, c = world
+    from app import transport
+    sent = []
+
+    class Recording:
+        def send_sms(self, to, body, from_number):
+            sent.append(to)
+            return transport.MessageRef(provider_ref="m1", status=transport.DeliveryStatus.QUEUED)
+
+    monkeypatch.setattr(transport, "get_transport", lambda: Recording())
+    from app import automations
+    monkeypatch.setattr(automations, "get_transport", lambda: Recording())
+    before = (_count(ConversationEvent), _count(NumberThread), _count(NumberThreadEvent),
+              _count(Conversation), _count(Contact))
+    for number in ("+19415550004", "(941) 555-7777"):   # Otto's customer; nobody's number
+        r = c["tess"].post("/api/messages/new", json={"number": number, "body": "hi"}).json()
+        assert r["recorded"] is False and "Only assigned data" in r["reason"]
+        assert r["contact_id"] is None and r["key"] is None
+    assert sent == [], "nothing was texted"
+    assert (_count(ConversationEvent), _count(NumberThread), _count(NumberThreadEvent),
+            _count(Conversation), _count(Contact)) == before
+    mine = c["tess"].post("/api/messages/new",
+                          json={"number": "+19415550000", "body": "On my way"}).json()
+    assert mine["recorded"] is True and mine["contact_id"] == ids["people"]["owned"]
+    assert sent == ["+19415550000"]
+    other = c["dana"].post("/api/messages/new",
+                           json={"number": "(941) 555-7777", "body": "hello"}).json()
+    assert other["recorded"] is True and other["kind"] == "number"
+
+
 def test_number_threads_are_404_on_every_route(world):
     ids, c = world
     n = ids["number"]
@@ -1070,6 +1103,9 @@ AUDITED = {
     "call_number_thread": "_number_thread refuses -> 404",
     "dial_number": "restricted: only a number held by a scope contact, else refused, "
                    "nothing written (assigned_access.scope)",
+    "new_message": "restricted: only a number held by a scope contact, else refused, "
+                   "nothing written (assigned_access.scope)",
+    "list_automations": "definitions only",
     "list_calls": "_search_events(scope)",
     "list_messages": "_search_events(scope)",
     "search": "contacts/opportunities/messages over one scope",

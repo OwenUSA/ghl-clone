@@ -1778,3 +1778,41 @@ export type AiAlert = {
 export const aiAlerts = () => get<{ unread: number; items: AiAlert[] }>('/api/ai/alerts')
 export const readAiAlert = (id: number) => send<{ id: number; read: boolean }>(`/api/ai/alerts/${id}/read`, 'POST')
 export const readAllAiAlerts = () => send<{ marked: number }>('/api/ai/alerts/read-all', 'POST')
+
+// ---------------- New message to any number (2026-09-15) ----------------
+
+/** What `POST /api/messages/new` answers. `recorded: false` means nothing was written — a
+ *  bad number or "Only assigned data" — and `reason` says why in a sentence. Otherwise the
+ *  text is on the thread named by `key` ("c<id>" / "n<id>"), whatever the phone system
+ *  then did with it (`reason` is the composer's vocabulary, see lib/sendOutcome.ts). */
+export type NewMessageResult = {
+  recorded: boolean
+  suppressed?: boolean
+  reason: string
+  number: string | null
+  kind: 'contact' | 'number' | null
+  key: string | null
+  id: number | null
+  contact_id: number | null
+  contact_name?: string | null
+  conversation_id: number | null
+  number_thread_id: number | null
+  delivery_status: string | null
+  delivery_detail: string | null
+}
+
+/** Text ANY number: a contact's number goes on their conversation, anyone else's on the
+ *  number's own thread. Never creates a contact, and never takes a "from" number. */
+export const sendNewMessage = (number: string, body: string) =>
+  send<NewMessageResult>('/api/messages/new', 'POST', { number, body })
+
+/** One hard-coded automation rule and whether it is on (Settings → Automations). */
+export type AutomationRule = {
+  key: string
+  name: string
+  trigger: string
+  texts_customer: boolean
+  enabled: boolean
+  reason: string | null
+}
+export const listAutomations = () => get<{ rules: AutomationRule[] }>('/api/automations')

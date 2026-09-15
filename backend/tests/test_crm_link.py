@@ -200,8 +200,10 @@ def test_the_send_reaches_owen_main_with_the_body_its_api_declares(world, link):
 
     sent = link.last
     assert sent["url"] == "http://callmon_app:8888/api/crm-link/messages"
+    # E.164 (2026-09-15): owen-main matches opt-outs and its block list on the number it
+    # is handed, so a contact saved as "(941) 555-0101" goes out as +19415550101.
     assert sent["json"] == {"from_number": "+19544829099",
-                            "to_number": "(941) 555-0101", "body": "hello"}
+                            "to_number": "+19415550101", "body": "hello"}
     assert sent["headers"]["X-OWEN-Key"] == "owen_sk_test"
 
 
@@ -236,15 +238,15 @@ def test_with_no_link_configured_nothing_leaves_the_building(world):
 # --- 2. a refused send ---------------------------------------------------------------
 
 
-# The exact bodies owen-main returns today. `config.REFUSE_SMS_DARK` is what a send
-# hits first, because CRM_LINK_SMS_ENABLED is false pending 10DLC approval.
+# The exact bodies owen-main returns. `config.REFUSE_SMS_DARK` is what a send hits
+# first whenever the operator has CRM_LINK_SMS_ENABLED switched off.
 SMS_DARK = {"detail": "CRM-link SMS is dark (CRM_LINK_SMS_ENABLED=false)"}
 NOT_ALLOWLISTED = {"detail": "destination is not on CRM_LINK_ALLOWLIST"}
 OPTED_OUT = {"detail": "this contact has opted out of SMS"}
 
 
 @pytest.mark.parametrize("body,expect_phrase", [
-    (SMS_DARK, "carrier"),
+    (SMS_DARK, "switched off"),
     (NOT_ALLOWLISTED, "approved list"),
     (OPTED_OUT, "opted out"),
 ])
@@ -285,7 +287,8 @@ def test_a_refusal_is_a_sentence_not_a_wire_body(world, link):
     assert "CRM_LINK" not in detail and "false" not in detail, (
         "the raw refusal leaked to the operator: %r" % detail)
     assert detail.endswith("."), "not a sentence: %r" % detail
-    assert "10DLC" in detail or "carrier" in detail
+    # 2026-09-15: 10DLC is approved, so "waiting on carrier approval" would now be false.
+    assert "switched off" in detail and "10DLC" not in detail
 
 
 def test_an_unreachable_phone_system_is_failed_not_refused(world, link,

@@ -5,6 +5,7 @@ as much as the happy paths.
 """
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from app import automations
 from app.models import (
     Appointment,
@@ -96,6 +97,7 @@ def test_new_lead_notify_ignores_dnd(db, contact):
 
 # ---------- rule 3: appointment reminders ----------
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_booking_schedules_both_reminders(db, contact):
     a = Appointment(title="Roof Inspection", contact_id=contact.id,
                     starts_at=utcnow() + timedelta(days=3),
@@ -106,6 +108,7 @@ def test_booking_schedules_both_reminders(db, contact):
     assert len(jobs(db, "appointment_reminder")) == 2
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_reminder_in_the_past_is_not_scheduled(db, contact):
     """An appointment in 2 hours can't get a T-24h reminder — that would fire
     immediately, which is worse than not sending."""
@@ -118,6 +121,7 @@ def test_reminder_in_the_past_is_not_scheduled(db, contact):
     assert len(jobs(db, "appointment_reminder")) == 1
 
 
+@pytest.mark.usefixtures("rule_3_armed")
 def test_rebooking_does_not_duplicate_reminders(db, contact):
     a = Appointment(title="Repair", contact_id=contact.id,
                     starts_at=utcnow() + timedelta(days=2),
@@ -131,6 +135,7 @@ def test_rebooking_does_not_duplicate_reminders(db, contact):
 
 # ---------- rule 4: stage change ----------
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_stage_change_queues_customer_text(db, opportunity, pipeline):
     _, _, b = pipeline
     old = opportunity.stage_id
@@ -149,6 +154,7 @@ def test_same_stage_does_not_notify(db, opportunity):
 
 # ---------- worker ----------
 
+@pytest.mark.usefixtures("rule_4_armed")
 def test_worker_records_outbound_as_logged_only(db, opportunity, pipeline):
     """The whole point of the stub: the message is recorded, never transmitted.
 

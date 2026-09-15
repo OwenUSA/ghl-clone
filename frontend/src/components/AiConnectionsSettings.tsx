@@ -87,7 +87,7 @@ export function AiConnectionsSettings() {
               </button>
             </div>
             <div style={{ fontSize: 12, color: FAINT, marginTop: 6 }}>
-              An EMERGENCY escalation texts this number (texting is dark until 10DLC is approved).
+              An EMERGENCY escalation texts this number from (954) 482-9099, through the phone system — only while an agent is on Auto-pilot, or when staff approve its suggestion.
             </div>
           </div>
         </div>

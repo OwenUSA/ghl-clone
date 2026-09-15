@@ -4818,28 +4818,41 @@ def dial_problem(raw: str) -> tuple[str | None, str | None]:
     `phones.normalize_phone`: its sentences are about SAVING a contact's number
     ("extensions are not stored...") and it accepts every country.
     """
+    return _number_problem(raw, "call")
+
+
+def text_problem(raw: str) -> tuple[str | None, str | None]:
+    """`dial_problem`'s rules for "New message" (2026-09-15), in words about texting.
+    The browser's twin is `textProblem` in `frontend/src/lib/dialPad.ts`."""
+    return _number_problem(raw, "text")
+
+
+def _number_problem(raw: str, verb: str) -> tuple[str | None, str | None]:
+    called = "called" if verb == "call" else "texted"
     text = (raw or "").strip()
     if not text:
-        return None, "Enter a number to call — 10 digits, area code first."
+        return None, "Enter a number to %s — 10 digits, area code first." % verb
     if not _DIALABLE_CHARS.match(text):
-        return None, ("A number to call has only digits. Star and pound are for menus "
-                      "once the call connects.")
+        if verb == "call":
+            return None, ("A number to call has only digits. Star and pound are for menus "
+                          "once the call connects.")
+        return None, "A number to text has only digits."
     digits = re.sub(r"\D", "", text)
     if text.startswith("+") and not digits.startswith("1"):
-        return None, ("Only US and Canadian numbers can be called from here — "
-                      "enter 10 digits, area code first.")
+        return None, ("Only US and Canadian numbers can be %s from here — "
+                      "enter 10 digits, area code first." % called)
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
     if len(digits) != 10:
-        return None, ("Only US and Canadian numbers can be called from here — "
-                      "enter 10 digits, area code first."
+        return None, ("Only US and Canadian numbers can be %s from here — "
+                      "enter 10 digits, area code first." % called
                       if len(digits) > 10 else
                       "That number is too short — enter all 10 digits, area code first.")
     if digits[0] in "01" or digits[3] in "01":
         return None, ("That is not a valid US number — an area code and an exchange "
                       "cannot start with 0 or 1.")
     if number_threads.phone_key(crmlink.current().from_number) == digits:
-        return None, "That is this CRM's own number — it cannot call itself."
+        return None, "That is this CRM's own number — it cannot %s itself." % verb
     return "+1" + digits, None
 
 
@@ -4894,6 +4907,94 @@ def dial_number(body: DialIn, db: Session = Depends(get_db),
             "number_thread_id": thread.id,
             "reason": "Calling %s now — your phone will ring first."
                       % (format_phone(number) or number)}
+
+
+ONLY_THEIR_CUSTOMERS_TEXT = ("With “Only assigned data” on you can text the customers on your "
+                             "own jobs, and this number is not one of them.")
+
+
+class NewMessageIn(BaseModel):
+    """"New message" to any number. Deliberately no `from_number`: every text leaves on
+    the bound BulkVS DID, and Quo (OpenPhone) is never a sender (2026-09-11). A client
+    that sends one anyway has it ignored, like any unknown field."""
+    number: str = Field(max_length=40)
+    body: str = Field(max_length=1600)
+
+
+@app.post("/api/messages/new")
+def new_message(body: NewMessageIn, db: Session = Depends(get_db),
+                principal: auth.Principal = auth.ANY_USER):
+    """Text ANY number — the Conversations page's "New message" (2026-09-15).
+
+    Not a second send path; the twin of `POST /api/calls/dial`. The number is
+    normalised by `text_problem`, then:
+
+      * a CONTACT holds it (last ten digits, lowest id): this is
+        `POST /api/contacts/{id}/messages`, DND suppression included, on their thread;
+      * nobody holds it: its NUMBER-ONLY thread is found or created and the text goes
+        through `send_outbound_to_number`, exactly as the thread's own composer sends.
+        No contact is ever created.
+
+    Refusals (a bad number, "Only assigned data") are a 200 with `recorded: false` and a
+    sentence, and write nothing — not even an empty thread. A send the phone system
+    refuses or cannot take IS recorded on the thread, like any composer send.
+    """
+    if not body.body.strip():
+        raise HTTPException(400, "a message needs a body")
+    none = {"recorded": False, "id": None, "kind": None, "key": None, "contact_id": None,
+            "conversation_id": None, "number_thread_id": None, "delivery_status": None,
+            "delivery_detail": None}
+    number, problem = text_problem(body.number)
+    if problem:
+        return {**none, "number": None, "reason": problem}
+
+    contact = number_threads.contact_holding(db, number)
+    s = assigned_access.scope(db, principal)
+    if s.restricted and (contact is None or not s.sees_contact(contact.id)):
+        # The same sentence whether or not someone else's contact holds the number, so
+        # it cannot be used to find out who does; nothing is written.
+        return {**none, "number": number, "reason": ONLY_THEIR_CUSTOMERS_TEXT}
+
+    if contact is not None:
+        out = _send_to_contact(db, contact, MessageSend(body=body.body, type="SMS"),
+                               principal)
+        conv_id = out.get("conversation_id")
+        if conv_id is None:
+            # Suppressed (DND, or no phone): nothing was written, so nothing to open —
+            # except the thread the contact may already have.
+            existing = db.scalar(select(Conversation.id).where(
+                Conversation.contact_id == contact.id))
+            conv_id = existing
+        return {**out, "recorded": not out["suppressed"], "number": number, "kind": "contact",
+                "key": ("c%d" % conv_id) if conv_id is not None else None,
+                "contact_id": contact.id, "contact_name": contact.name or None,
+                "conversation_id": conv_id, "number_thread_id": None}
+
+    thread, created = number_threads.thread_for_number(db, number)
+    ev, reason = automations.send_outbound_to_number(db, thread, body.body)
+    db.commit()
+    if ev is None:
+        if created:
+            db.delete(thread)
+            db.commit()
+        return {**none, "number": number, "reason": reason, "suppressed": True}
+    db.refresh(ev)
+    return {"recorded": True, "suppressed": False, "reason": reason, "id": ev.id,
+            "number": number, "kind": "number", "key": "n%d" % thread.id,
+            "contact_id": None, "contact_name": None, "conversation_id": None,
+            "number_thread_id": thread.id, "thread_created": created,
+            "type": ev.type.value, "direction": ev.direction.value,
+            "occurred_at": ev.occurred_at, "body": ev.body,
+            "delivery_status": ev.delivery_status.value if ev.delivery_status else None,
+            "delivery_detail": ev.delivery_detail}
+
+
+@app.get("/api/automations")
+def list_automations(principal: auth.Principal = auth.ANY_USER):
+    """The four hard-coded rules and whether each is on, with the reason in words
+    (2026-09-15). Read-only: there is no switch to flip from the browser, because the
+    owner's decision is that nothing texts a customer by itself."""
+    return {"rules": automations.rules()}
 
 
 class ConversationPatch(BaseModel):

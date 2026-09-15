@@ -13,6 +13,14 @@ import pytest
 _TMP = os.path.join(tempfile.gettempdir(), "ghl_clone_test.db")
 os.environ["DATABASE_URL"] = "sqlite:///" + _TMP
 
+# ---- no test may reach owen-main (texting goes live, 2026-09-15) -------------------------
+# Before any app module reads the environment: a shell with production's link settings
+# exported must not arm the suite. See tests/owen_guard.py.
+from tests import owen_guard  # noqa: E402
+
+owen_guard.strip_environment()
+owen_guard.install()
+
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import Contact, Opportunity, Pipeline, Role, Stage, User  # noqa: E402
 
@@ -28,6 +36,17 @@ from tests.ai_support import script, secrets_key, world  # noqa: E402, F401
 
 
 @pytest.fixture(autouse=True)
+def _no_owen_main_network():
+    owen_guard.ATTEMPTS.clear()
+    yield
+    attempted = list(owen_guard.ATTEMPTS)
+    owen_guard.ATTEMPTS.clear()
+    assert not attempted, ("this test tried to reach owen-main (%s) — a configured link sends "
+                           "REAL texts; mock crmlink at the HTTP boundary (tests/test_crm_link.py "
+                           "`link`)" % ", ".join(attempted))
+
+
+@pytest.fixture(autouse=True)
 def _no_provider_network():
     ai_guard.ATTEMPTS.clear()
     yield
@@ -35,6 +54,27 @@ def _no_provider_network():
     ai_guard.ATTEMPTS.clear()
     assert not attempted, ("this test tried to reach a real AI provider (%s) — mock it at "
                            "the HTTP boundary (tests/ai_support.py)" % ", ".join(attempted))
+
+
+# ---- rules 3 and 4 are OFF (owner's decision, 2026-09-15) --------------------------------
+# "No automatic texts at all — only texts a person sends." Their code is kept behind the
+# flags, and so are the tests that pin its mechanics (the reminder dedupe trap, reschedule,
+# cancel-withdraws, one text per real move from every path). Those tests ask for the rule
+# BY NAME with these fixtures; the default — off, nothing queued, a queued job refused — is
+# asserted in tests/test_sms_live.py.
+
+@pytest.fixture()
+def rule_3_armed(monkeypatch):
+    """Appointment reminders switched back ON for a test of their kept mechanics."""
+    from app import automations
+    monkeypatch.setattr(automations, "APPOINTMENT_REMINDERS_ENABLED", True)
+
+
+@pytest.fixture()
+def rule_4_armed(monkeypatch):
+    """Stage-change texts switched back ON for a test of their kept mechanics."""
+    from app import automations
+    monkeypatch.setattr(automations, "STAGE_CHANGE_TEXT_ENABLED", True)
 
 
 @pytest.fixture()

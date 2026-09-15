@@ -3,13 +3,18 @@
 No visual workflow builder in v1 — these four rules are what the business actually
 runs, and a canvas to configure four rules is 30-40% of the build for no gain.
 
-  1. missed call            -> auto-text the caller back   DISABLED 2026-09-13
-  2. new lead created       -> notify the team internally
-  3. appointment booked     -> remind the customer at T-24h and T-1h
-  4. opportunity stage move -> text the customer the status update
+  1. missed call            -> auto-text the caller back   OFF 2026-09-13
+  2. new lead created       -> notify the team internally  (internal, sends no text)
+  3. appointment booked     -> remind the customer at T-24h and T-1h   OFF 2026-09-15
+  4. opportunity stage move -> text the customer the status update  OFF 2026-09-15
 
-Every outbound message goes through MessageTransport, which in v1 is
-LoggingTransport: the rule fires, the intent is recorded, nothing is transmitted.
+**No automatic texts at all — only texts a person sends** (the owner, 2026-09-15, the
+day SMS went live on owen-main). Rules 1, 3 and 4 are each switched off the same way:
+a module flag, a hook that answers with a sentence and enqueues nothing, and a worker
+handler that refuses a job of that type already sitting in a queue. Their code is kept
+readable behind the flags; `RULES` is what the Settings screen and the API report.
+
+Every outbound message goes through MessageTransport (see transport.py).
 
 Two suppression rules apply to ALL customer-facing sends:
   * contact.dnd            - explicit Do Not Disturb
@@ -151,10 +156,21 @@ def _outcome_reason(ref) -> str:
     return "sent"
 
 
+def sms_number(stored: str | None) -> str:
+    """The number a text is handed to the transport as: E.164 when it parses.
+
+    A contact saved before normalisation can still hold "(941) 555-0100", and the far
+    side matches opt-outs and its block list on the number it is given. `store_phone`
+    never raises: a shape it cannot read is passed on as typed rather than guessed at.
+    """
+    from .phones import store_phone
+    return store_phone(stored) or ""
+
+
 def _record_outbound(db: Session, contact: Contact, body: str,
                      type_: EventType = EventType.SMS) -> ConversationEvent:
     """Send via the transport seam and record the result on the thread."""
-    ref = get_transport().send_sms(to=contact.phone or "", body=body,
+    ref = get_transport().send_sms(to=sms_number(contact.phone), body=body,
                                    from_number="")
     conv = thread_for(db, contact.id)
     ev = ConversationEvent(
@@ -231,7 +247,7 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
         ref = get_transport().send_email(to=contact.email,
                                          subject=subject or "", html=body)
     else:
-        ref = get_transport().send_sms(to=contact.phone or "", body=body,
+        ref = get_transport().send_sms(to=sms_number(contact.phone), body=body,
                                        from_number="")
 
     conv = thread_for(db, contact.id)
@@ -282,7 +298,7 @@ def send_outbound_to_number(db: Session, thread, body: str, *,
     if not thread.phone:
         return None, "suppressed: no phone number"
 
-    ref = get_transport().send_sms(to=thread.phone, body=body, from_number="")
+    ref = get_transport().send_sms(to=sms_number(thread.phone), body=body, from_number="")
     ev = NumberThreadEvent(
         number_thread_id=thread.id, type=type_, direction=Direction.OUTBOUND,
         occurred_at=_utcnow(), body=body,
@@ -345,12 +361,28 @@ def on_contact_created(db: Session, contact: Contact) -> str:
 NO_REMINDER_STATUSES = {"cancelled", "blocked"}
 
 
+# Rules 3 and 4 are OFF, by the owner's decision (DECISIONS.md, 2026-09-15): "no
+# automatic texts at all — only texts a person sends". Switched off exactly the way
+# rule 1 was — the hook answers with the sentence and enqueues nothing, and the worker
+# refuses a job of that type left in a queue from before, so it sends nothing either.
+APPOINTMENT_REMINDERS_ENABLED = False
+APPOINTMENT_REMINDERS_DISABLED = (
+    "appointment reminder texts are off — only texts a person sends go out "
+    "(owner's decision, 2026-09-15)")
+STAGE_CHANGE_TEXT_ENABLED = False
+STAGE_CHANGE_TEXT_DISABLED = (
+    "stage-change texts are off — only texts a person sends go out "
+    "(owner's decision, 2026-09-15)")
+
+
 def on_appointment_booked(db: Session, appt: Appointment) -> str:
-    """Rule 3 — appointment booked -> reminders at T-24h and T-1h.
+    """Rule 3 — appointment booked -> reminders at T-24h and T-1h. OFF; see above.
 
     Reminders already in the past are not scheduled; back-dating a send would
     fire immediately, which is worse than not sending.
     """
+    if not APPOINTMENT_REMINDERS_ENABLED:
+        return APPOINTMENT_REMINDERS_DISABLED
     # Re-entered by `update_appointment` on every reschedule, so it has to be
     # safe to call on a booking that is off: a cancelled slot must not acquire
     # reminders because someone corrected its title.
@@ -388,7 +420,7 @@ def on_appointment_booked(db: Session, appt: Appointment) -> str:
 
 def on_opportunity_stage_changed(db: Session, opp: Opportunity,
                                  old_stage_id: int) -> str:
-    """Rule 4 — stage move -> text the customer.
+    """Rule 4 — stage move -> text the customer. OFF (2026-09-15); see above.
 
     Also where an AI agent's "opportunity enters stage" trigger is asked (2026-09-15), so
     every path that fires rule 4 — the drag, the modal, a bulk move — reaches it, and a
@@ -397,6 +429,10 @@ def on_opportunity_stage_changed(db: Session, opp: Opportunity,
         return "stage unchanged"
     from .ai import triggers as ai_triggers
     ai_triggers.stage_entered(db, opp)
+    # AI agents are not automations — each is Off / Suggest / Auto-pilot on its own —
+    # so their trigger above is asked whatever the rule's switch says.
+    if not STAGE_CHANGE_TEXT_ENABLED:
+        return STAGE_CHANGE_TEXT_DISABLED
     contact = db.get(Contact, opp.contact_id) if opp.contact_id else None
     ok, why = _can_message(contact)
     if not ok:
@@ -433,6 +469,10 @@ def _h_new_lead(db: Session, payload: dict) -> None:
 
 
 def _h_appointment_reminder(db: Session, payload: dict) -> None:
+    if not APPOINTMENT_REMINDERS_ENABLED:
+        # A reminder queued before the rule was switched off must not send either.
+        log.info("appointment_reminder skipped: %s", APPOINTMENT_REMINDERS_DISABLED)
+        return
     appt = db.get(Appointment, payload["appointment_id"])
     if not appt or appt.status in NO_REMINDER_STATUSES:
         log.info("reminder skipped: appointment missing or cancelled")
@@ -447,6 +487,9 @@ def _h_appointment_reminder(db: Session, payload: dict) -> None:
 
 
 def _h_stage_change(db: Session, payload: dict) -> None:
+    if not STAGE_CHANGE_TEXT_ENABLED:
+        log.info("stage_change_notify skipped: %s", STAGE_CHANGE_TEXT_DISABLED)
+        return
     opp = db.get(Opportunity, payload["opportunity_id"])
     if not opp:
         return
@@ -473,3 +516,38 @@ HANDLERS = {
     "stage_change_notify": _h_stage_change,
     "ai_agent_run": _h_ai_agent_run,
 }
+
+
+def rules() -> list[dict]:
+    """The four rules as the Settings screen and `GET /api/automations` report them.
+
+    Read from the flags at call time, so what the screen says is what the code does —
+    a switch drawn on a page that did not read these would be a switch that lies.
+    """
+    return [
+        {"key": "missed_call_textback", "name": "Missed call → text the caller back",
+         "trigger": "An inbound call of 15 seconds or less",
+         "texts_customer": True, "enabled": MISSED_CALL_TEXTBACK_ENABLED,
+         "reason": None if MISSED_CALL_TEXTBACK_ENABLED else
+         "Off. Nothing texts anyone back automatically — contacts included "
+         "(owner's decision, 2026-09-13)."},
+        {"key": "new_lead_notify", "name": "New lead → notify the team",
+         "trigger": "A contact is created",
+         "texts_customer": False, "enabled": True,
+         "reason": "On. Internal only: it writes a line to the server log for the team "
+                   "and texts nobody."},
+        {"key": "appointment_reminder", "name": "Appointment booked → remind the customer",
+         "trigger": "24 hours and 1 hour before a booked appointment",
+         "texts_customer": True, "enabled": APPOINTMENT_REMINDERS_ENABLED,
+         "reason": None if APPOINTMENT_REMINDERS_ENABLED else
+         "Off. No automatic texts — only texts a person sends go out "
+         "(owner's decision, 2026-09-15). A reminder queued before this changed "
+         "sends nothing."},
+        {"key": "stage_change_notify", "name": "Stage change → text the customer",
+         "trigger": "An opportunity moves to a different stage",
+         "texts_customer": True, "enabled": STAGE_CHANGE_TEXT_ENABLED,
+         "reason": None if STAGE_CHANGE_TEXT_ENABLED else
+         "Off. No automatic texts — only texts a person sends go out "
+         "(owner's decision, 2026-09-15). AI agents' “stage entered” triggers are "
+         "separate and follow each agent's own Off / Suggest / Auto-pilot setting."},
+    ]

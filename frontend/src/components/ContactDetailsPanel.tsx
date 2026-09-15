@@ -523,8 +523,8 @@ export function ContactDetailsPanel({
                 Do Not Disturb (all channels)
               </label>
               <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 8 }}>
-                With DND on, automations must not message this contact. Outbound is stubbed in
-                v1, so this is recorded but has nothing to suppress yet.
+                With DND on, texts to this contact are not sent — from the composer, New
+                message or an AI agent. Nothing texts a customer automatically.
               </div>
             </div>
           )}

@@ -10,23 +10,25 @@ import { AddContactDialog } from '../components/AddContactDialog'
 import { AiAuthorChip } from '../components/AiSuggestions'
 import { CallRecordingPlayer } from '../components/CallRecordingPlayer'
 import { CallNumberDialog } from '../components/CallNumberDialog'
+import { NewMessageDialog } from '../components/NewMessageDialog'
 import {
-  IconCalendar, IconChat, IconChevronDown, IconClock, IconEye, IconFilter,
-  IconFunnel, IconInbox, IconMail, IconPhone, IconPlus, IconSearch, IconSort,
-  IconStar, IconStarFilled, IconTrash, IconUser, IconUsers,
+  IconCalendar, IconChat, IconChevronDown, IconClock, IconCompose, IconEye, IconFilter,
+  IconFunnel, IconInbox, IconMail, IconPaperclip, IconPhone, IconPlus, IconRetry, IconSearch,
+  IconSort, IconStar, IconStarFilled, IconTrash, IconUser, IconUsers,
 } from '../components/Icon'
 import {
   ApiError, PANE, callThreadRinging, deleteThread, listConversations, listThreadEvents,
   patchThread, sendToThread,
-  type AdoptedThread, type ContactDetail, type ConversationSummary, type SendableType,
-  type ThreadEvent,
+  type AdoptedThread, type ContactDetail, type ConversationSummary, type NewMessageResult,
+  type SendableType, type ThreadEvent,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
 import {
   emptyInboxMessage, markConversationRead, railActive, shouldMarkRead,
   unreadTabCount, type InboxScope, type RailKey,
 } from '../lib/inbox'
-import { sendSentence } from '../lib/sendOutcome'
+import { canRetry, deliveryExplanation, sendSentence } from '../lib/sendOutcome'
+import { attachmentLabel, splitMmsNote } from '../lib/mmsNote'
 import { useCallLauncher } from '../lib/callLauncher'
 import { hasRecording } from '../lib/callPlayer'
 import { formatPhone } from '../lib/phone'
@@ -287,7 +289,7 @@ const DELIVERY: Record<string, { label: string; color: string }> = {
   QUEUED: { label: 'queued', color: 'rgb(102,112,133)' },
   SENT: { label: 'sent', color: 'rgb(102,112,133)' },
   DELIVERED: { label: 'delivered', color: 'rgb(2,122,72)' },
-  FAILED: { label: 'failed', color: 'rgb(180,35,24)' },
+  FAILED: { label: 'failed — not delivered', color: 'rgb(180,35,24)' },
   REFUSED: { label: 'not sent', color: 'rgb(181,71,8)' },
   LOGGED_ONLY: { label: 'not sent (recorded only)', color: 'rgb(102,112,133)' },
   PENDING: { label: 'pending', color: 'rgb(102,112,133)' },
@@ -348,28 +350,50 @@ export function SourceChip({ e }: { e: ThreadEvent }) {
   )
 }
 
-function DeliveryNote({ e }: { e: ThreadEvent }) {
+function DeliveryNote({ e, onRetry, retrying }: {
+  e: ThreadEvent
+  onRetry?: (e: ThreadEvent) => void
+  retrying?: boolean
+}) {
   // Inbound messages and internal notes are delivered to nobody, so they carry no
   // status and get no line.
   if (!e.delivery_status) return null
   const known = DELIVERY[e.delivery_status]
   const label = known?.label ?? e.delivery_status.toLowerCase().replace(/_/g, ' ')
   const color = known?.color ?? 'rgb(102,112,133)'
+  const explain = deliveryExplanation(e.delivery_status, e.delivery_detail)
   return (
     <>
-      <span style={{ color }}> · {label}</span>
-      {e.delivery_detail && (
+      <span data-testid="delivery-status" data-status={e.delivery_status} style={{ color }}>
+        {' '}· {label}
+      </span>
+      {explain && (
         // The reason gets its own line rather than being appended to the timestamp
-        // row: these are whole sentences ("the number is still waiting on carrier
-        // approval"), and squeezing one onto the end of "10:42 AM · not sent"
-        // produces a line nobody finishes reading.
-        <div style={{ color, marginTop: 2, maxWidth: 460 }}>{e.delivery_detail}</div>
+        // row: these are whole sentences ("This number has opted out of texts"), and
+        // squeezing one onto the end of "10:42 AM · not sent" produces a line nobody
+        // finishes reading.
+        <div data-testid="delivery-detail" style={{ color, marginTop: 2, maxWidth: 460 }}>
+          {explain}
+          {onRetry && canRetry(e) && (
+            <button type="button" onClick={() => onRetry(e)} disabled={retrying}
+              className="inline-flex items-center gap-1"
+              style={{ marginLeft: 8, fontSize: 12, fontWeight: 600, color: 'rgb(0,78,235)',
+                opacity: retrying ? 0.5 : 1 }}>
+              <IconRetry size={12} color="rgb(0,78,235)" />
+              {retrying ? 'Sending…' : 'Retry'}
+            </button>
+          )}
+        </div>
       )}
     </>
   )
 }
 
-function EventBubble({ e }: { e: ThreadEvent }) {
+function EventBubble({ e, onRetry, retrying }: {
+  e: ThreadEvent
+  onRetry?: (e: ThreadEvent) => void
+  retrying?: boolean
+}) {
   const inbound = e.direction === 'INBOUND'
   const isActivity = !['SMS', 'EMAIL', 'CALL', 'INTERNAL_COMMENT'].includes(e.type)
 
@@ -430,16 +454,37 @@ function EventBubble({ e }: { e: ThreadEvent }) {
               )}
             </div>
           ) : (
-            <div>{e.body}</div>
+            <MessageBody body={e.body} />
           )}
         </div>
         <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
           {timeLabel(e.occurred_at)}
           <SourceChip e={e} />
           <AiAuthorChip author={(e as ThreadEvent & { ai_author?: string | null }).ai_author} />
-          <DeliveryNote e={e} />
+          <DeliveryNote e={e} onRetry={onRetry} retrying={retrying} />
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * A text's words, and an MMS's attachment count on its own line. owen-main relays an MMS
+ * as the words plus "[N attachments — view in OWEN]" and no media URLs (lib/mmsNote.ts),
+ * so there are no pictures to show — only how many there were.
+ */
+function MessageBody({ body }: { body: string | null }) {
+  const { text, attachments } = splitMmsNote(body)
+  return (
+    <div>
+      {text && <div style={{ whiteSpace: 'pre-wrap' }}>{text}</div>}
+      {attachments > 0 && (
+        <div data-testid="mms-attachments" className="flex items-center gap-1"
+          style={{ marginTop: text ? 6 : 0, fontSize: 13, color: 'rgb(71,84,103)' }}>
+          <IconPaperclip size={14} color="rgb(71,84,103)" />
+          {attachmentLabel(attachments)}
+        </div>
+      )}
     </div>
   )
 }
@@ -468,10 +513,15 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   const [sending, setSending] = useState(false)
   // One place for whatever the last action wants to tell the operator: a refused
   // send, a call that is ringing, a suppression. Rendered above the composer.
-  const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null)
+  // `for` pins a note to the thread it is about (a row key), so opening another thread does
+  // not leave "Not sent…" hanging over a conversation it says nothing about.
+  const [note, setNote] = useState<{ text: string; bad: boolean; for?: string | null } | null>(null)
   const [calling, setCalling] = useState(false)
   // "Call a number" (2026-09-14): the dialer modal.
   const [dialing, setDialing] = useState(false)
+  // "New message" to any number (2026-09-15): its modal, and the failed text being re-sent.
+  const [composing, setComposing] = useState(false)
+  const [retryingId, setRetryingId] = useState<number | null>(null)
   const { launch } = useCallLauncher()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -671,6 +721,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   useEffect(() => {
     setConfirmDelete(false)
     setDeleteError(null)
+    setNote((n) => (n && n.for != null && n.for !== active ? null : n))
   }, [active])
 
   // `DELETE /api/conversations/{id}` is ADMIN. Mirror it here so the other two
@@ -779,7 +830,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
       // refusal, a failure, a suppression, and the stub transport's "sent" --
       // means it did not go, and is shown as a problem rather than a confirmation.
       const went = r.reason === 'queued' || r.reason === 'recorded'
-      setNote({ text: sendSentence(r.reason), bad: !went })
+      setNote({ text: sendSentence(r.reason), bad: !went, for: current.key })
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['events', active] }),
         qc.invalidateQueries({ queryKey: ['conversations'] }),
@@ -792,6 +843,53 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
     } finally {
       setSending(false)
     }
+  }
+
+  /**
+   * Send a FAILED text again. A failure means owen-main could not be reached, which a
+   * retry may fix; a refusal will not, so it gets no button. The retry is a NEW message on
+   * the thread — the failed one stays, because it is what happened.
+   */
+  const onRetry = async (e: ThreadEvent) => {
+    if (!current || retryingId != null || !e.body) return
+    setRetryingId(e.id)
+    setNote(null)
+    try {
+      const r = await sendToThread(current, e.body, 'SMS')
+      const went = r.reason === 'queued'
+      setNote({ text: sendSentence(r.reason), bad: !went, for: current.key })
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['events', active] }),
+        qc.invalidateQueries({ queryKey: ['conversations'] }),
+      ])
+    } catch (err) {
+      setNote({
+        text: err instanceof ApiError ? err.message : 'The message could not be sent.',
+        bad: true,
+      })
+    } finally {
+      setRetryingId(null)
+    }
+  }
+
+  /**
+   * "New message" recorded a text. Open the thread it is on — the contact's, or the
+   * number's own — with the inbox widened so the list can show it: a text we sent is not
+   * unread and not starred, and a search or "Assigned to me" could hide a number thread.
+   * The list is refetched BEFORE the row is selected, or the "selection dropped out of the
+   * list" effect would clear it in the frame before the new row arrives.
+   */
+  const onNewMessageSent = async (r: NewMessageResult) => {
+    setComposing(false)
+    setNote({ text: sendSentence(r.reason), bad: r.reason !== 'queued', for: r.key })
+    await qc.invalidateQueries({ queryKey: ['conversations'] })
+    void qc.invalidateQueries({ queryKey: ['events'] })
+    setScope('team')
+    setQ('')
+    setSearching(false)
+    setFilter('all')
+    if (tab === 'unread' || tab === 'starred') setTab('all')
+    if (r.key) setSelected(r.key)
   }
 
   const onCall = async () => {
@@ -912,6 +1010,10 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                     like GoHighLevel's compose icon in this row. The rail is the wrong
                     place — every rail row is a view whose highlight states the filter
                     applied to the list, and a dialer is not a view. */}
+                {/* New message (2026-09-15): the dialer's sibling, beside it. */}
+                <IconBtn title="New message" onClick={() => setComposing(true)}>
+                  <IconCompose size={20} color="rgb(71,84,103)" />
+                </IconBtn>
                 <IconBtn title="Call a number" onClick={() => setDialing(true)}>
                   <IconPhone size={20} color="rgb(71,84,103)" />
                 </IconBtn>
@@ -1303,12 +1405,15 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   )}
                 </>
               )}
-              {events.data?.map((e) => <EventBubble key={e.id} e={e} />)}
+              {events.data?.map((e) => (
+                <EventBubble key={e.id} e={e} onRetry={(ev) => void onRetry(ev)}
+                  retrying={retryingId === e.id} />
+              ))}
             </div>
 
             {/* composer — measured tray #F7F9FD, inner white radius 4, height 40 */}
             <div className="shrink-0" style={{ backgroundColor: '#F7F9FD', padding: 8 }}>
-              {note && (
+              {note && (note.for == null || note.for === active) && (
                 <div
                   role="status"
                   style={{
@@ -1427,6 +1532,10 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
               // the dead id and the thread pane sits empty after the list refetches.
               onDeleted={() => setSelected(null)}
             />
+          )}
+          {composing && (
+            <NewMessageDialog user={user} onClose={() => setComposing(false)}
+              onSent={(r) => void onNewMessageSent(r)} />
           )}
           {dialing && <CallNumberDialog onClose={() => {
             setDialing(false)

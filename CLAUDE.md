@@ -13,17 +13,24 @@ deliberately out.
 - **The live GHL account is read-only.** The `capture/` harness drives a real logged-in
   browser. Never click anything that writes, deletes or sends there. Full rules in
   `DECISIONS.md`.
-- **No message leaves the building until somebody arms it.** There are now two
+- **No message leaves the building until somebody arms it.** There are two
   `MessageTransport` implementations. `get_transport()` returns `CrmLinkTransport` —
   which hands the message to owen-main for delivery over the real BulkVS DID
   `+19544829099` — only when **both** `CRM_LINK_BASE_URL` and `CRM_LINK_API_KEY` are
-  set. Neither is set anywhere today, including production, so the default is still
-  `LoggingTransport`: recorded with `delivery_status = LOGGED_ONLY`, nothing
-  transmitted. `GET /api/health` reports which one is live (`"crm_link": true|false`).
-  **The day those two variables are set, every `ghl msg send` becomes a real text** —
-  that is what the `--yes` guard has always been for. See the 2026-09-11 amendment in
-  `DECISIONS.md`. (SMS is currently dark on owen-main's side pending 10DLC approval,
-  so an armed send is refused with a reason rather than delivered.)
+  set; otherwise `LoggingTransport` records `delivery_status = LOGGED_ONLY` and transmits
+  nothing. `GET /api/health` reports which one is live (`"crm_link": true|false`) — ask
+  it rather than assume. **With the link armed and SMS switched on in owen-main (10DLC is
+  approved, 2026-09-15), every send is a REAL text** — that is what the `--yes` guard has
+  always been for. owen-main still refuses opted-out (STOP), blocked and switched-off
+  sends with a sentence, recorded REFUSED on the thread.
+- **No automatic texts at all — only texts a person sends** (2026-09-15). Rules 1, 3 and
+  4 in `app/automations.py` (missed-call text-back, appointment reminders, stage-change
+  texts) are OFF by module flag: the hook answers with a sentence, enqueues nothing, and
+  the worker refuses a job of that type left in a queue. Settings → Automations shows them
+  Off with the reason (`GET /api/automations`). Tests that pin the kept mechanics ask for
+  `rule_3_armed` / `rule_4_armed` by name. **No test reaches owen-main**:
+  `tests/owen_guard.py` strips `CRM_LINK_*` / `OWEN_*` and refuses any connection to an
+  owen-main host or whatever the link is pointed at, failing the test that tried.
 - **Never run `python -m app.seed` against the working database.** It calls
   `drop_all()`. It is in the `deny` list in `.claude/settings.json`.
 - **No AI agent acts by itself, and no test reaches a model provider.** Every agent is
@@ -134,6 +141,20 @@ uv run ghl opps create -t "Jane roof" -c "jane doe" --stage "New Lead" --value 9
 uv run ghl opps move 42 --stage "Inspection"
 uv run ghl jobs list --status pending         # did the automation fire?
 ```
+
+## Texting is live: manual texts only, and New message (2026-09-15)
+
+Conversations → the compose icon beside "Call a number" opens `components/NewMessageDialog.tsx`:
+number (formats as you type, `textProblem` in `lib/dialPad.ts` = `text_problem` in `main.py`),
+message with a character / segment count (`lib/smsSegments.ts`), "Sending from (954) 482-9099",
+Send. `POST /api/messages/new`: a number a contact holds is a send on the contact's conversation
+(DND suppresses); anyone else's goes on the number-only thread (found or created, never a
+contact). A restricted technician may text only their own jobs' customers. Quo is never a sender
+— no route takes a `from_number`. Under a bubble: owen-main's REFUSED sentence; FAILED says it
+can be retried and has Retry. An inbound MMS arrives as text plus `[N attachments — view in
+OWEN]` and no media URLs, shown as an attachment line (`lib/mmsNote.ts`).
+`uv run python -m tests.browser_sms` (from `backend/`) drives it in headless Chromium with
+owen-main replaced by a recorder; it is not collected by pytest. See DECISIONS.md.
 
 ## Unknown numbers are threads, not contacts (2026-09-13)
 
