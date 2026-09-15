@@ -26,6 +26,7 @@ import {
   CALLING_FROM, formatDialInput, normaliseTextNumber, pasteNumber, textProblem,
 } from '../lib/dialPad'
 import { formatPhone } from '../lib/phone'
+import { sendSentence } from '../lib/sendOutcome'
 import { segmentInfo, segmentLabel } from '../lib/smsSegments'
 import { IconChat, IconClose } from './Icon'
 
@@ -72,7 +73,9 @@ export function NewMessageDialog({ user, onClose, onSent }: {
     setRefused(null)
     try {
       const r = await sendNewMessage(to, body)
-      if (!r.recorded) setRefused(r.reason)
+      // A suppression (the contact is on DND) comes back in the composer's vocabulary;
+      // anything else refused here is already a sentence.
+      if (!r.recorded) setRefused(r.reason.startsWith('suppressed: ') ? sendSentence(r.reason) : r.reason)
       else onSent(r)
     } catch (err) {
       setRefused(err instanceof ApiError ? err.message : 'The message could not be sent.')

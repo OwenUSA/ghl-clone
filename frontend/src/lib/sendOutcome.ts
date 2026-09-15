@@ -69,7 +69,8 @@ export type DeliveryFacts = { direction: string; type: string; delivery_status: 
  *    (opted out, blocked, switched off). Shown as it is.
  *  - FAILED says what went wrong AND that it can be retried: the phone system could not
  *    be reached, which a second try may fix.
- *  - LOGGED_ONLY says plainly that nothing was transmitted.
+ *  - LOGGED_ONLY needs none: its label already reads "not sent (recorded only)", and a
+ *    sentence under every bubble of an unarmed test database is noise.
  *  - QUEUED / SENT / DELIVERED need no sentence — the label is the whole story.
  */
 export function deliveryExplanation(status: string | null, detail: string | null): string | null {
@@ -78,9 +79,6 @@ export function deliveryExplanation(status: string | null, detail: string | null
     return why + ' It did not arrive — you can retry it.'
   }
   if (status === 'REFUSED') return detail ? capitalise(detail) : 'The phone system refused it.'
-  if (status === 'LOGGED_ONLY') {
-    return 'Recorded only — this CRM is not connected to the phone system, so nothing was sent.'
-  }
   return detail ? capitalise(detail) : null
 }
 

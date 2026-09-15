@@ -162,7 +162,7 @@ def test_refused_shows_the_sentence_and_failed_offers_a_retry():
     assert got[1] == "Could not reach the phone system. It did not arrive — you can retry it."
     assert "retry" in got[2]
     assert got[3] is None and got[4] is None
-    assert "nothing was sent" in got[5]
+    assert got[5] is None, "LOGGED_ONLY's label already says it was not sent"
     assert got[6] == [True, False, False, False, False, False], "only FAILED is retried"
     assert got[7] is False and got[8] is False
     assert "retry" in got[9] and got[9].startswith("Not sent.")
