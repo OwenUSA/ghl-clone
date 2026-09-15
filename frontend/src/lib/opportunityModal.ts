@@ -22,6 +22,8 @@ export type ModalTab =
   | 'notes'
   | 'associated'
   | 'photos'
+  // AI Agents (2026-09-15): "Run AI agent" and this deal's pending suggestions.
+  | 'ai'
   | `group:${number}`
 
 export type ModalRequest = {

@@ -559,7 +559,7 @@ export function DashboardPage() {
         {/* marginRight leaves the header's top-right corner to the app-wide status dot
             (components/StatusIndicator.tsx, 2026-09-14), which is pinned there on every
             page and would otherwise sit on top of the ⋮ menu. */}
-        <div className="ml-auto flex items-center gap-2" style={{ marginRight: 44 }}>
+        <div className="ml-auto flex items-center gap-2" style={{ marginRight: 80 }}>
           <span className="flex items-center gap-2"
             style={{
               height: 36, padding: '0 10px', borderRadius: 6,

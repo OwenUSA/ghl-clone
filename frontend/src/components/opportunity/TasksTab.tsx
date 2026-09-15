@@ -179,6 +179,12 @@ export function TasksTab({ opportunityId, user, startAdding = false }: {
           <div className="min-w-0 flex-1">
             <div style={{ fontSize: 14, fontWeight: 500, color: BODY,
               textDecoration: t.done ? 'line-through' : undefined }}>
+              {(t as { priority?: string }).priority === 'urgent' && (
+                <span style={{ marginRight: 6, padding: '1px 6px', borderRadius: 10, fontSize: 11,
+                  fontWeight: 600, color: 'rgb(180,35,24)', backgroundColor: 'rgb(254,243,242)' }}>
+                  Urgent
+                </span>
+              )}
               {t.title}
             </div>
             {t.description && (
@@ -191,6 +197,9 @@ export function TasksTab({ opportunityId, user, startAdding = false }: {
                 Due: {t.due_at ? noteStamp(t.due_at) : '--'}
               </span>
               <span>Assignee: {t.assigned_user_name ?? 'Unassigned'}</span>
+              {(t as { created_by_ai?: string | null }).created_by_ai && (
+                <span>Created by: {(t as { created_by_ai?: string | null }).created_by_ai}</span>
+              )}
             </div>
           </div>
           {canWrite && (

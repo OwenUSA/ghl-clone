@@ -14,10 +14,12 @@ export const SETTINGS_SECTIONS = [
   // ADMIN only, like CompanyCam (2026-09-15): GoHighLevel's staff list, and the home of
   // each user's "Only assigned data" switch.
   { key: 'my-staff', label: 'My Staff', path: '/settings/my-staff' },
+  // ADMIN only (2026-09-15): AI provider connections, "Pause all AI agents", the on-call phone.
+  { key: 'ai-connections', label: 'AI Connections', path: '/settings/ai-connections' },
 ] as const
 
 /** Sections only an ADMIN is shown. SettingsPage does not draw their tabs for anyone else. */
-export const ADMIN_SECTIONS: readonly string[] = ['companycam', 'my-staff']
+export const ADMIN_SECTIONS: readonly string[] = ['companycam', 'my-staff', 'ai-connections']
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]['key']
 
@@ -32,6 +34,7 @@ export function sectionFromPath(pathname: string): SettingsSection {
 export function viewFromPath(pathname: string): string | null {
   const path = pathname.replace(/\/+$/, '').toLowerCase()
   if (path === '/opportunities') return 'opportunities'
+  if (path === '/ai-agents') return 'ai-agents'
   if (path === '/settings' || path.startsWith('/settings/')) return 'settings'
   return null
 }

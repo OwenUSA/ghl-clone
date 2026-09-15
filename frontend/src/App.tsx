@@ -14,6 +14,9 @@ import { DashboardPage } from './pages/DashboardPage'
 import { ReportingPage } from './pages/ReportingPage'
 import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { AiAgentsPage } from './pages/AiAgentsPage'
+import { AiAlertBell } from './components/AiAlertBell'
+import { canOpenAiAgents } from './lib/aiAgents'
 import { me } from './lib/auth'
 import { viewFor } from './lib/access'
 import { ChangePasswordScreen } from './pages/ChangePasswordScreen'
@@ -144,6 +147,7 @@ export default function App() {
     <div className="flex h-screen w-screen overflow-hidden">
       <Softphone />
       <StatusIndicator />
+      <AiAlertBell user={user} />
       {/* The one in-call window, for every call this browser is on (2026-09-14). */}
       <InCallWindow user={user} />
       <Sidebar
@@ -171,6 +175,10 @@ export default function App() {
         <DashboardPage />
       ) : view === 'reporting' ? (
         <ReportingPage />
+      ) : view === 'ai-agents' && canOpenAiAgents(user) ? (
+        // AI Agents (2026-09-15) is ADMIN / DISPATCHER only, never a restricted user: anyone
+        // else asking for it (a pasted /ai-agents link) falls through to the landing view.
+        <AiAgentsPage user={user} />
       ) : view === 'settings' ? (
         <SettingsPage user={user} />
       ) : (
