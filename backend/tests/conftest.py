@@ -16,6 +16,26 @@ os.environ["DATABASE_URL"] = "sqlite:///" + _TMP
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import Contact, Opportunity, Pipeline, Role, Stage, User  # noqa: E402
 
+# ---- no test may reach an AI provider (AI Agents, 2026-09-15) ----------------------------
+# Every lookup of a provider host is refused; a test that attempted one FAILS. See
+# tests/ai_guard.py, and tests/test_ai_network_guard.py for the proof it is live.
+from tests import ai_guard  # noqa: E402
+
+ai_guard.install()
+
+# The AI Agents fixtures (mocked providers, a seeded world), shared by tests/test_ai_*.py.
+from tests.ai_support import script, secrets_key, world  # noqa: E402, F401
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_network():
+    ai_guard.ATTEMPTS.clear()
+    yield
+    attempted = list(ai_guard.ATTEMPTS)
+    ai_guard.ATTEMPTS.clear()
+    assert not attempted, ("this test tried to reach a real AI provider (%s) — mock it at "
+                           "the HTTP boundary (tests/ai_support.py)" % ", ".join(attempted))
+
 
 @pytest.fixture()
 def db():
