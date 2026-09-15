@@ -98,7 +98,10 @@ def test_opportunities_keeps_its_four_tabs_and_what_each_does():
     block = _tabs_block("OpportunitiesPage.tsx", "Opportunities")
     source = _read("pages", "OpportunitiesPage.tsx")
     assert "const TABS = ['Opportunities', 'Forecast', 'Pipelines', 'Bulk Actions']" in source
-    assert "tabs={TABS.map((t) => ({" in block and "onSelect: () => setTab(t)" in block
+    # Narrowed by "Only assigned data" (2026-09-15): Forecast is not drawn for a restricted
+    # user (lib/access.ts opportunityTabs); everyone else still gets all four.
+    assert "tabs={opportunityTabs(user, TABS).map((t) => ({" in block
+    assert "onSelect: () => setTab(t)" in block
     assert "active={tab}" in block
     assert "blocked: t === 'Forecast' && !canForecast ? 'Your role cannot view the forecast'" \
         in block

@@ -62,7 +62,9 @@ def test_the_sidebar_renders_exactly_the_expected_items():
     # Both arrays are actually rendered — a correct list that nothing maps over
     # would satisfy the assertions above and ship an empty sidebar.
     nav = source.split("<nav", 1)[1].split("</nav>", 1)[0]
-    assert "PRIMARY.map(" in nav and "SECONDARY.map(" in nav, (
+    # PRIMARY may be narrowed first — "Only assigned data" (2026-09-15) drops Dashboard and
+    # Reporting for a restricted user — but it must still be the array that is mapped.
+    assert re.search(r"PRIMARY(\.filter\(.*?\))?\.map\(", nav) and "SECONDARY.map(" in nav, (
         "an array is no longer rendered, so the list above describes nothing")
 
 
@@ -115,7 +117,9 @@ def test_payments_has_no_view_left_behind_the_removed_nav_row():
     assert "not built yet" not in app, "a nav key still opens a not-built-yet card"
 
     # The fallback branch must render something real, not an empty pane.
-    tail = app.split("active === 'settings' ?", 1)[1]
+    # `view` since 2026-09-15: the active key after "Only assigned data" has redirected a
+    # restricted user away from Dashboard / Reporting (lib/access.ts viewFor).
+    tail = app.split("view === 'settings' ?", 1)[1]
     assert "<DashboardPage />" in tail, (
         "an unrecognised view no longer falls back to Dashboard")
 
@@ -192,5 +196,5 @@ def test_the_app_lands_on_dashboard():
     assert "useState(initialView)" in app, (
         "the initial view is not resolved from the path, so /launchpad is ignored")
     # ...and Dashboard must be a view that renders, not a placeholder.
-    assert "active === 'dashboard' ? (\n        <DashboardPage />" in app, (
+    assert "view === 'dashboard' ? (\n        <DashboardPage />" in app, (
         "Dashboard is the landing view but does not render DashboardPage")

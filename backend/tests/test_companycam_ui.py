@@ -163,7 +163,9 @@ def test_the_contact_panel_section_only_draws_when_there_is_a_project():
 
 def test_settings_shows_companycam_to_an_admin_only():
     settings = _read("pages", "SettingsPage.tsx")
-    assert "(s.key !== 'companycam' || user.role === 'ADMIN') && (" in settings
+    # One list of admin-only sections since My Staff joined CompanyCam there (2026-09-15).
+    assert "(!ADMIN_SECTIONS.includes(s.key) || user.role === 'ADMIN') && (" in settings
+    assert "'companycam'" in _read("lib", "settingsSections.ts").split("ADMIN_SECTIONS", 1)[1]
     assert "section === 'companycam' && user.role === 'ADMIN' ? <CompanyCamSettings />" in settings
     admin = _read("components", "CompanyCamSettings.tsx")
     for needle in ("Last error", "Last success", "Review", "Dismiss", "linkCompanyCamReview("):
