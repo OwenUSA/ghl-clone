@@ -567,7 +567,8 @@ export function AppointmentDetailDialog({
                   Cancel <strong>{a.title}</strong>
                   {a.contact_name ? <> with <strong>{a.contact_name}</strong></> : null}
                   {' on '}<strong>{when(new Date(a.starts_at))}</strong>?
-                  {' '}This cannot be undone from here.
+                  {' '}This cannot be undone from here. No reminder text is sent — any
+                  reminder still queued from before reminders were switched off is withdrawn.
                 </div>
                 <div className="mt-3 flex justify-end gap-2">
                   <button
