@@ -8,9 +8,9 @@ Needs node on PATH, the `capture` dependency group (Playwright) and its Chromium
 The database is a throwaway SQLite file in a fresh temp directory, created with
 `create_all` — never `app.seed`, never a database this did not create. The data arrives
 the way production's does: fixture CSVs through `app.workiz_import --commit`, TWICE —
-the first export has J2P6JO on Monday 10–12 and leaves 9CNTDD the way an earlier import
+the first export has J2P6JO on Monday 10-12 and leaves 9CNTDD the way an earlier import
 did (titled "Inspection", no import record); the second has Workiz's real times. The
-names are invented; the Job #s and times are production's week of Sep 13–19, 2026.
+names are invented; the Job #s and times are production's week of Sep 13-19, 2026.
 No phone system is configured (OWEN_* / CRM_LINK_* unset), so nothing can be rung or sent.
 
 The browser runs in America/New_York, the company's zone, at 1440x900.
@@ -170,7 +170,7 @@ def run(shots: Path) -> int:
         checks.ok(len(appts) == len(WEEK), f"one appointment per job ({len(appts)})")
         checks.ok(all(card == title for card, title, *_ in appts),
                   "every visit is titled like its card (9CNTDD's 'Inspection' fixed)")
-        j2 = [a for a in appts if a[0] == "Sawan Estimate"][0]
+        j2 = next(a for a in appts if a[0] == "Sawan Estimate")
         checks.ok(j2[2].startswith("2026-09-15 17:00"),
                   f"J2P6JO was MOVED to Tue 1 PM Eastern ({j2[2]})")
         checks.ok(rows("select count(*) from jobs")[0][0] == 0,
@@ -188,13 +188,13 @@ def run(shots: Path) -> int:
             page.wait_for_selector("text=Sign in to continue", state="detached")
             page.get_by_role("button", name="Calendars", exact=True).first.click()
 
-            label = "Sep 13 – Sep 19, 2026"
+            label = "Sep 13 \u2013 Sep 19, 2026"
             for _ in range(120):
-                shown = page.locator("text=/[A-Z][a-z]{2} \\d+ – [A-Z][a-z]{2} \\d+, \\d{4}/")
+                shown = page.locator("text=/[A-Z][a-z]{2} \\d+ \u2013 [A-Z][a-z]{2} \\d+, \\d{4}/")
                 current = shown.first.inner_text()
                 if current == label:
                     break
-                start = datetime.strptime(current.split(" – ")[0] + current[-6:],
+                start = datetime.strptime(current.split(" \u2013 ")[0] + current[-6:],
                                           "%b %d, %Y")
                 page.get_by_role("button", name="Previous" if start > datetime(2026, 9, 13)
                                  else "Next").click()
@@ -222,7 +222,8 @@ def run(shots: Path) -> int:
             # ---- Monday: seven blocks, heavy overlap, nothing behind anything ----------
             m = boxes(mon)
             names = {w[1]: w[0] for w in WEEK}
-            checks.ok(set(m) == {n for j, n, *_ in WEEK[:7]}, f"Monday draws all seven ({sorted(m)})")
+            checks.ok(set(m) == {n for _j, n, *_ in WEEK[:7]},
+                      f"Monday draws all seven ({sorted(m)})")
             worst = max((intersect(a[1], b[1]) for i, a in enumerate(m.values())
                          for b in list(m.values())[i + 1:]), default=0)
             checks.ok(worst <= 1.0, f"no two Monday blocks overlap on screen (max {worst:.1f}px²)")
@@ -248,12 +249,12 @@ def run(shots: Path) -> int:
                 checks.ok(abs(h - hours * hour_px) <= 1.5,
                           f"{names[name]} is {hours}h tall ({h:.1f}px at {hour_px:.1f}px/h)")
             text = m["Robin Tile"][0].inner_text()
-            checks.ok("7:30 – 10:00 AM" in text, f"the block shows its time RANGE ({text!r})")
+            checks.ok("7:30 \u2013 10:00 AM" in text, f"the block shows its time RANGE ({text!r})")
             checks.ok("Job #03T4HE" in text and "5790 SW 34th St, Miami" in text,
                       "a tall block shows the Workiz Job # and street, city")
             tip = m["Sam Benjamin"][0].get_attribute("title") or ""
             checks.ok("Job #QNAXZ2" in tip and "8712 Palm Way, Coral Springs" in tip
-                      and "12:00 – 1:00 PM" in tip, f"hover carries the full detail ({tip!r})")
+                      and "12:00 \u2013 1:00 PM" in tip, f"hover carries the full detail ({tip!r})")
 
             # ---- Tuesday: the pair at 3-5 that used to be stacked, and the move -------
             tue = page.locator('[data-day-column="Tue Sep 15 2026"]')
@@ -279,7 +280,7 @@ def run(shots: Path) -> int:
                       f"not at midnight ({words and round(words['y'])} in pane "
                       f"{round(pane_box['y'])}-{round(pane_box['y'] + pane_box['height'])})")
             checks.ok(fri["Jess Weiss"][0].locator("[data-block-range]").inner_text()
-                      == "Thu 7:30 AM – Fri 10:00 AM", "...and its range names both days")
+                      == "Thu 7:30 AM \u2013 Fri 10:00 AM", "...and its range names both days")
 
             # ---- the window opens on 7 AM-7 PM -----------------------------------------
             pane = page.evaluate("() => { const p = document.querySelector('[data-hour-pane]');"
