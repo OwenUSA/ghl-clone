@@ -10,8 +10,9 @@ import {
 import type { Me } from '../lib/auth'
 import { PageTabs } from '../components/PageTabs'
 import {
-  DEFAULT_SLOT_HOUR, MONTH_CELL_CHIPS, bucketByDay, defaultSlot, isSameDay,
-  queryWindow, rangeLabel, shiftAnchor, slotAt, visibleDays,
+  DEFAULT_SLOT_HOUR, FIRST_VISIBLE_HOUR, MIN_HOUR_PX, MONTH_CELL_CHIPS, bucketByOverlap,
+  defaultSlot, hourPxFor, isSameDay, layoutDay, queryWindow, rangeLabel, shiftAnchor,
+  slotAt, timeRange, visibleDays,
   type CalendarView,
 } from '../lib/calendarGrid'
 import { isRestricted } from '../lib/access'
@@ -44,15 +45,15 @@ import { isRestricted } from '../lib/access'
 const VIEWS = ['Day view', 'Week view', 'Month view'] as const
 
 /**
- * Every hour of the day is drawn, 12 AM to 11 PM. The owner: "we should show at
- * least from 5am to 11pm" — so the pane opens scrolled to FIRST_VISIBLE_HOUR, and
- * 11 PM is the last row, not cut off. Nothing earlier is removed: a 2 AM emergency
- * booking still has somewhere to be drawn.
+ * Every hour of the day is drawn, 12 AM to 11 PM, so a 2 AM emergency booking still
+ * has somewhere to be drawn. The pane opens scrolled to FIRST_VISIBLE_HOUR (7 AM,
+ * where Workiz starts — the owner, 2026-09-15) and each hour is as tall as it can be
+ * while 7 AM–7 PM fits without scrolling, never below MIN_HOUR_PX (`hourPxFor`).
  */
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
-const FIRST_VISIBLE_HOUR = 5
-/** One hour of the vertical grid, in px. The current-time line shares it. */
-const HOUR_PX = 48
+
+/** One text line inside a block on the hour grid, in px. */
+const LINE_PX = 16
 
 /**
  * Blocked off time is drawn grey and hatched, never in a calendar's colour, so it
@@ -65,6 +66,12 @@ const fmtHour = (h: number) =>
 
 const fmtChipTime = (d: Date) =>
   d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+
+/** A month chip's time: the start, or "until 10:00 AM" on a later day of a multi-day job. */
+const chipTime = (a: { starts_at: string; ends_at: string }, cell: Date) =>
+  isSameDay(new Date(a.starts_at), cell)
+    ? fmtChipTime(new Date(a.starts_at))
+    : 'until ' + fmtChipTime(new Date(a.ends_at))
 
 export function CalendarsPage({ user }: { user: Me }) {
   const [view, setView] = useState<CalendarView>('Week view')
@@ -125,23 +132,45 @@ export function CalendarsPage({ user }: { user: Me }) {
     // "View by type: Appointments" hides them; All and Blocked slots show them.
     enabled: kind !== 'appointments',
   })
+  // By OVERLAP, not by start day: a job running past midnight is on every day it
+  // touches, in the month cells and on the hour grid alike.
   const blockedBuckets = useMemo(
-    () => bucketByDay(dayList, kind === 'appointments' ? [] : blocked.data ?? []),
+    () => bucketByOverlap(dayList, kind === 'appointments' ? [] : blocked.data ?? []),
     [dayList, kind, blocked.data],
   )
 
-  // Open the hour grid at 5 AM rather than at midnight.
+  // The hour grid fits 7 AM–7 PM into the pane where the screen allows, and opens
+  // scrolled to 7 AM.
   const hourPane = useRef<HTMLDivElement>(null)
+  const [hourPx, setHourPx] = useState(MIN_HOUR_PX)
   useEffect(() => {
-    if (hourPane.current) hourPane.current.scrollTop = FIRST_VISIBLE_HOUR * HOUR_PX
+    const el = hourPane.current
+    if (!el) return
+    const measure = () => setHourPx(hourPxFor(el.clientHeight))
+    measure()
+    const watcher = new ResizeObserver(measure)
+    watcher.observe(el)
+    return () => watcher.disconnect()
   }, [view, tab])
+  useEffect(() => {
+    if (hourPane.current) hourPane.current.scrollTop = FIRST_VISIBLE_HOUR * hourPx
+  }, [view, tab, hourPx])
 
   const now = new Date()
-  const nowOffset = now.getHours() * HOUR_PX + (now.getMinutes() / 60) * HOUR_PX
+  const nowOffset = now.getHours() * hourPx + (now.getMinutes() / 60) * hourPx
   // One bucket per drawn cell, so nothing can be fetched and then not drawn.
   const buckets = useMemo(
-    () => bucketByDay(dayList, appts.data ?? []),
+    () => bucketByOverlap(dayList, appts.data ?? []),
     [dayList, appts.data],
+  )
+  // Day/Week: each column's bookings AND blocked time laid out side by side in one
+  // pass, so neither can be drawn behind the other.
+  const layouts = useMemo(
+    () => dayList.map((d, i) => layoutDay<GridItem>(d, [
+      ...blockedBuckets[i].map((b) => ({ starts_at: b.starts_at, ends_at: b.ends_at, blocked: b })),
+      ...buckets[i].map((a) => ({ starts_at: a.starts_at, ends_at: a.ends_at, appt: a })),
+    ])),
+    [dayList, buckets, blockedBuckets],
   )
 
   function shift(dir: number) {
@@ -182,7 +211,7 @@ export function CalendarsPage({ user }: { user: Me }) {
    */
   function bookFromColumn(d: Date, e: React.MouseEvent<HTMLDivElement>) {
     const box = e.currentTarget.getBoundingClientRect()
-    book(slotAt(d, (e.clientY - box.top) / HOUR_PX))
+    book(slotAt(d, (e.clientY - box.top) / hourPx))
   }
 
   return (
@@ -356,17 +385,18 @@ export function CalendarsPage({ user }: { user: Me }) {
               </div>
 
               {/* hour grid - this pane scrolls, not the document */}
-              <div ref={hourPane} className="relative min-h-0 flex-1 overflow-y-auto">
+              <div ref={hourPane} data-hour-pane className="relative min-h-0 flex-1 overflow-y-auto">
                 <div className="flex">
                   <div style={{ width: 60 }}>
                     {HOURS.map((h) => (
-                      <div key={h} style={{ height: HOUR_PX, fontSize: 11, color: 'rgb(152,162,179)', padding: '2px 6px' }}>
+                      <div key={h} style={{ height: hourPx, fontSize: 11, color: 'rgb(152,162,179)', padding: '2px 6px' }}>
                         {fmtHour(h)}
                       </div>
                     ))}
                   </div>
                   {dayList.map((d, i) => (
                     <div key={d.toISOString()} className="relative flex-1"
+                      data-day-column={d.toDateString()}
                       // Double-click an EMPTY part of the column to book that slot.
                       // The appointment blocks below stop the event, so a
                       // double-click on a booking is not a create.
@@ -377,54 +407,37 @@ export function CalendarsPage({ user }: { user: Me }) {
                         cursor: canCreate ? 'copy' : 'default',
                       }}>
                       {HOURS.map((h) => (
-                        <div key={h} style={{ height: HOUR_PX, borderBottom: '1px solid rgb(242,244,247)' }} />
+                        <div key={h} style={{ height: hourPx, borderBottom: '1px solid rgb(242,244,247)' }} />
                       ))}
                       {isSameDay(d, now) && (
                         <div style={{
                           position: 'absolute', left: 0, right: 0, top: nowOffset,
-                          borderTop: '2px solid rgb(217,45,32)',
+                          borderTop: '2px solid rgb(217,45,32)', zIndex: 2,
                         }} />
                       )}
-                      {blockedBuckets[i].map((b) => {
-                        const s = new Date(b.starts_at)
-                        const e = new Date(b.ends_at)
-                        const top = s.getHours() * HOUR_PX + (s.getMinutes() / 60) * HOUR_PX
-                        const h = Math.max(24, ((e.getTime() - s.getTime()) / 3_600_000) * HOUR_PX)
-                        return (
-                          <BlockedBlock key={'b' + b.id} b={b} top={top} height={h}
-                            label={fmtChipTime(s) + ' – ' + fmtChipTime(e)}
+                      {layouts[i].map((p) => {
+                        // Real duration for the height; the lane decides left and width.
+                        const height = ((p.endMin - p.startMin) / 60) * hourPx
+                        // A job carried over from yesterday starts at midnight, far above
+                        // where the grid opens: its words go at 7 AM instead.
+                        const opensAt = FIRST_VISIBLE_HOUR * hourPx
+                        const box: BlockBox = {
+                          top: (p.startMin / 60) * hourPx,
+                          height,
+                          textTop: p.fromBefore && height > opensAt + 2 * LINE_PX ? opensAt : 0,
+                          left: `calc(${(p.col / p.cols) * 100}% + 1px)`,
+                          width: `calc(${(p.span / p.cols) * 100}% - 3px)`,
+                          fromBefore: p.fromBefore,
+                          untilAfter: p.untilAfter,
+                        }
+                        const { blocked: b, appt: a } = p.item
+                        return b ? (
+                          <BlockedBlock key={'b' + b.id} b={b} box={box}
+                            label={timeRange(b.starts_at, b.ends_at)}
                             onOpen={openBlock} />
-                        )
-                      })}
-                      {buckets[i].map((a) => {
-                        const s = new Date(a.starts_at)
-                        const e = new Date(a.ends_at)
-                        const top = s.getHours() * HOUR_PX + (s.getMinutes() / 60) * HOUR_PX
-                        const h = Math.max(24, ((e.getTime() - s.getTime()) / 3_600_000) * HOUR_PX)
-                        const off = a.status === 'cancelled'
-                        return (
-                          <div key={a.id} data-appointment={a.id}
-                            title={`${a.title}${off ? ' (cancelled)' : ''} — click for details`}
-                            onClick={(ev) => open(a.id, ev)}
-                            onDoubleClick={(ev) => ev.stopPropagation()}
-                            style={{
-                              position: 'absolute', left: 2, right: 2, top, height: h,
-                              backgroundColor: 'rgb(239,244,255)',
-                              borderLeft: `3px solid ${a.color}`,
-                              borderRadius: 4, padding: '2px 6px', overflow: 'hidden',
-                              fontSize: 12, color: 'rgb(52,64,84)',
-                              cursor: 'pointer',
-                              // Cancelled is a status, not a delete — the row
-                              // survives and the Cancelled report tile counts it.
-                              // It has to be visibly not a live booking, or the
-                              // slot reads as still taken.
-                              opacity: off ? 0.55 : 1,
-                              textDecoration: off ? 'line-through' : undefined,
-                            }}>
-                            <div className="truncate" style={{ fontWeight: 500 }}>{a.title}</div>
-                            <div className="truncate">{fmtChipTime(s)}</div>
-                          </div>
-                        )
+                        ) : a ? (
+                          <AppointmentBlock key={a.id} a={a} box={box} onOpen={open} />
+                        ) : null
                       })}
                     </div>
                   ))}
@@ -585,6 +598,14 @@ function MonthGrid({
   onOpen: (id: number, e: React.MouseEvent) => void
 }) {
   const weeks = cells.length / 7
+  // The day whose "+N more" is open, and where on screen it was clicked.
+  const [more, setMore] = useState<{ i: number; x: number; y: number } | null>(null)
+  useEffect(() => {
+    if (!more) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMore(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [more])
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0" style={{ borderBottom: '1px solid rgb(234,236,240)' }}>
@@ -666,7 +687,7 @@ function MonthGrid({
                   <div
                     key={a.id}
                     data-appointment={a.id}
-                    title={`${a.title} — ${fmtChipTime(new Date(a.starts_at))}`
+                    title={`${a.title} — ${timeRange(a.starts_at, a.ends_at)}`
                            + (a.status === 'cancelled' ? ' (cancelled)' : '')
                            + ' — click for details'}
                     onClick={(e) => onOpen(a.id, e)}
@@ -682,46 +703,204 @@ function MonthGrid({
                       textDecoration: a.status === 'cancelled' ? 'line-through' : undefined,
                     }}
                   >
-                    {fmtChipTime(new Date(a.starts_at))} {a.title}
+                    {chipTime(a, d)} {a.title}
                   </div>
                 ))}
                 {hidden > 0 && (
-                  <div
+                  <button
+                    type="button"
+                    data-month-more={d.toDateString()}
                     title={list.slice(MONTH_CELL_CHIPS).map((a) => a.title).join('\n')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const r = e.currentTarget.getBoundingClientRect()
+                      setMore({ i, x: r.left, y: r.bottom + 4 })
+                    }}
                     onDoubleClick={(e) => e.stopPropagation()}
+                    className="self-start"
                     style={{ fontSize: 11, fontWeight: 600, color: 'rgb(0,78,235)' }}
                   >
                     +{hidden} more
-                  </div>
+                  </button>
                 )}
               </div>
             </div>
           )
         })}
       </div>
+
+      {more && (
+        <DayPopover
+          day={cells[more.i]}
+          appointments={buckets[more.i]}
+          x={more.x} y={more.y}
+          onOpen={(id, e) => { setMore(null); onOpen(id, e) }}
+          onClose={() => setMore(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * GoHighLevel's "+N more": a card over the month grid listing EVERY booking of that
+ * day, each opening its detail panel. Closed by a click outside or Escape.
+ */
+function DayPopover({ day, appointments, x, y, onOpen, onClose }: {
+  day: Date
+  appointments: Appointment[]
+  x: number
+  y: number
+  onOpen: (id: number, e: React.MouseEvent) => void
+  onClose: () => void
+}) {
+  const width = 280
+  return (
+    <>
+      <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={onClose}
+        onDoubleClick={(e) => e.stopPropagation()} />
+      <div role="dialog" aria-label={`Appointments on ${day.toDateString()}`}
+        data-day-popover={day.toDateString()}
+        className="fixed bg-white"
+        style={{
+          zIndex: 41, width, maxHeight: 360, overflowY: 'auto',
+          left: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+          top: Math.max(8, Math.min(y, window.innerHeight - 368)),
+          borderRadius: 8, border: '1px solid rgb(234,236,240)', padding: 12,
+          boxShadow: '0 12px 16px -4px rgba(16,24,40,0.08), 0 4px 6px -2px rgba(16,24,40,0.03)',
+        }}>
+        <div className="flex items-center justify-between">
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'rgb(16,24,40)' }}>
+            {day.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{ color: 'rgb(102,112,133)' }}>✕</button>
+        </div>
+        <div className="mt-2 flex flex-col gap-1">
+          {appointments.map((a) => (
+            <div key={a.id} data-appointment={a.id}
+              onClick={(e) => onOpen(a.id, e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+              title="Click for details"
+              className="cursor-pointer"
+              style={{
+                fontSize: 12, lineHeight: '16px', borderRadius: 4, padding: '4px 6px',
+                backgroundColor: 'rgb(239,244,255)', borderLeft: `3px solid ${a.color}`,
+                color: 'rgb(52,64,84)',
+                opacity: a.status === 'cancelled' ? 0.55 : 1,
+                textDecoration: a.status === 'cancelled' ? 'line-through' : undefined,
+              }}>
+              <div className="truncate" style={{ fontWeight: 500 }}>{a.title}</div>
+              <div className="truncate">{timeRange(a.starts_at, a.ends_at)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
+/** What one Day/Week column lays out: a booking or blocked off time. */
+type GridItem = {
+  starts_at: string
+  ends_at: string
+  appt?: Appointment
+  blocked?: BlockedTime
+}
+
+/** Where a laid-out block sits in its day column (see `layoutDay`). */
+type BlockBox = {
+  top: number
+  height: number
+  left: string
+  width: string
+  /** How far down the block its text starts (a carried-over job's words sit at 7 AM). */
+  textTop: number
+  /** Began on an earlier day / carries on past midnight: that edge is squared off. */
+  fromBefore: boolean
+  untilAfter: boolean
+}
+
+const boxStyle = (box: BlockBox): React.CSSProperties => ({
+  position: 'absolute', top: box.top, height: box.height, left: box.left, width: box.width,
+  borderTopLeftRadius: box.fromBefore ? 0 : 4, borderTopRightRadius: box.fromBefore ? 0 : 4,
+  borderBottomLeftRadius: box.untilAfter ? 0 : 4, borderBottomRightRadius: box.untilAfter ? 0 : 4,
+  overflow: 'hidden', cursor: 'pointer', fontSize: 12, lineHeight: `${LINE_PX}px`,
+  // A hairline of white keeps two side-by-side blocks of the same colour apart.
+  boxShadow: '0 0 0 1px #fff',
+})
+
+/**
+ * One booking on the Day/Week grid. Our design (the 2026-09-13 GHL look), carrying
+ * what makes the owner's Workiz week useful, as far as the block's height allows:
+ * the title (the customer), the time RANGE, then the Workiz Job # and the card's
+ * street and city. A short block puts title and range on one line. Every line
+ * truncates with an ellipsis; hovering shows all of it, and a click opens the
+ * appointment detail panel.
+ */
+function AppointmentBlock({ a, box, onOpen }: {
+  a: Appointment
+  box: BlockBox
+  onOpen: (id: number, e: React.MouseEvent) => void
+}) {
+  const off = a.status === 'cancelled'
+  const range = timeRange(a.starts_at, a.ends_at)
+  // The card's address; a booking with no card falls back to its meeting location.
+  const place = a.opportunity_address ?? a.location
+  const extra = [a.workiz_job_id ? `Job #${a.workiz_job_id}` : null, place]
+    .filter((x): x is string => !!x)
+  const lines = Math.max(1, Math.floor((box.height - box.textTop - 4) / LINE_PX))
+  return (
+    <div data-appointment={a.id}
+      title={[a.title + (off ? ' (cancelled)' : ''), range, ...extra,
+              a.calendar_name, 'Click for details'].filter(Boolean).join('\n')}
+      onClick={(ev) => onOpen(a.id, ev)}
+      onDoubleClick={(ev) => ev.stopPropagation()}
+      style={{
+        ...boxStyle(box),
+        backgroundColor: 'rgb(239,244,255)',
+        borderLeft: `3px solid ${a.color}`,
+        padding: `${2 + box.textTop}px 4px 2px 6px`, color: 'rgb(52,64,84)',
+        // Cancelled is a status, not a delete — the row survives and the Cancelled
+        // report tile counts it. It has to be visibly not a live booking, or the
+        // slot reads as still taken.
+        opacity: off ? 0.55 : 1,
+        textDecoration: off ? 'line-through' : undefined,
+      }}>
+      {lines === 1 ? (
+        <div className="truncate">
+          <span style={{ fontWeight: 500 }}>{a.title}</span>
+          <span data-block-range>{', ' + range}</span>
+        </div>
+      ) : (
+        <>
+          <div className="truncate" style={{ fontWeight: 500 }}>{a.title}</div>
+          <div className="truncate" data-block-range>{range}</div>
+          {extra.slice(0, lines - 2).map((line) => (
+            <div key={line} className="truncate" style={{ color: 'rgb(102,112,133)' }}>{line}</div>
+          ))}
+        </>
+      )}
     </div>
   )
 }
 
 /** One block of blocked off time on the Day/Week grid: grey, hatched, dashed edge. */
-function BlockedBlock({ b, top, height, label, onOpen }: {
+function BlockedBlock({ b, box, label, onOpen }: {
   b: BlockedTime
-  top: number
-  height: number
+  box: BlockBox
   label: string
   onOpen: (id: number, e: React.MouseEvent) => void
 }) {
   return (
     <div
       data-blocked-time={b.id}
-      title={`Blocked off: ${b.title} (${b.calendar_name ?? 'calendar'}) — click to open`}
+      title={`Blocked off: ${b.title} (${b.calendar_name ?? 'calendar'}) — ${label} — click to open`}
       onClick={(ev) => onOpen(b.id, ev)}
       onDoubleClick={(ev) => ev.stopPropagation()}
       style={{
-        position: 'absolute', left: 2, right: 2, top, height,
+        ...boxStyle(box),
         background: BLOCKED_FILL, border: '1px dashed rgb(152,162,179)',
-        borderRadius: 4, padding: '2px 6px', overflow: 'hidden',
-        fontSize: 12, color: 'rgb(71,84,103)', cursor: 'pointer',
+        padding: `${2 + box.textTop}px 6px 2px`, color: 'rgb(71,84,103)',
       }}
     >
       <div className="truncate" style={{ fontWeight: 500 }}>Blocked · {b.title}</div>

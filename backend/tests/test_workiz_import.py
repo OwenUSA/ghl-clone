@@ -373,7 +373,10 @@ def test_an_unreadable_amount_skips_its_row_and_does_not_abort_the_run(
 # ------------------------------------------------------------------ appointments
 
 
-def test_a_past_job_creates_no_appointment_and_a_future_one_does(fresh, tmp_path):
+def test_a_past_job_and_a_future_one_both_get_an_appointment(fresh, tmp_path):
+    """The owner, 2026-09-15: the calendar shows ALL our appointments, past and future.
+    (Until then a past job got none.) The past one queues nothing — see below and
+    test_workiz_calendar.py."""
     do_import(fresh, tmp_path,
               [client_row("1", "Ada Rowe", phone="9415550111"),
                client_row("2", "Ben Vale", phone="9415550222")],
@@ -382,12 +385,12 @@ def test_a_past_job_creates_no_appointment_and_a_future_one_does(fresh, tmp_path
                job_row("J2", "Ben Vale", phone="9415550222", status="Submitted",
                        scheduled=SOON, end=SOON_END)])
 
-    appts = fresh.scalars(select(Appointment)).all()
-    assert len(appts) == 1
-    assert "Ben Vale" in appts[0].title
-    assert as_utc(appts[0].starts_at) > datetime.now(UTC)
-    # Both jobs still became deals — only the BOOKING is filtered by date.
+    appts = {a.title: a for a in fresh.scalars(select(Appointment)).all()}
+    assert set(appts) == {"Ada Rowe", "Ben Vale"}
+    assert as_utc(appts["Ada Rowe"].starts_at) < datetime.now(UTC)
+    assert as_utc(appts["Ben Vale"].starts_at) > datetime.now(UTC)
     assert fresh.scalar(select(func.count(Opportunity.id))) == 2
+    assert fresh.scalar(select(func.count(Job.id))) == 0
 
 
 def test_an_imported_appointment_is_attached_to_its_job(fresh, tmp_path):
@@ -432,6 +435,8 @@ def test_times_are_read_as_eastern_not_as_utc(fresh, tmp_path):
 REMINDER_SHAPES = [
     # The exact shape that schedules T-24h and T-1h through the API.
     ("a future appointment", SOON, SOON_END),
+    # A visit that already happened (2026-09-15: every scheduled job is booked).
+    ("a past appointment", PAST, PAST),
     # ...and one far enough out that "too soon for a reminder" cannot be the
     # reason the queue is empty.
     ("a distant appointment", wz(datetime.now(UTC) + timedelta(days=120)),
@@ -456,7 +461,21 @@ def test_no_reminder_job_is_ever_enqueued_by_an_import(fresh, tmp_path, _what,
                        scheduled=scheduled, end=end),
                job_row("J2", "Ben Vale", phone="9415550222", status="Done")])
 
-    assert fresh.scalar(select(func.count(Appointment.id))) == 1, "it really booked"
+    # J1 at the shape under test, J2 (done, in the past) as well.
+    assert fresh.scalar(select(func.count(Appointment.id))) == 2, "it really booked"
+    assert fresh.scalars(select(Job)).all() == [], "an import must queue nothing"
+
+    # ...and a re-import that MOVES one visit and CANCELS the other queues nothing
+    # either: those are the shapes that re-queue or withdraw reminders through the API.
+    moved = wz(datetime.now(UTC) + timedelta(days=40))
+    do_import(fresh, tmp_path,
+              [client_row("1", "Ada Rowe", phone="9415550111"),
+               client_row("2", "Ben Vale", phone="9415550222")],
+              [job_row("J1", "Ada Rowe", phone="9415550111", status="Submitted",
+                       scheduled=moved, end=""),
+               job_row("J2", "Ben Vale", phone="9415550222", status="Canceled")])
+    statuses = sorted(a.status for a in fresh.scalars(select(Appointment)).all())
+    assert statuses == ["cancelled", "confirmed"], "it really moved and cancelled"
     assert fresh.scalars(select(Job)).all() == [], "an import must queue nothing"
 
 
@@ -614,7 +633,8 @@ def test_a_second_run_updates_rather_than_duplicating(fresh, tmp_path):
     # Three client rows share a phone and are one person; two more stand alone.
     assert fresh.scalar(select(func.count(Contact.id))) == 3
     assert fresh.scalar(select(func.count(Opportunity.id))) == 4
-    assert fresh.scalar(select(func.count(Appointment.id))) == 1
+    # Every one of the four jobs is scheduled, past or future: one visit each.
+    assert fresh.scalar(select(func.count(Appointment.id))) == 4
 
 
 def test_a_changed_export_updates_the_record_in_place(fresh, tmp_path):
@@ -1454,8 +1474,12 @@ def test_exactly_one_email_card_gets_the_workiz_job(fresh, tmp_path, ada):
     assert plan.ahs_attached == [("J7", card.id)] and plan.ahs_unmatched == []
     assert fresh.scalar(select(func.count(Opportunity.id))) == 1, "no second card"
     fresh.refresh(card)
+    visit = fresh.scalar(select(Appointment).where(Appointment.opportunity_id == card.id))
     assert card.custom_fields == {"ahs_job_id": "AHS-5521", "workiz_id": "J7",
-                                  wi.JOB_TYPE_KEY: "Roof Repair"}
+                                  wi.JOB_TYPE_KEY: "Roof Repair",
+                                  wi.WORKIZ_APPOINTMENT: wi.appointment_record(visit)}
+    # The job's visit carries the card's own title, like every imported visit.
+    assert visit.title == "AHS 5521 - Ada Rowe"
     assert fresh.get(Stage, card.stage_id).name == "Inspection"
     assert (card.value_cents, card.status) == (90000, "open")
     # The email's own facts are kept.

@@ -468,6 +468,12 @@ export type Appointment = {
   opportunity_title: string | null
   /** "Meeting location", resolved when it was booked. */
   location: string | null
+  /** The deal's street and city ("5790 SW 34th St, Miami"), or null. Blanked with
+   *  opportunity_title for a deal the reader cannot see. Absent from the detail
+   *  endpoint's older callers, hence optional. */
+  opportunity_address?: string | null
+  /** The Workiz Job # the deal was imported from, or null. */
+  workiz_job_id?: string | null
 }
 
 export function listAppointments(p: {

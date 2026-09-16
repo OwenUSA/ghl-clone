@@ -3716,9 +3716,17 @@ def _appointment_deal(a: Appointment, s: assigned_access.Scope) -> dict:
     a pipeline they cannot access, or (Only assigned data) a job that is not theirs,
     which a CANCELLED visit on their calendar does not make it."""
     if not s.sees_job(a.opportunity):
-        return {"opportunity_id": None, "opportunity_title": None}
+        return {"opportunity_id": None, "opportunity_title": None,
+                "opportunity_address": None, "workiz_job_id": None}
+    o = a.opportunity
+    # What a calendar block shows under the time when it is tall enough (2026-09-15):
+    # the card's street and city, and the Workiz Job # the card was imported from.
+    # Blanked with the title above, so neither leaks from a deal the reader cannot see.
+    address = ", ".join(p for p in (o.address_street, o.address_city) if p) if o else ""
     return {"opportunity_id": a.opportunity_id,
-            "opportunity_title": a.opportunity.title}
+            "opportunity_title": o.title if o else None,
+            "opportunity_address": address or None,
+            "workiz_job_id": ((o.custom_fields or {}).get("workiz_id") or None) if o else None}
 
 
 def _appointment_detail(a: Appointment, s: assigned_access.Scope,
