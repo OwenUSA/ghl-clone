@@ -48,13 +48,13 @@ over BulkVS and only BulkVS. See `ConversationsPage.tsx`, which says so on scree
 in any thread that holds a mirrored event.
 """
 import logging
-import re
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import assigned_access, auth, crmlink
+from .byte_range import ranged_response
 from .db import get_db
 from .models import Conversation, ConversationEvent
 
@@ -82,39 +82,10 @@ RECORDINGS_PATH = "/api/openphone/recordings"
 # cached here on purpose: a cache would keep playing audio after owen-main or Quo went
 # away, and `test_an_openphone_outage_leaves_the_thread_rendering` pins that it stops.
 # The browser may still reuse what it has (`Cache-Control: private, max-age=300`).
-_RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
-
-
-def audio_response(audio: bytes, content_type: str, range_header: str | None) -> Response:
-    """200 with the whole file, or 206 with the one byte range asked for.
-
-    `bytes=a-b`, `bytes=a-` and `bytes=-n` are honoured. A range past the end is
-    416; a header this does not understand (several ranges, other units) gets the
-    whole file, which is always a correct answer to a Range request.
-    """
-    total = len(audio)
-    headers = {"Cache-Control": "private, max-age=300",
-               "Accept-Ranges": "bytes"}
-    media_type = content_type or "audio/mpeg"
-    match = _RANGE.match((range_header or "").strip())
-    if not match or match.groups() == ("", ""):
-        return Response(content=audio, media_type=media_type, headers=headers)
-    first, last = match.groups()
-    if first == "":
-        length = int(last)
-        if length == 0:
-            return Response(status_code=416, headers={**headers,
-                            "Content-Range": "bytes */%d" % total})
-        start, end = max(0, total - length), total - 1
-    else:
-        start = int(first)
-        end = min(int(last), total - 1) if last else total - 1
-    if start >= total or start > end:
-        return Response(status_code=416, headers={**headers,
-                        "Content-Range": "bytes */%d" % total})
-    headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, total)
-    return Response(content=audio[start:end + 1], status_code=206, media_type=media_type,
-                    headers=headers)
+# Moved to `app/byte_range.py` on 2026-09-16 so picture messages could answer a Range
+# request the same way, and imported back under its old name so this module reads as it
+# always did. The measurement that produced it is in the comment above.
+audio_response = ranged_response
 
 
 @router.get("/recordings/{call_id}")
@@ -158,7 +129,8 @@ def stream_recording(call_id: str,
         # `private` because this is one customer's call audio: it must not sit in a
         # shared cache. The short max-age lets the player scrub without re-fetching
         # the whole file back through three hops.
-        return audio_response(audio, content_type, range_header)
+        return audio_response(audio, content_type, range_header,
+                              default_type="audio/mpeg")
 
     # A LinkResult: owen-main answered, or could not be reached.
     if result.status == 404:

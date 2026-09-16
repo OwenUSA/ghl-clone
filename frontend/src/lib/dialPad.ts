@@ -11,8 +11,20 @@
  * North American numbers only: the one line this CRM calls from is a US BulkVS DID.
  */
 
-/** The number every call leaves from. There is no other line — Quo cannot place calls. */
-export const CALLING_FROM = '+19544829099'
+/**
+ * The number every call leaves from, as a FALLBACK only (2026-09-16).
+ *
+ * The line is configuration, not a constant: the owner moved the CRM from `+19544829099`
+ * to `+19547758492` and the old number was unbound entirely. The server knows which line is
+ * bound (`app/crmlink.py`, `CRM_LINK_FROM_NUMBER`) and reports it on
+ * `GET /api/connection-status`; `lib/ourLine.ts` is where the browser reads it.
+ *
+ * This constant is what the two problem functions below use when the caller passes nothing
+ * — a cold render before the first status poll. Kept in step with `ourLine.FALLBACK_LINE`,
+ * and the one place either of them matters is a screen that has not heard from the server
+ * yet: the SERVER decides what a send actually uses, never this.
+ */
+export const CALLING_FROM = '+19547758492'
 
 /** The keypad, in phone order. The letters are what a phone prints under each digit. */
 export const KEYPAD: { key: string; letters: string }[] = [
@@ -21,6 +33,25 @@ export const KEYPAD: { key: string; letters: string }[] = [
   { key: '7', letters: 'PQRS' }, { key: '8', letters: 'TUV' }, { key: '9', letters: 'WXYZ' },
   { key: '*', letters: '' }, { key: '0', letters: '+' }, { key: '#', letters: '' },
 ]
+
+/** The last ten digits — the identity rule the server, the CRM link and owen-main share. */
+function lastTen(value: string): string {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  return digits.length >= 10 ? digits.slice(-10) : digits
+}
+
+/**
+ * The line to compare against: the caller's, or the fallback.
+ *
+ * Guards a real trap. `dialProblem` and `textProblem` grew a second parameter on 2026-09-16
+ * so the "cannot call itself" check could follow the CONFIGURED line — and
+ * `Array.map(pad.dialProblem)` passes the INDEX as that second argument. A test did exactly
+ * that and the check silently stopped refusing our own number. Anything that is not a
+ * string is not a phone line, and is ignored.
+ */
+function lineOf(ourNumber: unknown): string {
+  return typeof ourNumber === 'string' && ourNumber.trim() ? ourNumber : CALLING_FROM
+}
 
 /** The characters the field keeps: digits, star, pound and a leading +. */
 function keep(raw: string): string {
@@ -79,8 +110,9 @@ export function pasteNumber(text: string): string {
 }
 
 /** `+1XXXXXXXXXX` for a dialable number, else null. What the server is sent. */
-export function normaliseNumber(value: string): string | null {
-  return dialProblem(value) === null ? '+1' + nationalDigits(value) : null
+export function normaliseNumber(value: string,
+                                ourNumber: string = CALLING_FROM): string | null {
+  return dialProblem(value, ourNumber) === null ? '+1' + nationalDigits(value) : null
 }
 
 function nationalDigits(value: string): string {
@@ -92,7 +124,7 @@ function nationalDigits(value: string): string {
  * Why this number cannot be called, or null when it can. The same rules and words as
  * the server's `dial_problem`.
  */
-export function dialProblem(value: string): string | null {
+export function dialProblem(value: string, ourNumber: string = CALLING_FROM): string | null {
   const kept = keep(value)
   if (!kept.replace('+', '')) return 'Enter a number to call — 10 digits, area code first.'
   if (/[*#]/.test(kept)) {
@@ -110,7 +142,11 @@ export function dialProblem(value: string): string | null {
   if ('01'.includes(d[0]) || '01'.includes(d[3])) {
     return 'That is not a valid US number — an area code and an exchange cannot start with 0 or 1.'
   }
-  if (d === CALLING_FROM.slice(2)) return "That is this CRM's own number — it cannot call itself."
+  // Follows the CONFIGURED line, so the refusal moves when the owner moves the number —
+  // and the retired one stops being refused, because it is somebody else's line now.
+  if (d === lastTen(lineOf(ourNumber))) {
+    return "That is this CRM's own number — it cannot call itself."
+  }
   return null
 }
 
@@ -120,7 +156,7 @@ export function dialProblem(value: string): string | null {
  * texting. The server's twin is `text_problem` in `backend/app/main.py`; a test runs
  * both on the same inputs.
  */
-export function textProblem(value: string): string | null {
+export function textProblem(value: string, ourNumber: string = CALLING_FROM): string | null {
   const kept = keep(value)
   if (!kept.replace('+', '')) return 'Enter a number to text — 10 digits, area code first.'
   if (/[*#]/.test(kept)) return 'A number to text has only digits.'
@@ -136,11 +172,14 @@ export function textProblem(value: string): string | null {
   if ('01'.includes(d[0]) || '01'.includes(d[3])) {
     return 'That is not a valid US number — an area code and an exchange cannot start with 0 or 1.'
   }
-  if (d === CALLING_FROM.slice(2)) return "That is this CRM's own number — it cannot text itself."
+  if (d === lastTen(lineOf(ourNumber))) {
+    return "That is this CRM's own number — it cannot text itself."
+  }
   return null
 }
 
 /** `+1XXXXXXXXXX` for a textable number, else null. What the server is sent. */
-export function normaliseTextNumber(value: string): string | null {
-  return textProblem(value) === null ? '+1' + nationalDigits(value) : null
+export function normaliseTextNumber(value: string,
+                                    ourNumber: string = CALLING_FROM): string | null {
+  return textProblem(value, ourNumber) === null ? '+1' + nationalDigits(value) : null
 }

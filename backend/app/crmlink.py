@@ -1,6 +1,7 @@
 """The link to owen-main, the telephony platform that owns the real phone number.
 
-`+19544829099` is a BulkVS DID bound to this CRM. owen-main exposes an internal,
+`+19547758492` is the BulkVS DID bound to this CRM (it replaced `+19544829099` on
+2026-09-16, which is now fully unbound). owen-main exposes an internal,
 API-key-authenticated surface at `/api/crm-link/*` which this module is the only
 caller of:
 
@@ -49,8 +50,24 @@ import httpx
 
 log = logging.getLogger("crmlink")
 
-# The bound DID. Overridable, but this is the number the ring group is built on.
-DEFAULT_FROM_NUMBER = "+19544829099"
+# THE CRM'S OWN LINE. One definition, in one place, and everything else reads it — the
+# transport, `/api/health`, `/api/connection-status`, and through that the composer's
+# "Sending from", the dialer's "Calling from", the AI escalation copy and the
+# "you cannot text this number from itself" check in the browser.
+#
+# CHANGED 2026-09-16: the owner moved the CRM onto +19547758492 ("CRM number" in owen-main).
+# +19544829099 is FULLY UNBOUND and is no longer the CRM's line. It is not deleted from the
+# world, though: events already on a thread carry `source_number: +19544829099`, they were
+# genuinely sent and received on that line, and the thread still labels them with it. A
+# number is a fact about when something happened, not a setting to be rewritten.
+#
+# `CRM_LINK_FROM_NUMBER` overrides it, and production sets it — so this constant is the
+# fallback for a deployment that has not been told, never the authority.
+DEFAULT_FROM_NUMBER = "+19547758492"
+
+# The line the CRM used before 2026-09-16, kept ONLY so history can be read. Nothing sends
+# from it and nothing may be bound to it.
+RETIRED_FROM_NUMBERS = ("+19544829099",)
 
 CALLS_PATH = "/api/crm-link/calls"
 MESSAGES_PATH = "/api/crm-link/messages"
@@ -209,18 +226,29 @@ def _post(path: str, body: dict) -> LinkResult:
                       payload if isinstance(payload, dict) else None)
 
 
-def send_sms(to_number: str, body: str) -> LinkResult:
+def send_sms(to_number: str, body: str,
+             media_ids: list[str] | None = None) -> LinkResult:
     """`POST /api/crm-link/messages`. Shape from owen-main's `SendMessageIn`.
 
     On success owen-main answers `{"ok": true, "message_id": "...", "status":
     "queued"}`. That `message_id` is the join key a delivery receipt arrives with,
     so the caller stores it as `provider_ref`.
+
+    `media_ids` are ids owen-main handed back from `upload_media` — never URLs. The
+    CRM does not and cannot build a URL a carrier can fetch: the number of people
+    who can reach a picture is exactly the number of people who hold a live
+    owen-main media token, and minting those is owen-main's job alone (2026-09-16).
+    The key is omitted entirely when there is no picture, so a text is byte-for-byte
+    the request it was before this existed.
     """
-    return _post(MESSAGES_PATH, {
+    payload = {
         "from_number": current().from_number,
         "to_number": to_number,
         "body": body,
-    })
+    }
+    if media_ids:
+        payload["media_ids"] = list(media_ids)
+    return _post(MESSAGES_PATH, payload)
 
 
 def place_call(to_number: str, operator: str | None = None) -> LinkResult:
@@ -316,3 +344,95 @@ def fetch_openphone_recording(call_id: str) -> tuple[bytes, str] | LinkResult:
                  call_id, resp.status_code, raw)
         return LinkResult(False, resp.status_code, _human(raw))
     return resp.content, resp.headers.get("content-type", "audio/mpeg")
+
+
+# --- pictures on a text (2026-09-16) -----------------------------------------------------
+#
+# Two directions, and they are asymmetric on purpose.
+#
+# INBOUND. The carrier's media link expires, so the CRM copies the bytes once, when the text
+# arrives, and keeps them (`app/attachments.py`). It asks owen-main — never the carrier:
+# owen-main is the only system holding the BulkVS credential, exactly as it is the only
+# system holding the OpenPhone one.
+#
+#   CRM --X-OWEN-Key--> owen-main --BulkVS Basic auth--> the carrier's media URL
+#
+# OUTBOUND. BulkVS fetches the picture itself, from a URL on the public internet, so
+# something has to publish it. That something is owen-main, which already has a public
+# hostname and is the system BulkVS talks to. The CRM uploads the bytes and gets back an
+# OPAQUE ID; it never sees or builds the public URL. See the security note in DECISIONS.md.
+
+MESSAGE_MEDIA_PATH = "/api/crm-link/messages"
+UPLOAD_MEDIA_PATH = "/api/crm-link/media"
+
+
+def fetch_message_media(owen_message_id: str, index: int) -> tuple[bytes, str] | LinkResult:
+    """`GET /api/crm-link/messages/{id}/media/{index}` on owen-main.
+
+    Returns `(bytes, content_type)` on success, or a `LinkResult` carrying the reason —
+    the same two shapes as `fetch_openphone_recording`, and for the same reason: the caller
+    has to tell "there is no such picture" (404, permanent, stop retrying) from "we could
+    not ask" (a timeout, worth another go), and an empty byte string would collapse them.
+
+    Read fully rather than streamed: one MMS picture over an internal Docker network, and
+    the bytes are going straight onto disk anyway.
+    """
+    cfg = current()
+    if not cfg.configured:
+        return LinkResult(False, 0, "the phone link is not configured")
+
+    url = "%s%s/%s/media/%d" % (cfg.base_url, MESSAGE_MEDIA_PATH, owen_message_id, index)
+    try:
+        resp = httpx.get(url, timeout=cfg.timeout_seconds,
+                         headers={"X-OWEN-Key": cfg.api_key})
+    except Exception as exc:  # noqa: BLE001 - any transport failure is one outcome
+        log.warning("crm-link: media GET failed: %r", exc)
+        return LinkResult(False, 0, "could not reach the phone system")
+
+    if resp.status_code >= 400:
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = {}
+        raw = _detail_text(payload, resp.status_code)
+        log.info("crm-link: media %s/%d unavailable (%d): %s",
+                 owen_message_id, index, resp.status_code, raw)
+        return LinkResult(False, resp.status_code, _human(raw))
+    return resp.content, resp.headers.get("content-type", "application/octet-stream")
+
+
+def upload_media(data: bytes, filename: str, content_type: str) -> LinkResult:
+    """`POST /api/crm-link/media` — hand owen-main one picture to publish for the carrier.
+
+    On success owen-main answers `{"ok": true, "media_id": "...", "expires_at": "..."}`.
+    The `media_id` is opaque: it is NOT the public URL and cannot be turned into one here.
+    owen-main mints the signed, short-lived, single-object URL at send time and hands it to
+    BulkVS; nothing in this repository ever holds it, which is the property that makes the
+    exposure one carrier fetch wide rather than one CRM deploy wide.
+    """
+    cfg = current()
+    if not cfg.configured:
+        return LinkResult(False, 0, "the phone link is not configured")
+
+    url = cfg.base_url + UPLOAD_MEDIA_PATH
+    try:
+        resp = httpx.post(
+            url, timeout=cfg.timeout_seconds,
+            headers={"X-OWEN-Key": cfg.api_key, "Accept": "application/json"},
+            files={"file": (filename, data, content_type)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("crm-link: media upload failed: %r", exc)
+        return LinkResult(False, 0, "could not reach the phone system")
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {}
+    if resp.status_code >= 400:
+        raw = _detail_text(payload, resp.status_code)
+        log.warning("crm-link: media upload refused (%d): %s", resp.status_code, raw)
+        return LinkResult(False, resp.status_code, _human(raw),
+                          payload if isinstance(payload, dict) else None)
+    return LinkResult(True, resp.status_code, "",
+                      payload if isinstance(payload, dict) else None)

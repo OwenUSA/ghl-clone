@@ -32,6 +32,7 @@ from app import (
     assigned_access,
     companycam,
     companycam_api,
+    media_api,
     openphone,
     opportunity_workspace,
     softphone,
@@ -1111,6 +1112,12 @@ AUDITED = {
     "list_messages": "_search_events(scope)",
     "search": "contacts/opportunities/messages over one scope",
     "stream_recording": "event with that recording_url on a scope contact, else 404",
+    # Pictures on a text (2026-09-16). The bytes follow the THREAD's rule, asked through
+    # the same scope; an upload is a draft of the operator's own with no customer in it.
+    "get_attachment": "message_media.visible -> 404 (the thread's own rule)",
+    "retry_attachment": "message_media.visible -> 404 (the thread's own rule)",
+    "remove_attachment": "message_media.visible -> 404 (the thread's own rule)",
+    "upload_attachment": "own draft, no customer record",
     "ingest_event": "EVENTS_INGEST (machine, staff)",
     "ingest_delivery_receipt": "EVENTS_INGEST (machine, staff)",
     "ingest_ahs_job": "EVENTS_INGEST (machine, staff)",
@@ -1215,6 +1222,7 @@ NO_CUSTOMER_RECORD_READ = {
     "own", "definitions only", "definitions only, no answers", "STAFF",
     "roster; only_assigned_data ADMIN-only",
     "names only", "the caller's own SIP identity, no record", "link health, no record",
+    "own draft, no customer record",
     "STAFF; creates", "STAFF; structure only, no deal read", "STAFF; structure only",
 }
 
@@ -1228,9 +1236,13 @@ def test_every_route_reading_customer_records_goes_through_a_scope():
                "_contact_detail", "_pipeline_public", "_appointment_detail",
                # 2026-09-15: the booking route's checks moved into this service (shared
                # with AI agents); it resolves contact and deal through assigned_access.
-               "book_appointment(")
+               "book_appointment(",
+               # 2026-09-16: a picture's reader is decided by the thread it is on, which
+               # `message_media.visible` resolves through `assigned_access.scope`.
+               "message_media.visible(")
     reads = ("Contact", "Conversation", "Appointment", "Opportunity", "BlockedTime",
-             "NumberThread", "OpportunityTask", "OpportunityNote", "CompanyCamLink")
+             "NumberThread", "OpportunityTask", "OpportunityNote", "CompanyCamLink",
+             "MessageAttachment", "message_media.")
     exempt = {name for name, how in AUDITED.items()
               if how in NO_CUSTOMER_RECORD_READ}
     missing = []
@@ -1239,7 +1251,7 @@ def test_every_route_reading_customer_records_goes_through_a_scope():
         if fn.__name__ in exempt or fn.__module__ not in (
                 main_mod.__name__, opportunity_workspace.__name__,
                 companycam_api.__name__, softphone.__name__, openphone.__name__,
-                zuper_api.__name__):
+                media_api.__name__, zuper_api.__name__):
             continue
         src = inspect.getsource(fn)
         if any(m in src for m in reads) and not any(m in src for m in markers):

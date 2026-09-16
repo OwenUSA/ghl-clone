@@ -282,6 +282,27 @@ export type ConversationSummary = {
   starred: boolean
 }
 
+/**
+ * One picture on a message.
+ *
+ * `url` is null until the bytes are actually here, which is what the thread branches on:
+ * a PENDING picture is still being fetched from the phone system and shows a placeholder,
+ * a FAILED one shows `detail` and a Retry, and a REFUSED one shows `detail` with no Retry
+ * because trying again cannot make a PDF into a photograph.
+ */
+export type Attachment = {
+  id: number
+  position: number
+  status: 'PENDING' | 'STORED' | 'FAILED' | 'REFUSED' | 'DRAFT'
+  detail: string | null
+  content_type: string | null
+  byte_size: number | null
+  filename: string | null
+  url: string | null
+  pending: boolean
+  retryable: boolean
+}
+
 export type ThreadEvent = {
   id: number
   type: string
@@ -305,6 +326,12 @@ export type ThreadEvent = {
   delivery_status: string | null
   /** The reason, as a sentence, when the status alone does not explain itself. */
   delivery_detail: string | null
+  /**
+   * The pictures on this message (2026-09-16). ALWAYS an array; empty on almost every
+   * row. Each entry carries an id this server will serve the bytes for and nothing else —
+   * no carrier URL, no owen-main locator, no path. See backend/app/message_media.py.
+   */
+  attachments: Attachment[]
   /**
    * WHICH phone system carried this event -- "BulkVS" for anything this CRM sent or
    * owen-main relayed, "OpenPhone" for an event mirrored from the account the company
@@ -1404,8 +1431,10 @@ export const patchThread = (t: ThreadRef, body: { read?: boolean; starred?: bool
 export const deleteThread = (t: ThreadRef) =>
   send<{ deleted: number; events_deleted: number }>(threadPath(t), 'DELETE')
 
-export const sendToThread = (t: ThreadRef, body: string, type: SendableType) =>
-  send<SentMessage>(`${threadPath(t)}/messages`, 'POST', { body, type })
+export const sendToThread = (t: ThreadRef, body: string, type: SendableType,
+                            attachmentIds: number[] = []) =>
+  send<SentMessage>(`${threadPath(t)}/messages`, 'POST',
+                    { body, type, attachment_ids: attachmentIds })
 
 /** Ring the thread's number — a contact's, or a number nobody has saved — through the
  *  same owen-main click-to-call path. */
@@ -1809,8 +1838,10 @@ export type NewMessageResult = {
 
 /** Text ANY number: a contact's number goes on their conversation, anyone else's on the
  *  number's own thread. Never creates a contact, and never takes a "from" number. */
-export const sendNewMessage = (number: string, body: string) =>
-  send<NewMessageResult>('/api/messages/new', 'POST', { number, body })
+export const sendNewMessage = (number: string, body: string,
+                              attachmentIds: number[] = []) =>
+  send<NewMessageResult>('/api/messages/new', 'POST',
+                         { number, body, attachment_ids: attachmentIds })
 
 /** One hard-coded automation rule and whether it is on (Settings → Automations). */
 export type AutomationRule = {
@@ -1822,6 +1853,53 @@ export type AutomationRule = {
   reason: string | null
 }
 export const listAutomations = () => get<{ rules: AutomationRule[] }>('/api/automations')
+
+// ---------------------------------------------------------------------------
+// Pictures on a text message (2026-09-16).
+//
+// The bytes never travel as JSON. A picture is uploaded as a multipart form the moment the
+// operator picks it, so the composer can show it before anything is sent and a 4 MB photo
+// is not re-sent every time they edit the sentence; sending then passes ids.
+//
+// `uploadAttachment` does NOT go through `send()`, and deliberately: that helper sets
+// `Content-Type: application/json`, and a multipart body needs the boundary the browser
+// generates for it — setting the header by hand is the classic way to make a form upload
+// arrive as an empty dict. Everything else about it is the same: same-origin, cookies,
+// the CSRF token, and one retry after a refreshed access token.
+// ---------------------------------------------------------------------------
+
+async function upload<T>(path: string, file: File, retry = true): Promise<T> {
+  const form = new FormData()
+  form.append('file', file)
+  const r = await fetch(BASE + path, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-CSRF-Token': cookie('ghl_csrf') ?? '' },
+    body: form,
+  })
+  if (r.status === 401) {
+    if (retry && (await refresh())) return upload<T>(path, file, false)
+    window.dispatchEvent(new Event('ghl:unauthorized'))
+    throw new Unauthorized('not signed in')
+  }
+  if (!r.ok) throw await failed(r)
+  return r.json() as Promise<T>
+}
+
+/** Keep a picture so it can be previewed and then sent. Refused with a sentence if it is
+ *  not an image or is too big — the server sniffs the bytes, it does not trust the type. */
+export const uploadAttachment = (file: File) =>
+  upload<Attachment>('/api/attachments', file)
+
+/** Take an unsent picture back off the composer. Only a draft; a picture already on a
+ *  message is part of the record of what was said. */
+export const deleteAttachment = (id: number) =>
+  send<{ deleted: number }>(`/api/attachments/${id}`, 'DELETE')
+
+/** Fetch an inbound picture from the phone system again, now. Answers the attachment's new
+ *  state whatever happened — including "it failed again", with the sentence saying why. */
+export const retryAttachment = (id: number) =>
+  send<Attachment>(`/api/attachments/${id}/retry`, 'POST')
 
 // ---------------- Zuper two-way sync (2026-09-16) ----------------
 // Routes: backend/app/zuper/api.py. Shapes and the words for them: lib/zuper.ts.

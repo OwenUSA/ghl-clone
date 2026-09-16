@@ -13,6 +13,14 @@ import pytest
 _TMP = os.path.join(tempfile.gettempdir(), "ghl_clone_test.db")
 os.environ["DATABASE_URL"] = "sqlite:///" + _TMP
 
+# ---- pictures go to a throwaway directory, never to a real MEDIA_ROOT --------------------
+# Set before any app module reads it, for the same reason DATABASE_URL is: a shell with
+# production's MEDIA_ROOT exported must not have the suite writing JPEGs into the volume
+# that holds customers' photographs — or, worse, `forget()` unlinking one. Per RUN rather
+# than per test, so `attachments.store` can still prove that identical bytes are stored once
+# across two messages in the same test.
+os.environ["MEDIA_ROOT"] = os.path.join(tempfile.gettempdir(), "ghl_clone_test_media")
+
 # ---- no test may reach owen-main (texting goes live, 2026-09-15) -------------------------
 # Before any app module reads the environment: a shell with production's link settings
 # exported must not arm the suite. See tests/owen_guard.py.

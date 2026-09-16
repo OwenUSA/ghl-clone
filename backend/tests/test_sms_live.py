@@ -78,10 +78,28 @@ def test_every_rule_that_texts_a_customer_is_off():
     assert automations.APPOINTMENT_REMINDERS_ENABLED is False
     assert automations.STAGE_CHANGE_TEXT_ENABLED is False
     rules = {r["key"]: r for r in automations.rules()}
-    assert set(rules) == set(automations.HANDLERS) - {"ai_agent_run"}
+    # Every queue handler is one of the four rules, or is named here. Both exceptions send
+    # nothing on their own account: `ai_agent_run` runs an agent (whose own sends go through
+    # the same switches and are Off by default), and `fetch_message_media` COPIES AN INBOUND
+    # PICTURE onto our disk — it has no transport call in it at all (2026-09-16).
+    not_a_rule = {"ai_agent_run", "fetch_message_media"}
+    assert set(rules) == set(automations.HANDLERS) - not_a_rule
     for key, r in rules.items():
         if r["texts_customer"]:
             assert r["enabled"] is False and r["reason"].startswith("Off."), key
+
+
+def test_the_picture_fetch_handler_cannot_send_anything(world):
+    """It is in HANDLERS beside four rules that text customers, so "it sends nothing" is
+    worth holding to rather than asserting once in a comment."""
+    import inspect
+
+    from app import message_media
+
+    src = inspect.getsource(message_media.handle_fetch_job) + inspect.getsource(
+        message_media.fetch_one)
+    for banned in ("send_sms", "send_outbound", "get_transport", "send_email"):
+        assert banned not in src, "the picture fetch reached %s" % banned
 
 
 def test_the_automations_route_reports_the_flags_to_everyone(world):

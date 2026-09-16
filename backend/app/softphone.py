@@ -2,9 +2,10 @@
 
 The owner's requirement is one sentence — *"i should be able to answer from the crm
 or the other 2 phones, the one that picks up first, takes the call"* — and most of
-it already worked. `+19544829099` is bound, and OWEN's hybrid ring group already
-rings the two mobiles **and** every `PJSIP/operator-<slug>` browser softphone at
-once, bridging whichever answers first and hanging up the rest. The CRM was simply
+it already worked. The CRM's bound DID (`crmlink.DEFAULT_FROM_NUMBER`, one definition)
+is bound, and OWEN's hybrid ring group already rings the two mobiles **and** every
+`PJSIP/operator-<slug>` browser softphone at once, bridging whichever answers first and
+hanging up the rest. The CRM was simply
 not one of those softphones.
 
 Two endpoints make it one:

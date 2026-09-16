@@ -174,6 +174,7 @@ export const IconList = make(
 )
 
 export const IconChevronLeft = make(<path d="m15 18-6-6 6-6" />)
+export const IconChevronRight = make(<path d="m9 18 6-6-6-6" />)
 
 // The dialer and the in-call window (2026-09-14). Same 24-grid outline style as above.
 export const IconMic = make(
@@ -216,7 +217,7 @@ export const IconCompose = make(
     <path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L12 14.8l-4 1 1-4 9.4-9.2z" />
   </>,
 )
-/** A paperclip — an MMS attachment the CRM is told about but not given. */
+/** A paperclip — attach a picture to a text, and the fallback MMS note (2026-09-16). */
 export const IconPaperclip = make(
   <path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />,
 )

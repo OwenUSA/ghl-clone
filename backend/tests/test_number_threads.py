@@ -46,7 +46,11 @@ from app.models import (
 from fastapi.testclient import TestClient
 from sqlalchemy import func, inspect, select
 
-BULKVS_LINE = "+19544829099"
+# The line these tests send and receive on. It is the CRM's line as of 2026-09-16 — the
+# owner moved it off +19544829099, which is now fully unbound — and it is set into
+# CRM_LINK_FROM_NUMBER below so the suite exercises the configured value rather than a
+# constant that could drift from it.
+BULKVS_LINE = "+19547758492"
 QUO_LINE = "+19417247244"
 STRANGER = "+19415550199"
 STRANGER_TYPED = "(941) 555-0199"
@@ -793,6 +797,9 @@ def test_the_page_selects_by_key_and_shows_the_number_thread_affordances():
     assert "<NumberDetailsPanel row={current}" in page
     assert "!isNumber && current.contact_id != null" in page, (
         "the contact panel would render an empty contact for a number thread")
-    # Quo's name is labelled as Quo's, and the reply-line banner still names BulkVS.
+    # Quo's name is labelled as Quo's, and the reply-line banner still names the line the
+    # reply will actually leave on — which since 2026-09-16 is the CONFIGURED one, read from
+    # the server, rather than a hard-coded DID the owner has since retired.
     assert "from Quo" in panel and "<FromQuo />" in page
-    assert "This reply goes from" in page and "'+19544829099'" in page
+    assert "This reply goes from" in page and "formatPhone(ourNumber)" in page
+    assert "useOurLine()" in page

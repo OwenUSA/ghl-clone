@@ -161,7 +161,11 @@ def test_a_contact_on_dnd_is_refused_before_anything_is_rung(world, link):
     ("+44 20 7946 0958", "Only US and Canadian numbers"),
     ("941 555 0199 9", "Only US and Canadian numbers"),
     ("(054) 555-0199", "cannot start with 0 or 1"),
-    ("(954) 482-9099", "own number"),
+    # The CONFIGURED line, which since 2026-09-16 is +19547758492 — the owner moved the CRM
+    # off +19544829099 and unbound it. The refusal follows `crmlink.current().from_number`,
+    # so this case is the line the CRM is actually on, not a literal that has to be edited
+    # every time the number changes.
+    ("(954) 775-8492", "own number"),
 ])
 def test_a_number_that_cannot_be_called_is_refused_with_a_sentence_and_nothing_sent(
         world, link, number, words):
@@ -172,6 +176,24 @@ def test_a_number_that_cannot_be_called_is_refused_with_a_sentence_and_nothing_s
     assert words in out["reason"], out["reason"]
     assert dialled(link) == [], "a refused number reached owen-main"
     assert counts() == before
+
+
+def test_the_retired_line_is_an_ordinary_number_now(world, link):
+    """+19544829099 was this CRM's line until 2026-09-16 and is fully unbound. There is no
+    reason left to refuse it, and a refusal that outlived the number would be a number the
+    owner could never call."""
+    client, _, as_ = world
+    out = dial(client, as_, "(954) 482-9099", ring_browser=True)
+    assert "own number" not in (out.get("reason") or ""), out
+
+
+def test_the_refusal_follows_the_configured_line(world, link, monkeypatch):
+    """Whatever `CRM_LINK_FROM_NUMBER` says is the number the CRM cannot call."""
+    client, _, as_ = world
+    monkeypatch.setenv("CRM_LINK_FROM_NUMBER", "+13055550111")
+    out = dial(client, as_, "(305) 555-0111", ring_browser=True)
+    assert out["placed"] is False and "own number" in out["reason"]
+    assert dialled(link) == [], "a refused number reached owen-main"
 
 
 @pytest.mark.parametrize("status, detail, sentence", [

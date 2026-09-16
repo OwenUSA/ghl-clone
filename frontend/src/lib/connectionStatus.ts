@@ -36,6 +36,16 @@ export type ServerStatus = {
   checked_at: string
   link: { state: CheckState; sentence: string }
   quo: { state: CheckState; sentence: string; facts: QuoFacts | null }
+  /**
+   * The line this CRM calls and texts FROM (2026-09-16). The server is the only thing that
+   * knows it (`app/crmlink.py`, `CRM_LINK_FROM_NUMBER`); it rides along on this endpoint
+   * because every signed-in page already polls it for the dot. Read it through
+   * `lib/ourLine.ts`, which supplies the fallback for a render that has not polled yet.
+   *
+   * Optional on the type, not on the server: a browser left open across a deploy of an
+   * older backend must not blank the "Sending from" line.
+   */
+  our_line?: string
 }
 
 /** One row of the hover card. */

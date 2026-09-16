@@ -16,7 +16,9 @@ deliberately out.
 - **No message leaves the building until somebody arms it.** There are two
   `MessageTransport` implementations. `get_transport()` returns `CrmLinkTransport` —
   which hands the message to owen-main for delivery over the real BulkVS DID
-  `+19544829099` — only when **both** `CRM_LINK_BASE_URL` and `CRM_LINK_API_KEY` are
+  **`+19547758492`** (it replaced `+19544829099` on 2026-09-16; that number is now fully
+  unbound. ONE definition: `crmlink.DEFAULT_FROM_NUMBER` / `CRM_LINK_FROM_NUMBER`, reported
+  to the browser as `our_line` on `GET /api/connection-status`) — only when **both** `CRM_LINK_BASE_URL` and `CRM_LINK_API_KEY` are
   set; otherwise `LoggingTransport` records `delivery_status = LOGGED_ONLY` and transmits
   nothing. `GET /api/health` reports which one is live (`"crm_link": true|false`) — ask
   it rather than assume. **With the link armed and SMS switched on in owen-main (10DLC is
@@ -146,15 +148,72 @@ uv run ghl jobs list --status pending         # did the automation fire?
 
 Conversations → the compose icon beside "Call a number" opens `components/NewMessageDialog.tsx`:
 number (formats as you type, `textProblem` in `lib/dialPad.ts` = `text_problem` in `main.py`),
-message with a character / segment count (`lib/smsSegments.ts`), "Sending from (954) 482-9099",
+message with a character / segment count (`lib/smsSegments.ts`), "Sending from …" — the
+CONFIGURED line, from `useOurLine()` (`lib/ourLine.ts`), never a constant —
 Send. `POST /api/messages/new`: a number a contact holds is a send on the contact's conversation
 (DND suppresses); anyone else's goes on the number-only thread (found or created, never a
 contact). A restricted technician may text only their own jobs' customers. Quo is never a sender
 — no route takes a `from_number`. Under a bubble: owen-main's REFUSED sentence; FAILED says it
 can be retried and has Retry. An inbound MMS arrives as text plus `[N attachments — view in
-OWEN]` and no media URLs, shown as an attachment line (`lib/mmsNote.ts`).
+OWEN]`; the note is stripped and, since 2026-09-16, the pictures themselves are shown — see
+the next section. A message whose pictures the CRM does not hold still shows the count
+(`lib/mmsNote.ts`).
 `uv run python -m tests.browser_sms` (from `backend/`) drives it in headless Chromium with
 owen-main replaced by a recorder; it is not collected by pytest. See DECISIONS.md.
+
+## Pictures in text messages, both directions (2026-09-16)
+
+An inbound MMS shows its **pictures** in the thread — thumbnails in the bubble, click for a
+viewer with next/previous, sender and time — and the composer and New message accept images
+(drag, paste or pick), preview them and send them with the text.
+
+- **The CRM keeps its own copy**, because carrier media links expire. The bytes are on disk
+  under `MEDIA_ROOT`, content-addressed (`app/attachments.py`), one `message_attachments`
+  row each (`app/message_media.py`). In production that is the named `media` volume at
+  `/var/lib/ghl-clone/media`, set in `Dockerfile.api` — **do not set `MEDIA_ROOT` in
+  `.env.prod`**. `GET /api/health` reports `"media_writable"`; check it after a deploy.
+- **Inbound is a queued job, not part of the ingest.** `POST /api/events` takes `num_media`,
+  writes PENDING rows and enqueues `fetch_message_media`; the worker asks owen-main
+  (`GET /api/crm-link/messages/{id}/media/{i}`), sniffs the bytes and stores them. **A
+  failed fetch never loses the text** — the bubble says "Picture unavailable" with a Retry.
+- **Nothing public.** `GET /api/attachments/{id}` is the only way a picture reaches a
+  browser; it follows the THREAD's rule through `message_media.visible` and answers 404,
+  never 403. The browser never sees a carrier URL or an owen-main token.
+- **Outbound: owen-main publishes, this repo never does.** The composer uploads
+  (`POST /api/attachments` → a DRAFT), the send passes `attachment_ids`, and the bytes go to
+  owen-main, which mints an unguessable, signed, 30-minute, single-object URL for BulkVS.
+  A picture the phone system will not take **stops the send entirely**.
+- **Type is decided by the magic number** (jpeg/png/gif/webp/heic), never the header; 5 MB
+  each, 10 inbound and 5 outbound per message. **Nothing attaches a picture automatically**
+  — no rule and no AI agent has a draft to pass.
+- `uv run python -m tests.browser_pictures` (from `backend/`) drives the thread, the viewer
+  and the composer in headless Chromium; not collected by pytest. See DECISIONS.md,
+  2026-09-16, for the outbound URL's security note and the operator steps.
+
+## Delivery receipts are receipts, not messages (2026-09-16)
+
+BulkVS posts carrier DLRs to the SAME webhook as an inbound text. owen-main stored them as
+inbound messages and relayed them, so customers' threads held texts they never wrote
+(`id:... stat:UNDELIV err:255 text:...`). Fixed on both sides:
+
+- **owen-main** recognises one at `/webhooks/bulkvs/message` (`providers/bulkvs.py`
+  `parse_delivery_receipt`), never stores or relays it, and applies it as a receipt
+  (`services/dlr.py`). **The DLR `id` is NOT the /messageSend RefId** (4551F89F vs
+  1162999967) — it correlates on our DID + recipient + text echo + submit time, and says so.
+- **The CRM** refuses to file one on ingest too (`app/dlr.py`), because the two systems
+  deploy separately. A carrier failure reads as a sentence: "The carrier rejected it
+  (error 255)."
+- **Existing junk:** `python -m app.scripts.backfill_dlrs` (owen, hides — never deletes) and
+  `uv run python -m app.dlr_cleanup` (CRM, removes them from threads and repairs the unread
+  badge). Both dry-run by default, counts only. See DECISIONS.md.
+
+## The CRM's line lives in ONE place (2026-09-16)
+
+`+19547758492` replaced `+19544829099`, which is now fully unbound. `crmlink.DEFAULT_FROM_NUMBER`
+/ `CRM_LINK_FROM_NUMBER` is the only definition; `GET /api/connection-status` reports it as
+`our_line`; the browser reads it through `lib/useOurLine.ts`. "Sending from", "Calling from",
+the AI escalation copy and "it cannot text itself" all follow it. **History keeps its own
+number** — an event's source chip reads the event's `source_number`, never the configured line.
 
 ## Unknown numbers are threads, not contacts (2026-09-13)
 

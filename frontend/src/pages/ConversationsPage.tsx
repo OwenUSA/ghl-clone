@@ -11,6 +11,10 @@ import { AiAuthorChip } from '../components/AiSuggestions'
 import { CallRecordingPlayer } from '../components/CallRecordingPlayer'
 import { CallNumberDialog } from '../components/CallNumberDialog'
 import { NewMessageDialog } from '../components/NewMessageDialog'
+import { MessageAttachments } from '../components/MessageAttachments'
+import {
+  AttachButton, PictureStrip, dropHandlers, usePictureTray,
+} from '../components/AttachPictures'
 import {
   IconCalendar, IconChat, IconChevronDown, IconClock, IconCompose, IconEye, IconFilter,
   IconFunnel, IconInbox, IconMail, IconPaperclip, IconPhone, IconPlus, IconRetry, IconSearch,
@@ -19,8 +23,8 @@ import {
 import {
   ApiError, PANE, callThreadRinging, deleteThread, listConversations, listThreadEvents,
   patchThread, sendToThread,
-  type AdoptedThread, type ContactDetail, type ConversationSummary, type NewMessageResult,
-  type SendableType, type ThreadEvent,
+  type AdoptedThread, type Attachment, type ContactDetail, type ConversationSummary,
+  type NewMessageResult, type SendableType, type ThreadEvent,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
 import {
@@ -32,6 +36,7 @@ import { attachmentLabel, splitMmsNote } from '../lib/mmsNote'
 import { useCallLauncher } from '../lib/callLauncher'
 import { hasRecording } from '../lib/callPlayer'
 import { formatPhone } from '../lib/phone'
+import { useOurLine } from '../lib/useOurLine'
 
 /**
  * Rebuilt from capture/spec.py geometry (captures/conversations, 1440x900).
@@ -125,10 +130,6 @@ const FILTERS = [
   { key: 'sla', label: 'SLA', unimplemented: true },
   { key: 'wa_perm', label: 'WhatsApp Permission', unimplemented: true },
 ]
-
-/** The bound BulkVS DID every reply from this CRM leaves on (locked 2026-09-11). Named
- *  in the Quo banner when the thread holds no outbound row to read it from. */
-const BULKVS_LINE = '+19544829099'
 
 const dayLabel = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -389,10 +390,13 @@ function DeliveryNote({ e, onRetry, retrying }: {
   )
 }
 
-function EventBubble({ e, onRetry, retrying }: {
+function EventBubble({ e, onRetry, retrying, who, onPicturesChanged }: {
   e: ThreadEvent
   onRetry?: (e: ThreadEvent) => void
   retrying?: boolean
+  /** Who the customer is on this thread, for the picture viewer's header. */
+  who?: string
+  onPicturesChanged?: () => void
 }) {
   const inbound = e.direction === 'INBOUND'
   const isActivity = !['SMS', 'EMAIL', 'CALL', 'INTERNAL_COMMENT'].includes(e.type)
@@ -454,7 +458,13 @@ function EventBubble({ e, onRetry, retrying }: {
               )}
             </div>
           ) : (
-            <MessageBody body={e.body} />
+            <MessageBody
+              body={e.body}
+              pictures={e.attachments ?? []}
+              who={inbound ? (who ?? 'Customer') : 'You'}
+              when={timeLabel(e.occurred_at)}
+              onPicturesChanged={onPicturesChanged}
+            />
           )}
         </div>
         <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 4 }}>
@@ -469,16 +479,36 @@ function EventBubble({ e, onRetry, retrying }: {
 }
 
 /**
- * A text's words, and an MMS's attachment count on its own line. owen-main relays an MMS
- * as the words plus "[N attachments — view in OWEN]" and no media URLs (lib/mmsNote.ts),
- * so there are no pictures to show — only how many there were.
+ * A text's words, and its pictures (2026-09-16).
+ *
+ * The machine note owen-main appends — "[2 attachments — view in OWEN]" — is stripped
+ * either way (`lib/mmsNote.ts`); it is a marker, not something a customer wrote. What
+ * replaces it depends on what we actually have:
+ *
+ *   * the pictures themselves, when the CRM holds them — the ordinary case since the
+ *     fetch shipped, including the ones that are still on their way or could not be had,
+ *     which say so individually and keep the words intact;
+ *   * the count, from the note alone, for a message ingested before this existed. Kept
+ *     rather than dropped: "2 pictures" is a fact about that conversation, and a bubble
+ *     that silently lost it would read as though the customer sent nothing.
  */
-function MessageBody({ body }: { body: string | null }) {
+function MessageBody({ body, pictures, who, when, onPicturesChanged }: {
+  body: string | null
+  pictures?: Attachment[]
+  who?: string
+  when?: string
+  onPicturesChanged?: () => void
+}) {
   const { text, attachments } = splitMmsNote(body)
+  const have = pictures ?? []
   return (
     <div>
       {text && <div style={{ whiteSpace: 'pre-wrap' }}>{text}</div>}
-      {attachments > 0 && (
+      {have.length > 0 && (
+        <MessageAttachments items={have} who={who ?? 'Customer'} when={when ?? ''}
+          onChanged={onPicturesChanged} />
+      )}
+      {have.length === 0 && attachments > 0 && (
         <div data-testid="mms-attachments" className="flex items-center gap-1"
           style={{ marginTop: text ? 6 : 0, fontSize: 13, color: 'rgb(71,84,103)' }}>
           <IconPaperclip size={14} color="rgb(71,84,103)" />
@@ -497,6 +527,20 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   // share the list and their ids come from different tables.
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  // Pictures attached to the message being typed (2026-09-16). Uploaded on pick so they can
+  // be previewed and so a refusal arrives before the operator presses Send; see
+  // components/AttachPictures.tsx.
+  const tray = usePictureTray()
+  // The line a reply from this CRM actually leaves on, as the SERVER has it configured.
+  //
+  // It used to be read off the newest outbound event on the thread, falling back to a
+  // hard-coded DID. Both are now wrong for the same reason: the owner moved the CRM to a
+  // new number on 2026-09-16, so the line an OLD message went out on is not the line the
+  // next one will. The banner's whole job is to name the number the customer is about to
+  // see, and only the server knows it.
+  //
+  // Old events keep their own number: `SourceChip` reads `e.source_number`, never this.
+  const ourNumber = useOurLine()
   const [showSort, setShowSort] = useState(false)
   const [showFilter, setShowFilter] = useState(false)
   // The rail has NO state of its own. Scope is the only thing it owns; "Unread
@@ -791,6 +835,10 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   }
   const blocked = sendBlocked()
 
+  // Send is live when there is something to send: words, or a picture, or both.
+  const sendOff = Boolean(blocked) || sending || tray.busy
+    || (!draft.trim() && tray.ids.length === 0)
+
   /**
    * THE REPLY WARNING.
    *
@@ -809,22 +857,27 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
    * is a banner nobody reads.
    */
   const mirrored = events.data?.find((e) => isQuo(e))
-  const replyLine = events.data?.find(
-    (e) => e.direction === 'OUTBOUND' && e.source_system && !isQuo(e),
-  )?.source_number
 
   const onSend = async () => {
     const text = draft.trim()
-    if (!text || blocked || !current || sending) return
+    // A picture with no words is a message; the server agrees. Only both empty is nothing.
+    if ((!text && !tray.ids.length) || blocked || !current || sending) return
     setSending(true)
     setNote(null)
     try {
-      const r = await sendToThread(current, text, composerType)
+      const r = await sendToThread(current, text, composerType, tray.ids)
       // The draft is cleared for anything that was RECORDED -- including a refusal,
       // which writes a row carrying the text. It is kept only when nothing was
       // written at all (a suppression), so the operator does not have to retype a
       // message that never existed.
-      if (!r.suppressed) setDraft('')
+      if (!r.suppressed) {
+        setDraft('')
+        // FORGOTTEN, not deleted: they belong to the message now, and deleting them would
+        // take the pictures straight back off the thread they were just put on. A
+        // SUPPRESSED send keeps them attached, so the operator can fix whatever was wrong
+        // and press Send again without picking them a second time.
+        tray.clear()
+      }
       // "queued" and "recorded" are the only two outcomes where the message is
       // actually on its way (or was never meant to leave). Everything else -- a
       // refusal, a failure, a suppression, and the stub transport's "sent" --
@@ -1407,7 +1460,12 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
               )}
               {events.data?.map((e) => (
                 <EventBubble key={e.id} e={e} onRetry={(ev) => void onRetry(ev)}
-                  retrying={retryingId === e.id} />
+                  retrying={retryingId === e.id}
+                  who={current?.contact_name ?? current?.quo_name
+                       ?? (current?.contact_phone ? formatPhone(current.contact_phone) : undefined)}
+                  onPicturesChanged={() => {
+                    void qc.invalidateQueries({ queryKey: ['events', active] })
+                  }} />
               ))}
             </div>
 
@@ -1439,7 +1497,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   This thread includes messages through Quo
                   {mirrored.source_number ? ` (${formatPhone(mirrored.source_number)})` : ''},
                   which is read&#8209;only here. This reply goes from
-                  {' '}{formatPhone(replyLine ?? BULKVS_LINE)}
+                  {' '}{formatPhone(ourNumber)}
                   {' '}— a different number from the one the customer used. To reply on the
                   Quo line, use the Quo app.
                 </div>
@@ -1449,9 +1507,13 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   {blocked}
                 </div>
               )}
+              <PictureStrip tray={tray} />
               <div className="flex items-center"
+                // Drop or paste anywhere on the composer row, not only on the paperclip:
+                // an operator dragging a photo aims at the message box.
+                {...dropHandlers(tray, Boolean(blocked) || composerType !== 'SMS')}
                 style={{
-                  height: 40, borderRadius: 4, backgroundColor: '#fff',
+                  minHeight: 40, borderRadius: 4, backgroundColor: '#fff',
                   border: '1px solid rgb(234,236,240)',
                 }}>
                 {/* The channel picker. It rendered as decoration before there was
@@ -1478,6 +1540,10 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                     />
                   )}
                 </div>
+                {composerType === 'SMS' && (
+                  <AttachButton tray={tray} disabled={Boolean(blocked)}
+                    title={blocked ?? 'Attach a picture'} />
+                )}
                 <input
                   value={draft}
                   onChange={(ev) => setDraft(ev.target.value)}
@@ -1500,7 +1566,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                 />
                 <button
                   onClick={() => void onSend()}
-                  disabled={Boolean(blocked) || sending || !draft.trim()}
+                  disabled={sendOff}
                   title={blocked ?? (composerType === 'SMS'
                     ? 'Send this text message'
                     : 'Save this internal note')}
@@ -1508,9 +1574,8 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   style={{
                     height: 30, padding: '0 10px', borderRadius: 4,
                     color: '#fff', backgroundColor: 'rgb(21,112,239)',
-                    opacity: (blocked || sending || !draft.trim()) ? 0.5 : 1,
-                    cursor: (blocked || sending || !draft.trim())
-                      ? 'not-allowed' : 'pointer',
+                    opacity: sendOff ? 0.5 : 1,
+                    cursor: sendOff ? 'not-allowed' : 'pointer',
                   }}
                 >
                   <IconChat size={14} color="#fff" />
