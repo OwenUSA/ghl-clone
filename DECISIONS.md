@@ -4642,3 +4642,258 @@ latest Workiz export, exactly as every earlier import was run:
 (Without `--clients` / `--jobs` it reads `~/workiz/workiz_clients.csv` and
 `~/workiz/workiz_jobs.csv`.) Run it again after every new export: a second run with the same
 files changes nothing.
+
+---
+
+## Amendment — pictures in text messages, received and sent (2026-09-16)
+
+The owner: a customer texts a photo of the roof, and the operator sees the photo. Both
+directions. Nothing public, nothing automatic, thread only.
+
+### What was true the morning this started
+
+owen-main had stored inbound MMS media since Ticket 09 — `messages.num_media`,
+`messages.media_urls` — and the CRM link deliberately did not pass it on:
+`integrations/crm/events.message_body` appended `"[2 attachments — view in OWEN]"` because
+this CRM had nowhere to put a picture. The thread rendered that count as an attachment line
+(`lib/mmsNote.ts`, 2026-09-15) and said so plainly. That is what changed.
+
+### 1. The CRM keeps its own copy. The bytes are not in Postgres
+
+**LOCKED.** A carrier MMS media link EXPIRES — days, sometimes hours. So a picture is
+fetched ONCE, when the text arrives, and kept. That is the opposite of the choice made for
+a mirrored OpenPhone call recording (2026-09-11), which is streamed from owen-main every
+time it is played and stored nowhere, and the difference is the source: OpenPhone holds a
+recording as long as the account exists, a carrier does not.
+
+The bytes go on disk under `MEDIA_ROOT`, content-addressed as `<sha[:2]>/<sha>`
+(`app/attachments.py`), with one `message_attachments` row per picture saying where.
+Measured against how this database is actually used: a `pg_dump` the operator takes to look
+at 800 contacts must not carry a gigabyte of JPEG, and every byte in a `bytea` column is
+written again to the WAL and again into every base backup. Content addressing also makes
+"stored once" literal — the same picture twice is one file, and `forget()` counts the rows
+holding a sha before it unlinks.
+
+`MEDIA_ROOT` defaults to `/var/lib/ghl-clone/media` **in `Dockerfile.api`**, which is
+exactly where `docker-compose.prod.yml` mounts the named `media` volume. Set in the image
+rather than in `.env.prod` so the path and the mount come from the same repository and
+cannot drift. `GET /api/health` reports `"media_writable": true|false` — the one thing a
+deploy can silently get wrong, whose symptom (every photograph reading "Picture
+unavailable" a week later) looks like a carrier problem.
+
+### 2. Inbound: the text never waits for the picture
+
+`POST /api/events` gained `num_media`. owen-main now sends it (`to_crm_message_event`) and
+**still appends its note**, deliberately: a CRM deploy that predates this must not render a
+blank bubble. `lib/mmsNote.ts` strips the note when it has the pictures and prints the count
+when it does not.
+
+The CRM writes N PENDING rows in the same transaction as the event and queues one
+`fetch_message_media` job per picture. The FETCH IS A JOB, not part of the ingest request:
+inline, owen-main's `crm_report` job would wait on three carrier round-trips before its
+201, and on a slow carrier that is a timeout, a retry and a second delivery of a text that
+already landed. So the words land immediately and the pictures arrive seconds later.
+
+**A failed fetch never loses the text.** The row goes FAILED with a sentence, the bubble
+shows "Picture unavailable" and a Retry, and the words are untouched. Too big or not an
+image is REFUSED instead — no Retry, because trying again cannot make a PDF a photograph.
+Re-delivery stores nothing twice: the event's `dedupe_key` returns the existing row, and a
+unique index on `(parent event, position)` catches anything that gets past it.
+
+### 3. The type limit is decided by the BYTES
+
+`attachments.sniff()` reads the magic number: JPEG, PNG, GIF, WebP, HEIC, HEIF and nothing
+else. A `Content-Type: image/png` on a zip is a claim by whoever sent it. What is SERVED is
+what was sniffed, with `X-Content-Type-Options: nosniff` so the browser does not form its
+own opinion either. owen-main sniffs independently, on its own side, because "the other
+system checked" is not a check. Caps: 5 MB per picture, 10 per inbound message, 5 per
+outbound one — a backstop against a runaway disk, well above what any carrier will carry.
+
+### 4. Nothing public on the CRM side
+
+`GET /api/attachments/{id}` is the ONLY way a picture reaches a browser, behind the same
+app-level `require_auth` as every other `/api` route, so an `<img src="/api/attachments/12">`
+carries the session cookie because the path is same-origin. `message_media.visible` asks the
+THREAD's question — `assigned_access` for a contact thread, a flat refusal for a
+number-only thread when "Only assigned data" is on — and answers **404, never 403**, so an
+id cannot be walked. A draft belongs to the operator who uploaded it until it is sent.
+
+### 5. Outbound: owen-main publishes, the CRM never does — and the exposure that creates
+
+BulkVS sends an MMS by FETCHING the media itself, over the public internet, from a URL in
+`/messageSend`. Somebody has to serve a customer's photograph to a carrier that cannot
+authenticate. **It is owen-main**, which already has a public hostname (`api.<APP_DOMAIN>`,
+where the BulkVS webhooks already land) and already holds the BulkVS credential. The CRM
+uploads the bytes to `POST /api/crm-link/media` and gets back an OPAQUE id; owen-main mints
+the URL at send time and hands it to BulkVS. **Nothing in the CRM repository ever holds a
+URL a carrier can fetch**, which is what keeps the exposure one carrier fetch wide rather
+than one CRM deploy wide.
+
+**The exposure, stated plainly: for as long as that URL lives, anyone holding it can fetch
+that one picture with no credential.** That is not a flaw to engineer away — it is what MMS
+means, and it is equally true of every Twilio, SignalWire and BulkVS media URL in existence.
+What is controlled is how wide and how long:
+
+* **unguessable** — a 192-bit `secrets.token_urlsafe(24)` id plus an HMAC-SHA256 over
+  `id|expiry`, keyed on `CRM_LINK_MEDIA_SECRET` (falling back to `CRM_LINK_TOKEN`), which
+  the CRM never receives. A tampered expiry is refused because the expiry is signed;
+* **short-lived** — `CRM_LINK_MEDIA_TTL_SECONDS`, 30 minutes. The carrier fetches within
+  seconds; the rest is slack for a retry;
+* **one object** — the route serves the one file that id names. No listing, no directory,
+  no way to walk from one picture to another;
+* **GET only, no cookies, no CORS**, `Cache-Control: private, no-store`, `X-Robots-Tag:
+  noindex`;
+* **swept** — the worker deletes expired files every ten minutes, so an expired URL has
+  nothing behind it as well as an invalid signature;
+* **every refusal is the same 404** — bad signature, expired, never existed, swept, feature
+  off — so the route cannot be used to learn which.
+
+Rejected: a permanent public URL (the exposure never ends); a public URL on the CRM (a
+second public surface serving customer content, and Traefik routes no such path to it);
+embedding the bytes in the BulkVS call (their API does not take them). **This is the
+minimum that sends a picture at all.** It is OFF unless
+`CRM_LINK_MEDIA_PUBLIC_BASE_URL` is set: unset, `POST /api/crm-link/media` answers 409 with
+a sentence and nothing is ever published.
+
+**Inbound is deliberately not symmetric.** An inbound picture is never published: the CRM
+asks the key-gated `GET /api/crm-link/messages/{id}/media/{i}`, owen-main dereferences the
+carrier URL with the carrier's own credential, and the bytes come back over the internal
+network — the same three-hop shape as the OpenPhone recording stream, one floor down.
+
+### 6. A refused send keeps the pictures, and a picture that cannot be published stops the send
+
+A send owen-main declines is recorded on the thread WITH its pictures — that is what was
+attempted, and the rule that a refusal is recorded predates this. A send suppressed before
+anything was attempted (DND, no phone, a restricted technician) writes nothing and **leaves
+the drafts attached**, so the operator fixes the number and presses Send again without
+picking the photographs a second time. And if the picture cannot be handed to the phone
+system at all, **nothing is sent**: a text that arrives without the photograph — "here it
+is", with nothing attached — is worse than one that does not arrive.
+
+An abandoned draft — a refused send the operator walked away from, or a closed tab — is
+swept after 24 hours, **on that operator's next upload** rather than by a scheduled job:
+the only way drafts accumulate at all is by uploading more of them, so the sweep runs
+exactly when it can have something to do, and it is scoped to one user so it can never
+take a picture out of somebody else's open composer.
+
+### 7. Nothing sends a picture by itself
+
+The automations stay off (2026-09-15) and no AI agent can attach media. Kept by there being
+no automatic caller that HAS a draft: `pictures=` is passed only by the API's send routes,
+which require an id uploaded by a signed-in person through the composer.
+`test_message_pictures.py` asserts that property by reading the source, because that is
+where it lives.
+
+### 8. The delivery bubble that said "queued" for ever — fixed on the owen-main side
+
+The first real send, the morning texting went live, succeeded (`messages.status='sent'`)
+and `bulkvs_client.send_message` logged `ref=None`. `/webhooks/bulkvs/message-status`
+matches a DLR on `bulkvs-<RefId>`, so with no RefId nothing correlated and the CRM's bubble
+sat on QUEUED. Two changes, both on owen-main:
+
+* **`_extract_ref_id` now walks** dicts and lists to a bounded depth. The old version read
+  only the top level of a dict, and the BulkVS documentation shows `/messageSend` answering
+  with a per-recipient `Results` list — an id nested one level down was invisible to it.
+* **The whole decoded response body is kept** on `messages.raw_payload` under
+  `bulkvs_send_response`, beside (never over) the CRM-link marker. The first send threw the
+  evidence away with a `ref=%s` log line; the next real send writes the answer down where a
+  person can read it.
+
+**What BulkVS actually returns from `/messageSend` on this account is still not known, and
+this does not claim to settle it.** Production was not touched and no new text was sent to
+find out. So the correlation no longer depends on it:
+**`handle_message_send` reports `sent` to the CRM itself**, from owen-main's own knowledge
+that the carrier answered 2xx for that exact row, keyed on `messages.id` — which is the
+CRM's `provider_ref` and is right there. The carrier's word, not an advanced status: a real
+DLR, if one ever correlates, advances it to `delivered`, and both sides apply a forward-only
+ladder so a late or repeated receipt is harmless. This is the one-line fix
+`.qa/state/relay-done` §5 predicted would be needed, made necessary by exactly the
+circumstance it predicted.
+
+### Six fences fired, and what each one caught
+
+Worth recording, because five were widened and one was a real bug — and the difference is
+the point of having them.
+
+* **`test_only_assigned_data` / `test_crm_link` (the transport doubles) — A REAL BUG.**
+  `send_outbound` passed `media_ids=` on EVERY send, so every stand-in for
+  `MessageTransport` — whose shape has been `send_sms(to, body, from_number)` since the
+  seam existed — broke for a feature it does not use. Fixed at the call site
+  (`automations._send_sms`): the keyword goes only when there is a picture, so an ordinary
+  text is byte-for-byte the call it always was. The same choice `CrmLinkTransport` already
+  makes one layer down, and the reason the browser check's `crmlink.send_sms` double keeps
+  working too.
+* **`test_frontend_writes`, the fetch fence.** `upload` is a fourth transport helper and
+  cannot go through `send`: that helper sets `Content-Type: application/json`, and a
+  multipart body needs the boundary the browser generates. Widened, with a new test that it
+  carries the CSRF token, the session cookie and the refresh retry exactly as `send` does —
+  the fence's subject is the token, not the number of helpers.
+* **`test_sms_live`, "every handler is a rule".** `fetch_message_media` is not a rule.
+  Widened, with a new test that it cannot reach `send_sms`, `send_outbound`,
+  `get_transport` or `send_email` at all.
+* **Two `test_new_message_ui` sender fences.** Both matched brittle literals
+  (`sendNewMessage(to, body)`, `{ number, body }`) that the attachment ids broke. Rewritten
+  onto the property they exist for: the call and the body name NO SENDER.
+* **`test_crm_link`, the composer's disabled condition.** Moved into `sendOff` because a
+  picture with no words is now a message. Widened; blocked, sending and nothing-to-send are
+  all still in it.
+
+### What the operator must do, in order
+
+1. Merge and deploy **owen-main** first — it has the routes the CRM will call:
+   `ssh owen-main`, `cd /opt/santiagoproperties/owen-main`, `make check`, then the usual
+   deploy. **No migration**; the `messages` columns it writes have existed since Ticket 09.
+2. In owen-main's `.env.prod`, add **`CRM_LINK_MEDIA_PUBLIC_BASE_URL=https://api.<APP_DOMAIN>`**
+   — the origin Traefik already routes to `callmon_app`. Optionally set
+   `CRM_LINK_MEDIA_SECRET` to a fresh `openssl rand -base64 48`, so rotating the CRM's API
+   key does not invalidate media URLs already handed to the carrier. Restart owen-main.
+   **Leaving it unset is a supported state**: inbound pictures work, outbound ones are
+   refused with a sentence.
+3. Merge and deploy **the CRM**: `cd /opt/santiagoproperties/ghl-clone`,
+   `./deploy.sh --with-migrations` — this revision (`e1b4d7c96a05`) is CREATE TABLE only.
+4. `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d` creates the named
+   `media` volume by itself; nothing is provisioned by hand. **Do not set `MEDIA_ROOT` in
+   `.env.prod`** — `Dockerfile.api` already points it at the mount.
+5. Check `curl -s https://crm.dreamteamroofingfl.com/api/health` shows
+   `"media_writable": true`. If it is false the volume did not mount, and every picture
+   from then on reads "Picture unavailable".
+6. Add the `media` volume to whatever backs this box up. It is the only customer data in
+   this stack that is not in Postgres.
+7. Send yourself one picture from a mobile, and text one back. That is the first real MMS
+   either direction; nothing here has been exercised against BulkVS.
+
+### Not built, and known gaps
+
+* **No thumbnails are generated.** The full picture is served for the grid too, sized by
+  CSS. A carrier-capped MMS is well under a megabyte, and generating thumbnails means
+  Pillow — a compiled dependency on a host where that has cost us before. If the owner ever
+  attaches a 5 MB photo, a grid of three costs 15 MB to render.
+* **HEIC renders in Safari and not in Chrome.** The carrier passes it through unconverted
+  and we store what arrived rather than throwing the customer's picture away. Converting it
+  needs the same dependency as thumbnails.
+* **No "save to job" and no CompanyCam attaching** — the owner's decision 3, this phase.
+* **Nothing has touched BulkVS.** No MMS has been sent or received end to end; both
+  directions are exercised against a double. The first real one is a test to a number the
+  owner controls, not a rollout.
+* **Whether a BulkVS inbound media URL needs the REST credential is not documented and has
+  not been observed.** `media.fetch_carrier_media` tries WITHOUT one first (correct for a
+  pre-signed link) and retries WITH the `/tnRecord` Basic auth on a 401/403, for a
+  `bulkvs.com` host only. One of the two attempts is right whichever it turns out to be.
+
+### UI assumptions (no screenshot shows any of this)
+
+`refs/round3` and `refs/opps` contain no MMS bubble, no viewer and no composer with an
+attachment. Everything below follows GoHighLevel's conventions as they already appear in
+this rebuild, and is listed so nobody rediscovers it as a decision:
+
+* thumbnails are 104px squares, 8px radius, 1px `rgb(234,236,240)` — the card border used
+  across Opportunities — laid out in a wrapping row under the words;
+* the viewer is a full-screen `rgba(16,24,40,0.85)` scrim (the scrim behind every modal
+  here), the picture centred and never upscaled, with the sender, the time and "2 of 3" in
+  a header, round chevron buttons either side, Escape and the arrow keys;
+* the arrows stay in place and dim at the ends rather than disappearing, so the picture
+  does not shift sideways under the cursor mid-browse;
+* the composer's paperclip sits left of the message box, inside the same 40px tray, and the
+  attached pictures are 56px squares above it with a remove cross; drop and paste are
+  accepted anywhere on the composer row and on the New message dialog's message box;
+* a picture with no words is a valid message — Send is live with either.

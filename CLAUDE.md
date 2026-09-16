@@ -152,9 +152,40 @@ Send. `POST /api/messages/new`: a number a contact holds is a send on the contac
 contact). A restricted technician may text only their own jobs' customers. Quo is never a sender
 — no route takes a `from_number`. Under a bubble: owen-main's REFUSED sentence; FAILED says it
 can be retried and has Retry. An inbound MMS arrives as text plus `[N attachments — view in
-OWEN]` and no media URLs, shown as an attachment line (`lib/mmsNote.ts`).
+OWEN]`; the note is stripped and, since 2026-09-16, the pictures themselves are shown — see
+the next section. A message whose pictures the CRM does not hold still shows the count
+(`lib/mmsNote.ts`).
 `uv run python -m tests.browser_sms` (from `backend/`) drives it in headless Chromium with
 owen-main replaced by a recorder; it is not collected by pytest. See DECISIONS.md.
+
+## Pictures in text messages, both directions (2026-09-16)
+
+An inbound MMS shows its **pictures** in the thread — thumbnails in the bubble, click for a
+viewer with next/previous, sender and time — and the composer and New message accept images
+(drag, paste or pick), preview them and send them with the text.
+
+- **The CRM keeps its own copy**, because carrier media links expire. The bytes are on disk
+  under `MEDIA_ROOT`, content-addressed (`app/attachments.py`), one `message_attachments`
+  row each (`app/message_media.py`). In production that is the named `media` volume at
+  `/var/lib/ghl-clone/media`, set in `Dockerfile.api` — **do not set `MEDIA_ROOT` in
+  `.env.prod`**. `GET /api/health` reports `"media_writable"`; check it after a deploy.
+- **Inbound is a queued job, not part of the ingest.** `POST /api/events` takes `num_media`,
+  writes PENDING rows and enqueues `fetch_message_media`; the worker asks owen-main
+  (`GET /api/crm-link/messages/{id}/media/{i}`), sniffs the bytes and stores them. **A
+  failed fetch never loses the text** — the bubble says "Picture unavailable" with a Retry.
+- **Nothing public.** `GET /api/attachments/{id}` is the only way a picture reaches a
+  browser; it follows the THREAD's rule through `message_media.visible` and answers 404,
+  never 403. The browser never sees a carrier URL or an owen-main token.
+- **Outbound: owen-main publishes, this repo never does.** The composer uploads
+  (`POST /api/attachments` → a DRAFT), the send passes `attachment_ids`, and the bytes go to
+  owen-main, which mints an unguessable, signed, 30-minute, single-object URL for BulkVS.
+  A picture the phone system will not take **stops the send entirely**.
+- **Type is decided by the magic number** (jpeg/png/gif/webp/heic), never the header; 5 MB
+  each, 10 inbound and 5 outbound per message. **Nothing attaches a picture automatically**
+  — no rule and no AI agent has a draft to pass.
+- `uv run python -m tests.browser_pictures` (from `backend/`) drives the thread, the viewer
+  and the composer in headless Chromium; not collected by pytest. See DECISIONS.md,
+  2026-09-16, for the outbound URL's security note and the operator steps.
 
 ## Unknown numbers are threads, not contacts (2026-09-13)
 

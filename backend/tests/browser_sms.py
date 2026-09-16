@@ -351,9 +351,12 @@ def run(shots: Path, keep: bool) -> int:
             page.locator("div.cursor-pointer", has_text="+13055550123").first.click()
             att = page.get_by_test_id("mms-attachments")
             expect(att).to_be_visible(timeout=5000)
-            checks.ok("2 attachments" in att.inner_text()
+            # This feed event carries no `num_media`, so the CRM has no pictures for it and
+            # falls back to the count in owen-main's note — the 2026-09-16 wording. The
+            # pictures themselves are driven in tests/browser_pictures.py.
+            checks.ok("2 pictures" in att.inner_text()
                       and page.get_by_text("Here is the leak", exact=True).is_visible(),
-                      "an MMS shows its words and its attachment count (the event carries no URLs)")
+                      "an MMS with no pictures relayed still shows its words and the count")
             page.wait_for_timeout(1500)
             checks.ok(db_count("select unread_count from number_threads where phone_key = "
                                "'3055550123'") == 0, "opening it marks it read")

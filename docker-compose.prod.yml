@@ -27,6 +27,18 @@ x-api-base: &api-base
     - "host.docker.internal:host-gateway"
   security_opt: ["no-new-privileges:true"]
   restart: unless-stopped
+  # PICTURES ON A TEXT MESSAGE (2026-09-16). Every inbound MMS the CRM keeps a copy of lives
+  # here, and so does every picture the composer has uploaded and not yet sent. It is on the
+  # SHARED base so the api and the worker see the same directory: the worker FETCHES the
+  # bytes (`fetch_message_media`) and the api SERVES them, and two separate volumes would
+  # mean every picture stored successfully and never rendered.
+  #
+  # WITHOUT THIS MOUNT the pictures are written inside the container and the next
+  # `./deploy.sh` throws them away, leaving a thread of bubbles that say "Picture
+  # unavailable" for photographs that arrived perfectly. `MEDIA_ROOT` in .env.prod must
+  # match the container path below.
+  volumes:
+    - media:/var/lib/ghl-clone/media
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }
@@ -112,6 +124,13 @@ services:
     deploy:
       resources:
         limits: { cpus: '0.5', memory: 256M }
+
+volumes:
+  # Named, so it survives `docker compose down` and every rebuild. Docker creates it on the
+  # first `up`; nothing has to be provisioned by hand. It holds ONLY customer pictures from
+  # the message threads — no database, no secrets, no configuration — and it is the one
+  # thing in this stack that a backup has to include beyond Postgres.
+  media:
 
 networks:
   ghl-net:

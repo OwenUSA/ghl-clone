@@ -216,7 +216,8 @@ def _sent_source_number() -> str:
 def send_outbound(db: Session, contact: Contact, body: str, *,
                   type_: EventType = EventType.SMS,
                   subject: str | None = None,
-                  ai_agent_id: int | None = None
+                  ai_agent_id: int | None = None,
+                  pictures: list | None = None
                   ) -> tuple[ConversationEvent | None, str]:
     """One send path shared by the API and the four rules.
 
@@ -226,6 +227,12 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
 
     The four automation rules deliberately keep calling `_record_outbound`
     directly; routing them through here would change 15 passing tests for no gain.
+
+    `pictures` (2026-09-16) are DRAFT `MessageAttachment` rows a person picked in the
+    composer. **Only a person can pass them.** `ai_agent_id` and `pictures` are never both
+    set — an agent has no composer, no file picker and no route that reaches this with a
+    draft id — and the owner's rule that nothing sends a picture automatically is kept by
+    there being no automatic caller that has one, not by a flag here that could be flipped.
     """
     if type_ in INTERNAL_TYPES:
         conv = thread_for(db, contact.id)
@@ -247,8 +254,12 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
         ref = get_transport().send_email(to=contact.email,
                                          subject=subject or "", html=body)
     else:
-        ref = get_transport().send_sms(to=sms_number(contact.phone), body=body,
-                                       from_number="")
+        media_ids, problem = _publish_pictures(pictures)
+        if problem:
+            # NOTHING is written. A picture that never reached the phone system must not
+            # become a text that arrives without it: the picture is usually the message.
+            return None, "suppressed: " + problem
+        ref = _send_sms(sms_number(contact.phone), body, media_ids)
 
     conv = thread_for(db, contact.id)
     ev = ConversationEvent(
@@ -271,8 +282,40 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
     return ev, _outcome_reason(ref)
 
 
+def _send_sms(to: str, body: str, media_ids: list[str]):
+    """Hand one text to the transport, passing `media_ids` ONLY when there is a picture.
+
+    `MessageTransport` is a documented seam with stand-ins all over the tests, the browser
+    checks and the CLI's own doubles — `send_sms(self, to, body, from_number)` is its shape
+    and has been since the seam existed. A new keyword on EVERY send would break every one
+    of them for a feature they do not use, so an ordinary text stays byte-for-byte the call
+    it has always been and only a picture message widens it. The same choice, for the same
+    reason, as `CrmLinkTransport.send_sms` one layer down.
+    """
+    transport = get_transport()
+    if media_ids:
+        return transport.send_sms(to=to, body=body, from_number="", media_ids=media_ids)
+    return transport.send_sms(to=to, body=body, from_number="")
+
+
+def _publish_pictures(pictures: list | None) -> tuple[list[str], str]:
+    """Hand any attached pictures to owen-main and return `(media_ids, problem)`.
+
+    Imported inside the function rather than at module scope because `message_media`
+    imports THIS module's siblings and `app.main` imports both: a top-level import here is
+    a cycle waiting for whichever of the two a future reader imports first. The rules above
+    never reach this line — `pictures` is only ever passed by the API's send routes — so
+    nothing automatic pays for the import either.
+    """
+    if not pictures:
+        return [], ""
+    from .message_media import upload_for_send
+    return upload_for_send(pictures)
+
+
 def send_outbound_to_number(db: Session, thread, body: str, *,
-                            type_: EventType = EventType.SMS
+                            type_: EventType = EventType.SMS,
+                            pictures: list | None = None
                             ) -> tuple[object | None, str]:
     """`send_outbound`, for a number-only thread (app/number_threads.py).
 
@@ -298,7 +341,10 @@ def send_outbound_to_number(db: Session, thread, body: str, *,
     if not thread.phone:
         return None, "suppressed: no phone number"
 
-    ref = get_transport().send_sms(to=sms_number(thread.phone), body=body, from_number="")
+    media_ids, problem = _publish_pictures(pictures)
+    if problem:
+        return None, "suppressed: " + problem
+    ref = _send_sms(sms_number(thread.phone), body, media_ids)
     ev = NumberThreadEvent(
         number_thread_id=thread.id, type=type_, direction=Direction.OUTBOUND,
         occurred_at=_utcnow(), body=body,
@@ -509,12 +555,24 @@ def _h_ai_agent_run(db: Session, payload: dict) -> None:
     engine.handle_job(db, payload)
 
 
+def _h_fetch_message_media(db: Session, payload: dict) -> None:
+    """Copy one inbound picture from owen-main onto our own disk (2026-09-16).
+
+    The only handler here that is not a rule: it sends nothing, texts nobody and cannot,
+    which is why it is unaffected by every switch above it. Imported inside the function
+    for the same reason `_publish_pictures` is.
+    """
+    from .message_media import handle_fetch_job
+    handle_fetch_job(db, payload)
+
+
 HANDLERS = {
     "missed_call_textback": _h_missed_call,
     "new_lead_notify": _h_new_lead,
     "appointment_reminder": _h_appointment_reminder,
     "stage_change_notify": _h_stage_change,
     "ai_agent_run": _h_ai_agent_run,
+    "fetch_message_media": _h_fetch_message_media,
 }
 
 

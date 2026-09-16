@@ -25,6 +25,13 @@ backend/.jwt_secret
 /dist/
 *.egg-info/
 
+# Pictures the CRM keeps its own copy of (2026-09-16). MEDIA_ROOT defaults to ./var/media
+# when nothing sets it, which is what a local `uvicorn` from backend/ does — those are real
+# customers' photographs and must never reach a commit. In production the same path is a
+# docker volume (docker-compose.prod.yml) and this rule is irrelevant.
+var/media/
+backend/var/media/
+
 # Tool caches (each also self-ignores, but be explicit).
 .ruff_cache/
 .pytest_cache/

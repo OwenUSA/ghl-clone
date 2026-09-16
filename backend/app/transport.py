@@ -60,7 +60,8 @@ class MessageRef:
 
 
 class MessageTransport(Protocol):
-    def send_sms(self, to: str, body: str, from_number: str) -> MessageRef: ...
+    def send_sms(self, to: str, body: str, from_number: str,
+                 media_ids: list[str] | None = None) -> MessageRef: ...
 
     def send_email(self, to: str, subject: str, html: str) -> MessageRef: ...
 
@@ -69,8 +70,10 @@ class LoggingTransport:
     """Records intent, transmits nothing. The default, and the whole transport in
     every environment where the CRM link is not configured."""
 
-    def send_sms(self, to: str, body: str, from_number: str) -> MessageRef:
-        log.info("SMS suppressed to=%s from=%s chars=%d", to, from_number, len(body))
+    def send_sms(self, to: str, body: str, from_number: str,
+                 media_ids: list[str] | None = None) -> MessageRef:
+        log.info("SMS suppressed to=%s from=%s chars=%d pictures=%d",
+                 to, from_number, len(body), len(media_ids or []))
         return MessageRef(provider_ref="logged",
                           status=DeliveryStatus.LOGGED_ONLY)
 
@@ -99,8 +102,17 @@ class CrmLinkTransport:
     a transport that silently drops half of what it is handed.
     """
 
-    def send_sms(self, to: str, body: str, from_number: str) -> MessageRef:
-        result = crmlink.send_sms(to_number=to, body=body)
+    def send_sms(self, to: str, body: str, from_number: str,
+                 media_ids: list[str] | None = None) -> MessageRef:
+        # `media_ids` are owen-main's own ids for pictures it has already been given and
+        # is publishing for the carrier (2026-09-16). The CRM never holds the URL BulkVS
+        # fetches — see `crmlink.upload_media` and DECISIONS.md.
+        # The keyword is passed ONLY when there is a picture, so an ordinary text is
+        # byte-for-byte the call it has always been — which matters beyond tidiness: the
+        # browser check and several tests replace `crmlink.send_sms` with a double, and a
+        # new keyword on every send would make them fail for a feature they never used.
+        result = (crmlink.send_sms(to_number=to, body=body, media_ids=list(media_ids))
+                  if media_ids else crmlink.send_sms(to_number=to, body=body))
         if result.ok:
             data = result.data or {}
             return MessageRef(provider_ref=str(data.get("message_id") or ""),

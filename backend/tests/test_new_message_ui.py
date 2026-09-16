@@ -124,7 +124,10 @@ def test_the_mms_note_owen_main_appends_becomes_an_attachment_line():
     assert got[1] == {"text": "", "attachments": 1}
     assert got[2] == {"text": "I said [2 attachments] in words", "attachments": 0}
     assert got[3] == {"text": "", "attachments": 0}
-    assert got[4].startswith("1 attachment — view in OWEN")
+    # The FALLBACK line, for a message whose pictures the CRM does not hold (2026-09-16).
+    # It no longer says the pictures are only in OWEN, because since 2026-09-16 they are
+    # normally right here — see lib/mmsNote.ts and test_message_pictures.py.
+    assert got[4] == "1 picture — not saved to this thread."
 
 
 def test_the_mms_split_reads_owen_mains_exact_wording():
@@ -191,7 +194,13 @@ def test_after_a_send_the_page_opens_that_thread_after_refetching_the_list():
 def test_the_dialog_never_offers_a_sender_and_names_the_one_line():
     dialog = strip_comments(read("components", "NewMessageDialog.tsx"))
     assert "Sending from" in dialog and "formatPhone(CALLING_FROM)" in dialog
-    assert "sendNewMessage(to, body)" in dialog, "the request carries a number and a body only"
+    # Widened 2026-09-16: the call also passes the attached pictures. The property this
+    # line is for is that it passes NO SENDER — asserted below, by name, rather than by a
+    # literal that has to be edited every time the composer grows.
+    assert "sendNewMessage(to, body" in dialog, "New message must go through sendNewMessage"
+    call = dialog.split("sendNewMessage(to, body", 1)[1].split(")", 1)[0]
+    assert "from" not in call and "line" not in call, (
+        "a sender leaked into the New message call: %r" % call)
     for word in ("OpenPhone", "Quo", "from_number", "<select"):
         assert word not in dialog, "a sender choice leaked into New message: %s" % word
     assert "disabled={!canSend}" in dialog and "textProblem(number)" in dialog
@@ -201,7 +210,13 @@ def test_the_dialog_never_offers_a_sender_and_names_the_one_line():
 def test_the_api_helper_sends_no_from_number():
     api = read("lib", "api.ts")
     helper = api.split("export const sendNewMessage", 1)[1].split("\n\n", 1)[0]
-    assert "{ number, body }" in helper and "from" not in helper.split("=>", 1)[1]
+    payload = helper.split("{", 1)[1].split("}", 1)[0]
+    # Widened 2026-09-16 for `attachment_ids`. The fence is that the BODY names no sender:
+    # every text leaves on the bound BulkVS DID and Quo is never one (DECISIONS.md).
+    assert "number" in payload and "body" in payload
+    assert "attachment_ids" in payload, "pictures must reach the server with the text"
+    for word in ("from", "sender", "line"):
+        assert word not in payload, "a sender leaked into the New message body: %s" % word
 
 
 def test_failed_bubbles_get_a_retry_and_refused_ones_do_not():

@@ -765,7 +765,13 @@ def test_send_is_disabled_with_a_reason_when_the_contact_cannot_be_texted():
     from pathlib import Path
     source = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages"
               / "ConversationsPage.tsx").read_text(encoding="utf-8")
-    assert "disabled={Boolean(blocked) || sending || !draft.trim()}" in source
+    # The condition moved into `sendOff` on 2026-09-16, when a picture with no words became
+    # a valid message: Send is live when there are words OR an attached picture. The three
+    # things this line has always been for — blocked, sending, nothing to send — are all
+    # still in it, and the button still reads it.
+    assert ("const sendOff = Boolean(blocked) || sending || tray.busy\n"
+            "    || (!draft.trim() && tray.ids.length === 0)") in source
+    assert "disabled={sendOff}" in source
     assert "title={blocked ??" in source, "the reason is not on the control"
     for reason in ("This contact has no phone number.",
                    "This contact is on Do Not Disturb.",
