@@ -1822,3 +1822,46 @@ export type AutomationRule = {
   reason: string | null
 }
 export const listAutomations = () => get<{ rules: AutomationRule[] }>('/api/automations')
+
+// ---------------- Zuper two-way sync (2026-09-16) ----------------
+// Routes: backend/app/zuper/api.py. Shapes and the words for them: lib/zuper.ts.
+
+/** Settings → Zuper, everything on one read. ADMIN. */
+export const getZuperStatus = () => get<import('./zuper').ZuperStatus>('/api/zuper/status')
+
+/** The switch and the Workiz cutover date. 409 (a sentence) while a blocker remains. */
+export const putZuperSettings = (body: { enabled?: boolean; workiz_cutover_date?: string | null }) =>
+  send<import('./zuper').ZuperStatus>('/api/zuper/settings', 'PUT', body)
+
+/** Read-only GETs against Zuper; the results gate the switch. */
+export const runZuperSetupCheck = () =>
+  send<import('./zuper').ZuperSetup>('/api/zuper/setup/check', 'POST')
+
+/** "Confirmed by hand" for an item the Zuper API cannot report. Un-ticking pauses the sync. */
+export const confirmZuperSetupItem = (key: string, confirmed: boolean) =>
+  send<import('./zuper').ZuperSetup>(
+    `/api/zuper/setup/confirmations/${encodeURIComponent(key)}`, 'PUT', { confirmed })
+
+export const listZuperConflicts = (page: number, pageSize: number) =>
+  get<import('./zuper').ZuperPage<import('./zuper').ZuperConflict>>(
+    `/api/zuper/conflicts?${new URLSearchParams({ page: String(page), page_size: String(pageSize) })}`)
+
+export const listZuperDeletes = (page: number, pageSize: number) =>
+  get<import('./zuper').ZuperPage<import('./zuper').ZuperDelete>>(
+    `/api/zuper/deletes?${new URLSearchParams({ page: String(page), page_size: String(pageSize) })}`)
+
+/** Restore a delete the sync mirrored — its whole batch, parents first. */
+export const restoreZuperDelete = (id: number) =>
+  send<import('./zuper').ZuperRestoreResult>(`/api/zuper/deletes/${id}/restore`, 'POST')
+
+/** A card's quotes and invoices as Zuper last reported them. 404 = a card the reader cannot see. */
+export const getOpportunityZuper = (opportunityId: number) =>
+  get<import('./zuper').ZuperOpportunityMoney>(`/api/opportunities/${opportunityId}/zuper`)
+
+/** The documents on this customer's cards that the reader can see. */
+export const getContactZuper = (contactId: number) =>
+  get<import('./zuper').ZuperContactMoney>(`/api/contacts/${contactId}/zuper`)
+
+/** Zuper's job attachments. Every `url` is a CRM relay path, never Zuper's. */
+export const getOpportunityZuperAttachments = (opportunityId: number) =>
+  get<import('./zuper').ZuperAttachments>(`/api/opportunities/${opportunityId}/zuper/attachments`)

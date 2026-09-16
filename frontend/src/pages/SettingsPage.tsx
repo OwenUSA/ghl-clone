@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CompanyCamSettings } from '../components/CompanyCamSettings'
+import { ZuperSettings } from '../components/ZuperSettings'
 import { CustomFieldsPanel } from '../components/CustomFieldsPanel'
 import { MyStaffPanel } from '../components/MyStaffPanel'
 import { AiConnectionsSettings } from '../components/AiConnectionsSettings'
@@ -78,6 +79,7 @@ export function SettingsPage({ user }: { user: Me }) {
             <CustomFieldsPanel user={user} />
           </div>
         : section === 'companycam' && user.role === 'ADMIN' ? <CompanyCamSettings />
+        : section === 'zuper' && user.role === 'ADMIN' ? <ZuperSettings />
         : section === 'my-staff' && user.role === 'ADMIN' ? <MyStaffPanel user={user} />
         : section === 'ai-connections' && user.role === 'ADMIN' ? <AiConnectionsSettings />
         : section === 'automations' ? <AutomationsSettings />

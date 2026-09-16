@@ -9,6 +9,7 @@ import {
 import {
   BODY, BORDER, BUTTON, DIVIDER, FAINT, HEADING, MUTED, PRIMARY, TEXT, dead,
 } from './opportunity/ui'
+import { ZuperPhotos } from './ZuperPhotos'
 
 /**
  * CompanyCam photos, in the opportunity modal's style (screenshots 11 and 22).
@@ -91,6 +92,10 @@ export function PhotosTab({ opportunityId }: { opportunityId: number }) {
         <ProjectPhotos key={p.id} opportunityId={opportunityId} project={p}
           grouped={list.length > 1} refreshNonce={refreshNonce} />
       ))}
+
+      {/* Zuper's job attachments (2026-09-16), next to CompanyCam's; draws nothing unless
+          the job is linked and Zuper listed a file. */}
+      <ZuperPhotos opportunityId={opportunityId} />
     </div>
   )
 }

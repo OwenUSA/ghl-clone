@@ -21,6 +21,14 @@ from tests import owen_guard  # noqa: E402
 owen_guard.strip_environment()
 owen_guard.install()
 
+# ---- no test may reach Zuper (Zuper sync, 2026-09-16) -----------------------------------
+# Same stance, same moment: no ZUPER_* setting survives into the suite, and every lookup of a
+# zuperpro.com host is refused. See tests/zuper_guard.py.
+from tests import zuper_guard  # noqa: E402
+
+zuper_guard.strip_environment()
+zuper_guard.install()
+
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.models import Contact, Opportunity, Pipeline, Role, Stage, User  # noqa: E402
 
@@ -34,6 +42,10 @@ ai_guard.install()
 # The AI Agents fixtures (mocked providers, a seeded world), shared by tests/test_ai_*.py.
 from tests.ai_support import script, secrets_key, world  # noqa: E402, F401
 
+# The Zuper sync's fixtures (a fake Zuper, a seeded CRM, an armed and a loaded sync), shared by
+# tests/test_zuper_*.py. See tests/zuper_support.py.
+from tests.zuper_support import armed, fake, loaded, zuper_env, zworld  # noqa: E402, F401
+
 
 @pytest.fixture(autouse=True)
 def _no_owen_main_network():
@@ -44,6 +56,23 @@ def _no_owen_main_network():
     assert not attempted, ("this test tried to reach owen-main (%s) — a configured link sends "
                            "REAL texts; mock crmlink at the HTTP boundary (tests/test_crm_link.py "
                            "`link`)" % ", ".join(attempted))
+
+
+@pytest.fixture(autouse=True)
+def _no_zuper_network():
+    from app.zuper import client as zuper_client
+    from app.zuper import listener as zuper_listener
+
+    zuper_guard.ATTEMPTS.clear()
+    zuper_client.TRANSPORT = zuper_guard.GUARD_TRANSPORT
+    zuper_client.reset_pacing()
+    zuper_listener.reset()
+    yield
+    zuper_client.TRANSPORT = zuper_guard.GUARD_TRANSPORT
+    attempted = list(zuper_guard.ATTEMPTS)
+    zuper_guard.ATTEMPTS.clear()
+    assert not attempted, ("this test tried to reach Zuper (%s) — mock it at the HTTP boundary "
+                           "(tests/zuper_fake.py)" % ", ".join(attempted))
 
 
 @pytest.fixture(autouse=True)

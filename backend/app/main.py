@@ -68,6 +68,7 @@ from .models import (
 )
 from .phones import format_phone, phone_warning, store_phone
 from .transport import get_transport
+from .zuper import api as zuper_api
 
 # The gate is applied ONCE, app-wide, rather than decorating 25 routes. Any route
 # added later is authenticated by default, so the cost of forgetting is a 401 rather
@@ -107,6 +108,9 @@ app.include_router(companycam_api.router)
 # AI Agents, phase 1 (2026-09-15): agents, knowledge, logs, suggestions, connections and the
 # alert bell, under /api/ai. STAFF-and-unrestricted to open, ADMIN to change. See app/ai/.
 app.include_router(ai_api.router)
+# Zuper two-way sync (2026-09-16): Settings → Zuper, the money panels, Zuper's job photos and
+# the webhook (the one route here on auth.EXEMPT — it has its own token). See app/zuper/.
+app.include_router(zuper_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

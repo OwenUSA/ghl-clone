@@ -47,3 +47,36 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# ---- Zuper sync (2026-09-16) ------------------------------------------------------------
+# CRM changes become queued sync jobs from the flush, for every session, so no write path
+# can be forgotten. With ZUPER_SYNC_ENABLED false each hook returns on its first line.
+# Imported lazily for the same reason as above. See app/zuper/listener.py.
+
+@event.listens_for(Session, "before_flush")
+def _zuper_before_flush(session, flush_context, instances):
+    from .zuper import listener
+
+    listener.before_flush(session)
+
+
+@event.listens_for(Session, "after_flush")
+def _zuper_after_flush(session, flush_context):
+    from .zuper import listener
+
+    listener.after_flush(session)
+
+
+@event.listens_for(Session, "after_commit")
+def _zuper_after_commit(session):
+    from .zuper import listener
+
+    listener.after_commit(session)
+
+
+@event.listens_for(Session, "after_rollback")
+def _zuper_after_rollback(session):
+    from .zuper import listener
+
+    listener.after_rollback(session)

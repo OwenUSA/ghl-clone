@@ -139,8 +139,8 @@ def test_the_deep_link_path_opens_the_opportunities_view_and_settings_sections_r
     """, module=SECTIONS_TS)
     assert got == ["opportunities", "opportunities", "settings", None, "custom-fields",
                    "custom-fields", "account", "account",
-                   ["My account", "Custom Fields", "CompanyCam", "My Staff", "AI Connections",
-                    "Automations"]]
+                   ["My account", "Custom Fields", "CompanyCam", "Zuper", "My Staff",
+                    "AI Connections", "Automations"]]
 
 
 def test_the_app_opens_the_view_a_deep_link_names():

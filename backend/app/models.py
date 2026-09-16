@@ -1349,3 +1349,224 @@ class AiAlert(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---- Zuper two-way sync (2026-09-16) -------------------------------------------------------
+#
+# The owner's roles: this CRM is the hub for agents, texting, calls, technicians and
+# scheduling; Zuper owns quotes, invoices, payments and reports. See app/zuper/ (its
+# __init__.py is the map) and DECISIONS.md (2026-09-16, Zuper).
+#
+# Eight NEW tables and nothing else in the schema touched. Every reference to a CRM record
+# is a PLAIN INTEGER, never a foreign key, for the reason the AI tables give: a contact or a
+# deal can be deleted (and, from 2026-09-16, deleted by the sync itself), and no delete path
+# may learn about a new table to keep working. A Zuper record is referred to by its uid.
+
+class ZuperSettings(Base):
+    """One row (id 1): the switch, the Workiz cutover date and the setup check."""
+    __tablename__ = "zuper_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # The Settings → Zuper switch. Syncing needs this AND ZUPER_SYNC_ENABLED AND a passed
+    # setup check; switching it off pauses everything at once.
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # "YYYY-MM-DD" in America/New_York. NULL = Workiz still in use (Workiz wins its fields,
+    # and the importer still runs). On and after this day the importer refuses to run.
+    workiz_cutover_date: Mapped[str | None] = mapped_column(String(10))
+    # When the switch was first turned on: the daily digests start from here (no backfill).
+    enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    setup_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    setup_passed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # [{"key", "title", "state": pass|fail|confirm_by_hand, "sentences": [...]}]
+    setup_results: Mapped[list | None] = mapped_column(JSONType)
+    # {item key: {"by": email, "at": iso}} — an ADMIN's "confirmed by hand" for what the
+    # Zuper API cannot report (notification switches, the tag, the company's time zone).
+    confirmations: Mapped[dict | None] = mapped_column(JSONType)
+    # The Zuper user the API key belongs to ("CRM Sync"): events it caused are echoes.
+    sync_user_uid: Mapped[str | None] = mapped_column(String(64))
+    # {lead source name: source uid}, learned by the setup check when Zuper lists them.
+    lead_sources: Mapped[dict | None] = mapped_column(JSONType)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class ZuperMapping(Base):
+    """One CRM record <-> one Zuper record, and what the two last agreed on.
+
+    `base` is the field view both sides held after the last sync: a field that differs
+    from it on one side changed on that side, which is how a latest-edit-wins merge can
+    tell an edit from a stale value. `state` "creating" is written and committed BEFORE a
+    create request, so a crash between Zuper answering and our commit is followed by a
+    search, never a second create.
+    """
+    __tablename__ = "zuper_mappings"
+    __table_args__ = (
+        UniqueConstraint("crm_type", "crm_id", name="uq_zuper_mapping_crm"),
+        UniqueConstraint("zuper_type", "zuper_uid", name="uq_zuper_mapping_zuper"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # contact | opportunity | appointment | note | task | pipeline | stage
+    crm_type: Mapped[str] = mapped_column(String(20), index=True)
+    crm_id: Mapped[int] = mapped_column(Integer)
+    # customer | job | appointment | job_note | service_task | category | status
+    zuper_type: Mapped[str] = mapped_column(String(20))
+    zuper_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    # The Zuper job a note, task, appointment or status hangs under (a category for a status).
+    parent_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    # creating | linked | deleted
+    state: Mapped[str] = mapped_column(String(20), default="linked", server_default="linked")
+    base: Mapped[dict | None] = mapped_column(JSONType)
+    crm_hash: Mapped[str | None] = mapped_column(String(64))
+    zuper_hash: Mapped[str | None] = mapped_column(String(64))
+    zuper_updated_at: Mapped[str | None] = mapped_column(String(40))
+    last_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_pulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ZuperSyncState(Base):
+    """One row (id 1): the heartbeat of the sweep, pushes, webhooks and the initial load."""
+    __tablename__ = "zuper_sync_state"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    last_sweep_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sweep_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sweep_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Zuper records updated at or after this (minus an overlap) are read by the next sweep.
+    sweep_cursor: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # {module: true | false} — does filter.updated_at_from actually narrow that list?
+    filter_checks: Mapped[dict | None] = mapped_column(JSONType)
+    last_push_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_pull_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_webhook_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_counts: Mapped[dict | None] = mapped_column(JSONType)
+    # The initial load's last report (counts and ids only), for Settings → Zuper.
+    load_report: Mapped[dict | None] = mapped_column(JSONType)
+    # "YYYY-MM-DD": the last day whose digest notes were written.
+    last_digest_day: Mapped[str | None] = mapped_column(String(10))
+
+
+class ZuperWebhookDelivery(Base):
+    """A raw webhook delivery, stored BEFORE anything is done with it. Zuper's payload shape
+    and signing are undocumented, so the body is kept verbatim and processed idempotently:
+    processing re-reads the record from Zuper rather than trusting the payload."""
+    __tablename__ = "zuper_webhook_inbox"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    # The same delivery twice (a retry) is one row.
+    body_sha256: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    content_type: Mapped[str | None] = mapped_column(String(120))
+    event: Mapped[str | None] = mapped_column(String(120))
+    module: Mapped[str | None] = mapped_column(String(60))
+    record_uid: Mapped[str | None] = mapped_column(String(64))
+    # none | valid | unchecked (a signature header arrived and no secret is configured)
+    signature: Mapped[str] = mapped_column(String(20), default="none", server_default="none")
+    # pending | processed | ignored | failed
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending",
+                                        index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    outcome: Mapped[str | None] = mapped_column(String(200))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class ZuperConflict(Base):
+    """An overwrite the sync made of a value one side had changed: which record, which field,
+    the rule that decided, the side written to, and the value there before and after."""
+    __tablename__ = "zuper_conflict_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    crm_type: Mapped[str] = mapped_column(String(20))
+    crm_id: Mapped[int | None] = mapped_column(Integer)
+    zuper_uid: Mapped[str | None] = mapped_column(String(64))
+    field: Mapped[str] = mapped_column(String(120))
+    # zuper_money | workiz_before_cutover | zuper_schedule_after_cutover | latest_edit |
+    # crm_owned | crm_cannot_hold | invoice_paid | mirrored_cancel
+    rule: Mapped[str] = mapped_column(String(40))
+    # crm | zuper | workiz
+    winner: Mapped[str] = mapped_column(String(10))
+    # crm | zuper — the side whose value was replaced
+    written_to: Mapped[str] = mapped_column(String(10))
+    before: Mapped[dict | list | str | int | None] = mapped_column(JSONType)
+    after: Mapped[dict | list | str | int | None] = mapped_column(JSONType)
+
+
+class ZuperDeleteSnapshot(Base):
+    """A full, restorable copy of a record taken BEFORE the sync mirrored its delete.
+
+    `batch` groups a record with its own children deleted in the same moment (a deal and its
+    notes), so Restore brings the group back together, parents first."""
+    __tablename__ = "zuper_delete_snapshots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch: Mapped[str] = mapped_column(String(40), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    # crm_to_zuper (deleted in the CRM, mirrored to Zuper) | zuper_to_crm
+    direction: Mapped[str] = mapped_column(String(20))
+    crm_type: Mapped[str] = mapped_column(String(20))
+    crm_id: Mapped[int] = mapped_column(Integer)
+    zuper_type: Mapped[str | None] = mapped_column(String(20))
+    zuper_uid: Mapped[str | None] = mapped_column(String(64))
+    # {"record": {...columns}, "children": {...ids / rows}}
+    snapshot: Mapped[dict] = mapped_column(JSONType, default=dict)
+    # pending | mirrored | skipped | failed | restored | restore_failed
+    state: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending",
+                                       index=True)
+    mirrored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restored_by_id: Mapped[int | None] = mapped_column(Integer)
+    restore_detail: Mapped[str | None] = mapped_column(Text)
+
+
+class ZuperDocument(Base):
+    """A quote or an invoice as Zuper last reported it — the read-only money panel's cache.
+    Numbers, status, money and dates only: no customer details are copied."""
+    __tablename__ = "zuper_documents"
+    QUOTE = "quote"
+    INVOICE = "invoice"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10))
+    zuper_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    number: Mapped[str | None] = mapped_column(String(60))
+    status: Mapped[str | None] = mapped_column(String(40))
+    total_cents: Mapped[int | None] = mapped_column(Integer)
+    balance_cents: Mapped[int | None] = mapped_column(Integer)
+    issued_on: Mapped[str | None] = mapped_column(String(20))
+    due_on: Mapped[str | None] = mapped_column(String(20))
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    customer_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    opportunity_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    contact_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    zuper_updated_at: Mapped[str | None] = mapped_column(String(40))
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    # Zuper reported it deleted (its soft delete): kept, but no longer shown or counted.
+    removed_in_zuper: Mapped[bool] = mapped_column(Boolean, default=False,
+                                                   server_default=false())
+    # When "invoice fully paid -> Won" was applied for this invoice (once).
+    won_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The urgent task "quote declined" made for this quote (once).
+    declined_task_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class ZuperDigest(Base):
+    """The daily activity note written to a customer's job: counts only, never a message."""
+    __tablename__ = "zuper_digests"
+    __table_args__ = (UniqueConstraint("contact_id", "day", name="uq_zuper_digest"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    day: Mapped[str] = mapped_column(String(10))
+    opportunity_id: Mapped[int | None] = mapped_column(Integer)
+    job_uid: Mapped[str | None] = mapped_column(String(64))
+    counts: Mapped[dict] = mapped_column(JSONType, default=dict)
+    note_uid: Mapped[str | None] = mapped_column(String(64))
+    # pending | posted | failed
+    state: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -23,6 +23,7 @@ import { ChangePasswordScreen } from './pages/ChangePasswordScreen'
 import { viewFromPath } from './lib/settingsSections'
 import type { Focus } from './lib/focus'
 import { registerOpenRecord } from './lib/openRecord'
+import { recordFromLocation, withoutRecordParam } from './lib/zuper'
 
 // Paths that used to mean something and still turn up in bookmarks and pasted
 // links. Launchpad was removed from the product on 2026-09-09 and Payments on
@@ -80,6 +81,18 @@ export default function App() {
   }, [])
   const focusFor = (view: string) => (focus?.view === view ? focus : null)
   useEffect(() => registerOpenRecord(openRecord), [openRecord])
+
+  // The "CRM Link" the Zuper sync writes into Zuper (2026-09-16): /opportunities?opportunity=<id>
+  // and /contacts?contact=<id> open that record, through the palette's own path. Read once at
+  // boot; the parameter is then dropped so a reload after closing the record does not reopen
+  // it. Signing in first is fine: the request waits in `focus` for the page to mount.
+  useEffect(() => {
+    const link = recordFromLocation(window.location.pathname, window.location.search)
+    if (!link) return
+    window.history.replaceState(null, '',
+      withoutRecordParam(window.location.pathname, window.location.search))
+    openRecord(link.view, link.id)
+  }, [openRecord])
 
   // ctrl+K, and cmd+K on a Mac. Bound on the window so it works from anywhere,
   // including with the caret inside a page's own filter box -- which is exactly

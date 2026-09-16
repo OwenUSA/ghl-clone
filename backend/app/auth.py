@@ -249,7 +249,10 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 # Paths reachable without any credential. Small on purpose — everything not listed
 # here is protected, including any route added in the future.
-EXEMPT = {"/api/health", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout"}
+EXEMPT = {"/api/health", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout",
+          # Zuper's webhook (2026-09-16) carries no user credential. It authenticates with its
+          # own shared token and answers 503 while the sync is off — app/zuper/api.py.
+          "/api/zuper/webhook"}
 
 # What a user who must change their password may still reach: who am I, change it, and
 # sign out everywhere. Everything else answers MUST_CHANGE_PASSWORD (403).

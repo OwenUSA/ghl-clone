@@ -12,6 +12,8 @@ from . import companycam
 from .automations import HANDLERS
 from .db import SessionLocal
 from .queue import claim, finish
+from .zuper import listener as zuper_listener
+from .zuper import worker as zuper_worker
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -24,7 +26,8 @@ def drain_once() -> int:
     """Claim and run one batch. Returns how many jobs ran."""
     db = SessionLocal()
     try:
-        jobs = claim(db)
+        # Zuper jobs are its own thread's (2026-09-16); see app/zuper/worker.py.
+        jobs = claim(db, exclude_types=zuper_listener.JOB_TYPES)
         for job in jobs:
             handler = HANDLERS.get(job.type)
             if handler is None:
@@ -53,6 +56,9 @@ def main() -> None:
     # reminder. Each tick re-reads the switches, and with no token it does nothing.
     stop = threading.Event()
     companycam.start_worker_thread(SessionLocal, stop)
+    # Zuper sync (2026-09-16): pushes, webhooks, the 15-minute sweep and the daily digest, on
+    # a thread of their own. Each tick does nothing unless the sync is armed.
+    zuper_worker.start_worker_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

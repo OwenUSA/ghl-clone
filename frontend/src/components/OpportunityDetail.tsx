@@ -6,6 +6,7 @@ import {
   deleteOpportunity,
   getContact,
   getOpportunity,
+  getOpportunityZuper,
   listCustomFields,
   listFieldGroups,
   listPipelines,
@@ -33,6 +34,7 @@ import { NewAppointmentDialog } from './NewAppointmentDialog'
 import { AppointmentTab } from './opportunity/AppointmentTab'
 import { AssociatedTab } from './opportunity/AssociatedTab'
 import { PhotosTab } from './CompanyCamPhotos'
+import { ZuperMoneyPanel } from './ZuperMoneyPanel'
 import { NotesTab } from './opportunity/NotesTab'
 import { Chip, ContactSelect, MultiSelect, type Choice } from './opportunity/Pickers'
 import { TasksTab } from './opportunity/TasksTab'
@@ -43,6 +45,7 @@ import {
 import type { Me } from '../lib/auth'
 import { techOnOwnJob } from '../lib/access'
 import { canOpenAiAgents } from '../lib/aiAgents'
+import { showMoneyNav } from '../lib/zuper'
 import { AiAgentPanel } from './AiSuggestions'
 
 /**
@@ -198,7 +201,9 @@ export function OpportunityDetail({
 }) {
   const qc = useQueryClient()
   const [request, setRequest] = useState(() => takeModalTab(opportunityId))
-  const [tab, setTab] = useState<ModalTab>(request.tab)
+  // 'quotes' is the Zuper money panel (2026-09-16); no card icon asks for it, so it is not a
+  // ModalTab a request can carry.
+  const [tab, setTab] = useState<ModalTab | 'quotes'>(request.tab)
   const [form, setForm] = useState<Form | null>(null)
   // Which deal the form was seeded from — see the seeding effect below.
   const [seededFor, setSeededFor] = useState<number | null>(null)
@@ -219,6 +224,15 @@ export function OpportunityDetail({
   // Every definition, archived ones included; askedOn() decides what is drawn.
   const fields = useQuery({ queryKey: ['custom-fields'], queryFn: listCustomFields })
   const groups = useQuery({ queryKey: ['custom-field-groups'], queryFn: listFieldGroups })
+  // Zuper quotes and invoices (2026-09-16): fetched when the modal opens, so the nav item is
+  // drawn only for a job linked to Zuper or one with a document. A 404 (a card this reader
+  // cannot see) is no item — never a retry.
+  const zuperMoney = useQuery({
+    queryKey: ['opportunity-zuper', opportunityId],
+    queryFn: () => getOpportunityZuper(opportunityId),
+    retry: false,
+  })
+  const showMoney = showMoneyNav(zuperMoney.data)
   const contact = useQuery({
     queryKey: ['contact', form?.contact?.id],
     queryFn: () => getContact(form!.contact!.id),
@@ -441,6 +455,12 @@ export function OpportunityDetail({
                       onClick={() => setTab('associated')} />
                     {/* CompanyCam job photos (2026-09-14): every role, like the card. */}
                     <NavItem label="Photos" active={tab === 'photos'} onClick={() => setTab('photos')} />
+                    {/* Zuper quotes & invoices (2026-09-16): read-only, only when there is a
+                        linked job or a document — otherwise no item at all. */}
+                    {showMoney && (
+                      <NavItem label="Quotes & invoices" active={tab === 'quotes'}
+                        onClick={() => setTab('quotes')} />
+                    )}
                     {/* AI Agents (2026-09-15): only for a user who can open the module. */}
                     {canOpenAiAgents(user) && (
                       <NavItem label="AI agent" active={tab === 'ai'} onClick={() => setTab('ai')} />
@@ -811,6 +831,9 @@ export function OpportunityDetail({
                     <AssociatedTab o={o} onOpenAppointment={setOpenAppointment} />
                   )}
                   {tab === 'photos' && <PhotosTab opportunityId={o.id} />}
+                  {tab === 'quotes' && showMoney && (
+                    <ZuperMoneyPanel opportunityId={o.id} data={zuperMoney.data} />
+                  )}
                   {tab === 'ai' && canOpenAiAgents(user) && (
                     <AiAgentPanel user={user} opportunityId={o.id} contactId={o.contact_id ?? undefined} />
                   )}

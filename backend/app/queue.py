@@ -38,12 +38,20 @@ def enqueue(db: Session, type_: str, payload: dict, *,
     return job
 
 
-def claim(db: Session, limit: int = 10) -> list[Job]:
-    """Atomically claim due jobs."""
+def claim(db: Session, limit: int = 10, *, types: tuple[str, ...] | None = None,
+          exclude_types: tuple[str, ...] | None = None) -> list[Job]:
+    """Atomically claim due jobs — of `types` only, or of any type but `exclude_types`.
+
+    The Zuper sync (2026-09-16) drains its own job types on its own thread, so a slow or
+    rate-limited Zuper never delays anything the main drainer runs."""
     stmt = (select(Job)
             .where(Job.status == "pending", Job.run_after <= utcnow())
             .order_by(Job.run_after)
             .limit(limit))
+    if types:
+        stmt = stmt.where(Job.type.in_(types))
+    if exclude_types:
+        stmt = stmt.where(Job.type.not_in(exclude_types))
     if db.bind and db.bind.dialect.name == "postgresql":
         stmt = stmt.with_for_update(skip_locked=True)
 
