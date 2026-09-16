@@ -65,6 +65,8 @@ class FakeZuper:
     lead_sources: list[dict] | None = None
     requests: list[Seen] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
+    company_name: str = "Dream Team Roofing"
+    dc_api_url: str = "https://us-east-1.zuperpro.com"
     # Behaviour switches.
     honour_updated_filter: bool = True
     throttle: int = 0                       # the next N requests answer 429
@@ -136,6 +138,14 @@ class FakeZuper:
     # ------------------------------------------------------------------ the handler
 
     def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host == "accounts.zuperpro.com":
+            body = json.loads(request.content or b"{}")
+            self.requests.append(Seen(request.method, "ACCOUNTS " + request.url.path, {}, body))
+            if request.headers.get("x-api-key"):
+                self.violations.append("the API key was sent to the region lookup")
+            if body.get("company_name") != self.company_name:
+                return self.not_found()
+            return self.ok({"dc_api_url": self.dc_api_url})
         if request.url.host.endswith("zuperpro.com") and not request.url.path.startswith("/api"):
             return self.file(request)
         path = request.url.path.removeprefix("/api")

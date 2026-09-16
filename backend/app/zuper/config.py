@@ -70,6 +70,11 @@ def crm_base_url() -> str:
     return (os.getenv("ZUPER_CRM_BASE_URL") or DEFAULT_CRM_BASE_URL).strip().rstrip("/")
 
 
+def company_name() -> str:
+    """Optional: the Zuper company name, for the setup check's region lookup."""
+    return os.getenv("ZUPER_COMPANY_NAME", "").strip()
+
+
 def webhook_token() -> str:
     return os.getenv("ZUPER_WEBHOOK_TOKEN", "").strip()
 

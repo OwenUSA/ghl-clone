@@ -115,6 +115,20 @@ def _type_words(types: tuple[str, ...]) -> str:
             mapping.NUMBER: "Number", mapping.SINGLE_ITEM: "Single item"}.get(types, types[0])
 
 
+def check_region() -> dict:
+    title = "The configured base URL is this company's Zuper data centre"
+    try:
+        expected = client.region_lookup(config.company_name())
+    except ZuperError as exc:
+        return item("region", title, FAIL, "The region lookup for “%s” failed: %s" % (
+            config.company_name(), client.sentence(exc)))
+    if client.normalise_base(config.base_url()) != expected:
+        return item("region", title, FAIL,
+                    "Zuper keeps “%s” at %s, but ZUPER_BASE_URL is %s. Set ZUPER_BASE_URL=%s."
+                    % (config.company_name(), expected, config.base_url(), expected))
+    return item("region", title, PASS, "Zuper keeps this company at %s." % expected)
+
+
 def check_sync_user(db: Session, commit: bool) -> dict:
     title = "The API key belongs to the “CRM Sync” user (B1, B2)"
     try:
@@ -245,6 +259,8 @@ def run_checks(db: Session, *, commit: bool) -> list[dict]:
                             "Zuper answered at %s." % config.base_url()))
     except ZuperError as exc:
         return [item("connection", "API key and region", FAIL, client.sentence(exc))]
+    if config.company_name():
+        results.append(check_region())
     checks = [
         lambda: check_sync_user(db, commit),
         lambda: check_fields("CUSTOMER", {label: (mapping.SINGLE_LINE, [])

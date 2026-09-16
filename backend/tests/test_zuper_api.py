@@ -457,3 +457,38 @@ def test_contact_sync_never_invents_an_email(loaded, fake):
     with SessionLocal() as s:
         assert s.get(Contact, loaded.ids["bob"]).email is None
     assert fake.customers[uid_of("contact", loaded.ids["bob"])]["customer_email"] == ""
+
+
+# ------------------------------------------------------------------ region
+
+def test_region_lookup_finds_the_data_centre_without_sending_the_key(zuper_env):
+    fake = FakeZuper().install()
+    assert client.region_lookup("Dream Team Roofing") == "https://us-east-1.zuperpro.com/api"
+    assert fake.violations == []
+    with pytest.raises(ZuperError) as exc:
+        client.region_lookup("Nobody Roofing")
+    assert exc.value.kind == "not_found"
+
+
+def test_region_lookup_is_off_with_the_env_flag_false(monkeypatch):
+    fake = FakeZuper().install()
+    with pytest.raises(ZuperError) as exc:
+        client.region_lookup("Dream Team Roofing")
+    assert exc.value.kind == "off" and fake.requests == []
+    with client.operator_mode():
+        monkeypatch.setenv("ZUPER_API_KEY", "zk_test")
+        assert client.region_lookup("Dream Team Roofing").endswith("zuperpro.com/api")
+
+
+def test_setup_check_says_which_base_url_to_set_when_the_region_differs(zworld, fake,
+                                                                          monkeypatch):
+    from app.zuper import setup
+    monkeypatch.setenv("ZUPER_COMPANY_NAME", "Dream Team Roofing")
+    with SessionLocal() as s, client.operator_mode():
+        assert {r["key"]: r["state"] for r in setup.run_checks(s, commit=False)}["region"] \
+            == setup.PASS
+    fake.dc_api_url = "https://us-west-1c.zuperpro.com"
+    with SessionLocal() as s, client.operator_mode():
+        region = next(r for r in setup.run_checks(s, commit=False) if r["key"] == "region")
+    assert region["state"] == setup.FAIL
+    assert "Set ZUPER_BASE_URL=https://us-west-1c.zuperpro.com/api" in region["sentences"][0]

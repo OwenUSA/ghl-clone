@@ -467,3 +467,46 @@ def fetch_file(url: str) -> tuple[bytes, str]:
         raise ZuperError("bad_response", "attachment too large")
     ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
     return resp.content, ctype
+
+
+# ---------------------------------------------------------------------------- region
+
+REGION_LOOKUP_URL = "https://accounts.zuperpro.com/api/config"
+
+
+def normalise_base(url: str) -> str:
+    url = (url or "").strip().rstrip("/")
+    return url if url.endswith("/api") else url + "/api"
+
+
+def region_lookup(company_name: str) -> str:
+    """Which Zuper data centre holds this company: POST accounts.zuperpro.com/api/config
+    {"company_name"} -> `dc_api_url` (zuper-research.md; the field name is UNVERIFIED). A lookup,
+    not a write: allowed in a dry run. The API key is NOT sent to it."""
+    if not (config.env_enabled() or _OPERATOR.get()):
+        raise ZuperError("off")
+    if not (company_name or "").strip():
+        raise ZuperError("refused", "a region lookup needs the company name")
+    _pace()
+    try:
+        with httpx.Client(transport=TRANSPORT, timeout=TIMEOUT_SECONDS,
+                          follow_redirects=False) as http:
+            resp = http.post(REGION_LOOKUP_URL, json={"company_name": company_name.strip()},
+                             headers={"Accept": "application/json"})
+    except httpx.HTTPError as exc:
+        raise ZuperError("unavailable", type(exc).__name__) from None
+    if resp.status_code == 404:
+        raise ZuperError("not_found", "no Zuper company by that name", 404)
+    if resp.status_code >= 400:
+        raise ZuperError("unavailable" if resp.status_code >= 500 else "rejected",
+                         "HTTP %d" % resp.status_code, resp.status_code)
+    try:
+        data = data_of(resp.json())
+    except ValueError:
+        raise ZuperError("bad_response", "not JSON") from None
+    url = data.get("dc_api_url") if isinstance(data, dict) else None
+    if not isinstance(url, str) or not url:
+        raise ZuperError("bad_response", "the region lookup answered without dc_api_url")
+    url = normalise_base(url)
+    _check_host(url)
+    return url
