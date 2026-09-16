@@ -233,7 +233,22 @@ def test_no_secret_url_or_phone_number_in_the_payload(client, monkeypatch):
     assert KEY not in text
     assert "http" not in text, "a URL reached the browser"
     assert "crm_token_secret" not in text
-    assert not re.search(r"\d{7,}", text), "a phone-number-shaped run reached the browser"
+    # WIDENED 2026-09-16. `our_line` — the number this CRM sends FROM — is now in the body
+    # on purpose: it is the company's own published number, already printed on the composer,
+    # and putting it here is what stopped four screens hard-coding a line the owner had
+    # retired. The property this line has always been for is unchanged and is asserted
+    # exactly: NOTHING ELSE phone-shaped survives, and `our_line` is the CONFIGURED line
+    # rather than anything owen-main said.
+    from app import crmlink
+
+    ours = crmlink.current().from_number
+    assert r.json()["our_line"] == ours
+    others = [run for run in re.findall(r"\d{7,}", text) if run not in ours]
+    assert not others, ("a phone-number-shaped run other than our own line reached the "
+                        "browser: %s" % others)
+    assert "9415550123" not in text, "a CUSTOMER's number reached the browser"
+    assert "9417247244" not in text, "owen-main's own number reached the browser"
+    assert "9544829099" not in text, "owen-main's binding list reached the browser"
 
     # ...including when owen-main is down, which is where a careless error leaks config.
     use(monkeypatch, Upstream(raises=httpx.ConnectError(f"cannot connect to {BASE}")))

@@ -8,6 +8,8 @@ import {
   connectionBody, connectionProblems, DEFAULT_MODEL, formatCost, knownPrice, type ConnectionForm,
 } from '../lib/aiAgents'
 import { IconPencil, IconPlus, IconTrashOutline } from './PipelineIcons'
+import { formatPhone } from '../lib/phone'
+import { useOurLine } from '../lib/useOurLine'
 import {
   Confirm, Empty, Field, INPUT, LINE, Modal, MUTED, Notice, PageHeader, primarySmall, smallButton,
   Switch, TableCard, Td, TEXT, Th, FAINT,
@@ -23,6 +25,9 @@ const PROVIDER_LABEL: Record<string, string> = {
  * write-only: the table shows "•••• last4" and an edit with the key left blank keeps it.
  */
 export function AiConnectionsSettings() {
+  // The line an escalation text actually leaves on — from the server, not from a constant
+  // that would go on naming a retired number after the owner moved the line (2026-09-16).
+  const ourNumber = useOurLine()
   const qc = useQueryClient()
   const settings = useQuery({ queryKey: ['ai-settings'], queryFn: aiSettings })
   const conns = useQuery({ queryKey: ['ai-connections'], queryFn: aiConnections })
@@ -87,7 +92,7 @@ export function AiConnectionsSettings() {
               </button>
             </div>
             <div style={{ fontSize: 12, color: FAINT, marginTop: 6 }}>
-              An EMERGENCY escalation texts this number from (954) 482-9099, through the phone system — only while an agent is on Auto-pilot, or when staff approve its suggestion.
+              An EMERGENCY escalation texts this number from {formatPhone(ourNumber)}, through the phone system — only while an agent is on Auto-pilot, or when staff approve its suggestion.
             </div>
           </div>
         </div>

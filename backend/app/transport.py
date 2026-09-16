@@ -4,7 +4,9 @@ Originally LOCKED as UI-only: `LoggingTransport` was the only implementation and
 nothing left the building. That is still the DEFAULT and still what an unconfigured
 deployment does. As of 2026-09-11 there is a second implementation,
 `CrmLinkTransport`, which hands the message to owen-main (the telephony platform)
-for delivery over the real BulkVS DID `+19544829099`.
+for delivery over the real BulkVS DID the CRM is bound to — `crmlink.DEFAULT_FROM_NUMBER`,
+overridden by `CRM_LINK_FROM_NUMBER`. There is exactly one definition of that number and
+this is not it; see `app/crmlink.py`.
 
 **Which one is live is decided by configuration, not by this branch.** `get_transport()`
 returns `CrmLinkTransport` only when BOTH `CRM_LINK_BASE_URL` and `CRM_LINK_API_KEY`
@@ -60,7 +62,8 @@ class MessageRef:
 
 
 class MessageTransport(Protocol):
-    def send_sms(self, to: str, body: str, from_number: str) -> MessageRef: ...
+    def send_sms(self, to: str, body: str, from_number: str,
+                 media_ids: list[str] | None = None) -> MessageRef: ...
 
     def send_email(self, to: str, subject: str, html: str) -> MessageRef: ...
 
@@ -69,8 +72,10 @@ class LoggingTransport:
     """Records intent, transmits nothing. The default, and the whole transport in
     every environment where the CRM link is not configured."""
 
-    def send_sms(self, to: str, body: str, from_number: str) -> MessageRef:
-        log.info("SMS suppressed to=%s from=%s chars=%d", to, from_number, len(body))
+    def send_sms(self, to: str, body: str, from_number: str,
+                 media_ids: list[str] | None = None) -> MessageRef:
+        log.info("SMS suppressed to=%s from=%s chars=%d pictures=%d",
+                 to, from_number, len(body), len(media_ids or []))
         return MessageRef(provider_ref="logged",
                           status=DeliveryStatus.LOGGED_ONLY)
 
@@ -99,8 +104,17 @@ class CrmLinkTransport:
     a transport that silently drops half of what it is handed.
     """
 
-    def send_sms(self, to: str, body: str, from_number: str) -> MessageRef:
-        result = crmlink.send_sms(to_number=to, body=body)
+    def send_sms(self, to: str, body: str, from_number: str,
+                 media_ids: list[str] | None = None) -> MessageRef:
+        # `media_ids` are owen-main's own ids for pictures it has already been given and
+        # is publishing for the carrier (2026-09-16). The CRM never holds the URL BulkVS
+        # fetches — see `crmlink.upload_media` and DECISIONS.md.
+        # The keyword is passed ONLY when there is a picture, so an ordinary text is
+        # byte-for-byte the call it has always been — which matters beyond tidiness: the
+        # browser check and several tests replace `crmlink.send_sms` with a double, and a
+        # new keyword on every send would make them fail for a feature they never used.
+        result = (crmlink.send_sms(to_number=to, body=body, media_ids=list(media_ids))
+                  if media_ids else crmlink.send_sms(to_number=to, body=body))
         if result.ok:
             data = result.data or {}
             return MessageRef(provider_ref=str(data.get("message_id") or ""),

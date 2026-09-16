@@ -17,7 +17,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # says to `cd backend` first. Nothing in a container guarantees the working
     # directory, and uvicorn, the worker and alembic each run from different ones,
     # so put it on the path explicitly rather than relying on CWD.
-    PYTHONPATH=/app/backend
+    PYTHONPATH=/app/backend \
+    # PICTURES (2026-09-16). Where the CRM keeps its own copy of every inbound MMS, and
+    # every picture the composer has uploaded and not sent. Set HERE rather than left to
+    # .env.prod so the path and the volume in docker-compose.prod.yml come from the same
+    # repository and cannot drift: a MEDIA_ROOT that does not match the mount writes
+    # pictures into the container's filesystem, where the next deploy deletes them.
+    # .env.prod can still override it.
+    MEDIA_ROOT=/var/lib/ghl-clone/media
 
 # curl is for the container healthcheck, nothing else.
 RUN apt-get update \

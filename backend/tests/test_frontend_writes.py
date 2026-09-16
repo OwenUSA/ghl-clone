@@ -22,9 +22,16 @@ import pytest
 
 API_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "api.ts"
 
-# The three transport helpers. `get` is read-only, `refresh` signs itself by hand
-# because it runs when `send` would recurse, and `send` is the CSRF-signing path.
-TRANSPORT_HELPERS = {"get", "send", "refresh"}
+# The transport helpers. `get` is read-only, `refresh` signs itself by hand because it runs
+# when `send` would recurse, and `send` is the CSRF-signing path.
+#
+# `upload` joined them on 2026-09-16 (attaching a picture to a text). It cannot go through
+# `send`: that helper sets `Content-Type: application/json`, and a multipart body needs the
+# boundary the browser generates — setting the header by hand is the classic way to make a
+# form upload arrive as an empty dict. It signs itself exactly the way `send` does, and
+# `test_the_upload_helper_signs_itself_like_send` below is what holds it to that. Widened
+# deliberately: the fence's subject is the CSRF token, not the number of helpers.
+TRANSPORT_HELPERS = {"get", "send", "refresh", "upload"}
 
 # A top-level `export function x`, `function x`, `export const x =` or `const x =`.
 DECL = re.compile(
@@ -51,6 +58,20 @@ def test_only_the_transport_helpers_call_fetch():
     assert callers <= TRANSPORT_HELPERS, (
         f"{sorted(callers - TRANSPORT_HELPERS)} call fetch() directly and so send no "
         "X-CSRF-Token; route them through send()")
+
+
+def test_the_upload_helper_signs_itself_like_send():
+    """The reason `upload` is allowed to call fetch() directly is that it does everything
+    `send` does about credentials. Asserted, not assumed."""
+    source = API_TS.read_text(encoding="utf-8")
+    body = source.split("async function upload<T>", 1)[1].split("\n}", 1)[0]
+    assert "'X-CSRF-Token': cookie('ghl_csrf')" in body, (
+        "upload() must carry the double-submit token like every other write")
+    assert "credentials: 'include'" in body, "upload() must send the session cookie"
+    assert "Content-Type" not in body, (
+        "a multipart body must not have its Content-Type set by hand — the boundary is the "
+        "browser's to generate")
+    assert "await refresh()" in body, "upload() must retry once after renewing the token"
 
 
 def test_move_opportunity_goes_through_send():

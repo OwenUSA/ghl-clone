@@ -10,8 +10,10 @@
  *   - the number field takes typing and paste and formats as you type (`lib/dialPad.ts`),
  *     with the reason it cannot be texted under it;
  *   - the message box counts characters and carrier segments (`lib/smsSegments.ts`);
- *   - "Sending from (954) 482-9099" is read-only: it is the only line. Quo (OpenPhone) is
- *     never a sender, so it is never offered;
+ *   - "Sending from …" is read-only, and the number comes from the SERVER
+ *     (`useOurLine`, `GET /api/connection-status`) rather than a constant — the owner
+ *     changed the line on 2026-09-16 and five screens had it hard-coded. It is the only
+ *     line: Quo (OpenPhone) is never a sender, so it is never offered;
  *   - a refusal the SERVER gives before writing anything (a restricted technician and a
  *     number that is not one of their customers) is shown here, and the dialog stays.
  *
@@ -23,12 +25,14 @@ import { useRef, useState } from 'react'
 import { ApiError, sendNewMessage, type NewMessageResult } from '../lib/api'
 import { isRestricted, type AccessUser } from '../lib/access'
 import {
-  CALLING_FROM, formatDialInput, normaliseTextNumber, pasteNumber, textProblem,
+  formatDialInput, normaliseTextNumber, pasteNumber, textProblem,
 } from '../lib/dialPad'
 import { formatPhone } from '../lib/phone'
+import { useOurLine } from '../lib/useOurLine'
 import { sendSentence } from '../lib/sendOutcome'
 import { segmentInfo, segmentLabel } from '../lib/smsSegments'
 import { IconChat, IconClose } from './Icon'
+import { AttachButton, PictureStrip, dropHandlers, usePictureTray } from './AttachPictures'
 
 const INK = 'rgb(16,24,40)'
 const TEXT = 'rgb(52,64,84)'
@@ -53,11 +57,21 @@ export function NewMessageDialog({ user, onClose, onSent }: {
   const [sending, setSending] = useState(false)
   const [refused, setRefused] = useState<string | null>(null)
   const messageRef = useRef<HTMLTextAreaElement | null>(null)
+  // The same tray the thread composer uses, so the two cannot disagree about what a
+  // picture costs or what "remove" means (components/AttachPictures.tsx).
+  const tray = usePictureTray()
+  // The line this CRM texts from, as configured on the server. Everything below that shows
+  // or compares against "our number" reads this one value.
+  const line = useOurLine()
 
-  const numberProblem = textProblem(number)
-  const bodyProblem = body.trim() ? null : 'Type the message to send.'
+  const numberProblem = textProblem(number, line)
+  // A picture with no words is a message — it is what most MMS are — so the message box is
+  // only "empty" when there is nothing attached either.
+  const bodyProblem = (body.trim() || tray.ids.length)
+    ? null
+    : 'Type the message, or attach a picture.'
   const blocked = numberProblem ?? bodyProblem
-  const canSend = !blocked && !sending
+  const canSend = !blocked && !sending && !tray.busy
   const segments = segmentInfo(body)
 
   const editNumber = (next: string) => {
@@ -68,15 +82,22 @@ export function NewMessageDialog({ user, onClose, onSent }: {
 
   const submit = async () => {
     if (!canSend) return
-    const to = normaliseTextNumber(number) as string
+    const to = normaliseTextNumber(number, line) as string
     setSending(true)
     setRefused(null)
     try {
-      const r = await sendNewMessage(to, body)
+      const r = await sendNewMessage(to, body, tray.ids)
       // A suppression (the contact is on DND) comes back in the composer's vocabulary;
       // anything else refused here is already a sentence.
-      if (!r.recorded) setRefused(r.reason.startsWith('suppressed: ') ? sendSentence(r.reason) : r.reason)
-      else onSent(r)
+      if (!r.recorded) {
+        // NOTHING was written, so the pictures stay attached: the operator fixes the
+        // number and presses Send again rather than picking them a second time.
+        setRefused(r.reason.startsWith('suppressed: ') ? sendSentence(r.reason) : r.reason)
+      } else {
+        // Forgotten, not deleted — they are on the message now.
+        tray.clear()
+        onSent(r)
+      }
     } catch (err) {
       setRefused(err instanceof ApiError ? err.message : 'The message could not be sent.')
     } finally {
@@ -151,11 +172,18 @@ export function NewMessageDialog({ user, onClose, onSent }: {
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submit() }
             }}
+            // Drop or paste a photo straight onto the message box. Pasted TEXT still
+            // pastes — `dropHandlers` only intercepts when the clipboard holds a file.
+            {...dropHandlers(tray, sending)}
             className="w-full outline-none"
             style={{ marginTop: 6, padding: '8px 12px', borderRadius: 6, fontSize: 14, color: INK,
               resize: 'vertical', border: `1px solid ${LINE}`, lineHeight: '20px',
               boxShadow: '0 1px 2px rgba(16,24,40,0.05)' }} />
+          <div style={{ marginTop: 8 }}>
+            <PictureStrip tray={tray} />
+          </div>
           <div className="flex items-center" style={{ marginTop: 4, fontSize: 12, color: MUTED }}>
+            <AttachButton tray={tray} disabled={sending} />
             <span data-testid="segment-count"
               title={segments.segments > 1
                 ? 'Carriers split a long text into segments and join them back up on the phone.'
@@ -169,7 +197,7 @@ export function NewMessageDialog({ user, onClose, onSent }: {
             borderRadius: 8, border: `1px solid ${SOFT_LINE}`, fontSize: 13, color: TEXT }}>
             <span style={{ color: MUTED }}>Sending from</span>
             <span data-testid="sending-from" style={{ marginLeft: 'auto', fontWeight: 500, color: INK }}>
-              {formatPhone(CALLING_FROM)}
+              {formatPhone(line)}
             </span>
           </div>
         </div>

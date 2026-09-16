@@ -9,7 +9,8 @@
  * Every control does something real, and Call is only live when a call can be placed:
  *   - the number field takes typing and paste and formats as you type (`lib/dialPad.ts`);
  *   - the keypad appends, backspace removes the last digit typed;
- *   - "Calling from (954) 482-9099" is read-only: it is the only line, and Quo can never
+ *   - "Calling from …" is read-only and comes from the SERVER (`useOurLine`), not a
+ *     constant — the line changed on 2026-09-16. It is the only line, and Quo can never
  *     place a call;
  *   - Call is disabled, with the reason as a sentence, while the browser phone is not
  *     Ready or the number cannot be called; a refusal from the server is shown the same
@@ -23,11 +24,12 @@ import { ApiError, dialNumber } from '../lib/api'
 import { useCallLauncher } from '../lib/callLauncher'
 import { phoneNotReadyReason } from '../lib/callWindow'
 import {
-  CALLING_FROM, KEYPAD, backspace, dialProblem, formatDialInput, normaliseNumber,
+  KEYPAD, backspace, dialProblem, formatDialInput, normaliseNumber,
   pasteNumber, pressKey,
 } from '../lib/dialPad'
 import { OUTBOUND_INTENT_TTL_MS, outboundIntentPending } from '../lib/outboundIntent'
 import { formatPhone } from '../lib/phone'
+import { useOurLine } from '../lib/useOurLine'
 import { IconBackspace, IconClose, IconPhone } from './Icon'
 
 const INK = 'rgb(16,24,40)'
@@ -52,7 +54,10 @@ export function CallNumberDialog({ onClose }: { onClose: () => void }) {
   const [placing, setPlacing] = useState<Placing>({ kind: 'idle' })
   const inputRef = useRef<HTMLInputElement | null>(null)
 
-  const numberProblem = dialProblem(value)
+  // The line this CRM calls from, as configured on the server. Shown below, and the
+  // number the "cannot call itself" refusal follows.
+  const line = useOurLine()
+  const numberProblem = dialProblem(value, line)
   const phoneProblem = phoneNotReadyReason(status, phase)
   const busy = placing.kind === 'sending' || placing.kind === 'waiting'
   const blocked = phoneProblem ?? numberProblem
@@ -97,7 +102,7 @@ export function CallNumberDialog({ onClose }: { onClose: () => void }) {
 
   const call = async () => {
     if (!canCall) return
-    const number = normaliseNumber(value) as string
+    const number = normaliseNumber(value, line) as string
     setPlacing({ kind: 'sending' })
     try {
       const r = await launch({ number }, (ringBrowser) => dialNumber(number, ringBrowser))
@@ -192,7 +197,7 @@ export function CallNumberDialog({ onClose }: { onClose: () => void }) {
             borderRadius: 8, border: `1px solid ${SOFT_LINE}`, fontSize: 13, color: TEXT }}>
             <span style={{ color: MUTED }}>Calling from</span>
             <span data-testid="calling-from" style={{ marginLeft: 'auto', fontWeight: 500, color: INK }}>
-              {formatPhone(CALLING_FROM)}
+              {formatPhone(line)}
             </span>
           </div>
         </div>
@@ -205,7 +210,7 @@ export function CallNumberDialog({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button onClick={() => void call()} disabled={!canCall}
-            title={blocked ?? `Call ${formatPhone(normaliseNumber(value))}`}
+            title={blocked ?? `Call ${formatPhone(normaliseNumber(value, line))}`}
             className="flex items-center gap-2"
             style={{ height: 36, padding: '0 16px', borderRadius: 6, fontSize: 14, fontWeight: 600,
               color: '#fff', backgroundColor: BLUE, opacity: canCall ? 1 : 0.5,

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, object_session, selectinload
 from . import (
     ahs_jobs,
     assigned_access,
+    attachments,
     auth,
     automations,
     companycam,
@@ -26,6 +27,9 @@ from . import (
     connection_status,
     crmlink,
     custom_fields,
+    dlr,
+    media_api,
+    message_media,
     models,
     number_threads,
     openphone,
@@ -107,6 +111,9 @@ app.include_router(companycam_api.router)
 # AI Agents, phase 1 (2026-09-15): agents, knowledge, logs, suggestions, connections and the
 # alert bell, under /api/ai. STAFF-and-unrestricted to open, ADMIN to change. See app/ai/.
 app.include_router(ai_api.router)
+# Pictures on a text message (2026-09-16): the bytes a signed-in browser reads, and the
+# upload/remove/retry the composer and the thread use. See app/media_api.py.
+app.include_router(media_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
@@ -248,6 +255,12 @@ class EventOut(BaseModel):
     transcript: str | None = None
     # "AI: <agent name>" when an AI agent wrote this event (2026-09-15), else null.
     ai_author: str | None = None
+    # The pictures on this message (2026-09-16), in the order the carrier sent them.
+    # ALWAYS a list, empty for the overwhelming majority of rows — a null would make every
+    # caller write the same `?? []`, and the thread renders nothing for an empty one.
+    # Each entry carries an id the browser can ask THIS server for and nothing else: no
+    # carrier URL, no owen-main locator, no path on disk. See app/message_media.py.
+    attachments: list[dict] = []
 
 
 # ---------- contacts ----------
@@ -1621,6 +1634,13 @@ class EventIngest(BaseModel):
     # `body`; it is carried separately so a summary Quo finishes after the call was
     # mirrored can be added to that one row (see `_enrich`).
     summary: str | None = None
+    # How many pictures came with a text (2026-09-16). owen-main has stored an inbound
+    # MMS's media since before this CRM could show one; this is the field that says there
+    # are some, and `app/message_media.py` then asks owen-main for each by index. NO media
+    # URL is ever carried here: a carrier link is a credential-free URL to a customer's
+    # photograph, and the only system that should ever hold one is the one that already
+    # holds the carrier's key.
+    num_media: int = 0
 
     # owen-main's job payloads carry more than this (linkedid, outcome, winning
     # destination...) and are explicitly documented as forward-compatible. Ignoring
@@ -1724,6 +1744,26 @@ def _enrich(seen, body: EventIngest) -> list[str]:
     return filled
 
 
+def _plan_pictures(db: Session, ev, body: EventIngest) -> int:
+    """Make the PENDING attachment rows for an inbound MMS and queue their fetch.
+
+    Returns how many pictures are coming — the ingest answers it as `attachments_expected`,
+    a COUNT and not the list a send route's `attachments` is, which is why it has its own
+    name. It is worth answering at all because — owen-main logs
+    it, and "the CRM took the text but not the photo" is otherwise invisible from that end.
+
+    Deliberately NOT part of the transaction's success condition: the rows are added to the
+    same commit as the event (a text and its pictures are one thing), but the BYTES are
+    fetched later by the worker. See app/message_media.py for why that is a job and not an
+    inline carrier round-trip.
+    """
+    if body.direction != "INBOUND" or body.type != "SMS" or body.num_media <= 0:
+        return 0
+    rows = message_media.plan_inbound(db, ev, body.provider_ref, body.num_media)
+    message_media.enqueue_fetch(db, rows)
+    return len(rows)
+
+
 def _ingest_to_number(db: Session, body: EventIngest, key: str) -> dict:
     """File an event from a number no contact holds. Creates no contact, no deal,
     no job. See app/number_threads.py."""
@@ -1756,9 +1796,10 @@ def _ingest_to_number(db: Session, body: EventIngest, key: str) -> dict:
         thread.last_event_at = ev.occurred_at
     if body.direction == "INBOUND" and automations.is_fresh(ev.occurred_at):
         thread.unread_count += 1
+    pictures = _plan_pictures(db, ev, body)
     db.commit()
     return {"id": ev.id, "conversation_id": None, "number_thread_id": thread.id,
-            "contact_id": None,
+            "contact_id": None, "attachments_expected": pictures,
             "automation": "none: not a contact — filed on a number-only thread"}
 
 
@@ -1801,6 +1842,22 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
                     "contact_id": conv_existing.contact_id if conv_existing else None,
                     "enriched": filled,
                     "automation": "duplicate: already ingested"}
+
+    # A CARRIER DELIVERY RECEIPT IS NOT A MESSAGE (2026-09-16). BulkVS posts these to the
+    # same webhook as an inbound text, and before owen-main learned to tell them apart they
+    # were relayed here and filed on a customer's thread as words the customer had written.
+    #
+    # owen-main is where that is fixed. This is the CRM's own guard, and it is worth having
+    # because the two systems DEPLOY SEPARATELY: for however long an older owen-main is
+    # running, every receipt it relays would otherwise land in a conversation. Answered as a
+    # success with a reason rather than a 4xx — the relay job did its job, and dead-lettering
+    # it after five attempts for correctly delivering something we do not want would only
+    # lose the log line that says so.
+    if (body.type == "SMS" and body.direction == "INBOUND"
+            and dlr.looks_like_receipt(body.body)):
+        return {"id": None, "conversation_id": None, "contact_id": None,
+                "number_thread_id": None, "attachments_expected": 0,
+                "automation": dlr.REFUSED}
 
     if body.call_status is not None:
         if body.type != "CALL":
@@ -1872,9 +1929,10 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
     # A number no contact holds returned above and never reaches this line.
     if fresh:
         ai_triggers.inbound_event(db, contact, conv, ev)
+    pictures = _plan_pictures(db, ev, body)
     db.commit()
     return {"id": ev.id, "conversation_id": conv.id, "contact_id": contact.id,
-            "automation": outcome}
+            "attachments_expected": pictures, "automation": outcome}
 
 
 # A BulkVS delivery receipt's vocabulary, mapped onto ours. `undelivered` and
@@ -3051,7 +3109,11 @@ def _thread_events(model, parent_clause, db: Session, filter: str,
     rows = db.scalars(stmt.order_by(model.occurred_at, model.id)).all()
     authors = {aid: ai_engine.ai_author(db, aid)
                for aid in {e.ai_agent_id for e in rows if e.ai_agent_id}}
+    # One query for the whole page rather than one per bubble: a thread of 300 texts with
+    # two pictures on it should cost two queries, not 301.
+    pictures = message_media.by_event(db, list(rows))
     return [EventOut(id=e.id, type=e.type.value, direction=e.direction.value,
+                     attachments=pictures.get(message_media.event_key(e), []),
                      ai_author=authors.get(e.ai_agent_id),
                      occurred_at=e.occurred_at, body=e.body, subject=e.subject,
                      duration_seconds=e.duration_seconds,
@@ -4614,18 +4676,43 @@ class MessageSend(BaseModel):
     body: str
     type: Literal["SMS", "EMAIL", "NOTE", "INTERNAL_COMMENT"] = "SMS"
     subject: str | None = None
+    # Draft pictures from `POST /api/attachments`, in the order they should be sent
+    # (2026-09-16). Ids, not bytes: the composer uploads each picture as it is picked so it
+    # can be previewed and removed before anything is sent, and so a 4 MB photo is not
+    # re-uploaded every time the operator edits the sentence.
+    attachment_ids: list[int] = []
+
+
+def _pictures_for(db: Session, body: MessageSend,
+                  principal: auth.Principal) -> list:
+    """The draft attachments a send names, refusing anything a picture cannot go on.
+
+    A picture is an SMS thing. An email has no picture path in this product and an
+    internal note is not sent anywhere, so both refuse rather than silently dropping what
+    the operator attached — a note that swallowed a photograph would be the kind of quiet
+    loss nobody notices until the job is finished.
+    """
+    if not body.attachment_ids:
+        return []
+    if body.type != "SMS":
+        raise HTTPException(400, "Pictures can only be sent on a text message.")
+    return message_media.take_drafts(db, principal, body.attachment_ids)
 
 
 def _send_to_contact(db: Session, contact: Contact, body: MessageSend,
                      principal: auth.Principal) -> dict:
-    if not body.body.strip():
+    pictures = _pictures_for(db, body, principal)
+    # A picture with no words IS a message — the customer sent one, and the reply is often
+    # one back. Only a text with neither is empty.
+    if not body.body.strip() and not pictures:
         raise HTTPException(400, "a message needs a body")
     # Writing a note a TECH cannot then read would be a worse bug than refusing
     # the write, so the read rule and the write rule are the same rule.
     if EventType[body.type] in INTERNAL_TYPES and not _sees_internal(principal):
         _refuse_internal(principal, "write")
     ev, reason = automations.send_outbound(
-        db, contact, body.body, type_=EventType[body.type], subject=body.subject)
+        db, contact, body.body, type_=EventType[body.type], subject=body.subject,
+        pictures=pictures)
     if ev is not None and EventType[body.type] not in INTERNAL_TYPES:
         # A person answered the customer: an agent set to sleep on a staff reply stops on
         # this conversation, and its pending follow-up is cancelled (2026-09-15).
@@ -4635,13 +4722,20 @@ def _send_to_contact(db: Session, contact: Contact, body: MessageSend,
         # 201 with suppressed=True, not an error: the request was well-formed and
         # the outcome is a business rule, matching how the existing routes report
         # {"automation": "suppressed: contact is on DND"}.
+        #
+        # The DRAFTS ARE LEFT ALONE. A suppressed send wrote no message, so the pictures
+        # are still attached in the composer and the operator can fix the number and press
+        # send again without picking them a second time.
         return {"suppressed": True, "reason": reason, "id": None,
-                "conversation_id": None}
+                "conversation_id": None, "attachments": []}
+    message_media.attach_sent(db, ev, pictures)
+    db.commit()
     db.refresh(ev)
     return {"suppressed": False, "reason": reason, "id": ev.id,
             "conversation_id": ev.conversation_id, "type": ev.type.value,
             "direction": ev.direction.value, "occurred_at": ev.occurred_at,
             "body": ev.body, "subject": ev.subject,
+            "attachments": [message_media.public(a) for a in pictures],
             "delivery_status": (ev.delivery_status.value
                                 if ev.delivery_status else None),
             "delivery_detail": ev.delivery_detail}
@@ -4927,6 +5021,8 @@ class NewMessageIn(BaseModel):
     that sends one anyway has it ignored, like any unknown field."""
     number: str = Field(max_length=40)
     body: str = Field(max_length=1600)
+    # Draft pictures, exactly as the thread composer sends them (2026-09-16).
+    attachment_ids: list[int] = []
 
 
 @app.post("/api/messages/new")
@@ -4947,11 +5043,12 @@ def new_message(body: NewMessageIn, db: Session = Depends(get_db),
     sentence, and write nothing — not even an empty thread. A send the phone system
     refuses or cannot take IS recorded on the thread, like any composer send.
     """
-    if not body.body.strip():
+    pictures = message_media.take_drafts(db, principal, body.attachment_ids)
+    if not body.body.strip() and not pictures:
         raise HTTPException(400, "a message needs a body")
     none = {"recorded": False, "id": None, "kind": None, "key": None, "contact_id": None,
             "conversation_id": None, "number_thread_id": None, "delivery_status": None,
-            "delivery_detail": None}
+            "delivery_detail": None, "attachments": []}
     number, problem = text_problem(body.number)
     if problem:
         return {**none, "number": None, "reason": problem}
@@ -4964,7 +5061,9 @@ def new_message(body: NewMessageIn, db: Session = Depends(get_db),
         return {**none, "number": number, "reason": ONLY_THEIR_CUSTOMERS_TEXT}
 
     if contact is not None:
-        out = _send_to_contact(db, contact, MessageSend(body=body.body, type="SMS"),
+        out = _send_to_contact(db, contact,
+                               MessageSend(body=body.body, type="SMS",
+                                           attachment_ids=body.attachment_ids),
                                principal)
         conv_id = out.get("conversation_id")
         if conv_id is None:
@@ -4979,13 +5078,15 @@ def new_message(body: NewMessageIn, db: Session = Depends(get_db),
                 "conversation_id": conv_id, "number_thread_id": None}
 
     thread, created = number_threads.thread_for_number(db, number)
-    ev, reason = automations.send_outbound_to_number(db, thread, body.body)
-    db.commit()
+    ev, reason = automations.send_outbound_to_number(db, thread, body.body,
+                                                     pictures=pictures)
     if ev is None:
         if created:
             db.delete(thread)
-            db.commit()
+        db.commit()
         return {**none, "number": number, "reason": reason, "suppressed": True}
+    message_media.attach_sent(db, ev, pictures)
+    db.commit()
     db.refresh(ev)
     return {"recorded": True, "suppressed": False, "reason": reason, "id": ev.id,
             "number": number, "kind": "number", "key": "n%d" % thread.id,
@@ -4993,6 +5094,7 @@ def new_message(body: NewMessageIn, db: Session = Depends(get_db),
             "number_thread_id": thread.id, "thread_created": created,
             "type": ev.type.value, "direction": ev.direction.value,
             "occurred_at": ev.occurred_at, "body": ev.body,
+            "attachments": [message_media.public(a) for a in pictures],
             "delivery_status": ev.delivery_status.value if ev.delivery_status else None,
             "delivery_detail": ev.delivery_detail}
 
@@ -5102,21 +5204,26 @@ def send_to_number_thread(thread_id: int, body: MessageSend,
     """Text the number, or note on its thread — through the SAME transport a contact
     text uses, so it is logged, refused or queued exactly as that would be."""
     t = _number_thread(db, principal, thread_id)
-    if not body.body.strip():
+    pictures = _pictures_for(db, body, principal)
+    if not body.body.strip() and not pictures:
         raise HTTPException(400, "a message needs a body")
     type_ = EventType[body.type]
     if type_ in INTERNAL_TYPES and not _sees_internal(principal):
         _refuse_internal(principal, "write")
-    ev, reason = automations.send_outbound_to_number(db, t, body.body, type_=type_)
-    db.commit()
+    ev, reason = automations.send_outbound_to_number(db, t, body.body, type_=type_,
+                                                     pictures=pictures)
     if ev is None:
+        db.commit()
         return {"suppressed": True, "reason": reason, "id": None,
-                "conversation_id": None, "number_thread_id": t.id}
+                "conversation_id": None, "number_thread_id": t.id, "attachments": []}
+    message_media.attach_sent(db, ev, pictures)
+    db.commit()
     db.refresh(ev)
     return {"suppressed": False, "reason": reason, "id": ev.id,
             "conversation_id": None, "number_thread_id": t.id,
             "type": ev.type.value, "direction": ev.direction.value,
             "occurred_at": ev.occurred_at, "body": ev.body,
+            "attachments": [message_media.public(a) for a in pictures],
             "delivery_status": (ev.delivery_status.value
                                 if ev.delivery_status else None),
             "delivery_detail": ev.delivery_detail}
@@ -5654,6 +5761,29 @@ def health():
     being able to ask from outside after a deploy, given that the difference
     between LoggingTransport and CrmLinkTransport is the difference between a
     recorded intent and a real text message. Neither field names a URL or a key.
+
+    `media_writable` (2026-09-16) is the same kind of question for pictures: the volume
+    that holds them is the one thing in this stack a deploy can silently get wrong, and
+    the symptom — every inbound photograph reading "Picture unavailable" a week later —
+    looks like a carrier problem rather than a missing mount. It reports whether the
+    directory can be written, and deliberately NOT where it is: a path is a fact about
+    the host, and this route is unauthenticated.
     """
     return {"ok": True, "transport": type(get_transport()).__name__,
-            "crm_link": crmlink.configured()}
+            "crm_link": crmlink.configured(),
+            "media_writable": _media_writable()}
+
+
+def _media_writable() -> bool:
+    """Can we actually put a picture on disk? Asked by writing, because a directory that
+    exists and is read-only fails in exactly the way that matters and `os.access` on a
+    docker volume has lied about it before."""
+    try:
+        root = attachments.media_root()
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".writable"
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False

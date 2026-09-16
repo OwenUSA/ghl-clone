@@ -29,6 +29,11 @@ dependencies = [
     "cryptography>=50.0.1",
     "pypdf>=6.18.1",
     "python-docx>=1.2.0",
+    # Multipart form parsing, for ONE route: uploading a picture to attach to a text
+    # (2026-09-16). Starlette needs it to read a file part at all, and FastAPI refuses to
+    # build the route without it. Pure Python, no build step — which matters on this host
+    # (see "The SSL interception" in DECISIONS.md).
+    "python-multipart>=0.0.20",
 ]
 
 [project.scripts]

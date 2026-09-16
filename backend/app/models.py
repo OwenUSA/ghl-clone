@@ -1349,3 +1349,94 @@ class AiAlert(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---- picture messages (MMS), 2026-09-16 ----------------------------------------------
+#
+# The CRM keeps its OWN copy of every picture, unlike a mirrored call recording, which is
+# streamed from owen-main every time it is played. The reason is the difference between the
+# two sources: OpenPhone holds a recording for as long as the account exists, while a
+# CARRIER MMS media link EXPIRES — days, sometimes hours. A thread that relayed the bytes on
+# demand would show the roof for a week and a broken picture for ever after, which is the
+# opposite of what a job record is for.
+#
+# THE BYTES ARE NOT IN THIS TABLE. They live on disk under `MEDIA_ROOT`, content-addressed
+# by sha256, and this row records where. Postgres would carry a few gigabytes of JPEG in the
+# WAL, in every base backup and in every `pg_dump` the operator takes to look at 800
+# contacts. `app/attachments.py` owns the directory; nothing else reads or writes it.
+
+class MessageAttachment(Base):
+    """One picture on one message, on either kind of thread.
+
+    ONE table for both thread kinds rather than the parallel pair `ConversationEvent` /
+    `NumberThreadEvent` use. Those two are parallel because they are whole timelines with
+    their own routes, filters and permissions; an attachment has none of that — it is a file
+    and a status — and two tables would mean two of every query, two of every cap check and
+    two chances for them to disagree about what "stored" means.
+
+    Exactly one of the two parent columns is set, and BOTH are null for a DRAFT: a picture
+    the composer has uploaded and nobody has sent yet. A draft becomes an outbound
+    attachment when the send succeeds, and is deleted when the operator removes it.
+    """
+    __tablename__ = "message_attachments"
+    __table_args__ = (
+        # Idempotency for a re-delivered inbound MMS: owen-main hands us the same message
+        # twice, `POST /api/events` returns the existing event, and this index means the
+        # second attempt to create its pictures writes nothing rather than doubling them.
+        # NULLs are distinct in a unique index on both backends, so every draft (both
+        # parents NULL) is still its own row.
+        Index("uq_message_attachments_conv_event_position",
+              "conversation_event_id", "position", unique=True),
+        Index("uq_message_attachments_number_event_position",
+              "number_thread_event_id", "position", unique=True),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversation_events.id"), index=True)
+    number_thread_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("number_thread_events.id"), index=True)
+    # 0-based, and the order the carrier sent them in. What the viewer's next/previous walks.
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    direction: Mapped[Direction] = mapped_column(
+        Enum(Direction), default=Direction.INBOUND, server_default="INBOUND")
+
+    # PENDING -> STORED, or FAILED / REFUSED. A draft the composer holds is DRAFT.
+    #   PENDING  the text has landed, the picture has not been fetched yet
+    #   STORED   the bytes are on disk under `storage_path`
+    #   FAILED   the fetch did not work and may on a retry (a timeout, owen-main down)
+    #   REFUSED  it will never work: too big, or not an image. `detail` says which.
+    # Plain strings rather than an Enum: a status added later must not need an ALTER TYPE
+    # against a live Postgres, which is exactly what the owner's migration rule forbids.
+    status: Mapped[str] = mapped_column(String(20), default="PENDING",
+                                        server_default="PENDING")
+    # A sentence for a person, never a wire body: "That picture is 8.2 MB — the limit is 5 MB."
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    # WHERE owen-main can be asked for this picture: "<owen message id>/<index>". The CRM
+    # never holds a carrier URL — this is a locator on the link, resolved by
+    # `crmlink.fetch_message_media`. Null on an outbound picture, which we already have.
+    source_ref: Mapped[str | None] = mapped_column(String(200), index=True)
+
+    content_type: Mapped[str | None] = mapped_column(String(80))
+    byte_size: Mapped[int | None] = mapped_column(Integer)
+    # The file's identity AND its name on disk: `<sha[:2]>/<sha>` under MEDIA_ROOT. Two
+    # messages carrying the same picture share one file, and deleting one must not orphan
+    # the other — which is why deletion counts the rows holding a sha before unlinking.
+    sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    storage_path: Mapped[str | None] = mapped_column(String(200))
+    # What to call it in a download. The carrier rarely sends one; then it is derived from
+    # the type ("photo-3.jpg"), never invented from the customer's words.
+    filename: Mapped[str | None] = mapped_column(String(200))
+
+    # Who uploaded an OUTBOUND picture. Null on everything inbound.
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+ATTACHMENT_PENDING = "PENDING"
+ATTACHMENT_STORED = "STORED"
+ATTACHMENT_FAILED = "FAILED"
+ATTACHMENT_REFUSED = "REFUSED"
+ATTACHMENT_DRAFT = "DRAFT"
