@@ -31,11 +31,21 @@ request per `CACHE_SECONDS` serves all of them, and a timeout of `TIMEOUT_SECOND
 dead phone system costs one slow request per window, not one per tab. Failures are cached
 too, for the same reason.
 
-## Names nobody
+## Names nobody — except our own line, deliberately (2026-09-16)
 
 owen-main's payload carries no number, and this module forwards only what it names below —
-states, sentences, switches and timestamps. `test_connection_status.py` asserts no phone
-number, key or URL survives into the body.
+states, sentences, switches and timestamps. **No key, no URL and no CUSTOMER'S number ever
+survives into the body**, and `test_connection_status.py` asserts it.
+
+`our_line` is the one exception and is not a leak: it is the company's own published
+business number, already printed on the composer ("Sending from …"), the dialer ("Calling
+from …") and the AI escalation copy. It is here because those three screens had it
+HARD-CODED, in five files, and the owner changed the line — so the one place that actually
+knows it (`crmlink`) now tells the browser, and a future change is one environment variable
+rather than a hunt through the frontend.
+
+It is read PER REQUEST rather than from the 30-second cache: the cache exists to stop N tabs
+becoming N requests to owen-main, and our own configuration costs nothing to look up.
 """
 from __future__ import annotations
 
@@ -240,8 +250,17 @@ def clear_cache() -> None:
         _cache.clear()
 
 
+def our_line() -> str:
+    """The number this CRM calls and texts FROM, as configured. One definition, in
+    `app/crmlink.py`; this is a window onto it, not a second copy."""
+    return crmlink.current().from_number
+
+
 @router.get("")
 def connection_status(_: auth.Principal = auth.ANY_USER) -> dict:
-    """The link and Quo checks. Every role reads it: the dot is on every signed-in page,
-    and "is the phone system up" is not privileged information."""
-    return cached()
+    """The link and Quo checks, and the line this CRM sends from.
+
+    Every role reads it: the dot is on every signed-in page, "is the phone system up" is not
+    privileged information, and neither is the number the company prints on its vans.
+    """
+    return {**cached(), "our_line": our_line()}

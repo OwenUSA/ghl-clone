@@ -14,6 +14,8 @@ import {
   type BuilderSection, type Draft, type Mode, type Trigger,
 } from '../../lib/aiAgents'
 import { IconChevronLeft, IconSparkle } from '../Icon'
+import { formatPhone } from '../../lib/phone'
+import { useOurLine } from '../../lib/useOurLine'
 import { IconClose, IconPlus, IconTrashOutline } from '../PipelineIcons'
 import {
   BLUE, BODY, BORDER, Chip, Confirm, FAINT, Field, INK, INPUT, LABEL, LINE, MUTED, Notice,
@@ -587,6 +589,8 @@ function Connection({ admin, draft, set }: SectionProps) {
 
 function Escalation({ admin, draft, set }: SectionProps) {
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
+  // The line an escalation text leaves on, from the server (2026-09-16).
+  const ourNumber = useOurLine()
   const staff = (users.data ?? []).filter((u) => (u.role === 'ADMIN' || u.role === 'DISPATCHER')
     && (u as { is_active?: boolean }).is_active !== false)
   const ids = staff.map((u) => u.id)
@@ -594,7 +598,7 @@ function Escalation({ admin, draft, set }: SectionProps) {
     <>
       <SectionTitle>Escalation</SectionTitle>
       <Help>Who gets an urgent task and an alert when the agent hands a conversation to a person. An emergency also
-        texts the on-call phone set in Settings → AI Connections, from (954) 482-9099 through the phone system.</Help>
+        texts the on-call phone set in Settings → AI Connections, from {formatPhone(ourNumber)} through the phone system.</Help>
       <div style={{ marginTop: 10 }}>
         {staff.map((u) => (
           <CheckRow key={u.id} admin={admin} checked={draft.escalation_user_ids.includes(u.id)}

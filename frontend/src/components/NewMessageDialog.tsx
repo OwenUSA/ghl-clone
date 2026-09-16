@@ -10,8 +10,10 @@
  *   - the number field takes typing and paste and formats as you type (`lib/dialPad.ts`),
  *     with the reason it cannot be texted under it;
  *   - the message box counts characters and carrier segments (`lib/smsSegments.ts`);
- *   - "Sending from (954) 482-9099" is read-only: it is the only line. Quo (OpenPhone) is
- *     never a sender, so it is never offered;
+ *   - "Sending from …" is read-only, and the number comes from the SERVER
+ *     (`useOurLine`, `GET /api/connection-status`) rather than a constant — the owner
+ *     changed the line on 2026-09-16 and five screens had it hard-coded. It is the only
+ *     line: Quo (OpenPhone) is never a sender, so it is never offered;
  *   - a refusal the SERVER gives before writing anything (a restricted technician and a
  *     number that is not one of their customers) is shown here, and the dialog stays.
  *
@@ -23,9 +25,10 @@ import { useRef, useState } from 'react'
 import { ApiError, sendNewMessage, type NewMessageResult } from '../lib/api'
 import { isRestricted, type AccessUser } from '../lib/access'
 import {
-  CALLING_FROM, formatDialInput, normaliseTextNumber, pasteNumber, textProblem,
+  formatDialInput, normaliseTextNumber, pasteNumber, textProblem,
 } from '../lib/dialPad'
 import { formatPhone } from '../lib/phone'
+import { useOurLine } from '../lib/useOurLine'
 import { sendSentence } from '../lib/sendOutcome'
 import { segmentInfo, segmentLabel } from '../lib/smsSegments'
 import { IconChat, IconClose } from './Icon'
@@ -57,8 +60,11 @@ export function NewMessageDialog({ user, onClose, onSent }: {
   // The same tray the thread composer uses, so the two cannot disagree about what a
   // picture costs or what "remove" means (components/AttachPictures.tsx).
   const tray = usePictureTray()
+  // The line this CRM texts from, as configured on the server. Everything below that shows
+  // or compares against "our number" reads this one value.
+  const line = useOurLine()
 
-  const numberProblem = textProblem(number)
+  const numberProblem = textProblem(number, line)
   // A picture with no words is a message — it is what most MMS are — so the message box is
   // only "empty" when there is nothing attached either.
   const bodyProblem = (body.trim() || tray.ids.length)
@@ -76,7 +82,7 @@ export function NewMessageDialog({ user, onClose, onSent }: {
 
   const submit = async () => {
     if (!canSend) return
-    const to = normaliseTextNumber(number) as string
+    const to = normaliseTextNumber(number, line) as string
     setSending(true)
     setRefused(null)
     try {
@@ -191,7 +197,7 @@ export function NewMessageDialog({ user, onClose, onSent }: {
             borderRadius: 8, border: `1px solid ${SOFT_LINE}`, fontSize: 13, color: TEXT }}>
             <span style={{ color: MUTED }}>Sending from</span>
             <span data-testid="sending-from" style={{ marginLeft: 'auto', fontWeight: 500, color: INK }}>
-              {formatPhone(CALLING_FROM)}
+              {formatPhone(line)}
             </span>
           </div>
         </div>

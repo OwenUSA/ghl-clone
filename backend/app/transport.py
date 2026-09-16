@@ -4,7 +4,9 @@ Originally LOCKED as UI-only: `LoggingTransport` was the only implementation and
 nothing left the building. That is still the DEFAULT and still what an unconfigured
 deployment does. As of 2026-09-11 there is a second implementation,
 `CrmLinkTransport`, which hands the message to owen-main (the telephony platform)
-for delivery over the real BulkVS DID `+19544829099`.
+for delivery over the real BulkVS DID the CRM is bound to — `crmlink.DEFAULT_FROM_NUMBER`,
+overridden by `CRM_LINK_FROM_NUMBER`. There is exactly one definition of that number and
+this is not it; see `app/crmlink.py`.
 
 **Which one is live is decided by configuration, not by this branch.** `get_transport()`
 returns `CrmLinkTransport` only when BOTH `CRM_LINK_BASE_URL` and `CRM_LINK_API_KEY`

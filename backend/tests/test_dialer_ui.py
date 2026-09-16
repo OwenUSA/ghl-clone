@@ -113,18 +113,30 @@ def test_normalised_number_is_what_the_server_is_sent():
     assert got == ["+19415550199", "+19415550199", "+19415550199", None, None]
 
 
+# The own-number cases follow the CONFIGURED line (2026-09-16): the owner moved the CRM to
+# +19547758492 and unbound +19544829099, so the new line is refused and the retired one is
+# an ordinary number both sides are happy to dial.
 CASES = ["", "9", "(941) 555-01", "555-0199", "(941) 555-0199", "+1 (941) 555-0199",
          "(941) 555-01*9", "#123", "+44 20 7946 0958", "941 555 0199 9",
-         "(054) 555-0199", "(941) 155-0199", "(954) 482-9099", "1 (954) 482-9099"]
+         "(054) 555-0199", "(941) 155-0199", "(954) 775-8492", "1 (954) 775-8492",
+         "(954) 482-9099"]
 
 
 @node
 def test_every_reason_call_is_disabled_matches_the_server_word_for_word():
-    got = run_js("out(%s.map(pad.dialProblem))" % json.dumps(CASES))
+    # NOT `.map(pad.dialProblem)`: map passes the index as the second argument, which since
+    # 2026-09-16 is the line to compare against. `lineOf` in dialPad.ts ignores a non-string,
+    # so both spellings work — this one says what it means.
+    got = run_js("out(%s.map((n) => pad.dialProblem(n)))" % json.dumps(CASES))
     server = [dial_problem(c)[1] for c in CASES]
     assert got == server, list(zip(CASES, got, server, strict=True))
-    assert got[4] is None and got[5] is None
-    assert all(isinstance(x, str) and x.endswith(".") for i, x in enumerate(got) if i not in (4, 5))
+    # The dialable ones: two renderings of an ordinary number, and the RETIRED line, which
+    # is somebody else's number now and may be called like any other.
+    assert got[4] is None and got[5] is None and got[-1] is None
+    assert "own number" in got[12] and "own number" in got[13], (
+        "the configured line must refuse itself, however it is written")
+    assert all(x.endswith(".") for x in got if isinstance(x, str)), (
+        "every reason is a sentence")
 
 
 def test_the_server_normalises_what_the_browser_normalises():
@@ -133,9 +145,18 @@ def test_the_server_normalises_what_the_browser_normalises():
 
 
 @node
-def test_calling_from_is_the_one_bound_line():
+def test_calling_from_is_only_a_fallback_and_matches_the_server():
+    """2026-09-16: the line is CONFIGURATION, not a constant — the owner moved it. This is
+    the fallback for a render that has not heard from the server yet, and the one thing that
+    must be true of it is that it does not contradict the server's own default."""
+    from app import crmlink
+
     got = run_js("out(pad.CALLING_FROM)")
-    assert got == "+19544829099"
+    assert got == crmlink.DEFAULT_FROM_NUMBER == "+19547758492"
+    dialog = read("components", "CallNumberDialog.tsx")
+    assert "useOurLine()" in dialog and "formatPhone(line)" in dialog, (
+        "the dialog must SHOW the configured line, not the fallback")
+    assert "CALLING_FROM" not in dialog
 
 
 # ---------------- is the browser phone ready ----------------

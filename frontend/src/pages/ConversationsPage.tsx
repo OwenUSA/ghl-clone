@@ -36,6 +36,7 @@ import { attachmentLabel, splitMmsNote } from '../lib/mmsNote'
 import { useCallLauncher } from '../lib/callLauncher'
 import { hasRecording } from '../lib/callPlayer'
 import { formatPhone } from '../lib/phone'
+import { useOurLine } from '../lib/useOurLine'
 
 /**
  * Rebuilt from capture/spec.py geometry (captures/conversations, 1440x900).
@@ -129,10 +130,6 @@ const FILTERS = [
   { key: 'sla', label: 'SLA', unimplemented: true },
   { key: 'wa_perm', label: 'WhatsApp Permission', unimplemented: true },
 ]
-
-/** The bound BulkVS DID every reply from this CRM leaves on (locked 2026-09-11). Named
- *  in the Quo banner when the thread holds no outbound row to read it from. */
-const BULKVS_LINE = '+19544829099'
 
 const dayLabel = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -534,6 +531,16 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   // be previewed and so a refusal arrives before the operator presses Send; see
   // components/AttachPictures.tsx.
   const tray = usePictureTray()
+  // The line a reply from this CRM actually leaves on, as the SERVER has it configured.
+  //
+  // It used to be read off the newest outbound event on the thread, falling back to a
+  // hard-coded DID. Both are now wrong for the same reason: the owner moved the CRM to a
+  // new number on 2026-09-16, so the line an OLD message went out on is not the line the
+  // next one will. The banner's whole job is to name the number the customer is about to
+  // see, and only the server knows it.
+  //
+  // Old events keep their own number: `SourceChip` reads `e.source_number`, never this.
+  const ourNumber = useOurLine()
   const [showSort, setShowSort] = useState(false)
   const [showFilter, setShowFilter] = useState(false)
   // The rail has NO state of its own. Scope is the only thing it owns; "Unread
@@ -850,9 +857,6 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
    * is a banner nobody reads.
    */
   const mirrored = events.data?.find((e) => isQuo(e))
-  const replyLine = events.data?.find(
-    (e) => e.direction === 'OUTBOUND' && e.source_system && !isQuo(e),
-  )?.source_number
 
   const onSend = async () => {
     const text = draft.trim()
@@ -1493,7 +1497,7 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
                   This thread includes messages through Quo
                   {mirrored.source_number ? ` (${formatPhone(mirrored.source_number)})` : ''},
                   which is read&#8209;only here. This reply goes from
-                  {' '}{formatPhone(replyLine ?? BULKVS_LINE)}
+                  {' '}{formatPhone(ourNumber)}
                   {' '}— a different number from the one the customer used. To reply on the
                   Quo line, use the Quo app.
                 </div>

@@ -4897,3 +4897,181 @@ this rebuild, and is listed so nobody rediscovers it as a decision:
   attached pictures are 56px squares above it with a remove cross; drop and paste are
   accepted anywhere on the composer row and on the New message dialog's message box;
 * a picture with no words is a valid message — Send is live with either.
+
+---
+
+## Amendment — delivery receipts are receipts, not messages (2026-09-16)
+
+**Measured on production, the morning after texting went live.** BulkVS posts carrier
+delivery receipts to the SAME webhook it posts inbound texts to. owen-main stored each one
+as an INBOUND message and relayed it here like any other, so this CRM filed them on
+customers' threads as words the customers had written:
+
+    id:1162999967 sub:001 dlvrd:000 submit date:2609160247 done date:2609160247
+    stat:UNDELIV err:255 text:Dream Te...
+
+One number-only thread held two of them. They are not messages — they are the answer to
+"did the text arrive?", the exact question the owner asked for, and they were being shown
+as the question instead.
+
+### 1. Recognised by the BODY, and the match is deliberately strict
+
+The SMPP `deliver_sm` shape: seven fields, in order, anchored at the start, `text:`
+optional because it is a truncated echo a carrier may omit. **The property that matters is
+that a real customer text is never mistaken for one** — everything downstream hides,
+reclassifies or deletes on the strength of this match, and a person cannot type it by
+accident. A receipt-shaped body the pattern cannot read is logged at ERROR and still
+ingests, so an unrecognised carrier variant is LOUD rather than silently in a thread.
+
+**Which field the raw payload flags it with is still not known.** Production could not be
+read from here, so detection is on the body, which is definitive.
+`providers/bulkvs._DLR_FLAG_KEYS` is a defensive second route over plausible key names, it
+can never reclassify a customer's text on its own, and **every recognised receipt now keeps
+its whole raw payload** on the outbound row (`raw_payload.bulkvs_dlr.raw`) — so the next
+live one writes the answer down instead of it being guessed at again. The same device used
+for the `/messageSend` response.
+
+### 2. Correlation, exactly — and why it is not the id
+
+**The DLR's `id` is not the send's `RefId`.** Measured: `RefId 4551F89F` against
+`id:1162999967`. Hex against decimal, eight characters against ten — two identifier spaces,
+not one number in two renderings. A future reader who "fixes" this by matching
+`provider_message_sid` will silently receipt nothing.
+
+So `services/dlr.correlate` matches on four facts the receipt carries and the outbound row
+also holds:
+
+1. **our DID** — the receipt's `To` is the number the text was sent FROM;
+2. **the recipient** — the receipt's `From` is the number it was sent TO. Both are inverted
+   relative to a normal inbound message, because a receipt is addressed to us about them.
+   Compared on the LAST TEN DIGITS, this platform's identity rule everywhere;
+3. **the text prefix** — `text:` is a truncated echo; the outbound body must START WITH it,
+   trailing ellipsis removed, compared case-insensitively;
+4. **the submit time** — `submit date` is `YYMMDDhhmm[ss]` **on the SMSC's own clock in a
+   timezone the receipt does not state**, so it is never treated as authoritative: it only
+   has to fall within ±2 days, which absorbs any plausible offset, and it breaks ties by
+   nearness.
+
+An empty `text:` drops fact 3. **Ambiguity is resolved, never guessed**: an unreceipted row
+beats a receipted one, then nearest submit time, then most recent. The case this can get
+wrong is the same text sent twice to the same person inside the window — recorded here
+rather than hidden.
+
+Idempotent: every applied receipt is remembered as `raw_payload.bulkvs_dlr_seen`
+(`"<id>:<stat>"`), so a carrier re-POST changes nothing and the backfill can be re-run
+freely. New keys are written BESIDE the CRM-link marker, never over it — that marker is the
+only thing that says a message was the CRM's.
+
+### 3. What the operator reads
+
+`stat` becomes the platform's own vocabulary (`DELIVRD`→delivered, `ACCEPTD`→sent,
+`UNDELIV`→undelivered, `REJECTD`/`EXPIRED`/`DELETED`/`UNKNOWN`→failed) so the existing
+forward-only ladder applies unchanged on both sides. **A carrier word nobody here has seen
+becomes `failed`, not `sent`** — "did it arrive" answered "probably" is never useful.
+
+The sentence is written for a roofer, and the error code is carried **verbatim and not
+interpreted** (BulkVS's codes are per-carrier and undocumented for this account):
+
+    failed — not delivered
+    The carrier rejected it (error 255). It did not arrive — you can retry it.
+
+### 4. Two guards, because the systems deploy separately
+
+owen-main recognises a receipt at the webhook and never stores or relays it. The CRM ALSO
+refuses to file one on ingest (`app/dlr.py`, `POST /api/events`), because for however long
+an older owen-main is running, every receipt it relays would otherwise land in a
+conversation. Two copies of one regex, deliberately: a guard that needed the other side
+deployed first would not be a guard. A test pins that they agree.
+
+### 5. Existing junk — one command each side, dry run by default, counts only
+
+* **owen-main** `python -m app.scripts.backfill_dlrs` (`--apply` writes). Parses each stored
+  inbound row with the SAME parser the webhook uses, applies it to its outbound message,
+  and **marks it hidden** (`services/dlr_junk`). **It deletes nothing.** The row is the only
+  record that a carrier ever said anything, and hiding is reversible. `_msg_stmt()` — the
+  one statement the Inbox list and the thread view are both built from — excludes marked
+  rows, NULL-safely (a bare `~has_key` would have hidden every outbound row the CRM did not
+  send, i.e. most of the operator's Inbox).
+* **the CRM** `uv run python -m app.dlr_cleanup` (`--commit` writes). Removes the junk
+  events from their threads and repairs what they broke while they were there: the unread
+  badge (recomputed, and only ever DOWNWARD, so a thread somebody had read is not marked
+  unread by a cleanup), `last_event_at` (it orders the inbox), and a number-only thread the
+  receipts created that now holds nothing.
+
+**Why the CRM deletes where owen-main hides.** Here the row carries no information at all —
+this CRM receives receipts through `POST /api/events/delivery`, a different route entirely
+— so a hidden row would mean a permanent read-time regex over every customer's words on
+every thread query. That is a worse thing to own than a one-off, dry-run-by-default removal
+of rows positively identified as machine output. Both are scoped to INBOUND SMS; a call, a
+note and an outbound row are never touched.
+
+A receipt that correlates to nothing is **kept, hidden and never relayed** on owen-main
+rather than dropped: losing it would mean losing the only evidence of a failed text.
+
+### Not settled
+
+* whether BulkVS flags a receipt in the payload, and how (see §1);
+* whether the `/messageSend` `RefId` ever appears in a receipt at all. It does not in the
+  one measured, and nothing depends on it;
+* the same-text-twice-in-the-window ambiguity (§2).
+
+---
+
+## Amendment — the CRM's line moved, and now lives in one place (2026-09-16)
+
+The owner replaced the CRM's number. **`+19547758492`** ("CRM number" in owen-main) is the
+bound DID; **`+19544829099` is FULLY UNBOUND** and is no longer the CRM's line. A carrier
+delivery receipt confirms texts from the new line deliver.
+
+### One definition
+
+The line was hard-coded in FIVE places — `lib/dialPad.ts` (`CALLING_FROM`),
+`ConversationsPage.tsx` (`BULKVS_LINE`), `AiConnectionsSettings.tsx`, `ai/AgentBuilder.tsx`
+and `crmlink.DEFAULT_FROM_NUMBER` — so four screens went on telling customers to reply to a
+number that no longer reaches anybody.
+
+**`app/crmlink.py` is now the only definition**, overridden by `CRM_LINK_FROM_NUMBER`.
+`GET /api/connection-status` reports it to the browser as `our_line`, and
+`lib/useOurLine.ts` reads it from there — sharing the `['connection-status']` query the
+status dot already polls on every signed-in page, so the dialer, the composer and the AI
+settings pay nothing for asking.
+
+That endpoint was chosen because it is already polled everywhere and is already
+signed-in-only. Its "names nobody" property is **kept and narrowed to what it was for**: no
+key, no URL and no customer's number survives into the body, and a test still asserts it.
+Our own line is not a leak — it is the number on the company's vans, already printed on the
+composer. It is read PER REQUEST rather than from the 30-second cache; the cache exists to
+stop N tabs becoming N requests to owen-main, and a stale number on screen is the bug this
+whole change is about.
+
+`lib/ourLine.FALLBACK_LINE` and `dialPad.CALLING_FROM` are the only remaining literals, and
+they are fallbacks for a render that has not polled yet — never what a send uses. The
+SERVER picks the line.
+
+### "It cannot text itself" follows the configuration
+
+`dialProblem` / `textProblem` / `normaliseNumber` / `normaliseTextNumber` take the line as a
+parameter. So the refusal moves when the owner moves the number — and, just as importantly,
+**the retired number stops being refused**: `+19544829099` is somebody else's line now and
+there is no reason this CRM may not text it. The server's own check already read
+`crmlink.current().from_number` and needed nothing but the new default.
+
+### History keeps its own number
+
+**Nothing relabels an old event and nothing drops its label.** A thread row carrying
+`source_number: +19544829099` was genuinely sent on that line and still says so: the source
+chip reads the EVENT's number, never the configured one, and a test plants an old message
+beside a new one and asserts both are labelled with the line each actually used. A number on
+a thread is a fact about when something happened, not a setting.
+
+The thread's Quo reply banner changed for the opposite reason: it used to name the newest
+outbound event's `source_number`, falling back to the hard-coded DID. Both are wrong once
+the line moves — an old message's number is not the number the next one goes out on — and
+its whole job is to name what the customer is about to see. It reads `useOurLine()` now.
+
+### What the operator must do
+
+Set **`CRM_LINK_FROM_NUMBER=+19547758492`** in the CRM's `.env.prod` (production already
+has it) and restart. Nothing else: the frontend has no copy left to update. Verify with
+`curl -s https://crm.dreamteamroofingfl.com/api/connection-status` as a signed-in user —
+`our_line` is the answer every screen shows.

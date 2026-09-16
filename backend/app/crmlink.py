@@ -1,6 +1,7 @@
 """The link to owen-main, the telephony platform that owns the real phone number.
 
-`+19544829099` is a BulkVS DID bound to this CRM. owen-main exposes an internal,
+`+19547758492` is the BulkVS DID bound to this CRM (it replaced `+19544829099` on
+2026-09-16, which is now fully unbound). owen-main exposes an internal,
 API-key-authenticated surface at `/api/crm-link/*` which this module is the only
 caller of:
 
@@ -49,8 +50,24 @@ import httpx
 
 log = logging.getLogger("crmlink")
 
-# The bound DID. Overridable, but this is the number the ring group is built on.
-DEFAULT_FROM_NUMBER = "+19544829099"
+# THE CRM'S OWN LINE. One definition, in one place, and everything else reads it — the
+# transport, `/api/health`, `/api/connection-status`, and through that the composer's
+# "Sending from", the dialer's "Calling from", the AI escalation copy and the
+# "you cannot text this number from itself" check in the browser.
+#
+# CHANGED 2026-09-16: the owner moved the CRM onto +19547758492 ("CRM number" in owen-main).
+# +19544829099 is FULLY UNBOUND and is no longer the CRM's line. It is not deleted from the
+# world, though: events already on a thread carry `source_number: +19544829099`, they were
+# genuinely sent and received on that line, and the thread still labels them with it. A
+# number is a fact about when something happened, not a setting to be rewritten.
+#
+# `CRM_LINK_FROM_NUMBER` overrides it, and production sets it — so this constant is the
+# fallback for a deployment that has not been told, never the authority.
+DEFAULT_FROM_NUMBER = "+19547758492"
+
+# The line the CRM used before 2026-09-16, kept ONLY so history can be read. Nothing sends
+# from it and nothing may be bound to it.
+RETIRED_FROM_NUMBERS = ("+19544829099",)
 
 CALLS_PATH = "/api/crm-link/calls"
 MESSAGES_PATH = "/api/crm-link/messages"

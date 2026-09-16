@@ -27,6 +27,7 @@ from . import (
     connection_status,
     crmlink,
     custom_fields,
+    dlr,
     media_api,
     message_media,
     models,
@@ -1841,6 +1842,22 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
                     "contact_id": conv_existing.contact_id if conv_existing else None,
                     "enriched": filled,
                     "automation": "duplicate: already ingested"}
+
+    # A CARRIER DELIVERY RECEIPT IS NOT A MESSAGE (2026-09-16). BulkVS posts these to the
+    # same webhook as an inbound text, and before owen-main learned to tell them apart they
+    # were relayed here and filed on a customer's thread as words the customer had written.
+    #
+    # owen-main is where that is fixed. This is the CRM's own guard, and it is worth having
+    # because the two systems DEPLOY SEPARATELY: for however long an older owen-main is
+    # running, every receipt it relays would otherwise land in a conversation. Answered as a
+    # success with a reason rather than a 4xx — the relay job did its job, and dead-lettering
+    # it after five attempts for correctly delivering something we do not want would only
+    # lose the log line that says so.
+    if (body.type == "SMS" and body.direction == "INBOUND"
+            and dlr.looks_like_receipt(body.body)):
+        return {"id": None, "conversation_id": None, "contact_id": None,
+                "number_thread_id": None, "attachments_expected": 0,
+                "automation": dlr.REFUSED}
 
     if body.call_status is not None:
         if body.type != "CALL":
