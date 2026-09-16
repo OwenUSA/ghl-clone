@@ -43,7 +43,7 @@ def test_setup_dry_run_reads_only_and_writes_nothing_on_either_side(zworld, fake
     assert ahs["action"] == "create"
     assert [s["status"] for s in ahs["statuses"]] == [
         "New Lead", "Inspection", "Request the Approval (AHS)", "Submit Invoices", "Call Back"]
-    assert report["categories"]["created_statuses"] == 9
+    assert report["categories"]["created_statuses"] == 11
 
 
 def test_setup_commit_creates_both_categories_with_every_stage_mapped_by_uid(zworld, fake):
@@ -69,7 +69,8 @@ def test_setup_commit_creates_both_categories_with_every_stage_mapped_by_uid(zwo
     retail = next(c for c in report["categories"]["categories"] if c["pipeline"] == RETAIL)
     assert retail["ordered_by"].startswith("id")
     assert [x["status_name"] for x in fake.statuses[uid_of("pipeline", zworld.ids["retail"])]] \
-        == ["New Lead", "Inspection / Estimate", "Estimate Sent", "Follow Up"]
+        == ["New Lead", "Inspection / Estimate", "Estimate Sent", "Follow Up", "Scheduled",
+            "Invoice"]
     assert report["passed"]
 
 
@@ -186,44 +187,71 @@ def test_a_technician_or_dispatcher_cannot_touch_settings_and_nothing_changes(ar
         assert row.enabled is True and row.workiz_cutover_date is None
 
 
-# ------------------------------------------------------------------ the initial load
+# ------------------------------------------------------------------ the initial load (v2)
 
-def test_load_dry_run_writes_nothing_on_either_side_and_counts(armed, fake):
+def test_load_dry_run_writes_nothing_and_counts_the_day_one_selection(armed, fake):
     before = crm_fingerprint()
     writes = len(fake.writes())
     code, report = load.run(SessionLocal(), commit=False)
-    assert code == 0
+    assert code == 0, report
     assert crm_fingerprint() == before
     assert len(fake.writes()) == writes
-    assert report["phases"]["contact"] == {"crm": 6, "already_linked": 0, "link_existing": 0,
-                                           "create": 6}
-    # Jane's, Bob's and Tim's cards; the Commercial pipeline's card is out of scope.
-    assert report["phases"]["opportunity"]["crm"] == 3
+    sel = report["selection"]
+    assert sel["groups"] == {
+        "AHS (all)": 2, "Retail / Scheduled (open)": 1,
+        "Retail / Inspection / Estimate (open)": 0, "Retail / Estimate Sent (open)": 0,
+        "Retail / Invoice (open)": 0, "Retail / Invoice (won)": 1}
+    assert (sel["selected"], sel["to_send"], sel["skipped"]) == (4, 3, 1)
+    assert sel["skipped_ids"] == [armed.ids["noaddr_card"]]
+    assert sel["skip_reasons"] == {"no job address": 1}
+    # Customers are only the customers of the cards that will be sent.
+    assert report["phases"]["contact"]["crm"] == 3
+    assert report["phases"]["opportunity"] == {"crm": 3, "already_linked": 0,
+                                               "link_existing": 0, "create": 3}
     assert report["phases"]["appointment"]["crm"] == 2
-    assert report["phases"]["note"]["crm"] == 1 and report["phases"]["task"]["crm"] == 1
+    text_report = load.render(report)
+    assert "Retail / Invoice (won): 1" in text_report
     assert "Jane" not in json.dumps(report) and "555" not in json.dumps(report)
+
+
+def test_new_lead_and_follow_up_and_leads_never_reach_zuper(loaded, fake):
+    ids = loaded.ids
+    sent = {mapping.custom_values(j)["CRM Opportunity ID"] for j in fake.jobs.values()}
+    assert sent == {str(ids["jane_card"]), str(ids["bob_card"]), str(ids["al_card"])}
+    customers = {mapping.custom_values(c)["CRM Contact ID"] for c in fake.customers.values()}
+    assert customers == {str(ids["jane"]), str(ids["bob"]), str(ids["al"])}
+    for lead in ("leo", "tim", "ann"):
+        with SessionLocal() as s:
+            assert mapping_row(s, "contact", ids[lead]) is None
+
+
+def test_load_refuses_when_a_named_retail_stage_is_missing(armed, fake):
+    with SessionLocal() as s:
+        s.get(Stage, armed.ids["stages"]["retail:Scheduled"]).name = "Booked"
+        s.commit()
+    for commit in (False, True):
+        code, report = load.run(SessionLocal(), commit=commit)
+        assert code == 3
+        assert "no stage named “Scheduled”" in report["refused"]
+    assert fake.jobs == {} and fake.customers == {}
 
 
 def test_load_commit_creates_customers_jobs_visits_notes_tasks_with_mappings(loaded, fake):
     ids = loaded.ids
-    assert len(fake.customers) == 6
+    assert len(fake.customers) == 3
     assert len(fake.jobs) == 3
     assert len(fake.appointments) == 2
     assert sum(len(v) for v in fake.notes.values()) == 1
     assert sum(len(v) for v in fake.tasks.values()) == 1
-    assert fake.violations == []
     jane = fake.customers[uid_of("contact", ids["jane"])]
     assert mapping.custom_values(jane)["CRM Contact ID"] == str(ids["jane"])
     assert mapping.custom_values(jane)["CRM Link"].endswith("/contacts?contact=%d" % ids["jane"])
     assert jane["customer_contact_no"]["mobile"] == "+19415550101"
     assert jane["source_uid"] == "src-6"                    # CRM "FB" -> "Facebook"
-    assert fake.customers[uid_of("contact", ids["bob"])]["source_uid"] == "src-2"
-    assert fake.customers[uid_of("contact", ids["bob"])]["customer_email"] == ""  # no fake email
-    # Leads — contacts with no job — are tagged "Lead"; Jane has a job and is not.
-    assert "Lead" in fake.customers[uid_of("contact", ids["leo"])]["customer_tags"]
     assert "Lead" not in jane["customer_tags"]
-    # Two people sharing one phone stay two customers.
-    assert uid_of("contact", ids["ann"]) != uid_of("contact", ids["al"])
+    bob = fake.customers[uid_of("contact", ids["bob"])]
+    assert bob["source_uid"] == "src-2"                     # "Existig Customer"
+    assert bob["customer_email"] == ""                      # no fake email
     job = fake.jobs[uid_of("opportunity", ids["jane_card"])]
     values = mapping.custom_values(job)
     assert values["CRM Opportunity ID"] == str(ids["jane_card"])
@@ -240,8 +268,6 @@ def test_load_commit_creates_customers_jobs_visits_notes_tasks_with_mappings(loa
     assert mapping.custom_values(bob_job)["Workiz Job #"] == "W100"
     assert mapping.custom_values(bob_job)["Technicians"] == "Antonio"
     assert bob_job["assigned_to"] == []                      # no owner: unassigned
-    tim_job = fake.jobs[uid_of("opportunity", ids["tim_card"])]
-    assert tim_job["assigned_to"] == []                      # a technician has no Zuper user
     note = next(iter(fake.notes.values()))[0]
     assert note["note"] == "Gate code 1234" and note["is_private"] is True
 
@@ -260,41 +286,39 @@ def test_a_second_commit_changes_nothing(loaded, fake):
     assert code == 0, report
     assert len(fake.writes()) == writes
     assert report["phases"]["contact"]["created"] == 0
-    assert report["phases"]["contact"]["already_linked"] == 6
+    assert report["phases"]["contact"]["already_linked"] == 3
     assert report["verification"]["mismatches"] == 0
     assert report["verification"]["contact"] == {
-        "crm": 6, "mapped": 6, "zuper": 6, "crm_not_mapped": [], "mapped_not_in_zuper": [],
+        "crm": 3, "mapped": 3, "zuper": 3, "crm_not_mapped": [], "mapped_not_in_zuper": [],
         "zuper_not_mapped": []}
 
 
 def test_resume_after_a_crash_mid_page_does_not_duplicate(armed, fake, monkeypatch):
     """Zuper created the customer, then the process died before our commit."""
+    from app.zuper import zapi
     real = client.request
     state = {"creates": 0}
 
-    def crash_after_third_create(method, path, **kw):
+    def crash_after_second_create(method, path, **kw):
         out = real(method, path, **kw)
         if method == "POST" and path == "/customers_new":
             state["creates"] += 1
-            if state["creates"] == 3:
+            if state["creates"] == 2:
                 raise KeyboardInterrupt("power cut")
         return out
 
-    monkeypatch.setattr(client, "request", crash_after_third_create)
-    from app.zuper import zapi
-    monkeypatch.setattr(zapi, "request", crash_after_third_create)
+    monkeypatch.setattr(zapi, "request", crash_after_second_create)
     with pytest.raises(KeyboardInterrupt):
         load.run(SessionLocal(), commit=True)
-    monkeypatch.setattr(client, "request", real)
     monkeypatch.setattr(zapi, "request", real)
-    assert len(fake.customers) == 3
+    assert len(fake.customers) == 2
     with SessionLocal() as s:
         states = sorted(s.scalars(select(ZuperMapping.state).where(
             ZuperMapping.crm_type == "contact")).all())
-        assert states == ["creating", "linked", "linked"]
+        assert states == ["creating", "linked"]
     code, report = load.run(SessionLocal(), commit=True)
     assert code == 0, report
-    assert len(fake.customers) == 6                  # not 7
+    assert len(fake.customers) == 3                  # not 4
     crm_ids = [mapping.custom_values(c)["CRM Contact ID"] for c in fake.customers.values()]
     assert len(crm_ids) == len(set(crm_ids))
     assert report["phases"]["contact"]["linked_existing"] == 1
@@ -325,25 +349,24 @@ def test_load_command_without_a_key_refuses(zworld, monkeypatch):
 
 def test_the_verification_report_lists_mismatches_by_id(loaded, fake):
     ids = loaded.ids
-    fake.customers.pop(uid_of("contact", ids["leo"]))    # gone from Zuper behind our back
+    fake.customers.pop(uid_of("contact", ids["al"]))     # gone from Zuper behind our back
     stray = fake.new_customer(customer_first_name="X",
                               custom_fields=[{"label": "CRM Contact ID", "value": "99999"}])
     with SessionLocal() as s, client.operator_mode():
-        report = load.verify(s, load.scope_pipelines(s), deep=True)
-    assert report["contact"]["mapped_not_in_zuper"] == [ids["leo"]]
+        eligible, _ = load.selected(s)
+        report = load.verify(s, eligible, deep=True)
+    assert report["contact"]["mapped_not_in_zuper"] == [ids["al"]]
     assert report["contact"]["zuper_not_mapped"] == [stray]
     assert report["mismatches"] == 2
 
 
-def test_contacts_are_all_loaded_even_without_email_and_no_contact_is_invented(loaded, fake):
+def test_no_contact_or_card_is_invented_by_the_load(loaded, fake):
     with SessionLocal() as s:
         assert s.scalar(select(func.count(Contact.id))) == 6
-        assert s.scalar(select(func.count(Opportunity.id))) == 4
-    assert all(c.get("customer_email") in ("", None) or "@example.test" in c["customer_email"]
-               for c in fake.customers.values())
+        assert s.scalar(select(func.count(Opportunity.id))) == 8
 
 
 def test_zuper_error_kinds_are_plain_sentences():
     assert "API key" in client.sentence(ZuperError("unauthorized"))
-    assert client.sentence(
-        ZuperError("rejected", "field x is bad")) == "Zuper rejected the request. field x is bad"
+    assert client.sentence(ZuperError("rejected", "field x is bad")) == \
+        "Zuper rejected the request. field x is bad"

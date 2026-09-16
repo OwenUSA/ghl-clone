@@ -215,18 +215,22 @@ def test_with_the_switch_off_nothing_is_queued_even_with_the_env_flag_on(zworld,
 
 def test_a_save_queues_one_push_after_commit_and_bursts_coalesce(loaded, fake):
     c = loaded.client("owner")
-    jane = loaded.ids["jane"]
-    for name in ("Janet", "Janette", "Jan"):
-        assert c.patch("/api/contacts/%d" % jane, json={"first_name": name}).status_code == 200
+    card = loaded.ids["jane_card"]
+    for answer in ("1", "2", "3+"):
+        assert c.patch("/api/opportunities/%d/detail" % card, json={
+            "custom_fields": {"checklist_stories": answer}}).status_code == 200
     pending = [j for j in zuper_jobs() if j.status == "pending"]
     assert [(j.type, j.dedupe_key) for j in pending] == [
-        ("zuper_push", "zuper:push:contact:%d" % jane)]
+        ("zuper_push", "zuper:push:opportunity:%d" % card)]
     drain()
-    assert fake.customers[uid_of("contact", jane)]["customer_first_name"] == "Jan"
+    job = fake.jobs[uid_of("opportunity", card)]
+    from app.zuper import mapping
+    assert mapping.custom_values(job)["How many stories?"] == "3+"
     done = zuper_jobs()
     assert all(j.status == "done" and j.dedupe_key is None for j in done)
     # The key was released, so the next save queues again.
-    c.patch("/api/contacts/%d" % jane, json={"first_name": "Jane"})
+    c.patch("/api/opportunities/%d/detail" % card,
+            json={"custom_fields": {"checklist_stories": "2"}})
     assert len([j for j in zuper_jobs() if j.status == "pending"]) == 1
 
 
@@ -239,8 +243,8 @@ def test_a_refused_save_queues_nothing(loaded, fake):
 
 def test_the_main_worker_never_runs_zuper_jobs(loaded, fake):
     from app.worker import drain_once
-    loaded.client("owner").patch("/api/contacts/%d" % loaded.ids["jane"],
-                                 json={"first_name": "Janet"})
+    loaded.client("owner").post("/api/opportunities/%d/notes" % loaded.ids["jane_card"],
+                                json={"body": "Ladder on the truck"})
     writes = len(fake.writes())
     assert drain_once() == 0
     assert len(fake.writes()) == writes
@@ -297,8 +301,8 @@ def test_an_event_whose_content_is_unchanged_is_an_echo_and_writes_nothing(loade
     card = loaded.ids["jane_card"]
     uid = uid_of("opportunity", card)
     loaded.client("owner").patch("/api/opportunities/%d/detail" % card,
-                                 json={"title": "Jane Roof - big leak"})
-    drain()                             # our push: Zuper now holds the new title
+                                 json={"custom_fields": {"checklist_stories": "2"}})
+    drain()                             # our push: Zuper now holds the new answer
     writes = len(fake.writes())
     with SessionLocal() as s:
         before = s.get(Opportunity, card).updated_at
@@ -394,7 +398,7 @@ def test_settings_routes_are_admin_only(loaded, fake):
 
 def test_status_reports_counts_heartbeat_and_no_secrets(loaded, fake):
     body = loaded.client("owner").get("/api/zuper/status").json()
-    assert body["counts"]["contact"] == {"linked": 6}
+    assert body["counts"]["contact"] == {"linked": 3}
     assert body["counts"]["opportunity"] == {"linked": 3}
     assert body["sync"] == "on" and body["blockers"] == []
     assert body["load_report"]["verification"]["mismatches"] == 0

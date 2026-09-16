@@ -1167,6 +1167,9 @@ AUDITED = {
     "zuper_run_setup_check": "ADMIN", "zuper_confirm_setup_item": "ADMIN",
     "zuper_conflicts": "ADMIN", "zuper_deletes": "ADMIN", "zuper_restore_delete": "ADMIN",
     "zuper_webhook": "exempt",
+    "zuper_send_opportunity": "may_send refuses restricted 403; get_opportunity -> 404",
+    "bulk_lead_outcome": "STAFF; _bulk_load (scope) refuses a foreign id",
+    "report_lead_outcomes": "refuse_reporting -> 403; assigned_access.opportunities(scope)",
     # admin, auth, machinery — no customer record
     "list_users": "roster; only_assigned_data ADMIN-only", "create_user": "ADMIN",
     "update_user": "ADMIN", "list_jobs": "ADMIN", "retry_job": "ADMIN",

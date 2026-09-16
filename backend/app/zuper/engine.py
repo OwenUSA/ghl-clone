@@ -60,6 +60,7 @@ from ..models import (
     OpportunityTask,
     Stage,
     Tag,
+    User,
     ZuperConflict,
     ZuperDeleteSnapshot,
     ZuperDigest,
@@ -68,13 +69,13 @@ from ..models import (
     ZuperSyncState,
 )
 from ..phones import store_phone
-from . import config, mapping, zapi
+from . import config, mapping, outcomes, zapi
 from .client import ZuperError, cents, is_read_only
 
 log = logging.getLogger("zuper.engine")
 
 MISSING = object()
-LATEST, CRM, ZUPER, ZUPER_ON_CONFLICT = "latest", "crm", "zuper", "zuper_on_conflict"
+LATEST, CRM, ZUPER = "latest", "crm", "zuper"
 
 KINDS = ("contact", "opportunity", "appointment", "note", "task")
 ZUPER_TYPE = {"contact": "customer", "opportunity": "job", "appointment": "appointment",
@@ -88,8 +89,6 @@ MODELS: dict[str, type] = {"contact": Contact, "opportunity": Opportunity,
 ORDER = {"contact": 0, "opportunity": 1, "appointment": 2, "note": 3, "task": 4}
 
 SYNC_CALENDAR = "Zuper appointments"
-QUOTE_DECLINED = "DECLINED"
-INVOICE_PAID = "PAID"
 
 
 def utcnow() -> datetime:
@@ -124,6 +123,9 @@ class Ctx:
     # When a CRM change was observed (a queued job's time), for latest-edit-wins on records
     # that carry no updated_at of their own (appointments).
     crm_changed_at: datetime | None = None
+    # True while a card is being sent (Send to Zuper, AHS auto-send, the day-one load): the
+    # only time a customer or a job may be created in Zuper from the CRM.
+    sending: bool = False
     _users: dict[str, str] | None = None
     _before_cutover: bool | None = None
 
@@ -173,27 +175,31 @@ class Ctx:
 
 # ============================================================================ policy and merge
 
+WORKIZ_JOB_FIELDS = ("title", "stage", "street", "city", "state", "zip")
+
+
 def policy(ctx: Ctx, kind: str, f: str, obj: Any) -> tuple[str, str, str]:
-    """(mode, rule name, winner label) for one field of one record."""
+    """(mode, rule name, winner label) for one field of one SENT record (2026-09-16, v2).
+
+    Zuper is the source of truth for a sent job: its stage, visits, address, value, title and
+    owner, and its customer's details, are Zuper's. The CRM's own fields (the "CRM" field
+    group) are the CRM's. Notes, Checklist answers and tasks are edited on both sides: latest
+    edit wins. Before the Workiz cutover, a Workiz-origin job's title, stage, address and its
+    Workiz visit's schedule are Workiz's — the CRM holds what the importer wrote."""
     if kind == "contact":
-        if f == "lead":
-            return CRM, "crm_owned", "crm"
-        return LATEST, "latest_edit", ""
+        return ZUPER, "zuper_owned", "zuper"
     if kind == "opportunity":
-        if f.startswith("crm:") or f == "owner_email":
+        if f.startswith("crm:"):
             return CRM, "crm_owned", "crm"
-        if f == "value":
-            return ZUPER, "zuper_money", "zuper"
-        if f in ("title", "stage", "street", "city", "state", "zip") and ctx.before_cutover \
-                and mapping.is_workiz_card(obj):
-            return CRM, "workiz_before_cutover", "workiz"
-        return LATEST, "latest_edit", ""
-    if kind == "appointment" and f in ("starts_at", "ends_at"):
-        if ctx.before_cutover:
-            if mapping.is_workiz_appointment(ctx.db, obj):
-                return CRM, "workiz_before_cutover", "workiz"
+        if f.startswith("cl:"):
             return LATEST, "latest_edit", ""
-        return ZUPER_ON_CONFLICT, "zuper_schedule_after_cutover", ""
+        if f in WORKIZ_JOB_FIELDS and ctx.before_cutover and mapping.is_workiz_card(obj):
+            return CRM, "workiz_before_cutover", "workiz"
+        return ZUPER, "zuper_owned", "zuper"
+    if kind == "appointment":
+        if ctx.before_cutover and mapping.is_workiz_appointment(ctx.db, obj):
+            return CRM, "workiz_before_cutover", "workiz"
+        return ZUPER, "zuper_owned", "zuper"
     return LATEST, "latest_edit", ""
 
 
@@ -223,9 +229,6 @@ def merge(ctx: Ctx, kind: str, obj: Any, crm_view: dict, zup_view: dict,
             winner = "crm"
         elif mode == ZUPER:
             winner = "zuper"
-        elif mode == ZUPER_ON_CONFLICT:
-            winner = "zuper" if (crm_changed and zup_changed) else (
-                "crm" if crm_changed else "zuper")
         elif crm_changed and not zup_changed:
             winner = "crm"
         elif zup_changed and not crm_changed:
@@ -350,6 +353,13 @@ def apply_crm(ctx: Ctx, kind: str, obj: Any, changes: dict) -> set[str]:
                 setattr(obj, columns[f], v)
             elif f == "value":
                 obj.value_cents = int(v or 0)
+            elif f == "owner_email":
+                # Zuper's assigned office user, when a CRM user has that email. A job with no
+                # such user (technicians have none) leaves the CRM owner as it is.
+                user = db.scalar(select(User).where(func.lower(User.email) == v)) if v \
+                    else None
+                if user is not None:
+                    obj.owner_id = user.id
             elif f.startswith("cl:") and f[3:] in keys:
                 key = keys[f[3:]]
                 ok, answer = mapping.checklist_to_crm(defs.get(key.removesuffix("__details")),
@@ -509,10 +519,13 @@ def reconcile(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping, record: dict) -> s
                  mapping.parse_time(record.get("updated_at")))
     rejected = apply_crm(ctx, kind, obj, plan.to_crm)
     for f in rejected:
-        # The CRM cannot hold Zuper's value (an option its question does not offer): the
-        # CRM's value goes back to Zuper instead, and that is logged.
+        # The CRM cannot hold Zuper's value (an option its question does not offer). For a
+        # field edited on both sides the CRM's value goes back to Zuper, logged; a Zuper-owned
+        # field is simply left as the CRM has it.
         before = plan.to_crm.pop(f)
         plan.conflicts = [c for c in plan.conflicts if c["field"] != f]
+        if policy(ctx, kind, f, obj)[0] == ZUPER:
+            continue
         if crm_view.get(f) != before:
             plan.to_zuper[f] = crm_view.get(f)
             plan.conflicts.append({"field": f, "rule": "crm_cannot_hold", "winner": "crm",
@@ -544,20 +557,29 @@ def reconcile(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping, record: dict) -> s
 
 # ============================================================================ push (CRM -> Zuper)
 
+def is_linked(db: Session, kind: str, crm_id: int | None) -> bool:
+    m = mapping.mapping_for(db, kind, crm_id) if crm_id is not None else None
+    return m is not None and m.state == "linked" and bool(m.zuper_uid)
+
+
 def in_scope(ctx: Ctx, kind: str, obj: Any) -> bool:
+    """Which CRM records reach Zuper (2026-09-16, v2): only what belongs to a SENT job.
+
+    A card or a customer goes to Zuper only by being sent (`send`, the AHS auto-send, the
+    day-one load — `ctx.sending`). After that, its notes and tasks follow it; its visits are
+    Zuper's, so a CRM visit is created there only while sending, or when the Workiz importer
+    booked it on a Workiz-origin sent job before cutover."""
     db = ctx.db
-    if kind == "contact":
-        return True
-    if kind == "opportunity":
-        return pipeline_category(db, obj.pipeline_id) is not None
-    if kind == "appointment" and obj.status == "cancelled" \
-            and mapping.mapping_for(db, "appointment", obj.id) is None:
-        return False                        # never create a cancelled visit in Zuper
+    if kind in ("contact", "opportunity"):
+        return ctx.sending or is_linked(db, kind, obj.id)
     opp_id = getattr(obj, "opportunity_id", None)
-    if opp_id is None:
+    if opp_id is None or not (ctx.sending or is_linked(db, "opportunity", opp_id)):
         return False
-    o = db.get(Opportunity, opp_id)
-    return o is not None and pipeline_category(db, o.pipeline_id) is not None
+    if kind == "appointment" and not is_linked(db, "appointment", obj.id):
+        if obj.status == "cancelled":
+            return False                    # never create a cancelled visit in Zuper
+        return ctx.sending or (ctx.before_cutover and mapping.is_workiz_appointment(db, obj))
+    return True
 
 
 def fetch(ctx: Ctx, kind: str, m: ZuperMapping) -> dict | None:
@@ -688,6 +710,83 @@ def create_in_zuper(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping | None) -> st
     return "created"
 
 
+# ============================================================================ Send to Zuper
+
+ADDRESS_PARTS = (("address_street", "street"), ("address_city", "city"),
+                 ("address_state", "state"), ("address_postal_code", "ZIP code"))
+
+
+def send_problems(db: Session, o: Opportunity) -> list[str]:
+    """What stops this card being sent, as sentences (2026-09-16, v2): the customer's name and
+    phone, and the JOB's address (the card's own — the contact's can be copied onto it with
+    "Use contact address"). Not the switches or the role: those are the route's."""
+    problems = []
+    if pipeline_category(db, o.pipeline_id) is None:
+        problems.append("Only cards in the AHS or Retail pipeline go to Zuper, and that "
+                        "pipeline's category must be set up first (python -m "
+                        "app.zuper.setup --commit).")
+    c = db.get(Contact, o.contact_id) if o.contact_id else None
+    if c is None:
+        problems.append("Choose the customer (a contact) for this card first.")
+    else:
+        if not (c.first_name or "").strip() and not (c.last_name or "").strip():
+            problems.append("The customer needs a name.")
+        if not (c.phone or "").strip():
+            problems.append("The customer needs a phone number.")
+    missing = [label for col, label in ADDRESS_PARTS if not (getattr(o, col) or "").strip()]
+    if missing:
+        problems.append("The job needs its address — missing: %s. The contact's address can "
+                        "be copied with “Use contact address”." % ", ".join(missing))
+    return problems
+
+
+def send(ctx: Ctx, opportunity_id: int) -> str:
+    """Send one card to Zuper: its customer (found by CRM id, else created), the job, its
+    visits, notes and tasks. Idempotent: a card already linked does nothing, and every record
+    is created through the `creating` checkpoint, so a retry after a crash searches first."""
+    db = ctx.db
+    o = db.get(Opportunity, opportunity_id)
+    if o is None:
+        return "gone"
+    m = mapping.mapping_for(db, "opportunity", o.id)
+    if m is not None and m.state == "linked" and m.zuper_uid:
+        return "already_sent"
+    if m is not None and m.state == "deleted":
+        return "deleted"
+    problems = send_problems(db, o)
+    if problems:
+        if m is None:
+            m = ZuperMapping(crm_type="opportunity", crm_id=o.id, zuper_type="job")
+            db.add(m)
+        m.state, m.last_error, m.updated_at = "failed", " ".join(problems), ctx.now
+        db.commit()
+        ctx.count("send_refused")
+        return "refused"
+    ctx.sending = True
+    try:
+        outcome = create_in_zuper(ctx, "opportunity", o, m)
+        if outcome in ("created", "linked_existing"):
+            for kind, model in (("appointment", Appointment), ("note", OpportunityNote),
+                                ("task", OpportunityTask)):
+                stmt = select(model.id).where(model.opportunity_id == o.id).order_by(model.id)
+                if kind == "appointment":
+                    stmt = stmt.where(Appointment.status != "cancelled")
+                for child_id in db.scalars(stmt).all():
+                    push(ctx, kind, child_id)
+                    db.commit()
+    finally:
+        ctx.sending = False
+    ctx.count("sent")
+    return "sent" if outcome == "created" else outcome
+
+
+def mark_send_failed(db: Session, opportunity_id: int, why: str) -> None:
+    m = mapping.mapping_for(db, "opportunity", opportunity_id)
+    if m is not None and m.state in ("queued", "creating") and not m.zuper_uid:
+        m.state, m.last_error, m.updated_at = "failed", why[:1000], utcnow()
+        db.commit()
+
+
 # ============================================================================ pull (Zuper -> CRM)
 
 def fetch_uid(kind: str, uid: str) -> dict | None:
@@ -705,8 +804,10 @@ def fetch_uid(kind: str, uid: str) -> dict | None:
     raise ValueError(kind)
 
 
-def pull(ctx: Ctx, zuper_type: str, uid: str, record: dict | None = None) -> str:
-    """Bring the CRM up to date with one Zuper record (creating it here when it is new)."""
+def pull(ctx: Ctx, zuper_type: str, uid: str, record: dict | None = None, *,
+         via_job: bool = False) -> str:
+    """Bring the CRM up to date with one Zuper record (creating it here when it is new — a
+    customer only as the customer of a job being pulled)."""
     kind = CRM_TYPE[zuper_type]
     db = ctx.db
     if record is None:
@@ -717,7 +818,7 @@ def pull(ctx: Ctx, zuper_type: str, uid: str, record: dict | None = None) -> str
             return mirror_zuper_delete(ctx, kind, m)
         return "deleted_unmapped"
     if m is None:
-        return create_in_crm(ctx, kind, uid, record)
+        return create_in_crm(ctx, kind, uid, record, via_job=via_job)
     if m.state != "linked":
         return "ignored_" + m.state
     obj = db.get(MODELS[kind], m.crm_id)
@@ -783,12 +884,18 @@ def _claimable(db: Session, kind: str, obj: Any) -> ZuperMapping | bool | None:
     return m if m.state == "creating" and not m.zuper_uid else False
 
 
-def create_in_crm(ctx: Ctx, kind: str, uid: str, record: dict) -> str:
+def create_in_crm(ctx: Ctx, kind: str, uid: str, record: dict, *,
+                  via_job: bool = False) -> str:
     db = ctx.db
     if kind == "contact":
         claimed = mapping.custom_values(record).get("CRM Contact ID")
         c = db.get(Contact, int(claimed)) if str(claimed or "").strip().isdigit() else None
         m = _claimable(db, "contact", c)
+        if not via_job and not (c is not None and m is not None and m is not False):
+            # A customer reaches the CRM only as the customer of a job (2026-09-16) — or as
+            # our own create seen before its commit (a `creating` row naming it).
+            ctx.count("customer_without_job")
+            return "customer_without_job"
         if c is not None and m is not False:
             if m is None:
                 m = ZuperMapping(crm_type="contact", crm_id=c.id, zuper_type="customer")
@@ -844,7 +951,7 @@ def create_in_crm(ctx: Ctx, kind: str, uid: str, record: dict) -> str:
         if customer_uid:
             cm = mapping.mapping_by_uid(db, "customer", customer_uid)
             if cm is None:
-                pull(ctx, "customer", customer_uid)
+                pull(ctx, "customer", customer_uid, via_job=True)
                 cm = mapping.mapping_by_uid(db, "customer", customer_uid)
             contact_id = cm.crm_id if cm is not None and cm.state == "linked" else None
         view = mapping.job_view(db, record, uid)
@@ -1035,30 +1142,11 @@ def pull_document(ctx: Ctx, kind: str, uid: str, record: dict | None = None) -> 
         o.contact_id if o else None)
     db.flush()
     ctx.count("documents")
-    if o is not None and not doc.removed_in_zuper:
-        paid = doc.status == INVOICE_PAID or (
-            doc.total_cents and doc.balance_cents == 0
-            and doc.status not in mapping.INVOICE_VOID)
-        if not quote and paid and doc.won_applied_at is None:
-            if o.status != "won":
-                log_conflict(ctx, "opportunity", o.id, doc.job_uid, {
-                    "field": "status", "rule": "invoice_paid", "winner": "zuper",
-                    "written_to": "crm", "before": o.status, "after": "won"})
-                o.status = "won"
-                ctx.count("won_from_paid_invoice")
-            doc.won_applied_at = ctx.now
-        if quote and doc.status == QUOTE_DECLINED and doc.declined_task_id is None:
-            label = ("Quote %s" % doc.number) if doc.number else "A quote"
-            task = OpportunityTask(
-                opportunity_id=o.id, contact_id=o.contact_id,
-                title="%s was declined in Zuper — follow up" % label,
-                description="The customer declined this quote in Zuper. The card was not "
-                            "marked Lost; decide the next step.",
-                assigned_user_id=o.owner_id, priority="urgent", created_by_id=None)
-            db.add(task)
-            db.flush()
-            doc.declined_task_id = task.id
-            ctx.count("urgent_task_from_declined_quote")
+    if o is not None:
+        # The owner dropped automatic outcomes (2026-09-16): a paid invoice does not mark the
+        # card Won and a declined quote makes no task. The one place a future, owner-approved
+        # rule would hook in — none ship, and the hook is off (app/zuper/outcomes.py).
+        outcomes.document_changed(ctx, doc, o)
     _follow_value(ctx, doc.job_uid)
     return "stored"
 
@@ -1239,6 +1327,8 @@ def mirror_zuper_delete(ctx: Ctx, kind: str, m: ZuperMapping) -> str:
     if obj is None:
         m.state = "deleted"
         return "already_gone"
+    if kind == "contact":
+        return _mirror_customer_delete(ctx, obj, m)
     db.add(ZuperDeleteSnapshot(
         batch=new_batch(), direction="zuper_to_crm", crm_type=kind, crm_id=obj.id,
         zuper_type=m.zuper_type, zuper_uid=m.zuper_uid,
@@ -1249,6 +1339,61 @@ def mirror_zuper_delete(ctx: Ctx, kind: str, m: ZuperMapping) -> str:
     m.updated_at = ctx.now
     db.flush()
     ctx.count("deleted_in_crm_" + kind)
+    return "deleted_in_crm"
+
+
+def _mirror_customer_delete(ctx: Ctx, c: Contact, m: ZuperMapping) -> str:
+    """A customer deleted in Zuper (2026-09-16, v2). Its SENT cards — the mirrored job side —
+    are deleted here, each snapshotted. The contact itself is deleted only when nothing else
+    of the CRM's hangs off it: a contact that also has cards never sent to Zuper, or any
+    conversation, is kept, and that is logged (state "kept", not restorable — nothing of it
+    was removed)."""
+    from . import locks
+    db = ctx.db
+    batch = new_batch()
+    for oid in sorted(locks.sent_ids(db, db.scalars(select(Opportunity.id).where(
+            Opportunity.contact_id == c.id)).all())):
+        om = mapping.mapping_for(db, "opportunity", oid)
+        o = db.get(Opportunity, oid)
+        if o is None or om is None:
+            continue
+        db.add(ZuperDeleteSnapshot(
+            batch=batch, direction="zuper_to_crm", crm_type="opportunity", crm_id=o.id,
+            zuper_type="job", zuper_uid=om.zuper_uid, snapshot=snapshot(db, "opportunity", o),
+            state="mirrored", mirrored_at=ctx.now))
+        db.flush()
+        delete_in_crm(ctx, "opportunity", o)
+        om.state, om.updated_at = "deleted", ctx.now
+        ctx.count("deleted_in_crm_opportunity")
+    unsent = db.scalar(select(func.count(Opportunity.id)).where(
+        Opportunity.contact_id == c.id)) or 0
+    talks = db.scalar(select(func.count(Conversation.id)).where(
+        Conversation.contact_id == c.id)) or 0
+    m.state, m.updated_at = "deleted", ctx.now
+    if unsent or talks:
+        why = []
+        if unsent:
+            why.append("%d card%s never sent to Zuper" % (unsent, "" if unsent == 1 else "s"))
+        if talks:
+            why.append("a conversation")
+        db.add(ZuperDeleteSnapshot(
+            batch=batch, direction="zuper_to_crm", crm_type="contact", crm_id=c.id,
+            zuper_type="customer", zuper_uid=m.zuper_uid,
+            snapshot={"record": {"id": c.id, "first_name": c.first_name,
+                                 "last_name": c.last_name}, "children": {}},
+            state="kept", mirrored_at=ctx.now,
+            error="The contact was kept: it has %s." % " and ".join(why)))
+        db.flush()
+        ctx.count("contact_kept")
+        return "contact_kept"
+    db.add(ZuperDeleteSnapshot(
+        batch=batch, direction="zuper_to_crm", crm_type="contact", crm_id=c.id,
+        zuper_type="customer", zuper_uid=m.zuper_uid, snapshot=snapshot(db, "contact", c),
+        state="mirrored", mirrored_at=ctx.now))
+    db.flush()
+    delete_in_crm(ctx, "contact", c)
+    db.flush()
+    ctx.count("deleted_in_crm_contact")
     return "deleted_in_crm"
 
 

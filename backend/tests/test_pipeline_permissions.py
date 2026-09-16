@@ -564,6 +564,9 @@ AUDITED = {
     "zuper_attachment_file": "_job_for -> pipeline_access.get_opportunity -> 404",
     "zuper_status": "ADMIN (sees all)", "zuper_restore_delete": "ADMIN (sees all)",
     "zuper_deletes": "ADMIN (sees all)", "zuper_conflicts": "ADMIN (sees all)",
+    "zuper_send_opportunity": "pipeline_access.get_opportunity -> 404",
+    "bulk_lead_outcome": "_bulk_load visible_opportunities",
+    "report_lead_outcomes": "assigned_access.opportunities(scope) excludes hidden pipelines",
 }
 
 MARKERS = ("Opportunity", "Pipeline", "Stage", "_contact_detail", "_appointment_detail",

@@ -413,3 +413,116 @@ def zuper_attachment_file(opp_id: int, attachment_id: str, db: Session = Depends
         ctype = "application/octet-stream"
         headers["Content-Disposition"] = "attachment"
     return Response(content=data, media_type=ctype, headers=headers)
+
+
+# ------------------------------------------------------------------ Send to Zuper (2026-09-16)
+
+SEND_JOB = "zuper_send"
+
+
+def may_send(principal: auth.Principal | None) -> bool:
+    """ADMIN or DISPATCHER, never with "Only assigned data" on. Agents only suggest."""
+    from ..models import Role
+    return principal is not None and principal.role in (Role.ADMIN, Role.DISPATCHER) \
+        and not assigned_access.restricted(principal)
+
+
+def job_url(job_uid: str | None) -> str | None:
+    template = config.job_url_template()
+    return template.format(uid=job_uid) if job_uid and template else None
+
+
+def send_state(m: ZuperMapping | None) -> str:
+    if m is None or m.state == "deleted":
+        return "not_sent"
+    if m.state == "linked" and m.zuper_uid:
+        return "sent"
+    if m.state == "failed":
+        return "failed"
+    return "queued"
+
+
+def send_block(db: Session, o: Opportunity, principal: auth.Principal | None) -> dict:
+    """The card's Zuper state for the modal: sent or not, the locks, and whether this reader
+    may press Send to Zuper now — with the reasons when not."""
+    from . import locks
+    m = mapping.mapping_for(db, "opportunity", o.id)
+    state = send_state(m)
+    problems: list[str] = []
+    if state in ("not_sent", "failed"):
+        if not config.armed(db):
+            problems.append("The Zuper sync is not switched on (Settings → Zuper), so nothing "
+                            "can be sent yet.")
+        problems.extend(engine.send_problems(db, o))
+    locked = state in ("queued", "sent")
+    return {
+        "state": state, "job_uid": m.zuper_uid if m is not None else None,
+        "job_url": job_url(m.zuper_uid) if state == "sent" else None,
+        "sent_at": _iso(m.created_at) if locked and m is not None else None,
+        "error": m.last_error if state == "failed" and m is not None else None,
+        "locked_fields": [*locks.OPPORTUNITY_FIELDS, locks.APPOINTMENTS] if locked else [],
+        "may_send": may_send(principal),
+        "can_send": may_send(principal) and state in ("not_sent", "failed") and not problems,
+        "send_problems": problems,
+    }
+
+
+def queue_send(db: Session, o: Opportunity, *, by: str) -> tuple[bool, str]:
+    """Mark the card sent (it is a locked mirror from this moment) and queue the worker's
+    send. (queued now?, state). A card already queued or sent queues nothing — a second press,
+    or a second approval, does nothing. The caller has checked who may send; this checks the
+    sync and the card, and raises 409 with the sentences."""
+    from .. import queue
+    from ..models import Job
+    m = mapping.mapping_for(db, "opportunity", o.id)
+    state = send_state(m)
+    if state in ("queued", "sent"):
+        return False, state
+    why = []
+    if not config.armed(db):
+        why.append("The Zuper sync is not switched on (Settings → Zuper), so nothing can be "
+                   "sent yet.")
+    why.extend(engine.send_problems(db, o))
+    if why:
+        raise HTTPException(409, " ".join(why))
+    if m is None:
+        m = ZuperMapping(crm_type="opportunity", crm_id=o.id, zuper_type="job")
+        db.add(m)
+    m.state, m.last_error, m.updated_at = "queued", None, datetime.now(UTC)
+    if m.zuper_uid is None:
+        m.created_at = datetime.now(UTC)
+    old = db.scalar(select(Job).where(Job.dedupe_key == "zuper:send:%d" % o.id))
+    if old is not None and old.status != "pending":
+        old.dedupe_key = None
+    db.flush()
+    queue.enqueue(db, SEND_JOB, {"opportunity_id": o.id, "by": by[:120]},
+                  dedupe_key="zuper:send:%d" % o.id)
+    return True, "queued"
+
+
+@router.post("/api/opportunities/{opp_id}/zuper/send")
+def zuper_send_opportunity(opp_id: int, response: Response, db: Session = Depends(get_db),
+                           principal: auth.Principal = auth.ANY_USER):
+    """Send to Zuper (ADMIN / DISPATCHER; never a technician, never "Only assigned data")."""
+    if not may_send(principal):
+        raise HTTPException(403, "Only an admin or a dispatcher can send a card to Zuper.")
+    o = pipeline_access.get_opportunity(db, principal, opp_id)
+    queued, state = queue_send(db, o, by=principal.email)
+    db.commit()
+    if not queued:
+        return {"state": state, "already": True}
+    response.status_code = 202
+    return {"state": state}
+
+
+def auto_send(db: Session, o: Opportunity, *, by: str) -> str:
+    """An AHS email card (and a new Workiz AHS job, through the sweep): sent automatically
+    when the sync is armed and the card has what a send needs. With the sync off nothing is
+    queued — the card can be sent by hand later. Never raises into the caller."""
+    if not config.armed(db):
+        return "sync off: not sent"
+    try:
+        queued, state = queue_send(db, o, by=by)
+    except HTTPException as exc:
+        return "not sent: %s" % exc.detail
+    return state if queued else "already " + state

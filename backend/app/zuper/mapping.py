@@ -17,7 +17,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -227,19 +227,16 @@ def mapping_by_uid(db: Session, zuper_type: str, zuper_uid: str) -> ZuperMapping
 # ------------------------------------------------------------------------ contacts
 
 CONTACT_FIELDS = ["first_name", "last_name", "email", "phone", "company", "street", "city",
-                  "state", "zip", "source", "lead"]
+                  "state", "zip", "source"]
 
 
 def contact_view(db: Session, c: Contact) -> dict:
-    with db.no_autoflush:
-        has_jobs = db.scalar(select(func.count(Opportunity.id)).where(
-            Opportunity.contact_id == c.id)) or 0
     return {
         "first_name": text(c.first_name), "last_name": text(c.last_name),
         "email": text(c.email), "phone": last10(c.phone), "company": text(c.business_name),
         "street": text(c.address_street), "city": text(c.address_city),
         "state": text(c.address_state), "zip": text(c.address_postal_code),
-        "source": canonical_source(c.source), "lead": has_jobs == 0,
+        "source": canonical_source(c.source),
     }
 
 
@@ -256,7 +253,6 @@ def customer_view(record: dict, sources_by_uid: dict[str, str]) -> dict:
     if not source_name:
         source_uid = record.get("source_uid") or (source if isinstance(source, str) else None)
         source_name = sources_by_uid.get(source_uid or "")
-    tags = record.get("customer_tags") or record.get("tags") or []
     return {
         "first_name": text(record.get("customer_first_name")),
         "last_name": text(record.get("customer_last_name")),
@@ -266,7 +262,6 @@ def customer_view(record: dict, sources_by_uid: dict[str, str]) -> dict:
         "street": text(address.get("street")), "city": text(address.get("city")),
         "state": text(address.get("state")), "zip": text(address.get("zip_code")),
         "source": text(source_name),
-        "lead": LEAD_TAG in [str(t) for t in tags] if isinstance(tags, list) else False,
     }
 
 
@@ -278,9 +273,9 @@ def e164(ten: str | None) -> str | None:
 
 def customer_payload(c: Contact, view: dict, *, sources_by_name: dict[str, str],
                      existing_tags: list[str] | None = None) -> dict:
-    tags = [t for t in (existing_tags or []) if t != LEAD_TAG]
-    if view.get("lead"):
-        tags.append(LEAD_TAG)
+    # Tags are Zuper's own; the sync sends back whatever the customer already carries. (Leads
+    # never reach Zuper since 2026-09-16, so there is no "Lead" tag to maintain.)
+    tags = list(existing_tags or [])
     body: dict[str, Any] = {
         # Zuper requires a first name; a contact with none is sent its last name, else "—".
         "customer_first_name": view.get("first_name") or view.get("last_name") or "—",

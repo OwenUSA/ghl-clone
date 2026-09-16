@@ -82,11 +82,19 @@ class World:
 
 
 def seed(db) -> World:
+    """A CRM shaped like production for the v2 rules (2026-09-16).
+
+    Day-one selection: AHS = jane_card and noaddr_card (every AHS card); Retail = bob_card
+    (Scheduled, open, a Workiz job) and al_card (Invoice, won). Not selected: tim_card (New
+    Lead), follow_card (Follow Up), lost_estimate (Estimate Sent but lost), other_card (another
+    pipeline). noaddr_card has no job address, so the load skips it and lists its id.
+    """
     owner = User(email="owner@example.test", name="Owen Owner", role=Role.ADMIN)
     dana = User(email="dana@example.test", name="Dana Dispatch", role=Role.DISPATCHER)
     tess = User(email="tess@example.test", name="Tess Tech", role=Role.TECH,
                 only_assigned_data=True)
-    db.add_all([owner, dana, tess])
+    terry = User(email="terry@example.test", name="Terry Tech", role=Role.TECH)
+    db.add_all([owner, dana, tess, terry])
     db.flush()
     ahs = Pipeline(name=AHS, position=0)
     retail = Pipeline(name=RETAIL, position=1)
@@ -98,7 +106,8 @@ def seed(db) -> World:
                               "Submit Invoices", "Call Back"]):
         stages["ahs:" + name] = Stage(pipeline_id=ahs.id, name=name, position=i)
     # Production's Retail stages all have position 0: id order decides.
-    for name in ["New Lead", "Inspection / Estimate", "Estimate Sent", "Follow Up"]:
+    for name in ["New Lead", "Inspection / Estimate", "Estimate Sent", "Follow Up",
+                 "Scheduled", "Invoice"]:
         stages["retail:" + name] = Stage(pipeline_id=retail.id, name=name, position=0)
     stages["other:New"] = Stage(pipeline_id=other.id, name="New", position=0)
     for s in stages.values():
@@ -122,11 +131,13 @@ def seed(db) -> World:
     tim = Contact(first_name="Tim", last_name="Techjob", phone="+19415550190")
     db.add_all([jane, bob, leo, ann, al, tim])
     db.flush()
+    addr = {"address_street": "9 Gulf Dr", "address_city": "Palmetto", "address_state": "FL",
+            "address_postal_code": "34221"}
     jane_card = Opportunity(title="Jane Roof - leak", contact_id=jane.id, pipeline_id=ahs.id,
                             stage_id=stages["ahs:Inspection"].id, value_cents=0,
                             owner_id=owner.id, address_street="1 Palm St",
                             address_city="Bradenton", address_state="FL",
-                            address_postal_code="34205",
+                            address_postal_code="34205", source="AHS",
                             custom_fields={"checklist_leak_count": 2,
                                            "checklist_roof_age": "10" + chr(0x2013) + "15 yrs",
                                            "checklist_email_verified": True,
@@ -134,15 +145,28 @@ def seed(db) -> World:
                                            "checklist_previous_repair__details": "2019 patch",
                                            "ahs_job_id": "AHS-555"})
     bob_card = Opportunity(title="Bob Workiz - repair", contact_id=bob.id,
-                           pipeline_id=retail.id, stage_id=stages["retail:New Lead"].id,
-                           created_by="Workiz import",
+                           pipeline_id=retail.id, stage_id=stages["retail:Scheduled"].id,
+                           created_by="Workiz import", **addr,
                            custom_fields={"workiz_id": "W100", "workiz_tech": ["Antonio"],
                                           "job_type": "Roof Repair"})
+    al_card = Opportunity(title="Al Shared - reroof", contact_id=al.id, pipeline_id=retail.id,
+                          stage_id=stages["retail:Invoice"].id, status="won",
+                          value_cents=1200000, **addr)
     tim_card = Opportunity(title="Tim Techjob", contact_id=tim.id, pipeline_id=retail.id,
-                           stage_id=stages["retail:New Lead"].id, owner_id=tess.id)
+                           stage_id=stages["retail:New Lead"].id, owner_id=tess.id, **addr)
+    follow_card = Opportunity(title="Ann Shared - follow up", contact_id=ann.id,
+                              pipeline_id=retail.id, stage_id=stages["retail:Follow Up"].id,
+                              source="Google", **addr)
+    lost_estimate = Opportunity(title="Al Shared - gutters", contact_id=al.id,
+                                pipeline_id=retail.id,
+                                stage_id=stages["retail:Estimate Sent"].id, status="lost",
+                                **addr)
+    noaddr_card = Opportunity(title="Ann Shared - AHS no address", contact_id=ann.id,
+                              pipeline_id=ahs.id, stage_id=stages["ahs:New Lead"].id)
     other_card = Opportunity(title="Commercial - out of scope", contact_id=ann.id,
-                             pipeline_id=other.id, stage_id=stages["other:New"].id)
-    db.add_all([jane_card, bob_card, tim_card, other_card])
+                             pipeline_id=other.id, stage_id=stages["other:New"].id, **addr)
+    db.add_all([jane_card, bob_card, al_card, tim_card, follow_card, lost_estimate,
+                noaddr_card, other_card])
     db.flush()
     start = datetime(2026, 9, 20, 14, 0, tzinfo=UTC)
     visit = Appointment(title="Inspection", calendar_id=cal.id, contact_id=jane.id,
@@ -151,7 +175,10 @@ def seed(db) -> World:
     workiz_visit = Appointment(title="Repair", calendar_id=cal.id, contact_id=bob.id,
                                opportunity_id=bob_card.id, starts_at=start + timedelta(days=1),
                                ends_at=start + timedelta(days=1, hours=2), status="confirmed")
-    db.add_all([visit, workiz_visit])
+    tim_visit = Appointment(title="Tim estimate", calendar_id=tess_cal.id, contact_id=tim.id,
+                            opportunity_id=tim_card.id, starts_at=start + timedelta(days=2),
+                            ends_at=start + timedelta(days=2, hours=1), status="confirmed")
+    db.add_all([visit, workiz_visit, tim_visit])
     db.flush()
     bob_card.custom_fields = {**bob_card.custom_fields, "workiz_appointment": {
         "id": workiz_visit.id, "starts_at": workiz_visit.starts_at.isoformat(),
@@ -162,19 +189,20 @@ def seed(db) -> World:
                            title="Call AHS for approval", created_by_id=owner.id)
     db.add_all([note, task])
     tokens = {}
-    for key, u in (("owner", owner), ("dana", dana), ("tess", tess)):
+    for key, u in (("owner", owner), ("dana", dana), ("tess", tess), ("terry", terry)):
         plain, tok = mint_api_token(u, name=key)
         db.add(tok)
         tokens[key] = plain
     db.commit()
-    ids = {"owner": owner.id, "dana": dana.id, "tess": tess.id, "ahs": ahs.id,
-           "retail": retail.id, "other": other.id,
+    ids = {"owner": owner.id, "dana": dana.id, "tess": tess.id, "terry": terry.id,
+           "ahs": ahs.id, "retail": retail.id, "other": other.id,
            "stages": {k: s.id for k, s in stages.items()},
            "jane": jane.id, "bob": bob.id, "leo": leo.id, "ann": ann.id, "al": al.id,
            "tim": tim.id, "jane_card": jane_card.id, "bob_card": bob_card.id,
-           "tim_card": tim_card.id, "other_card": other_card.id, "visit": visit.id,
-           "workiz_visit": workiz_visit.id, "note": note.id, "task": task.id,
-           "calendar": cal.id}
+           "al_card": al_card.id, "tim_card": tim_card.id, "follow_card": follow_card.id,
+           "lost_estimate": lost_estimate.id, "noaddr_card": noaddr_card.id,
+           "other_card": other_card.id, "visit": visit.id, "workiz_visit": workiz_visit.id,
+           "tim_visit": tim_visit.id, "note": note.id, "task": task.id, "calendar": cal.id}
     return World(ids=ids, tokens=tokens)
 
 

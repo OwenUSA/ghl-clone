@@ -403,7 +403,8 @@ def _tool(db: Session, run: AiRun, ctx, mode: str, allowed: list[str], call, wou
         add_step(db, run, "tool_result", text, tool_name=call.name, tool_call_id=call.id[:120])
         return text, False
 
-    if action.kind == actions.WRITE and mode == "suggest":
+    if (action.kind == actions.WRITE and mode == "suggest"
+            and not prep.data.get("change_request")) or action.kind == actions.SUGGEST_ONLY:
         s = AiSuggestion(run_id=run.id, agent_id=run.agent_id, action=call.name,
                          args=prep.args, summary=prep.summary, contact_id=run.contact_id,
                          opportunity_id=prep.opportunity_id or run.opportunity_id)

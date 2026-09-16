@@ -9,11 +9,13 @@ paged whole and compared on `updated_at` here instead (recorded per list in
 `zuper_sync_state.filter_checks`). Deleted customers and jobs are asked for with
 `filter.is_deleted=true` the same way.
 
-**CRM -> Zuper.** Every contact, card, visit, note and task in scope is read as its sync view
-and hashed; a record whose hash differs from the one last synced, or that has never been
-synced, is pushed. That is what carries a Workiz import (a quiet session) or a change made
-while the switch was off. A mapped record that no longer exists in the CRM is deleted in
-Zuper, with what the mapping knows as its snapshot. At most `PUSH_LIMIT` pushes a sweep; the
+**CRM -> Zuper.** Every record of a SENT job (2026-09-16, v2) — the card, its customer, visits,
+notes and tasks — is read as its sync view and hashed; a record whose hash differs from the one
+last synced is pushed, and a new note or task on a sent card is created. Before the Workiz
+cutover, a new Workiz job that qualifies is sent (`_send_new_workiz_jobs`). That is what
+carries a Workiz import (a quiet session) or a change made while the switch was off. A mapped
+record that no longer exists in the CRM is deleted in Zuper, with what the mapping knows as its
+snapshot. At most `PUSH_LIMIT` pushes a sweep; the
 rest wait for the next one.
 """
 from __future__ import annotations
@@ -107,6 +109,33 @@ def _crm_rows(db: Session, kind: str):
     return db.scalars(stmt).all()
 
 
+def _send_new_workiz_jobs(ctx: engine.Ctx) -> None:
+    """Before the cutover date, a Workiz job the importer filed on a card that qualifies —
+    every AHS one, a Retail one in a booked or owing stage — is sent (2026-09-16, v2). The
+    importer queues nothing itself (its jobs-table guard), so the sweep does it. A card whose
+    send was refused (missing name, phone or address) is not retried here; the modal says why."""
+    from ..models import Opportunity
+    from . import selection
+    db = ctx.db
+    if not ctx.before_cutover:
+        return
+    try:
+        ahs_id, stages = selection.rule(db)
+    except selection.Refused as why:
+        ctx.count("workiz_auto_send_refused")
+        engine.sync_state(db).last_error = str(why)
+        return
+    sent = {m.crm_id for m in db.scalars(select(ZuperMapping).where(
+        ZuperMapping.crm_type == "opportunity")).all()}
+    for o in db.scalars(select(Opportunity).order_by(Opportunity.id)).all():
+        if o.id in sent or not selection.is_workiz_origin(o) \
+                or not selection.qualifies(o, ahs_id, stages):
+            continue
+        outcome = engine.send(ctx, o.id)
+        db.commit()
+        ctx.count("workiz_auto_" + outcome)
+
+
 def _push_crm(ctx: engine.Ctx) -> None:
     db = ctx.db
     pushed = 0
@@ -164,6 +193,7 @@ def run(db: Session, now: datetime | None = None) -> dict:
     checks: dict[str, bool] = {}
     try:
         _pull_zuper(ctx, since, checks)
+        _send_new_workiz_jobs(ctx)
         _push_crm(ctx)
         state = engine.sync_state(db)
         state.sweep_cursor = start

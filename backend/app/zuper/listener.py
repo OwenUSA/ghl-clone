@@ -10,6 +10,8 @@ agent's action, the AHS email ingest — is covered without anyone remembering t
   importer, whose guard aborts an import that adds so much as one `jobs` row. What a quiet
   session changed is found by the 15-minute sweep, which compares every record's content
   hash with the one last synced.
+* **Only a sent card's changes go out** (2026-09-16, v2): the card, its notes and its tasks.
+  Contacts and visits of sent jobs are Zuper's and locked; unsent cards stay in the CRM.
 * **Jobs are written AFTER the change commits, in a session of their own.** One job per
   record with a dedupe key (`zuper:push:<kind>:<id>`), due ten seconds later, so a burst of
   saves is one push; a key that is already pending is the coalescing, and a race between two
@@ -46,7 +48,8 @@ log = logging.getLogger("zuper.listener")
 
 PUSH_JOB = "zuper_push"
 DELETE_JOB = "zuper_delete"
-JOB_TYPES = (PUSH_JOB, DELETE_JOB)
+SEND_JOB = "zuper_send"
+JOB_TYPES = (PUSH_JOB, DELETE_JOB, SEND_JOB)
 COALESCE_SECONDS = 10
 
 TRACKED: dict[type, str] = {Contact: "contact", Opportunity: "opportunity",
@@ -196,6 +199,23 @@ def after_rollback(session: Session) -> None:
     session.info.pop("zuper_detached", None)
 
 
+def _reaches_zuper(side: Session, kind: str, record_id: int) -> bool:
+    """Which CRM changes are pushed (2026-09-16, v2): only on a card SENT to Zuper — the card
+    itself (its Checklist answers and the CRM's own fields), and its notes and tasks. A
+    contact's details and a sent job's visits are Zuper's and locked in the CRM, so a change to
+    either is never pushed from here (the Workiz importer's, before cutover, is found by the
+    sweep). A card that was never sent reaches Zuper only through Send to Zuper."""
+    from . import engine
+    if kind == "stage":
+        return True
+    if kind == "opportunity":
+        return engine.is_linked(side, "opportunity", record_id)
+    if kind in ("note", "task"):
+        row = side.get(engine.MODELS[kind], record_id)
+        return row is not None and engine.is_linked(side, "opportunity", row.opportunity_id)
+    return False
+
+
 def enqueue(bind, keys: list[tuple[str, int]], batches: list[str]) -> int:
     """Insert the jobs in a session of their own. A key already queued is the coalescing."""
     now = datetime.now(UTC)
@@ -217,6 +237,11 @@ def enqueue(bind, keys: list[tuple[str, int]], batches: list[str]) -> int:
     added = 0
     with Session(bind=engine) as side:
         side.info["zuper_quiet"] = "enqueue"
+        for key in [k for k, job in wanted.items() if job.type == PUSH_JOB]:
+            if not _reaches_zuper(side, wanted[key].payload["kind"], wanted[key].payload["id"]):
+                del wanted[key]
+        if not wanted:
+            return 0
         taken = set(side.scalars(select(Job.dedupe_key).where(
             Job.dedupe_key.in_(list(wanted)))).all())
         fresh = [job for key, job in wanted.items() if key not in taken]

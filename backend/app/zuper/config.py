@@ -75,6 +75,14 @@ def company_name() -> str:
     return os.getenv("ZUPER_COMPANY_NAME", "").strip()
 
 
+def job_url_template() -> str:
+    """How to link a Zuper job from the CRM. UNVERIFIED default; empty = no link drawn."""
+    raw = os.getenv("ZUPER_JOB_URL_TEMPLATE")
+    if raw is None:
+        return "https://app.zuperpro.com/jobs/{uid}/details"
+    return raw.strip()
+
+
 def webhook_token() -> str:
     return os.getenv("ZUPER_WEBHOOK_TOKEN", "").strip()
 

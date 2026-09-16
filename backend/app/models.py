@@ -387,6 +387,14 @@ class Opportunity(Base):
     address_city: Mapped[str | None] = mapped_column(String(120))
     address_state: Mapped[str | None] = mapped_column(String(80))
     address_postal_code: Mapped[str | None] = mapped_column(String(20))
+    # Lead outcome (2026-09-16), CRM-only: why a card closed (lost / abandoned) without ever
+    # being booked — one of app/lead_outcomes.OUTCOMES, with a note (required for "Other").
+    # Three nullable columns ON the card rather than a table: one value per card, read with
+    # the card by the board, the modal, bulk actions and every report, and never a history.
+    # NULL for every card that existed before, and nothing backfills them.
+    lead_outcome: Mapped[str | None] = mapped_column(String(40))
+    lead_outcome_note: Mapped[str | None] = mapped_column(Text)
+    lead_outcome_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # The live account already carries owen_* custom fields written by the
     # telephony project ("from OWEN"), with owen_call_id documented as the
@@ -1503,7 +1511,9 @@ class ZuperMapping(Base):
     zuper_uid: Mapped[str | None] = mapped_column(String(64), index=True)
     # The Zuper job a note, task, appointment or status hangs under (a category for a status).
     parent_uid: Mapped[str | None] = mapped_column(String(64), index=True)
-    # creating | linked | deleted
+    # queued (Send to Zuper pressed; the card is already a locked mirror) | creating (committed
+    # just before the create request) | linked | failed (a send that did not reach Zuper) |
+    # deleted
     state: Mapped[str] = mapped_column(String(20), default="linked", server_default="linked")
     base: Mapped[dict | None] = mapped_column(JSONType)
     crm_hash: Mapped[str | None] = mapped_column(String(64))
@@ -1641,10 +1651,6 @@ class ZuperDocument(Base):
     # Zuper reported it deleted (its soft delete): kept, but no longer shown or counted.
     removed_in_zuper: Mapped[bool] = mapped_column(Boolean, default=False,
                                                    server_default=false())
-    # When "invoice fully paid -> Won" was applied for this invoice (once).
-    won_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # The urgent task "quote declined" made for this quote (once).
-    declined_task_id: Mapped[int | None] = mapped_column(Integer)
 
 
 class ZuperDigest(Base):

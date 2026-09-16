@@ -29,6 +29,8 @@ def handle(db: Session, job: Job) -> str:
             outcome = setup.push_stage(ctx, int(payload["id"]))
         else:
             outcome = engine.push(ctx, payload["kind"], int(payload["id"]))
+    elif job.type == listener.SEND_JOB:
+        outcome = engine.send(ctx, int(payload["opportunity_id"]))
     elif job.type == listener.DELETE_JOB:
         outcome = str(engine.mirror_crm_deletes(ctx, payload["batch"]))
     else:
@@ -67,7 +69,12 @@ def drain(db: Session, limit: int = 25) -> int:
         except client.ZuperError as exc:
             db.rollback()
             engine.mark_quiet(db)
-            queue.finish(db, job, client.sentence(exc), permanent=exc.kind in PERMANENT)
+            permanent = exc.kind in PERMANENT
+            queue.finish(db, job, client.sentence(exc), permanent=permanent)
+            if job.type == listener.SEND_JOB and job.status == "failed":
+                # The card shows why, and Send to Zuper can be pressed again.
+                engine.mark_send_failed(db, int((job.payload or {}).get("opportunity_id", 0)),
+                                        client.sentence(exc))
             record_error(db, exc)
             if exc.kind in ("unavailable", "rate_limited"):
                 break

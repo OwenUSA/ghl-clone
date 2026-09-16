@@ -5,6 +5,13 @@
     uv run python -m app.zuper.load --commit     # ...and this one writes
     uv run python -m app.zuper.load --json       # the same report, for jq
 
+What is sent (2026-09-16, v2 — app/zuper/selection.py): EVERY card in the AHS pipeline, and
+Retail cards in Scheduled, Inspection / Estimate, Estimate Sent (open) and Invoice (open and
+won); the dry run prints the count per group, and a missing named stage is a refusal. Retail
+New Lead / Follow Up and every lead stay CRM-only. A selected card a send would refuse (no
+customer, name, phone or job address) is skipped and listed by id. Contacts go only as the
+customers of the selected cards.
+
 Order: setup verify -> categories / statuses -> customers -> jobs -> appointments ->
 notes (the Checklist travels with each job) -> tasks -> verification report.
 
@@ -41,7 +48,7 @@ from ..models import (
     ZuperDigest,
     ZuperMapping,
 )
-from . import client, config, engine, mapping, setup, zapi
+from . import client, config, engine, mapping, selection, setup, zapi
 from .client import ZuperError
 
 PHASES = ("contact", "opportunity", "appointment", "note", "task")
@@ -60,17 +67,47 @@ def index(kind: str) -> dict[int, dict]:
     return out
 
 
-def scope_pipelines(db: Session) -> set[int]:
-    return {p.id for p in setup.pipelines(db).values()}
+CATEGORY_PROBLEM = "Only cards in the AHS or Retail pipeline"
+SKIP_KINDS = (("customer (a contact)", "no customer"), ("needs a name", "no customer name"),
+              ("phone number", "no customer phone"), ("its address", "no job address"))
+
+
+def selected(db: Session) -> tuple[set[int], dict]:
+    """The day-one selection (selection.day_one), minus the cards a send would refuse — no
+    customer, name, phone or job address — which are listed by id, never sent half-made.
+    Raises selection.Refused when a named Retail stage is missing."""
+    cards, groups = selection.day_one(db)
+    eligible: set[int] = set()
+    skipped: list[int] = []
+    reasons: dict[str, int] = {}
+    for o in cards:
+        problems = [p for p in engine.send_problems(db, o)
+                    if not p.startswith(CATEGORY_PROBLEM)]
+        if not problems:
+            eligible.add(o.id)
+            continue
+        skipped.append(o.id)
+        for p in problems:
+            for words, key in SKIP_KINDS:
+                if words in p:
+                    reasons[key] = reasons.get(key, 0) + 1
+    return eligible, {"groups": groups, "selected": len(cards), "to_send": len(eligible),
+                      "skipped": len(skipped), "skip_reasons": reasons,
+                      "skipped_ids": skipped[:MAX_IDS]}
 
 
 def crm_records(db: Session, kind: str, pipelines: set[int]) -> list:
+    """The records of the selected cards (`pipelines` is the set of selected card ids): their
+    customers, the cards, their visits, notes and tasks. Leads never reach Zuper."""
+    ids = sorted(pipelines)
     if kind == "contact":
-        return list(db.scalars(select(Contact).order_by(Contact.id)).all())
+        return list(db.scalars(select(Contact).where(Contact.id.in_(
+            select(Opportunity.contact_id).where(Opportunity.id.in_(ids))))
+            .order_by(Contact.id)).all())
     if kind == "opportunity":
         return list(db.scalars(select(Opportunity).where(
-            Opportunity.pipeline_id.in_(pipelines)).order_by(Opportunity.id)).all())
-    in_scope = select(Opportunity.id).where(Opportunity.pipeline_id.in_(pipelines))
+            Opportunity.id.in_(ids)).order_by(Opportunity.id)).all())
+    in_scope = ids
     if kind == "appointment":
         return list(db.scalars(select(Appointment).where(
             Appointment.opportunity_id.in_(in_scope), Appointment.status != "cancelled")
@@ -102,6 +139,7 @@ def commit_phase(ctx: engine.Ctx, kind: str, pipelines: set[int]) -> dict:
     db = ctx.db
     counts: dict = {"crm": 0, "already_linked": 0, "linked_existing": 0, "created": 0,
                     "updated": 0, "unchanged": 0, "failed": 0, "failed_ids": []}
+    ctx.sending = True
     for obj in crm_records(db, kind, pipelines):
         counts["crm"] += 1
         m = mapping.mapping_for(db, kind, obj.id)
@@ -194,7 +232,7 @@ def run(db: Session, *, commit: bool) -> tuple[int, dict]:
                     checks = setup.run_checks(db, commit=False)
                     report["setup"] = _summary(checks)
                     report["categories"] = setup.ensure_categories(db, commit=False)
-                    pipelines = scope_pipelines(db)
+                    pipelines, report["selection"] = selected(db)
                     for kind in PHASES:
                         idx = index(kind) if kind in ID_FIELD else None
                         report["phases"][kind] = plan_phase(db, kind, pipelines, idx)
@@ -216,7 +254,7 @@ def run(db: Session, *, commit: bool) -> tuple[int, dict]:
             if state.sweep_cursor is None:
                 state.sweep_cursor = datetime.fromisoformat(report["started_at"])
                 db.commit()
-            pipelines = scope_pipelines(db)
+            pipelines, report["selection"] = selected(db)
             for kind in PHASES:
                 ctx = engine.Ctx(db, index={kind: index(kind)} if kind in ID_FIELD else None)
                 report["phases"][kind] = commit_phase(ctx, kind, pipelines)
@@ -224,6 +262,10 @@ def run(db: Session, *, commit: bool) -> tuple[int, dict]:
             setup.record_results(db, setup.run_checks(db, commit=True))
             report["verification"] = verify(db, pipelines, deep=True)
             _checkpoint(db, report)
+        except selection.Refused as why:
+            db.rollback()
+            report["refused"] = str(why)
+            return 3, report
         except ZuperError as exc:
             db.rollback()
             report["stopped"] = client.sentence(exc) + " Run the same command again to resume."
@@ -258,6 +300,16 @@ def render(report: dict) -> str:
             s["pass"], len(s["fail"]), s["confirm_by_hand"]))
         for title in s["fail"]:
             lines.append("  FAIL: " + title)
+    if report.get("selection"):
+        sel = report["selection"]
+        lines.append("day-one selection: %d card(s), %d to send, %d skipped" % (
+            sel["selected"], sel["to_send"], sel["skipped"]))
+        for group, n in sel["groups"].items():
+            lines.append("  %s: %d" % (group, n))
+        for reason, n in sel["skip_reasons"].items():
+            lines.append("  skipped, %s: %d" % (reason, n))
+        if sel["skipped_ids"]:
+            lines.append("  skipped ids: %s" % ", ".join(map(str, sel["skipped_ids"])))
     if report.get("categories"):
         c = report["categories"]
         lines.append("categories: %d %s, statuses: %d %s" % (
