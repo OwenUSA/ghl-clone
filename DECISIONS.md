@@ -5428,3 +5428,13 @@ status it created is trusted (checkpoint committed per status), so a rerun never
 one; the load's final read-back reports an unreadable list instead of stopping. Also: the
 initial load now STOPS on the first refused record of a kind (as the runbook
 already promised) and keeps the reason for later per-record refusals.
+
+### Amendment 2026-09-17 (2): Zuper's status create answers without a uid
+
+Live `setup --commit` created the "AHS" category (flat body accepted), then the first status create
+answered success without a `status_uid`. The sync stopped as designed (never retried). Now: uids are
+also read one level inside `data` and under `job_status_uid`; a status create answered without a uid
+is adopted from the category's list by exact name (exactly one unmapped match, else stop); a commit
+refuses to create any status while Zuper lists statuses whose name or uid it cannot read (they may be
+ones it made); an answer without a uid names its field NAMES (never values) so the next live answer
+shows its shape; the setup report lists the statuses Zuper holds per category.
