@@ -395,3 +395,54 @@ def test_a_non_admin_key_still_fails_with_a_sentence(zworld, fake):
     by_key = {r["key"]: r for r in report["checks"]}
     assert by_key["sync_user"]["state"] == setup.FAIL
     assert "must be Admin" in by_key["sync_user"]["sentences"][0]
+
+
+def test_a_refused_first_create_stops_the_load_with_zuper_s_message(armed, fake, monkeypatch):
+    """The create bodies are UNVERIFIED. If Zuper refuses the very first customer, the load
+    stops there with Zuper's own sentence instead of trying (and losing the reason for)
+    every other record; fixing the body and running again finishes without duplicates."""
+    real = fake.create_customer
+    monkeypatch.setattr(fake, "create_customer", lambda params, body: fake.error(
+        "customer_contact_no.mobile must be a valid phone number"))
+    code, report = load.run(SessionLocal(), commit=True)
+    assert code == 2
+    assert "customer_contact_no.mobile must be a valid phone number" in report["stopped"]
+    assert "The first contact sent" in report["stopped"]
+    assert "Run the same command again to resume" in report["stopped"]
+    assert "STOPPED: " in load.render(report)
+    assert len(fake.calls("POST", r"^/customers_new$")) == 1       # not one per contact
+    assert fake.customers == {} and fake.jobs == {}
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count(ZuperMapping.id)).where(
+            ZuperMapping.crm_type == "contact", ZuperMapping.state == "linked")) == 0
+    monkeypatch.setattr(fake, "create_customer", real)
+    code, report = load.run(SessionLocal(), commit=True)
+    assert code == 0, report
+    assert len(fake.customers) == 3 and len(fake.jobs) == 3
+
+
+def test_a_refusal_after_the_first_success_is_counted_with_its_reason(armed, fake, monkeypatch):
+    real = fake.create_customer
+    state = {"n": 0}
+
+    def second_refused(params, body):
+        state["n"] += 1
+        if state["n"] == 2:
+            return fake.error("customer_email is not a valid email")
+        return real(params, body)
+
+    monkeypatch.setattr(fake, "create_customer", second_refused)
+    code, report = load.run(SessionLocal(), commit=True)
+    contacts = report["phases"]["contact"]
+    assert "stopped" not in report
+    assert (contacts["created"], contacts["failed"]) == (2, 1)
+    assert len(contacts["failed_ids"]) == 1
+    assert contacts["failed_reasons"] == {
+        "Zuper rejected the request. customer_email is not a valid email": 1}
+    text_report = load.render(report)
+    assert "failed 1: Zuper rejected the request. customer_email is not a valid email" \
+        in text_report
+    assert "failed_reasons" not in text_report
+    # The refused customer is tried again when its card is sent, and made exactly once.
+    crm_ids = [mapping.custom_values(c)["CRM Contact ID"] for c in fake.customers.values()]
+    assert len(crm_ids) == 3 == len(set(crm_ids))
