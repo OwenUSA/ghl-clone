@@ -5421,5 +5421,10 @@ retried) — that record keeps it idempotent and lets the setup check pass. The 
 `setup --commit` was refused "Category Name Missing" for `{"job_category": {...}}`: category and
 status creates now try candidate body shapes (flat first) ONLY while Zuper refuses, never after an
 answer that may have created something. Checklist item B3 now reads "do NOT delete the key" (the
-sync uses the owner's own key). Also: the initial load now STOPS on the first refused record of a kind (as the runbook
+sync uses the owner's own key). The same refusal-only fallback covers the job status move (and
+rollback), appointment and note creates; the accepted shape is tried first from then on and the
+load report names it. When Zuper does not list a category's statuses, the CRM's mapping of each
+status it created is trusted (checkpoint committed per status), so a rerun never duplicates
+one; the load's final read-back reports an unreadable list instead of stopping. Also: the
+initial load now STOPS on the first refused record of a kind (as the runbook
 already promised) and keeps the reason for later per-record refusals.

@@ -7,6 +7,7 @@ commit is proven by what the fake holds; idempotency by a second commit that sen
 import hashlib
 import json
 
+import httpx
 import pytest
 from app.db import SessionLocal, engine
 from app.models import Contact, Opportunity, Stage, ZuperMapping, ZuperSettings
@@ -472,7 +473,8 @@ def test_a_refused_body_shape_falls_through_to_the_next_without_duplicates(zworl
     monkeypatch.setattr(fake, "create_category", wrapped_only)
     report = run_setup(commit=True)
     assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
-    assert len(fake.calls("POST", r"^/jobs/category$")) == 4       # flat refused, then wrapped
+    # AHS: flat refused, then wrapped; Retail goes straight to the shape Zuper accepted.
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 3
     assert report["categories"]["accepted_shapes"]["category"] == "category"
     assert report["passed"]
 
@@ -510,3 +512,86 @@ def test_an_unreadable_answer_to_a_create_is_never_retried_with_another_shape(zw
     monkeypatch.setattr(fake, "create_category", real)
     run_setup(commit=True)
     assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
+
+
+def test_when_zuper_does_not_list_statuses_a_rerun_never_creates_them_twice(zworld, fake,
+                                                                            monkeypatch):
+    """The first live read found the status list empty/unreadable: the CRM's own mapping of
+    each status it created is trusted, the check passes on it and says so."""
+    monkeypatch.setattr(fake, "routes", lambda real=fake.routes: [
+        (rx, fn) for rx, fn in real() if not (rx == r"/jobs/status/([^/]+)" and fn[0] == "GET")])
+    report = run_setup(commit=True)
+    created = len(fake.calls("POST", r"^/jobs/status_new/"))
+    assert created == 11
+    assert all(c["statuses_listed"] is False for c in report["categories"]["categories"])
+    report = run_setup(commit=True)
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == created      # none again
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 2
+    item = next(c for c in report["checks"] if c["key"] == "categories")
+    assert item["state"] == setup.PASS
+    assert "does not list the statuses" in " ".join(item["sentences"])
+
+
+def test_a_status_create_that_fails_midway_keeps_what_was_made(zworld, fake, monkeypatch):
+    real = fake.create_status
+    state = {"n": 0}
+
+    def third_is_down(params, body, cat):
+        state["n"] += 1
+        if state["n"] == 3:
+            return httpx.Response(503, json={"type": "error", "message": "down"})
+        return real(params, body, cat)
+
+    monkeypatch.setattr(fake, "create_status", third_is_down)
+    with pytest.raises(ZuperError), SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count(ZuperMapping.id)).where(
+            ZuperMapping.crm_type == "stage")) == 2              # both checkpoints kept
+        assert s.scalar(select(func.count(ZuperMapping.id)).where(
+            ZuperMapping.crm_type == "pipeline")) == 1
+    monkeypatch.setattr(fake, "create_status", real)
+    run_setup(commit=True)
+    names = [x["status_name"] for sts in fake.statuses.values() for x in sts]
+    assert len(names) == 11 and len(fake.categories) == 2
+    for sts in fake.statuses.values():                        # no status made twice
+        assert len({x["status_name"] for x in sts}) == len(sts)
+
+
+def test_verification_says_what_zuper_would_not_read_back_instead_of_stopping(loaded, fake,
+                                                                             monkeypatch):
+    monkeypatch.setattr(fake, "routes", lambda real=fake.routes: [
+        (rx, (m, (lambda *a: fake.error("service tasks module disabled"))
+              if rx == r"/jobs/([^/]+)/service_tasks" and m == "GET" else f))
+        for rx, (m, f) in real()])
+    code, report = load.run(SessionLocal(), commit=True)
+    assert "stopped" not in report, report
+    task = report["verification"]["task"]
+    assert "service tasks module disabled" in task["zuper_unreadable"]
+    assert "mapped_not_in_zuper" not in task
+    assert "Zuper could not be read back" in load.render(report)
+
+
+def test_the_status_move_and_child_bodies_fall_back_and_remember_the_accepted_shape(
+        armed, fake, monkeypatch):
+    """Zuper wants the wrapped status move here: the first job tries flat (refused) then
+    wrapped; every later job goes straight to the wrapped shape. Nothing is made twice."""
+    from app.zuper import zapi
+    zapi.ACCEPTED_SHAPES.pop("job_status", None)
+    real_move = fake.move
+
+    def wrapped_only(uid, body, *, back):
+        if "job_status" not in body:
+            return fake.error("status_uid is required")
+        return real_move(uid, {"status_uid": body["job_status"]["status_uid"]}, back=back)
+
+    monkeypatch.setattr(fake, "move", wrapped_only)
+    code, report = load.run(SessionLocal(), commit=True)
+    assert code == 0, report
+    moves = fake.calls("PUT", r"^/jobs/[^/]+/status$")
+    assert len(moves) == len(fake.jobs) + 1                   # one refused, then one per job
+    assert report["accepted_shapes"]["job_status"] == "job_status"
+    for job in fake.jobs.values():
+        assert job.get("current_job_status", {}).get("status_uid")
+    assert len(fake.appointments) == 2 and sum(len(v) for v in fake.notes.values()) == 1
+    assert "Zuper accepted these request bodies" in load.render(report)

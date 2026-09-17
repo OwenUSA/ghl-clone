@@ -369,7 +369,7 @@ class FakeZuper:
             return self.not_found()
         order = [s["status_uid"] for s in self.statuses.get(
             job["job_category"]["category_uid"], [])]
-        target = body["status_uid"]
+        target = body.get("status_uid")
         if target not in order:
             return self.error("unknown status")
         current = (job.get("current_job_status") or {}).get("status_uid")

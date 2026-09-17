@@ -49,7 +49,9 @@ def fake(zuper_env, monkeypatch):
     from app.zuper import listener
     # Queued pushes are due at once, so a test can drain them straight after the save.
     monkeypatch.setattr(listener, "COALESCE_SECONDS", -1)
+    from app.zuper import zapi
     zuper_api.clear_cache()
+    zapi.ACCEPTED_SHAPES.clear()            # per process in production; per test here
     f = FakeZuper().configure_account().install()
     yield f
     # Package-wide: whatever a test did, no denylisted endpoint reached even the fake.

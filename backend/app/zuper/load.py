@@ -221,8 +221,15 @@ def verify(db: Session, pipelines: set[int], *, deep: bool) -> dict:
                 try:
                     seen |= {uid_fn(r) for r in lister(jm.zuper_uid) if uid_fn(r)} - digests
                 except ZuperError as exc:
-                    if exc.kind != "not_found":
+                    if exc.kind in ("unavailable", "rate_limited", "unauthorized"):
                         raise
+                    if exc.kind != "not_found":
+                        # Unreadable in Zuper: say so instead of stopping a finished load.
+                        entry["zuper_unreadable"] = client.sentence(exc)
+                        break
+            if entry.get("zuper_unreadable"):
+                out[kind] = entry                 # no count to compare: not a mismatch list
+                continue
             mapped_uids = {m.zuper_uid for m in maps.values()}
             entry["zuper"] = len(seen)
             entry["mapped_not_in_zuper"] = _ids(cid for cid, m in maps.items()
@@ -277,6 +284,7 @@ def run(db: Session, *, commit: bool) -> tuple[int, dict]:
                 report["phases"][kind] = commit_phase(ctx, kind, pipelines)
                 _checkpoint(db, report)
             setup.record_results(db, setup.run_checks(db, commit=True))
+            report["accepted_shapes"] = dict(zapi.ACCEPTED_SHAPES)
             report["verification"] = verify(db, pipelines, deep=True)
             _checkpoint(db, report)
         except selection.Refused as why:
@@ -339,6 +347,9 @@ def render(report: dict) -> str:
             lines.append("  failed ids: %s" % ", ".join(map(str, counts["failed_ids"])))
         for reason, n in (counts.get("failed_reasons") or {}).items():
             lines.append("  failed %d: %s" % (n, reason))
+    if report.get("accepted_shapes"):
+        lines.append("Zuper accepted these request bodies: %s" % ", ".join(
+            "%s = %s" % kv for kv in sorted(report["accepted_shapes"].items())))
     if report.get("verification"):
         v = report["verification"]
         lines.append("verification: %d mismatch(es)" % v["mismatches"])
@@ -346,6 +357,8 @@ def render(report: dict) -> str:
             e = v.get(kind, {})
             lines.append("  %s: CRM %s, mapped %s, Zuper %s" % (
                 kind, e.get("crm"), e.get("mapped"), e.get("zuper", "—")))
+            if e.get("zuper_unreadable"):
+                lines.append("    Zuper could not be read back: %s" % e["zuper_unreadable"])
             for key in ("crm_not_mapped", "mapped_not_in_zuper", "zuper_not_mapped"):
                 if e.get(key):
                     lines.append("    %s: %s" % (key, ", ".join(map(str, e[key]))))
