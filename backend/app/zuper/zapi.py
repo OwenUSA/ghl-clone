@@ -186,21 +186,25 @@ def _status_sources(category_uid: str) -> tuple[list[dict] | None, list[str], bo
                 " %s" % exc.detail if exc.kind == "bad_response" else ""))
             continue
         readable = True
-        notes.append("GET %s: %d%s" % (api_path, len(rows), (" (fields: %s)" % ", ".join(
-            sorted(rows[0].keys())[:20])) if rows else ""))
+        # GET /jobs/status/{c} is Zuper's own status list for the category (live: it answers
+        # {data: {job_statuses: [...]}} with status_uid and status_name) — a status missing
+        # from it does not exist.
+        reliable = reliable or name == "statuses"
+        notes.append("GET %s: %d%s" % (api_path, len(rows), (": " + ", ".join(
+            "“%s”" % (status_name(r) or "?") for r in rows[:30])) if rows else ""))
         take(rows)
-    others_with_statuses = 0
-    for rec in categories():
-        embedded = rec.get("job_statuses")
+    records = categories()
+    others_with_statuses = sum(
+        1 for rec in records if category_uid_of(rec) != category_uid
+        and isinstance(rec.get("job_statuses"), list) and rec["job_statuses"])
+    for rec in records:
         if category_uid_of(rec) != category_uid:
-            if isinstance(embedded, list) and embedded:
-                others_with_statuses += 1
             continue
         notes.append("category record fields: %s" % ", ".join(sorted(rec.keys())[:30]))
         for key in ("job_statuses", "statuses", "category_statuses", "job_status"):
             if isinstance(rec.get(key), list):
                 readable = True
-                reliable = reliable or key == "job_statuses"
+                reliable = reliable or (key == "job_statuses" and others_with_statuses > 0)
                 rows = [r for r in rec[key] if isinstance(r, dict)]
                 notes.append("category record %s: %d%s" % (key, len(rows), (
                     " (fields: %s)" % ", ".join(sorted(rows[0].keys())[:20])) if rows else ""))
@@ -208,7 +212,7 @@ def _status_sources(category_uid: str) -> tuple[list[dict] | None, list[str], bo
     notes.append("other categories showing statuses in their record: %d" % others_with_statuses)
     # The category list is Zuper's own record of each category's statuses. It is trusted to
     # show a status that exists when it shows statuses for other categories too.
-    return (merged if readable else None), notes, reliable and others_with_statuses > 0
+    return (merged if readable else None), notes, reliable
 
 
 def statuses_reliably(category_uid: str) -> tuple[list[dict] | None, list[str], bool]:

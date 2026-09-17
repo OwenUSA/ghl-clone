@@ -66,6 +66,8 @@ class FakeZuper:
     # /jobs/status_new/{c}. A path not in the set answers an empty list (as live 09-17).
     statuses_listed_at: set[str] = field(default_factory=lambda: {"status"})
     status_create_echoes_uid: bool = True
+    status_list_wrapped: bool = False    # live: {data: {_id, job_statuses: [...]}}
+    status_list_readable: bool = True    # False: GET /jobs/status/{c} answers no list
     # Live-like status creates: the only body form that really creates ("flat", "job_status",
     # "job_statuses", "list", "plain"; None = flat and job_status both work, as before). Any
     # other form answers {type, message} and makes nothing (live, 2026-09-17).
@@ -203,8 +205,7 @@ class FakeZuper:
                 self.customers, u))),
             (r"/jobs/category", ("GET", lambda p, b: self.ok(self.category_rows()))),
             (r"/jobs/category", ("POST", self.create_category)),
-            (r"/jobs/status/([^/]+)", ("GET", lambda p, b, c: self.ok(
-                self.statuses.get(c, []) if "status" in self.statuses_listed_at else []))),
+            (r"/jobs/status/([^/]+)", ("GET", lambda p, b, c: self.status_list(c))),
             (r"/jobs/status_new/([^/]+)", ("GET", lambda p, b, c: self.ok(
                 self.statuses.get(c, []) if "status_new" in self.statuses_listed_at else []))),
             (r"/jobs/status_new/([^/]+)", ("POST", self.create_status)),
@@ -324,6 +325,14 @@ class FakeZuper:
         self.categories[uid] = {"category_uid": uid, "category_name": body["category_name"]}
         self.statuses[uid] = []
         return self.ok({"category_uid": uid})
+
+    def status_list(self, cat: str) -> httpx.Response:
+        rows = self.statuses.get(cat, []) if "status" in self.statuses_listed_at else []
+        if not self.status_list_readable:
+            return self.ok({"_id": "x"})
+        if self.status_list_wrapped:
+            return self.ok({"_id": "x", "job_statuses": rows})
+        return self.ok(rows)
 
     def category_rows(self) -> list[dict]:
         rows = []

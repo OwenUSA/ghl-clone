@@ -693,6 +693,7 @@ def test_empty_lists_and_uids_echoed_a_rerun_trusts_the_crm_s_mapping(zworld, fa
 
 def test_empty_lists_and_no_uid_stop_once_and_never_send_that_status_again(zworld, fake):
     fake.statuses_listed_at = set()
+    fake.status_list_readable = False            # no list Zuper's absence can be read from
     fake.status_create_echoes_uid = False
     assert setup.main(["--commit"]) == 2
     assert len(fake.calls("POST", r"^/jobs/status_new/")) == 1
@@ -744,7 +745,10 @@ def live_like(fake, form: str = "job_statuses", *, reliable: bool = True) -> Non
     fake.status_create_echoes_uid = False
     fake.statuses_listed_at = set()
     fake.category_embeds_statuses = True
-    fake.template_category_with_statuses = reliable
+    fake.template_category_with_statuses = False
+    fake.status_list_readable = reliable
+    fake.status_list_wrapped = True
+    fake.statuses_listed_at = {"status"}
     fake.status_create_form = form
 
 
@@ -790,8 +794,41 @@ def test_a_leftover_checkpoint_is_resent_once_the_list_is_reliable(zworld, fake)
     live_like(fake, "plain", reliable=False)
     assert setup.main(["--commit"]) == 2
     assert stage_states() == {"creating": 1}
-    fake.template_category_with_statuses = True                      # the list proves reliable
+    fake.status_list_readable = True                                 # the list is readable now
     report = run_setup(commit=True)
     assert report["passed"], report["checks"]
     assert stage_states() == {"linked": 11}
     assert len(fake.calls("POST", r"^/jobs/status$")) == 11
+
+
+# ------------------------------------------------ live 2026-09-17 (5): the real status list
+
+def test_the_wrapped_status_list_is_read_trusted_and_duplicates_reported(zworld, fake):
+    """GET /jobs/status/{c} answers {data: {_id, job_statuses: [...]}}. Two earlier OK-only
+    creates may have made "New Lead" twice: one is linked, the extra is reported, the
+    leftover checkpoint is resolved, nothing more named "New Lead" is made."""
+    fake.status_list_wrapped = True
+    fake.status_create_echoes_uid = False
+    fake.status_create_form = "job_status"
+    # Zuper already holds the AHS category with two "New Lead" statuses, and the CRM has the
+    # category mapped and a "creating" checkpoint for its first stage (the live state).
+    uid = "cat-ahs"
+    fake.categories[uid] = {"category_uid": uid, "category_name": "AHS"}
+    fake.statuses[uid] = [{"status_uid": "st-a", "status_name": "New Lead"},
+                          {"status_uid": "st-b", "status_name": "New Lead"}]
+    with SessionLocal() as s:
+        ahs = zworld.ids["ahs"]
+        s.add(ZuperMapping(crm_type="pipeline", crm_id=ahs, zuper_type="category",
+                           zuper_uid=uid, state="linked"))
+        first = zworld.ids["stages"]["ahs:New Lead"]
+        s.add(ZuperMapping(crm_type="stage", crm_id=first, zuper_type="status",
+                           parent_uid=uid, state="creating"))
+        s.commit()
+    report = run_setup(commit=True)
+    assert report["passed"], report["checks"]
+    ahs_entry = report["categories"]["categories"][0]
+    assert ahs_entry["duplicate_statuses"] == ["New Lead"]
+    assert "delete the extra in Zuper" in setup.render(report)
+    assert [x["status_name"] for x in fake.statuses[uid]].count("New Lead") == 2   # not 3
+    assert stage_states() == {"linked": 11}
+    assert any("GET /jobs/status/cat-ahs: 2" in n for n in ahs_entry["status_sources"])

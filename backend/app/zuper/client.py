@@ -367,7 +367,9 @@ def data_of(payload: Any) -> Any:
 def rows_of(payload: Any) -> list[dict]:
     rows = data_of(payload)
     if isinstance(rows, dict):
-        for key in ("rows", "records", "items", "list"):
+        # "job_statuses": GET /jobs/status/{category} answers {data: {_id, job_statuses: [...]}}
+        # (live, 2026-09-17).
+        for key in ("rows", "records", "items", "list", "job_statuses"):
             if isinstance(rows.get(key), list):
                 rows = rows[key]
                 break

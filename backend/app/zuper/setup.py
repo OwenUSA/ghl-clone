@@ -378,6 +378,9 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
                                 ", ".join(sorted(unreadable[0].keys())[:30])))
         statuses = {zapi.status_uid(s): s for s in listing or []}
         by_name = {zapi.status_name(s): u for u, s in statuses.items()}
+        names_held = [zapi.status_name(s) for s in statuses.values()]
+        entry["duplicate_statuses"] = sorted({n for n in names_held
+                                              if n and names_held.count(n) > 1})
         stages = ordered_stages(db, p.id)
         entry["ordered_by"] = ("id (every stage has the same position)"
                                if len({s.position for s in stages}) <= 1 and len(stages) > 1
@@ -539,6 +542,10 @@ def render(report: dict) -> str:
                 lines.append("      status fields: " + ", ".join(c["status_fields"]))
             for note in c.get("status_sources") or []:
                 lines.append("      source: " + note)
+            for dup in c.get("duplicate_statuses") or []:
+                lines.append("      NOTE: Zuper holds more than one status named “%s” in "
+                             "“%s”; the sync maps one — delete the extra in Zuper." % (
+                                 dup, c["category"]))
             for s in c["statuses"]:
                 lines.append("      stage #%d -> status “%s”: %s%s" % (
                     s["stage_id"], s["status"], verb, s["action"]))

@@ -5463,3 +5463,11 @@ only if Zuper refused, or said OK with nothing appearing while the category list
 statuses for other categories); otherwise it stops, keeping the "creating" checkpoint. The candidate that
 worked is tried first from then on and named in the report. Refusals print in full (Zuper's message for
 every attempt).
+
+### Amendment 2026-09-17 (5): the real status list
+
+Live (fix 4 deployed): GET /jobs/status/{c} answers `{type, data: {_id, job_statuses: [{status_uid,
+status_name, status_type, ...}]}}` — AHS holds 2 statuses there — while the category list's
+`job_statuses` is empty for every category. That endpoint is now read (`rows_of` unwraps
+`job_statuses`) and is the RELIABLE list for verified creates; a status name Zuper holds more than
+once is reported ("delete the extra in Zuper") and one of them is linked.
