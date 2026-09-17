@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Pipeline, Stage, ZuperMapping
-from . import client, config, engine, mapping, zapi
+from . import client, config, engine, mapping, webhook, zapi
 from .client import ZuperError
 
 PASS, FAIL, BY_HAND = "pass", "fail", "confirm_by_hand"
@@ -40,7 +40,8 @@ PASS, FAIL, BY_HAND = "pass", "fail", "confirm_by_hand"
 # Items the Zuper API cannot report: always confirmed by hand (checklist letters in brackets).
 HAND_ITEMS = [
     ("company", "Company time zone America/New_York and currency USD (A)"),
-    ("old_key_deleted", "The earlier API key under the owner's own user is deleted (B3)"),
+    ("old_key_deleted", ("The API key the sync uses is NOT deleted — with no free seat it is "
+                         "the owner's own Admin key, so checklist step B3 does not apply (B3)")),
     ("lead_tag", "Master tag “Lead” exists (F)"),
     ("portal_invites", "Customer portal welcome / invite emails are OFF (G1)"),
     ("job_notifications",
@@ -197,21 +198,10 @@ def check_lead_sources(db: Session, commit: bool) -> dict:
                 % len(mapping.ZUPER_LEAD_SOURCES))
 
 
-def check_webhook() -> dict:
+def check_webhook(db: Session) -> dict:
     title = "A Zuper webhook points at this CRM"
-    url = config.crm_base_url() + "/api/zuper/webhook"
-    try:
-        rows = zapi.webhooks()
-    except ZuperError as exc:
-        if exc.kind in ("not_found", "bad_response"):
-            return item("webhook", title, BY_HAND,
-                        "Zuper did not list its webhooks; confirm one posts to %s with the "
-                        "X-Webhook-Token header." % url)
-        raise
-    ours = [w for w in rows if url in str(w.get("webhook_url") or w.get("url") or "")]
-    if not ours:
-        return item("webhook", title, FAIL, "No webhook posts to %s yet (runbook step 7)." % url)
-    return item("webhook", title, PASS, "%d webhook(s) post to this CRM." % len(ours))
+    state, sentence = webhook.setup_state(db)
+    return item("webhook", title, {"pass": PASS, "fail": FAIL}.get(state, BY_HAND), sentence)
 
 
 def pipelines(db: Session) -> dict[str, Pipeline]:
@@ -285,7 +275,7 @@ def run_checks(db: Session, *, commit: bool) -> list[dict]:
                              "Job fields in group “Checklist” (D)"),
         lambda: check_lead_sources(db, commit),
         lambda: check_categories(db),
-        check_webhook,
+        lambda: check_webhook(db),
     ]
     for check in checks:
         try:
@@ -332,6 +322,7 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
     ctx = engine.Ctx(db)
     report = {"categories": [], "created_categories": 0, "created_statuses": 0,
               "linked_statuses": 0, "renamed_statuses": 0}
+    zapi.ACCEPTED_SHAPES.clear()
     existing = {zapi.category_name(c): c for c in zapi.categories()}
     found = pipelines(db)
     for pipeline_name, category_name in mapping.CATEGORIES.items():
@@ -393,6 +384,7 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
             entry["statuses"].append(row)
     if commit:
         db.commit()
+    report["accepted_shapes"] = dict(zapi.ACCEPTED_SHAPES)
     return report
 
 
@@ -457,6 +449,9 @@ def render(report: dict) -> str:
         lines.append("categories: %d to create; statuses: %d to create, %d to link, %d to "
                      "rename" % (cats["created_categories"], cats["created_statuses"],
                                  cats["linked_statuses"], cats["renamed_statuses"]))
+        if cats.get("accepted_shapes"):
+            lines.append("Zuper accepted these create bodies: %s" % ", ".join(
+                "%s = %s" % kv for kv in sorted(cats["accepted_shapes"].items())))
         for c in cats["categories"]:
             lines.append("  %s -> %s: %s%s (ordered by %s)" % (
                 c["pipeline"], c["category"], verb, c.get("action", c.get("problem")),

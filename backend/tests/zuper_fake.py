@@ -62,6 +62,7 @@ class FakeZuper:
     # keeps the custom headers it was sent.
     webhook_events: set[tuple[str, str]] | None = None
     keeps_webhook_headers: bool = True
+    webhooks_listable: bool = True          # False: both list endpoints answer 404 (live, 09-17)
     users: list[dict] = field(default_factory=lambda: [dict(SYNC_USER), dict(OFFICE_USER)])
     me: dict = field(default_factory=lambda: dict(SYNC_USER))
     # Settings the check reads. None = Zuper answers 404 (the "confirm by hand" path).
@@ -235,7 +236,9 @@ class FakeZuper:
             (r"/settings/lead_sources", ("GET", lambda p, b: self.not_found()
                                          if self.lead_sources is None else self.ok(
                 self.lead_sources))),
-            (r"/service/notifications/webhook", ("GET", lambda p, b: self.ok(self.webhooks))),
+            (r"/service/notifications/webhook", ("GET", lambda p, b: self.ok(self.webhooks)
+                                                 if self.webhooks_listable
+                                                 else self.not_found())),
             (r"/webhook", ("POST", self.create_webhook)),
         ]
 
@@ -298,17 +301,22 @@ class FakeZuper:
         return self.ok({"webhook_uid": uid})
 
     def create_category(self, params, body) -> httpx.Response:
+        # Live Zuper (2026-09-17) refused the wrapped body with "Category Name Missing".
+        if not body.get("category_name"):
+            return self.error("Category Name Missing")
         uid = self.uid("cat")
-        self.categories[uid] = {"category_uid": uid,
-                                "category_name": body["job_category"]["category_name"]}
+        self.categories[uid] = {"category_uid": uid, "category_name": body["category_name"]}
         self.statuses[uid] = []
         return self.ok({"category_uid": uid})
 
     def create_status(self, params, body, cat) -> httpx.Response:
+        fields = body.get("job_status") or body
+        if not fields.get("status_name"):
+            return self.error("Status Name Missing")
         uid = self.uid("st")
         self.statuses.setdefault(cat, []).append(
-            {"status_uid": uid, "status_name": body["job_status"]["status_name"],
-             "status_type": body["job_status"].get("status_type")})
+            {"status_uid": uid, "status_name": fields["status_name"],
+             "status_type": fields.get("status_type")})
         return self.ok({"status_uid": uid})
 
     def rename_status(self, params, body, cat, status) -> httpx.Response:

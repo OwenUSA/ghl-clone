@@ -89,9 +89,40 @@ def categories() -> list[dict]:
     return rows_of(request("GET", path("categories")))
 
 
+# Which body shape Zuper accepted for a create whose shape is UNVERIFIED, by kind — shown by
+# the setup report so the first live run tells which one is right.
+ACCEPTED_SHAPES: dict[str, str] = {}
+
+
+def create_first_accepted(kind: str, api_path: str, shapes: list[tuple[str, dict]],
+                          key: str) -> str:
+    """POST each candidate body in turn until Zuper accepts one; return the new uid.
+
+    Only a REJECTION (Zuper's 4xx or {"type": "error"}) moves on to the next shape: a
+    refused create made nothing. Anything else — an outage, or an answer the sync cannot
+    read after a create that may have gone through — stops, so a record is never made
+    twice. All refused: one error carrying Zuper's message for every shape."""
+    refused = []
+    for name, body in shapes:
+        try:
+            uid = uid_of(request("POST", api_path, body=body), key)
+        except ZuperError as exc:
+            if exc.kind != "rejected":
+                raise
+            refused.append("%s → %s" % (name, exc.detail or "rejected"))
+            continue
+        ACCEPTED_SHAPES[kind] = name
+        return uid
+    raise ZuperError("rejected", "Zuper refused every %s body tried: %s" % (
+        kind, "; ".join(refused)))
+
+
 def create_category(name: str) -> str:
-    return uid_of(request("POST", path("categories"),
-                          body={"job_category": {"category_name": name}}), "category_uid")
+    # 2026-09-17, live: {"job_category": {"category_name": …}} → "Category Name Missing".
+    fields = {"category_name": name}
+    return create_first_accepted("category", path("categories"), [
+        ("flat", dict(fields)), ("category", {"category": dict(fields)}),
+        ("job_category", {"job_category": dict(fields)})], "category_uid")
 
 
 def statuses(category_uid: str) -> list[dict]:
@@ -99,9 +130,10 @@ def statuses(category_uid: str) -> list[dict]:
 
 
 def create_status(category_uid: str, name: str, status_type: str) -> str:
-    body = {"job_status": {"status_name": name, "status_type": status_type}}
-    return uid_of(request("POST", path("status_create", category_uid=category_uid), body=body),
-                  "status_uid")
+    fields = {"status_name": name, "status_type": status_type}
+    return create_first_accepted("status", path("status_create", category_uid=category_uid), [
+        ("flat", dict(fields)), ("job_status", {"job_status": dict(fields)}),
+        ("status", {"status": dict(fields)})], "status_uid")
 
 
 def rename_status(category_uid: str, status_uid: str, name: str) -> None:
@@ -291,8 +323,8 @@ def lead_sources() -> list[dict]:
     return rows_of(request("GET", path("lead_sources")))
 
 
-def webhooks() -> list[dict]:
-    return rows_of(request("GET", path("webhooks")))
+def webhooks(path_name: str = "webhooks") -> list[dict]:
+    return rows_of(request("GET", path(path_name)))
 
 
 def create_webhook(web_hook: dict) -> Any:

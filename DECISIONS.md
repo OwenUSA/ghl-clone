@@ -5414,5 +5414,12 @@ is switched ON. `python -m app.zuper.webhook` (dry run; `--commit`) registers on
 JSON to `/api/zuper/webhook` with the `X-Webhook-Token` header (or `?token=` if Zuper keeps no
 header). Idempotent by module + event + URL (query ignored); never edits or deletes a Zuper webhook;
 the first refusal stops it with Zuper's message. Event names and the header field are UNVERIFIED
-constants. Also: the initial load now STOPS on the first refused record of a kind (as the runbook
+constants. Zuper did not list webhooks on the first live read (both candidate list endpoints are
+tried), so each registered webhook is also recorded as a `zuper_mappings` row (crm_type "webhook",
+committed "creating" before the POST; a refused create drops it; an unknown outcome is never
+retried) — that record keeps it idempotent and lets the setup check pass. The first live
+`setup --commit` was refused "Category Name Missing" for `{"job_category": {...}}`: category and
+status creates now try candidate body shapes (flat first) ONLY while Zuper refuses, never after an
+answer that may have created something. Checklist item B3 now reads "do NOT delete the key" (the
+sync uses the owner's own key). Also: the initial load now STOPS on the first refused record of a kind (as the runbook
 already promised) and keeps the reason for later per-record refusals.

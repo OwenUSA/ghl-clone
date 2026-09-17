@@ -446,3 +446,67 @@ def test_a_refusal_after_the_first_success_is_counted_with_its_reason(armed, fak
     # The refused customer is tried again when its card is sent, and made exactly once.
     crm_ids = [mapping.custom_values(c)["CRM Contact ID"] for c in fake.customers.values()]
     assert len(crm_ids) == 3 == len(set(crm_ids))
+
+
+# ------------------------------------------------------------------ unverified create bodies
+
+def test_setup_commit_uses_the_category_body_zuper_accepts(zworld, fake):
+    """Live Zuper refused {"job_category": {...}} with "Category Name Missing" (2026-09-17):
+    the flat body goes first, one POST per category, and the report names the shape."""
+    report = run_setup(commit=True)
+    assert {c["category_name"] for c in fake.categories.values()} == {"AHS", "Retail"}
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 2
+    assert report["categories"]["accepted_shapes"]["category"] == "flat"
+    assert "Zuper accepted these create bodies: category = flat" in setup.render(report)
+
+
+def test_a_refused_body_shape_falls_through_to_the_next_without_duplicates(zworld, fake,
+                                                                          monkeypatch):
+    real = fake.create_category
+
+    def wrapped_only(params, body):
+        if "category" not in body:
+            return fake.error("Unexpected field category_name")
+        return real(params, body["category"])
+
+    monkeypatch.setattr(fake, "create_category", wrapped_only)
+    report = run_setup(commit=True)
+    assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 4       # flat refused, then wrapped
+    assert report["categories"]["accepted_shapes"]["category"] == "category"
+    assert report["passed"]
+
+
+def test_every_shape_refused_stops_with_each_message_and_creates_nothing(zworld, fake,
+                                                                         monkeypatch):
+    monkeypatch.setattr(fake, "create_category",
+                        lambda params, body: fake.error("Category Name Missing"))
+    assert setup.main(["--commit"]) == 2
+    assert fake.categories == {}
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count(ZuperMapping.id))) == 0
+    with pytest.raises(ZuperError) as caught, SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    assert "refused every category body tried" in caught.value.detail
+    assert caught.value.detail.count("Category Name Missing") == 3
+
+
+def test_an_unreadable_answer_to_a_create_is_never_retried_with_another_shape(zworld, fake,
+                                                                            monkeypatch):
+    """The create may have gone through: trying another body could make a second category."""
+    real = fake.create_category
+
+    def made_but_unreadable(params, body):
+        real(params, body)
+        return fake.ok(message="created")                   # no category_uid anywhere
+
+    monkeypatch.setattr(fake, "create_category", made_but_unreadable)
+    with pytest.raises(ZuperError) as caught, SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    assert caught.value.kind == "bad_response"
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 1
+    assert len(fake.categories) == 1
+    # The rerun links the category Zuper already has by name: still one "AHS".
+    monkeypatch.setattr(fake, "create_category", real)
+    run_setup(commit=True)
+    assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
