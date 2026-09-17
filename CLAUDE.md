@@ -65,7 +65,8 @@ Get-NetTCPConnection -LocalPort 8000 -State Listen |
 ## Auth
 
 Every `/api` route requires a credential. The only exceptions are `/api/health`,
-`/api/auth/login`, `/api/auth/refresh` and `/api/auth/logout`.
+`/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout` and `/api/zuper/webhook` (its own
+shared token in `X-Webhook-Token`; 503 while the Zuper sync is off — 2026-09-16).
 
 - **Browser** — JWT in an httpOnly cookie, 15 min access + 7 day refresh, plus a
   double-submit CSRF token on cookie-authenticated writes.
@@ -529,3 +530,42 @@ pending suggestion staff approve (`POST /api/ai/suggestions/{id}/approve`, exact
   metrics, gaps, connections and settings are ADMIN. `test_ai_permissions.py` enumerates the router.
 - The worker runs agent runs as ordinary jobs; a failed run is logged as `error` and never retried
   (a retry could text a customer twice). See the 2026-09-15 AI Agents amendment in `DECISIONS.md`.
+
+## Zuper: the source of truth for jobs — built, switched OFF (2026-09-16)
+
+`backend/app/zuper/` (read `__init__.py` first). The CRM captures customers; Zuper owns jobs,
+quotes, invoices, payments and reports. Every rule: the 2026-09-16 Zuper amendment in `DECISIONS.md`.
+
+- **What reaches Zuper:** a Retail card only when an ADMIN / unrestricted DISPATCHER presses **Send
+  to Zuper** (`POST /api/opportunities/{id}/zuper/send`; name, phone and the JOB's address first);
+  an AHS email card automatically; the day-one load (`python -m app.zuper.load`, dry run; all AHS +
+  Retail Scheduled / Inspection / Estimate / Estimate Sent open / Invoice open+won); new qualifying
+  Workiz jobs before cutover (the sweep). Leads never. An AI agent only SUGGESTS a send.
+- **A sent card is a mirror — `app/zuper/locks.py`.** Stage, visits, job address, value, title,
+  status, pipeline, owner, and its customer's name / phone / email / address answer **409 "Change
+  this in Zuper"** on every path. A new route that edits any of them must call the lock. Notes,
+  Checklist answers and tasks still sync both ways. Agents turn change requests into urgent tasks.
+- **No automations on Zuper jobs:** paid → Won and declined → task were dropped;
+  `app/zuper/outcomes.py` is the switched-off hook.
+- **Lead outcome** (`app/lead_outcomes.py`, CRM-only): required when a never-booked card is closed
+  lost / abandoned; "Other" needs a note; modal, bulk, AI action, `GET /api/reports/lead-outcomes`.
+- **Off three ways:** `ZUPER_SYNC_ENABLED` (default false — zero requests, nothing queued, the
+  webhook 503), the Settings → Zuper switch (refused until the setup check passes and every
+  confirm-by-hand item is ticked), and `ZUPER_API_KEY` / `ZUPER_API_KEY_FILE`.
+- **`app/zuper/client.py` is the only code that talks to Zuper:** a denylist (texting, calling,
+  every send, portal invites, notifications, any write to money documents) and an allowlist are
+  checked before a request exists. **No test reaches Zuper:** `tests/zuper_guard.py`; mock with
+  `tests/zuper_fake.py` (fixtures `fake`, `zworld`, `armed`, `loaded` in conftest).
+- **CRM changes are queued by a flush listener** after the ROOT commit (a SAVEPOINT commit does
+  not count). A session with `info["zuper_quiet"]` queues nothing (the sync, the Workiz importer);
+  the 15-minute sweep finds those by content hash. `zuper_*` jobs run on the worker's Zuper thread,
+  never the main drainer.
+- **Deletes are mirrored both ways** for sent jobs / customers, snapshotted first, restorable from
+  Settings → Zuper; a contact with unsent cards or conversations is never deleted by Zuper.
+- **Workiz cutover date** (Settings → Zuper): before it the importer's job changes are pushed; on
+  and after it the importer refuses (exit 10).
+
+```bash
+uv run python -m app.zuper.setup            # DRY RUN checks; --commit makes the AHS / Retail categories
+uv run python -m app.zuper.load             # DRY RUN day-one load; --commit sends, resumable
+```

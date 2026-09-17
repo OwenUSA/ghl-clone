@@ -5075,3 +5075,332 @@ Set **`CRM_LINK_FROM_NUMBER=+19547758492`** in the CRM's `.env.prod` (production
 has it) and restart. Nothing else: the frontend has no copy left to update. Verify with
 `curl -s https://crm.dreamteamroofingfl.com/api/connection-status` as a signed-in user —
 `our_line` is the answer every screen shows.
+
+## AMENDMENT (2026-09-16): Zuper — the source of truth for jobs; Send to Zuper, mirror locks, lead outcome. Built switched OFF
+
+The owner's decisions, grilled twice on 2026-09-16 (the brief, then `zuper-decisions-v2`, which
+REPLACED its ownership rules, which records sync and when, the automatic outcomes, deletes and
+the initial-load selection). Roles: **the CRM captures customers** — AI agents answer retail
+campaign calls and texts, every lead is tracked, all calls and texts live here; **Zuper is the
+source of truth for jobs** (AHS and Retail) and owns quotes, invoices, payments and reports
+(QuickBooks Online later: keep the API-key user separate from any QBO sync user). Branch
+`feature/zuper-sync`. Code: `backend/app/zuper/` (its `__init__.py` is the map),
+`backend/app/lead_outcomes.py`, a thread in `app/worker.py`, the flush listener registered in
+`app/db.py`; screens `components/ZuperSettings.tsx`, `ZuperMoneyPanel.tsx`, `ZuperPhotos.tsx`,
+`lib/zuper.ts`, plus the Send / locks / lead outcome controls listed under Screens.
+
+### What this AMENDS, explicitly
+
+* **"Nothing here ever deletes a deal" / "never delete opportunities as a side effect"
+  (CLAUDE.md, the pipeline delete rule, `owen_call_id`)** — for SENT jobs and their customers,
+  **deletes are mirrored both ways** (the owner's explicit choice). A job deleted in Zuper deletes
+  its card here with the CRM's own delete semantics (visits detached; the card's own notes, tasks
+  and links removed). A customer deleted in Zuper deletes the contact ONLY when nothing else of the
+  CRM's hangs off it: **a contact that also has an unsent card or any conversation is kept** — only
+  its sent cards are removed — and that is logged ("kept"). BEFORE every mirrored delete a full
+  restorable snapshot (the row, its own children's rows, the ids it detached, and for a contact
+  every conversation and event) goes to `zuper_delete_snapshots`, listed on Settings → Zuper →
+  "Deleted by sync" with Restore. Nothing cascades beyond the record's own children. A visit is
+  still never deleted: a Zuper appointment deleted cancels the CRM visit (status), logged.
+* **A card's stage, visits, address, value, title, status, pipeline and owner, and a customer's
+  name, phone, email and address, are no longer editable in the CRM once the card is sent** — the
+  mirror locks, below. This amends every screen and route that edited them (the modal, the board
+  drag, bulk actions, the calendar, the contact panel, the CLI, AI agents).
+* **"Suggest turns every write into a suggestion" (AI Agents, 2026-09-15)** — two exceptions:
+  `suggest_send_to_zuper` is ALWAYS a suggestion, even on Auto-pilot; and a change request on a
+  sent job (reschedule, cancel, book, move stage) is carried out at once in every mode but Try-it,
+  because what it does is create an urgent task for staff — it changes nothing else.
+* **"A task notifies nobody" (2026-09-13)** — still true; the change-request task is urgent and
+  assigned to the card owner, and notifies nobody.
+* **Closing a card** (status lost / abandoned) that was never booked now requires a **lead
+  outcome**. Every card closed before this stays blank; nothing is backfilled.
+* **The Workiz importer** — gains ONE refusal: on and after the **Workiz cutover date** (Settings →
+  Zuper; empty = Workiz still in use) it refuses before reading the export (exit 10, with the
+  sentence). Its session is marked quiet so the sync's listener adds no `jobs` row: its jobs-table
+  guard is untouched and still holds (tested with the sync armed).
+* **`auth.EXEMPT`** — one more path, `/api/zuper/webhook`: no user credential, its own shared
+  token (below). `test_auth.py` still enumerates every other route.
+* **`queue.claim`** takes `types` / `exclude_types`: the main drainer no longer claims
+  `zuper_push` / `zuper_delete` / `zuper_send`, which the worker's Zuper thread drains, so a slow
+  or rate-limited Zuper never delays anything else. Every existing job type is unchanged.
+* **The access audits** (`test_only_assigned_data.py`, `test_pipeline_permissions.py`) list the
+  new routes; their module filters cover `app/zuper/api.py`.
+* **AI agents still never create contacts or opportunities**, and never write to Zuper.
+  Sync-created contacts and cards (`created_by = "Zuper sync"`) come only from Zuper jobs.
+
+### Which records reach Zuper, and when
+
+* **Retail: only when an ADMIN or an unrestricted DISPATCHER presses Send to Zuper** on the card
+  (`POST /api/opportunities/{id}/zuper/send`; a TECH or any "Only assigned data" user: 403). First
+  required, each missing one a sentence and the button disabled with them: the customer (a contact)
+  with a name and a phone, and **the JOB's address** — street, city, state, ZIP on the card (the
+  contact's can be copied with "Use contact address"). The card is a locked mirror from the moment
+  Send is pressed ("queued"); the worker sends the customer (found by its CRM id, else created),
+  the job, its visits, notes and tasks. A second press does nothing. A send Zuper refuses shows
+  "failed" with the sentence, and Send can be pressed again.
+* **AI agents may NOT send.** `suggest_send_to_zuper` makes a pending suggestion; a staff approval
+  sends once (the suggestion's exactly-once approval), whatever the agent's mode.
+* **AHS:** a card made by `POST /api/ahs-jobs` is sent automatically right after creation — only
+  while the sync is armed and the card has what a send needs; otherwise nothing is queued and it can
+  be sent by hand. The ingest's response is unchanged (owen-main's contract).
+* **Leads that never book stay CRM-only.** A contact reaches Zuper only as the customer of a sent
+  job. A customer created in Zuper with no job creates no contact here.
+* **The day-one load** (`python -m app.zuper.load`, dry run; `--commit`): EVERY card in the AHS
+  pipeline, and Retail cards in **Scheduled, Inspection / Estimate, Estimate Sent (open)** and
+  **Invoice (open and won)** — selected by stage NAME inside the Retail pipeline; the dry run prints
+  the count per group; a missing named stage is a refusal with a sentence. Retail New Lead and
+  Follow Up stay CRM-only. A selected card a send would refuse (no customer, name, phone or job
+  address) is skipped and listed by id, never sent half-made (judgement call).
+* **New Workiz jobs before the cutover date:** an AHS one is sent; a Retail one is sent when the
+  import files it in a booked or owing stage. The 15-minute sweep does it, because the importer may
+  queue nothing itself. After cutover the importer refuses.
+* A job created in Zuper in the AHS or Retail category becomes a card here (its customer a contact,
+  created if needed); Zuper's template categories are ignored.
+
+### After a card is sent: the mirror
+
+* The card stays on its board. **Zuper-only, refused server-side with 409 "Change this in Zuper…"
+  before anything is written** (`app/zuper/locks.py`), and disabled in the UI with that reason:
+  stage, schedule / visits, job address, value, title, status, pipeline, owner — and the name,
+  phone, email and address of any contact that has at least one sent card. Paths: the modal's
+  PATCH (an unchanged echo passes), the board drag, bulk stage and owner (refused whole), book /
+  edit / cancel a visit (the calendar and its drag), the contact PATCH, the CLI (it is the API) and
+  AI actions (they call the same services). The locks hold whether or not the sync is switched on.
+* **Editable in the CRM and synced both ways:** notes, Checklist answers, opportunity tasks ↔ Zuper
+  service tasks (completion included). The CRM-owned "CRM" job fields go to Zuper.
+* **The board** badges a sent card "Managed in Zuper" and does not drag it; the modal shows the
+  badge and a link to the job (`ZUPER_JOB_URL_TEMPLATE`, default
+  `https://app.zuperpro.com/jobs/{uid}/details` — UNVERIFIED). **The calendar** draws a sent job's
+  visits read-only.
+* **AI agents** read the mirrored job in `get_context` — status, visits, quotes and invoices — and a
+  change request on a sent job (reschedule, cancel, book, move stage; there is no address action)
+  becomes an URGENT task for staff naming the Zuper job, assigned to the card owner, with zero
+  Zuper writes; the agent is told never to say it is done.
+* **Quotes, invoices and payments:** read-only, on the card ("Quotes & invoices") and in the contact
+  panel — number, status, total, balance, dates. The card's value follows the invoices' total, else
+  the approved quotes' total, once one exists.
+* **No automations run on Zuper jobs in the CRM.** "Invoice paid → Won" and "quote declined → urgent
+  task" were built and then DROPPED by the owner. `app/zuper/outcomes.py` is the one documented
+  place a future owner-approved rule would hook in: `ENABLED = False`, `RULES = []`, pinned by a test.
+
+### Field ownership on a sent job, every overwrite logged
+
+A three-way merge per field against `zuper_mappings.base` (what both sides last agreed):
+
+| field | winner |
+|---|---|
+| title, stage, job address, owner, value, a visit's schedule; the customer's details | **Zuper** |
+| a Workiz-origin job's title, stage, address, and its Workiz visit's schedule — before cutover | **Workiz** (the importer's value is pushed; a Zuper edit is put back) |
+| the "CRM" job fields (CRM Opportunity ID, CRM Link, Technicians, Workiz Job #, AHS Job ID, CompanyCam Project, Job Type) | **CRM** |
+| notes, Checklist answers, tasks | **latest edit** |
+
+`zuper_conflict_log` records each value a side had changed that the sync overwrote: record, field,
+rule, winner, side written to, before and after. Judgement calls, all overrulable:
+
+* A plain propagation (only one side changed) is counted, not logged.
+* The CRM owner follows Zuper's assigned user only when a CRM user has that email; a job assigned to
+  nobody the CRM knows leaves the CRM owner as it is (technicians have no Zuper users).
+* A Zuper Checklist answer the CRM question cannot hold (an option it does not offer) is put back in
+  Zuper and logged (`crm_cannot_hold`).
+* The importer bypass covers the job fields the owner named. The importer also rewrites a contact's
+  details; those are Zuper's, so the next sync puts them back (logged) and does not push them.
+* A card's primary contact is not on the lock list (the owner's list names the contact's details,
+  not which contact); changing it re-points nothing in Zuper.
+* Deleting a stage or pipeline still moves its cards (a structural admin edit, 2026-09-13), sent
+  ones included; the next sync puts a sent card back where Zuper has it when it can.
+
+### Switched off, three ways — and never notifying a customer
+
+1. `ZUPER_SYNC_ENABLED` (default false): the client refuses before a connection exists, the listener
+   returns on its first line, the worker's Zuper thread does nothing, the panels read only the local
+   cache, Zuper photos report "off", Send to Zuper answers 409, and the webhook answers **503** with
+   a sentence. Tested: CRM edits, deletes, a worker tick, the panels, the setup check and the webhook
+   make ZERO requests and queue nothing.
+2. The Settings → Zuper switch, refused (409, the reasons) until the setup check passes and every
+   "confirm by hand" item is ticked by an ADMIN. Un-ticking a safety item pauses the sync at once.
+3. `ZUPER_API_KEY` / `ZUPER_API_KEY_FILE`. The operator's commands (`python -m app.zuper.setup`,
+   `python -m app.zuper.load`) need only the key and are dry runs unless given `--commit`.
+
+`app/zuper/client.py` is the only code that sends a request to Zuper. Before anything is built it
+refuses a **denylist** — Zuper Connect `/telephony/*` (real SMS), every `send` endpoint (quotes,
+invoices, payment requests), customer-portal invites, notification sends, reminders, email
+endpoints — and every write to quotes, invoices, payments and credit notes; then an **allowlist**
+of exactly the endpoints used; then the off switch; then a dry run's writes. The region lookup
+(`accounts.zuperpro.com/api/config`) never gets the key. `tests/zuper_guard.py` (conftest) strips
+`ZUPER_*` and refuses DNS / connections to `*.zuperpro.com`; the fake Zuper records and fails any
+denylisted request that reached it. The customer-notification switches in Zuper are on the setup
+checklist (G1–G6) as confirm-by-hand items.
+
+### Speed, loops, the webhook, the sweep, the digest
+
+* **CRM → Zuper:** one flush listener (every path covered). After the ROOT commit — a SAVEPOINT's
+  commit does not count (the AI hooks run in one; found by a test) — one `zuper_push` job per
+  changed record of a SENT card (the card, its notes, its tasks), dedupe key
+  `zuper:push:<kind>:<id>`, written in a session of its own so a coalesced duplicate can never fail
+  the person's save; the job releases its key as it starts. A delete is snapshotted inside the
+  deleting transaction; `zuper_delete` mirrors it.
+* **Zuper → CRM:** `POST /api/zuper/webhook`, token in `X-Webhook-Token` (or `?token=` if Zuper cannot
+  send a custom header — UNVERIFIED); wrong or missing = 401 and nothing stored. Raw deliveries are
+  stored FIRST in `zuper_webhook_inbox` (a repeated body is one row); a signature header, if one ever
+  arrives, is verified as HMAC-SHA256 under `ZUPER_WEBHOOK_SECRET` (bad = 401, nothing stored).
+  Processing never trusts the payload: it drops events made by the "CRM Sync" user, re-reads the
+  record, and ignores content whose hash has not changed (echo).
+* **The 15-minute sweep:** Zuper records updated since the cursor (minus 5 minutes) for customers,
+  jobs, appointments, quotes and invoices, after checking every sweep, per list, that
+  `filter.updated_at_from` really narrows (asked for the future; if not, the list is paged whole and
+  compared on `updated_at`); deleted customers / jobs by `filter.is_deleted`; new qualifying Workiz
+  jobs sent; and CRM → Zuper by content hash for sent records (what a quiet importer session or a
+  paused switch changed; a mapped record gone from the CRM). At most 300 pushes a sweep. The initial
+  load starts the cursor.
+* 180 requests / minute (the account allows 200), 429 retried up to 6 times honouring Retry-After;
+  GETs retried twice on 5xx; an outage is a heartbeat error, never a crash.
+* **The daily digest:** one private note per customer on their most recently updated open SENT job:
+  `Sep 16 - 3 texts (2 in, 1 out) - 1 call, 4 min, answered - <CRM link>` — counts only, never a
+  message, recording or transcript (tested). America/New_York days, written after 01:00; from the
+  day the switch was first turned on.
+
+### Lead outcome (CRM-only)
+
+`opportunities.lead_outcome` / `lead_outcome_note` / `lead_outcome_set_at` (`app/lead_outcomes.py`):
+Spam, Wrong number, Not interested, Price shopping, Out of service area, Duplicate, No response,
+Other (+ a note, required for Other). **Required when a card is closed (lost / abandoned) without
+booking** — "booked" = it has a visit that is not cancelled, or was sent to Zuper — on the modal's
+PATCH and on Add opportunity. Settable in the modal, by bulk action
+(`POST /api/opportunities/bulk/lead-outcome`, STAFF) and by an AI agent (`set_lead_outcome`; Suggest
+mode makes it a suggestion). Reporting: `GET /api/reports/lead-outcomes?since&until&pipeline_id` —
+counts by source (the card's) and by campaign (`owen_campaign`), for the period the outcome was set,
+over the cards the reader may see; refused for restricted users like the other reports. Columns on
+the card rather than a table: one value per card, read with the card everywhere, never a history.
+Zuper never sees it.
+
+### Setup, the initial load, Settings → Zuper
+
+`python -m app.zuper.setup` checks every item of the owner's checklist with GETs (the region when
+`ZUPER_COMPANY_NAME` is set, the key's user is "CRM Sync" with Admin rights, the customer and job
+fields with exact labels, types and options, the lead sources, the categories and statuses, a
+webhook pointing at this CRM). Where Zuper documents no way to read a setting (notification
+switches, the Lead master tag, company time zone / currency, the old key deleted, and — until the
+first probe shows otherwise — custom-field definitions and lead sources) the item is **confirm by
+hand**. `--commit` creates the categories "AHS" and "Retail" with the pipelines' stages 1:1 as
+statuses, mapped by uid (board order: position, then id — every Retail stage has position 0 in
+production, so id decides; AHS's empty "Submit Invoices" included; a repeated name gets " (2)"), and
+records the results. The load is idempotent (customers and jobs indexed by their CRM id field before
+anything is created — Zuper has no idempotency keys), resumable (each record committed `creating`
+before its create, so a crash is followed by a search, never a duplicate), rate-limited, and ends
+with a verification report (CRM vs Zuper per type, mismatches by id). Reports carry counts and ids
+only. Settings → Zuper (ADMIN): connection, the switch, the cutover date, setup results with
+confirm-by-hand ticks, heartbeat, counts per type, errors in sentences, the webhook inbox, the load
+report, the conflict log and "Deleted by sync" with Restore.
+
+### Screens — OURS; GoHighLevel has no Zuper screens
+
+Built in the Opportunities module's rebuilt style (refs/opps; `components/opportunity/ui.tsx`
+tokens, the CompanyCam and My Staff cards and tables). No emoji; outline icons. Every assumption:
+
+* **Settings → Zuper** (ADMIN only; section after CompanyCam): chips green (On, PASS,
+  Paid/Approved), amber (Paused, Confirm by hand, Partial), red (FAIL, Declined/Void/Overdue), blue
+  (other statuses), grey (Off, Draft). The switch asks for confirmation both ways (My Staff's
+  dialog) and shows a 409 sentence under it; while anything blocks it the switch is NOT drawn — "The
+  sync can be switched on when:" and the reasons are listed. Cutover date: a date input, Save faded
+  until a new date is typed, Clear only when a date is saved; "Workiz is still in use" /
+  "…until <date>" / "Workiz retired on <date> — the importer refuses to run". "Run setup check"
+  is replaced by a sentence without the env flag or the key; each confirm-by-hand item shows
+  "Confirmed by hand — by <email> at <time>", and un-ticking goes straight to the server (which
+  pauses the sync). Tables page 25 rows, Previous / Next only past one page. The conflict log's
+  Record column reads "Opportunity #id" with the Zuper uid beneath; `value` before / after reads as
+  money, other values cut at 120 characters, objects as JSON; rule names in words (lib/zuper.ts);
+  field labels: `cl:` → "Checklist: …", `crm:` → the label, first_name → "First name", company →
+  "Business name", source → "Lead source", owner_email → "Owner", starts_at / ends_at → "Start" /
+  "End", body → "Note". "Deleted by sync" states: Waiting, Mirrored, Skipped, Kept, Failed, Restored,
+  Restore failed; Restore only on restorable rows, with a dismissible result box. Failed sync jobs
+  read "Push a change", "Mirror a delete", "Send a card". Times in America/New_York
+  ("Sep 16 2026, 9:17 AM (EDT)").
+* **Send to Zuper**: a line under the modal title. Not sent: "Send to Zuper" with a confirmation
+  saying the customer and job are created in Zuper and what becomes Zuper-owned; disabled when it
+  cannot be sent, the sentences as its tooltip AND as grey text beside it (reasons must not be
+  hover-only); not drawn at all for a technician or an "Only assigned data" user. Queued: a
+  "Sending to Zuper…" chip; the modal re-checks every 3 s. Sent: a "Managed in Zuper" badge, "Open
+  in Zuper" when a job link is configured, and the sent time. Failed: the sentence and "Send to
+  Zuper again".
+* **The locks in the UI**: title, pipeline, stage, status, value, owner and the job address inputs
+  disabled and greyed with the tooltip "Change this in Zuper"; "Use contact address" is not drawn on
+  a locked card (the Address heading carries the reason); the Checklist's linked address (and, for a
+  locked contact, the linked email) disabled; booking disabled with "This job's visits are scheduled
+  in Zuper." A managed board card shows the badge, does not lift or start a text selection, and a
+  drop of one is ignored. The calendar has no drag or resize today; a locked visit is marked, and its
+  dialog keeps the fields visible but disabled and offers only Close, with "This visit belongs to a
+  job managed in Zuper. Change this in Zuper." The contact panel says once that the customer's
+  details are managed in Zuper (its address is not editable there anyway), and Add opportunity locks
+  a locked contact's email and phone.
+* **Quotes & invoices** (modal nav item after Photos, before AI agent; drawn only when the card is
+  linked or has a document): "From Zuper — read only", last synced; Quotes (Number, Status, Total,
+  Date, Expires) and Invoices (Number, Status, Total, Balance, Date, Due); "No quotes or invoices in
+  Zuper for this job yet."; "The Zuper sync is paused / off, so these may be out of date."; dates
+  "Sep 10, 2026", never time-zone shifted. Contact panel: a collapsible "Zuper quotes & invoices (n)"
+  drawn only with documents, rows "Quote Q-1001" / "Invoice INV-7", chip, "$total · card title"
+  (the title opens the card). Zuper photos: a "Zuper · N files on the job in Zuper" group below
+  CompanyCam's, a thumbnail opens the file in a new tab (CompanyCam's viewer would print "Photo by
+  unknown"); one line when unavailable, nothing when off or not linked.
+* **Lead outcome**: a full-width "Lead outcome" select under Status, shown when the status is Lost or
+  Abandoned or an outcome exists; a required note box for Other (a note on another outcome only when
+  one exists); Update / Create stays disabled with the server's exact sentences (pinned by a test).
+  Bulk "Set lead outcome" (not drawn for a TECH) with an inline note for Other. Reporting → "Lead
+  outcomes": the shared date range (the end day included), a pipeline select, By source and By
+  campaign tables, blank rows "No source" / "No campaign", zero cells grey.
+* **Deep links** `/opportunities?opportunity=<id>` and `/contacts?contact=<id>` (the "CRM Link"
+  fields) open the record through `openRecord`, then drop the parameter so a reload does not reopen
+  it; other parameters are kept.
+* `tests/browser_zuper.py` drives it in headless Chromium against a fake Zuper on a throwaway SQLite
+  (73 checks): setup check, confirm by hand, switch on, the load, a Send (one customer and one job
+  POST, a second press answers "already"), a managed card's drag and title PATCH refused with
+  nothing changed, the locked visit and contact, closing a lead (no outcome refused, Other without a
+  note refused), the Lead outcomes report, a technician with no Send button and a 403, the conflict
+  log, Restore, money panels and Zuper photos.
+
+### Zuper facts relied on that are UNVERIFIED (no key on the build machine)
+
+Every path is one constant in `client.PATHS` and every response is unwrapped in `zapi.py`, so a wrong
+guess is a one-line fix. The first live **read-only** probe (GETs only, the CRM Sync key, a quiet
+hour) should confirm, in order: `POST accounts.zuperpro.com/api/config {"company_name"}` answers
+`dc_api_url` (the one POST that writes nothing); `GET /user` returns the key's own user (first / last
+name, `user_uid`, role); `GET /user/all` rows carry `email` and `user_uid`; `GET
+/customers?page=1&count=1` wraps rows in `data` with `total_records` / `total_pages`, and a customer
+carries `customer_uid`, `customer_contact_no.mobile`, `customer_address{street,city,state,zip_code}`,
+`customer_company_name`, `customer_tags`, `custom_fields[{label,value}]`, `source_uid` or
+`customer_source`, `updated_at`, `is_deleted`; `filter.keyword`, `filter.updated_at_from` (asked for
+a future moment it must return 0 — the sweep checks this itself) and `filter.is_deleted=true` on
+customers AND jobs; `GET /jobs/category` and `GET /jobs/status/{category_uid}` field names; a job's
+`job_category`, `current_job_status{status_uid}`, `customer`, `assigned_to`, `customer_address`,
+`custom_fields`; `GET /jobs/{uid}/note`, `/service_tasks`, `/attachments` and `GET
+/appointments?filter.job_uid=` exist, with their uid / text / status / time field names; `GET
+/estimate` and `GET /invoice` field names (number, status, total, balance, dates, `job.job_uid`);
+`GET /settings/custom_fields?module=` and `/settings/lead_sources` (a 404 keeps them confirm-by-hand);
+`GET /service/notifications/webhook`. NOT probe-able read-only — confirmed on the first Send of ONE
+test card in a quiet hour, then its deletion in Zuper checked against "Deleted by sync": the create /
+update bodies (`{"customer": …}`, `{"job": …}` with `job_uid` in the body for `PUT /jobs`), `POST
+/jobs/status_new/{category}` with `status_type` NEW / STARTED, `PUT /jobs/{uid}/status` and
+`…/status/rollback`, note / service-task / appointment bodies, `POST /customers/{uid}/recover` and
+`POST /jobs/{uid}/recover`, whether PUT replaces or merges, the web link to a job, and the webhook
+payload and whether Zuper can send a custom header.
+
+### Not built
+
+Organizations and properties (the company name goes on the customer); Zuper "Requests"; pushing
+CompanyCam photos into Zuper (the link only, as decided); recovering deleted Zuper notes / tasks /
+visits by a recover endpoint (none documented — they are re-created); any automatic outcome on money
+documents (dropped; the hook is off); a `ghl` CLI for the sync. **No request has ever been sent to
+Zuper from this server.**
+
+### Migration `f5c1e9a3d742`, on `e1b4d7c96a05` — ONE revision
+
+Eight CREATE TABLEs (`zuper_settings`, `zuper_mappings`, `zuper_sync_state`, `zuper_webhook_inbox`,
+`zuper_conflict_log`, `zuper_delete_snapshots`, `zuper_documents`, `zuper_digests`) with plain
+`op.create_index`es, and three nullable ADD COLUMNs on `opportunities` (`lead_outcome` VARCHAR(40),
+`lead_outcome_note` TEXT, `lead_outcome_set_at` TIMESTAMP). No ALTER of an existing column, no DROP,
+no UPDATE, no backfill, no batch mode in `upgrade()`; `server_default` on every non-nullable column
+with a default. Every reference to a CRM record is a plain integer, so no existing delete path gains
+a foreign key. `tests/test_zuper_migration.py` stands a SQLite up at `e1b4d7c96a05` with
+production-shaped rows, upgrades, and asserts every existing table's columns and rows unchanged (the
+three added columns at the end of `opportunities`, NULL), exactly the eight new tables, empty, their
+server defaults, a clean downgrade / upgrade round trip, and an `upgrade()` that only creates tables,
+creates indexes and adds columns.

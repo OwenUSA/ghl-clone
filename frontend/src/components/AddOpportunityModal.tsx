@@ -17,10 +17,14 @@ import {
 import {
   ADDRESS_FIELDS, addressForm, contactFallback, withContactAddress, type AddressForm,
 } from '../lib/opportunityAddress'
+import {
+  LOCK_REASON, contactFieldLocked, leadOutcomeProblem, showLeadOutcome,
+} from '../lib/zuper'
 import { prefillFrom } from '../lib/phoneMatch'
 import { AddContactDialog } from './AddContactDialog'
 import { CustomFieldAnswers, type LinkedValues } from './CustomFieldAnswers'
 import { CUSTOM_FIELDS_PATH, NavItem } from './OpportunityDetail'
+import { LeadOutcomeFields } from './opportunity/LeadOutcomeFields'
 import { ContactSelect, MultiSelect, type Choice } from './opportunity/Pickers'
 import {
   BODY, BUTTON, DIVIDER, ErrorLine, FAINT, HEADING, INPUT, Label, MUTED, PRIMARY,
@@ -90,6 +94,9 @@ export function AddOpportunityDialog({
   const [pipelineId, setPipelineId] = useState(initialPipelineId)
   const [stageId, setStageId] = useState<number | null>(null)
   const [status, setStatus] = useState<string>('open')
+  // Zuper v2: a card created Lost / Abandoned says why (CRM-only).
+  const [leadOutcome, setLeadOutcome] = useState('')
+  const [leadOutcomeNote, setLeadOutcomeNote] = useState('')
   const [value, setValue] = useState('')
   const [ownerId, setOwnerId] = useState('')
   const [followers, setFollowers] = useState<Choice[]>([])
@@ -120,6 +127,9 @@ export function AddOpportunityDialog({
   const stage = stages.find((s) => s.id === stageId) ?? stages[0]
   const sections = modalSections(fields.data ?? [], groups.data ?? [], pipeline?.id)
 
+  // Zuper v2: a customer with a job managed in Zuper keeps their email and phone there.
+  const emailLocked = contactFieldLocked(loaded, 'email')
+  const phoneLocked = contactFieldLocked(loaded, 'phone')
   const shownEmail = email ?? loaded?.email ?? ''
   const shownPhone = phone ?? loaded?.phone ?? ''
   const emailChanged = email != null && !!loaded && email.trim() !== (loaded.email ?? '')
@@ -154,6 +164,10 @@ export function AddOpportunityDialog({
         // Dollars -> integer cents without a float in the middle; see api.ts.
         value_cents: centsFromDollars(value),
         status,
+        ...(showLeadOutcome(status, leadOutcome) ? {
+          lead_outcome: leadOutcome || null,
+          lead_outcome_note: leadOutcomeNote.trim() || null,
+        } : {}),
         owner_id: ownerId ? Number(ownerId) : null,
         follower_ids: followers.map((f) => f.id),
         business_name: t(businessName),
@@ -174,7 +188,9 @@ export function AddOpportunityDialog({
   const problem = !contact ? 'Choose a primary contact'
     : !title.trim() ? 'Opportunity name is required'
       : !stage ? `${pipeline?.name ?? 'This pipeline'} has no stages`
-        : null
+        : showLeadOutcome(status, leadOutcome)
+          ? leadOutcomeProblem({ status, booked: false, outcome: leadOutcome, note: leadOutcomeNote })
+          : null
   const ready = problem == null
   const touched = !!(contact || title.trim())
 
@@ -293,18 +309,18 @@ export function AddOpportunityDialog({
                     {field(<>
                       <Label>Primary email</Label>
                       <input value={shownEmail} aria-label="Primary email" placeholder="Enter email"
-                        type="email" disabled={!contact}
-                        title={contact ? undefined : 'Choose a primary contact first'}
+                        type="email" disabled={!contact || emailLocked}
+                        title={emailLocked ? LOCK_REASON : contact ? undefined : 'Choose a primary contact first'}
                         onChange={(e) => setEmail(e.target.value)}
-                        style={{ ...INPUT, ...(contact ? {} : { backgroundColor: 'rgb(249,250,251)' }) }} />
+                        style={{ ...INPUT, ...(contact && !emailLocked ? {} : { backgroundColor: 'rgb(249,250,251)' }) }} />
                     </>)}
                     {field(<>
                       <Label>Primary phone</Label>
                       <input value={shownPhone} aria-label="Primary phone" placeholder="Enter phone"
-                        disabled={!contact}
-                        title={contact ? undefined : 'Choose a primary contact first'}
+                        disabled={!contact || phoneLocked}
+                        title={phoneLocked ? LOCK_REASON : contact ? undefined : 'Choose a primary contact first'}
                         onChange={(e) => setPhone(e.target.value)}
-                        style={{ ...INPUT, ...(contact ? {} : { backgroundColor: 'rgb(249,250,251)' }) }} />
+                        style={{ ...INPUT, ...(contact && !phoneLocked ? {} : { backgroundColor: 'rgb(249,250,251)' }) }} />
                     </>)}
                   </div>
 
@@ -338,6 +354,11 @@ export function AddOpportunityDialog({
                         ))}
                       </Select>
                     </>)}
+                    {showLeadOutcome(status, leadOutcome) && (
+                      <LeadOutcomeFields outcome={leadOutcome} note={leadOutcomeNote}
+                        required={['lost', 'abandoned'].includes(status)}
+                        onOutcome={setLeadOutcome} onNote={setLeadOutcomeNote} />
+                    )}
                     {field(<>
                       <Label>Value</Label>
                       <div className="relative">

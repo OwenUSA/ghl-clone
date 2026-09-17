@@ -130,6 +130,7 @@ from .models import (
     User,
 )
 from .phones import store_phone
+from .zuper import config as zuper_config
 
 # Workiz timestamps carry no offset. The business is in Bradenton FL and every job
 # in the file is a van driving to a Florida address, so the wall-clock times in the
@@ -2465,6 +2466,14 @@ def run(clients_path: str, jobs_path: str, *, commit: bool,
             print("PREFLIGHT: %s" % p, file=sys.stderr)
         return 6
 
+    # Workiz's cutover to Zuper (2026-09-16): on and after the date set in Settings → Zuper
+    # the importer refuses, before it reads the export. Empty date = Workiz still in use.
+    with SessionLocal() as db:
+        retired = zuper_config.workiz_retired_sentence(db)
+    if retired:
+        print("REFUSED: %s" % retired, file=sys.stderr)
+        return 10
+
     try:
         clients = read_csv(clients_path)
         jobs = read_csv(jobs_path)
@@ -2481,6 +2490,11 @@ def run(clients_path: str, jobs_path: str, *, commit: bool,
             return 4
 
     with SessionLocal() as db:
+        # The Zuper sync's flush listener queues nothing for this session — a queued sync job
+        # is a `jobs` row, which the guard below would rightly refuse. The 15-minute sweep
+        # finds what the import changed by its content hash and pushes it (DECISIONS.md,
+        # 2026-09-16).
+        db.info["zuper_quiet"] = "workiz import"
         # The reminder guard. Counted inside the same transaction the import runs
         # in, so a job row appearing by any route at all takes the whole import
         # down with it rather than texting a customer about a roof we fixed in

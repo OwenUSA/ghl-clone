@@ -58,6 +58,8 @@ TZ = ZoneInfo("America/New_York")
 READ = "read"          # runs in every mode, Try-it included
 INTERNAL = "internal"  # AI-only bookkeeping (a knowledge gap): runs except in Try-it
 WRITE = "write"        # a change to the CRM or a message: Auto executes, Suggest suggests
+# Always a pending suggestion, whatever the mode (2026-09-16): only a person may carry it out.
+SUGGEST_ONLY = "suggest_only"
 VOICE = "voice"        # phase 3
 
 
@@ -316,7 +318,9 @@ def build_context(ctx: Context) -> dict:
                 checklist.append({"key": d.key, "question": d.label, "type": d.field_type,
                                   "options": list(d.options or []),
                                   "answer": answers.get(d.key)})
+        zuper = _zuper_job_context(db, o, stage)
         out["opportunities"].append({
+            **zuper,
             "id": o.id, "title": o.title, "status": o.status,
             "pipeline": pipeline.name if pipeline else None,
             "stage": stage.name if stage else None, "stage_id": o.stage_id,
@@ -361,6 +365,36 @@ def build_context(ctx: Context) -> dict:
     return out
 
 
+def _zuper_job_context(db, o: Opportunity, stage) -> dict:
+    """A card sent to Zuper (2026-09-16): what an agent may READ of the mirrored job — its
+    status, visits and money — and the rule that it never changes it."""
+    from ..models import ZuperDocument
+    from ..zuper import locks, mapping
+    if not locks.is_sent(db, o.id):
+        return {"managed_in_zuper": False}
+    m = mapping.mapping_for(db, "opportunity", o.id)
+    visits = [{"id": a.id, "title": a.title, "starts": local(a.starts_at),
+               "ends": local(a.ends_at), "status": a.status}
+              for a in db.scalars(select(Appointment).where(
+                  Appointment.opportunity_id == o.id).order_by(Appointment.starts_at)).all()]
+    money = [{"kind": d.kind, "number": d.number, "status": d.status,
+              "total": None if d.total_cents is None else "$%.2f" % (d.total_cents / 100),
+              "balance": None if d.balance_cents is None else "$%.2f" % (d.balance_cents / 100),
+              "issued_on": d.issued_on, "due_on": d.due_on}
+             for d in db.scalars(select(ZuperDocument).where(
+                 ZuperDocument.opportunity_id == o.id,
+                 ZuperDocument.removed_in_zuper.is_(False))).all()]
+    return {"managed_in_zuper": True,
+            "zuper_job": {"job": m.zuper_uid if m else None,
+                          "status": stage.name if stage else None, "visits": visits,
+                          "quotes_and_invoices": money,
+                          "rule": "This job is managed in Zuper. You may tell the customer its "
+                                  "status, visits and balance. You cannot change it: a "
+                                  "reschedule, cancellation, address change or stage move "
+                                  "you ask for becomes an urgent task for staff — never tell "
+                                  "the customer it is done."}}
+
+
 def _address(r) -> str | None:
     parts = [p for p in (r.address_street, r.address_city, r.address_state,
                          r.address_postal_code) if p and p.strip()]
@@ -401,6 +435,41 @@ def _thread(ctx: Context, *, create: bool = True) -> AiAgentThread | None:
         ctx.db.add(t)
         ctx.db.flush()
     return t
+
+
+def _change_request(ctx: Context, o: Opportunity, what: str, args: dict) -> Prepared:
+    """A write an agent wants on a job sent to Zuper: it becomes an urgent task for staff
+    naming the Zuper job (2026-09-16). Carried out at once in every mode but Try-it — it
+    changes nothing but the task list, and never writes to Zuper."""
+    from ..zuper import mapping
+    m = mapping.mapping_for(ctx.db, "opportunity", o.id)
+    job = m.zuper_uid if m is not None and m.zuper_uid else "(being sent)"
+    return Prepared("Ask staff to %s in Zuper (job %s)" % (what, job),
+                    {**args, "opportunity_id": o.id},
+                    o.id, {"change_request": True, "what": what, "job": job})
+
+
+def _execute_change_request(ctx: Context, prep: Prepared) -> dict:
+    from .. import opportunity_workspace as ws
+    db = ctx.db
+    o = db.get(Opportunity, prep.opportunity_id)
+    if o is None:
+        raise Refused("the opportunity no longer exists")
+    c = db.get(Contact, o.contact_id) if o.contact_id else None
+    title = "URGENT: %s asks to %s — change it in Zuper (job %s)" % (
+        c.name if c else o.title, prep.data["what"], prep.data["job"])
+    t = ws.add_task(db, o, ws.TaskCreate(
+        title=title[:255], description="Requested through AI: %s. This job is managed in "
+                                       "Zuper; the agent changed nothing." % ctx.agent_name,
+        assigned_user_id=o.owner_id, due_at=datetime.now(UTC)),
+        created_by_id=None, ai_agent_id=ctx.agent_id, priority="urgent")
+    return {"change_request": True, "task_id": t.id, "zuper_job": prep.data["job"],
+            "done_in_zuper": False}
+
+
+def _sent(ctx: Context, opportunity_id: int | None) -> bool:
+    from ..zuper import locks
+    return locks.is_sent(ctx.db, opportunity_id)
 
 
 class SendText(Action):
@@ -461,6 +530,9 @@ class BookAppointment(Action):
         opp_id = None
         if args.get("opportunity_id") is not None or ctx.subject.opportunity_id is not None:
             opp_id = opportunity_of(ctx, args).id
+        if _sent(ctx, opp_id):
+            return _change_request(ctx, ctx.db.get(Opportunity, opp_id),
+                                   "book a visit on %s" % local(starts), args)
         clean = {**args, "calendar_id": cal_id, "duration_minutes": minutes,
                  "starts_at": starts.isoformat(), "opportunity_id": opp_id}
         return Prepared("Book appointment for %s on %s" % (c.name, local(starts)), clean,
@@ -468,6 +540,8 @@ class BookAppointment(Action):
 
     def execute(self, ctx, prep):
         from .. import main
+        if prep.data.get("change_request"):
+            return _execute_change_request(ctx, prep)
         a = prep.args
         starts = datetime.fromisoformat(a["starts_at"])
         body = main.AppointmentCreate(
@@ -491,6 +565,9 @@ class RescheduleAppointment(Action):
         if a.status == "cancelled":
             raise Refused("appointment %s is cancelled" % a.id)
         starts = parse_when(args["starts_at"])
+        if _sent(ctx, a.opportunity_id):
+            return _change_request(ctx, ctx.db.get(Opportunity, a.opportunity_id),
+                                   "move the visit “%s” to %s" % (a.title, local(starts)), args)
         minutes = args.get("duration_minutes") or int(
             (auth.as_aware(a.ends_at) - auth.as_aware(a.starts_at)).total_seconds() // 60) or 60
         return Prepared("Reschedule “%s” to %s" % (a.title, local(starts)),
@@ -499,6 +576,8 @@ class RescheduleAppointment(Action):
 
     def execute(self, ctx, prep):
         from .. import main
+        if prep.data.get("change_request"):
+            return _execute_change_request(ctx, prep)
         a = appointment_of(ctx, prep.args)
         starts = datetime.fromisoformat(prep.args["starts_at"])
         body = main.AppointmentPatch(
@@ -517,11 +596,17 @@ class CancelAppointment(Action):
         a = appointment_of(ctx, args)
         if a.status == "cancelled":
             raise Refused("appointment %s is already cancelled" % a.id)
+        if _sent(ctx, a.opportunity_id):
+            return _change_request(ctx, ctx.db.get(Opportunity, a.opportunity_id),
+                                   "cancel the visit “%s” on %s" % (a.title, local(a.starts_at)),
+                                   args)
         return Prepared("Cancel “%s” on %s" % (a.title, local(a.starts_at)), args,
                         a.opportunity_id)
 
     def execute(self, ctx, prep):
         from .. import main
+        if prep.data.get("change_request"):
+            return _execute_change_request(ctx, prep)
         a = appointment_of(ctx, prep.args)
         dropped = main.cancel_appointment_record(ctx.db, a, ai_agent_id=ctx.agent_id)
         return {"cancelled": True, "appointment_id": a.id, "reminders_withdrawn": dropped}
@@ -603,11 +688,15 @@ class MoveStage(Action):
             raise Refused("stage %s is not in this opportunity's pipeline" % args["stage_id"])
         if stage.id == o.stage_id:
             raise Refused("the opportunity is already in “%s”" % stage.name)
+        if _sent(ctx, o.id):
+            return _change_request(ctx, o, "move it to “%s”" % stage.name, args)
         return Prepared("Move “%s” to stage “%s”" % (o.title, stage.name),
                         {**args, "opportunity_id": o.id}, o.id)
 
     def execute(self, ctx, prep):
         from .. import main
+        if prep.data.get("change_request"):
+            return _execute_change_request(ctx, prep)
         o = opportunity_of(ctx, prep.args)
         end = len(ctx.db.scalars(select(Opportunity.id).where(
             Opportunity.stage_id == prep.args["stage_id"], Opportunity.id != o.id)).all())
@@ -686,6 +775,64 @@ class Escalate(Action):
                 prep.data["user_ids"], "emergency": emergency, "on_call_text": on_call}
 
 
+class SuggestSendToZuper(Action):
+    """Ask staff to send this card to Zuper (2026-09-16). Always a pending suggestion — an
+    agent never sends; a staff member's approval sends it once, through Send to Zuper."""
+
+    def prepare(self, ctx, args):
+        from ..zuper import api as zuper_api
+        from ..zuper import engine as zuper_engine
+        from ..zuper import mapping
+        o = opportunity_of(ctx, args)
+        if zuper_api.send_state(mapping.mapping_for(ctx.db, "opportunity", o.id)) in (
+                "queued", "sent"):
+            raise Refused("“%s” is already managed in Zuper" % o.title)
+        problems = zuper_engine.send_problems(ctx.db, o)
+        if problems:
+            raise Refused(" ".join(problems))
+        return Prepared("Send “%s” to Zuper" % o.title, {**args, "opportunity_id": o.id}, o.id)
+
+    def execute(self, ctx, prep):
+        from ..zuper import api as zuper_api
+        if ctx.approved_by is None:
+            raise Refused("an AI agent cannot send to Zuper — staff approve the suggestion")
+        approver = ctx.db.get(User, ctx.approved_by)
+        who = None if approver is None else auth.Principal(
+            user_id=approver.id, email=approver.email, name=approver.name, role=approver.role,
+            kind="cookie", scopes=frozenset(),
+            only_assigned=bool(approver.only_assigned_data))
+        if not zuper_api.may_send(who):
+            raise Refused("only an admin or a dispatcher can send a card to Zuper")
+        o = opportunity_of(ctx, prep.args)
+        try:
+            queued, state = zuper_api.queue_send(
+                ctx.db, o, by="AI suggestion approved by %s" % approver.email)
+        except HTTPException as e:
+            raise _http(e) from None
+        return {"sent_to_zuper": queued, "state": state, "opportunity_id": o.id}
+
+
+class SetLeadOutcome(Action):
+    """Record why a lead closed without booking (2026-09-16). CRM-only."""
+
+    def prepare(self, ctx, args):
+        from .. import lead_outcomes
+        o = opportunity_of(ctx, args)
+        try:
+            outcome, note = lead_outcomes.clean(args["outcome"], args.get("note"))
+        except HTTPException as e:
+            raise _http(e) from None
+        return Prepared("Set lead outcome of “%s” to %s%s" % (
+            o.title, outcome, (": " + note[:120]) if note else ""),
+            {**args, "opportunity_id": o.id, "outcome": outcome, "note": note}, o.id)
+
+    def execute(self, ctx, prep):
+        from .. import lead_outcomes
+        o = opportunity_of(ctx, prep.args)
+        lead_outcomes.apply(o, prep.args["outcome"], prep.args.get("note"))
+        return {"lead_outcome": o.lead_outcome, "opportunity_id": o.id}
+
+
 class VoiceOnly(Action):
     def prepare(self, ctx, args):
         raise Refused("%s is a voice action (phase 3)" % self.name)
@@ -748,6 +895,20 @@ CATALOGUE: dict[str, Action] = {a.name: a for a in (
              _obj({"reason": _str("what the person needs to know", 1000),
                    "emergency": {"type": "boolean", "description": "an emergency"},
                    "opportunity_id": _int("which opportunity")}, ("reason",)), WRITE),
+    SuggestSendToZuper("suggest_send_to_zuper", "Suggest sending to Zuper",
+                       "Suggest to staff that this card be sent to Zuper (a booked job). It "
+                       "is never done by you: a person approves it.",
+                       _obj({"opportunity_id": _int("which opportunity"),
+                             "reason": _str("why it is ready", 500)}), SUGGEST_ONLY),
+    SetLeadOutcome("set_lead_outcome", "Set lead outcome",
+                   "Record why a lead that never booked is closing: one of Spam, Wrong "
+                   "number, Not interested, Price shopping, Out of service area, Duplicate, "
+                   "No response, Other (Other needs a note).",
+                   _obj({"outcome": {"type": "string", "enum": [
+                       "Spam", "Wrong number", "Not interested", "Price shopping",
+                       "Out of service area", "Duplicate", "No response", "Other"]},
+                         "note": _str("what happened (required for Other)", 2000),
+                         "opportunity_id": _int("which opportunity")}, ("outcome",)), WRITE),
     ReportGap("report_knowledge_gap", "Report knowledge gap",
               "Record a question the knowledge base could not answer, so the owner can "
               "add the answer.",

@@ -10,12 +10,19 @@ import {
   deleteContact,
   getContact,
   getContactCompanyCam,
+  getContactZuper,
   listUsers,
   patchContact,
   removeContactTag,
   type ContactDetail,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
+import { canOpenRecords, openRecord } from '../lib/openRecord'
+import {
+  CONTACT_LOCK_SENTENCE, LOCK_REASON, contactFieldLocked, documentStatus, kindLabel, money,
+  showContactMoney,
+} from '../lib/zuper'
+import { Chip } from './ZuperMoneyPanel'
 
 /**
  * Contact Details panel.
@@ -53,6 +60,7 @@ function Field({
   onSave,
   type = 'text',
   hint = null,
+  locked = null,
 }: {
   label: string
   value: string | null
@@ -60,6 +68,8 @@ function Field({
   type?: string
   /** Shown under the value, never in place of it. The value was saved either way. */
   hint?: string | null
+  /** Zuper v2: the reason this field cannot be edited here ("Change this in Zuper"). */
+  locked?: string | null
 }) {
   const [draft, setDraft] = useState(value ?? '')
   const [editing, setEditing] = useState(false)
@@ -68,7 +78,12 @@ function Field({
   return (
     <div style={{ marginBottom: 18 }}>
       <div style={LABEL}>{label}</div>
-      {editing ? (
+      {locked ? (
+        <div data-locked-field={label} title={locked}
+          style={{ ...VALUE, marginTop: 4, minHeight: 21, cursor: 'not-allowed' }}>
+          {value && value.trim() ? value : '--'}
+        </div>
+      ) : editing ? (
         <input
           autoFocus
           type={type}
@@ -456,6 +471,13 @@ export function ContactDetailsPanel({
               <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(16,24,40)', margin: '16px 0 12px' }}>
                 Contact
               </div>
+              {/* Zuper v2: a customer with a job managed in Zuper is edited there. */}
+              {c?.zuper_locked && (
+                <div data-testid="contact-zuper-locked"
+                  style={{ fontSize: 13, color: 'rgb(102,112,133)', marginBottom: 12 }}>
+                  {CONTACT_LOCK_SENTENCE}
+                </div>
+              )}
               {fields.length === 0 && (
                 <div style={{ fontSize: 14, color: 'rgb(102,112,133)' }}>
                   No fields match “{search}”.
@@ -467,6 +489,7 @@ export function ContactDetailsPanel({
                   label={f.label}
                   value={f.value}
                   hint={'hint' in f ? f.hint : null}
+                  locked={contactFieldLocked(c, f.key) ? LOCK_REASON : null}
                   onSave={(v) => patch.mutate({ [f.key]: v } as Partial<ContactDetail>)}
                 />
               ))}
@@ -487,6 +510,9 @@ export function ContactDetailsPanel({
                   there is at least one, so a contact with none renders exactly the
                   measured panel. */}
               <CompanyCamSection contactId={c.id} />
+              {/* Zuper (2026-09-16): quotes and invoices on this customer's cards that the
+                  reader can see, read-only. Drawn only when there is at least one. */}
+              <ZuperSection contactId={c.id} />
 
               {/* measured: "Created by:" is its own 11px label beside the value */}
               <div className="mt-3" style={{ fontSize: 11, color: 'rgb(96,113,121)' }}>
@@ -699,6 +725,47 @@ function CompanyCamSection({ contactId }: { contactId: number }) {
       </Section>
       {project && <ProjectPhotosDialog project={project} onClose={() => setOpen(null)} />}
     </>
+  )
+}
+
+function ZuperSection({ contactId }: { contactId: number }) {
+  const { data } = useQuery({
+    queryKey: ['contact-zuper', contactId],
+    queryFn: () => getContactZuper(contactId),
+    staleTime: 60_000,
+    retry: false,
+  })
+  if (!data || !showContactMoney(data)) return null
+  const links = canOpenRecords()
+  return (
+    <Section title={`Zuper quotes & invoices (${data.documents.length})`}>
+      {data.documents.map((d) => (
+        <div key={d.id} data-document={d.id} style={{ marginBottom: 12 }}>
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate" style={{ fontSize: 14, fontWeight: 500,
+              color: 'rgb(16,24,40)' }}>
+              {kindLabel(d.kind)} {d.number ?? ''}
+            </span>
+            <Chip {...documentStatus(d.status)} />
+          </div>
+          <div className="flex items-center gap-2" style={{ marginTop: 2 }}>
+            <span style={{ ...VALUE, fontSize: 13 }}>{money(d.total_cents)}</span>
+            {d.opportunity_title && <span style={{ ...LABEL, fontSize: 13 }}>·</span>}
+            {d.opportunity_title && (links && d.opportunity_id != null ? (
+              <button type="button" onClick={() => openRecord('opportunities', d.opportunity_id!)}
+                className="min-w-0 truncate text-left"
+                style={{ fontSize: 13, color: 'rgb(56,160,219)' }}>
+                {d.opportunity_title}
+              </button>
+            ) : (
+              <span className="min-w-0 truncate" style={{ ...LABEL, fontSize: 13 }}>
+                {d.opportunity_title}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </Section>
   )
 }
 

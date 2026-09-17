@@ -128,16 +128,19 @@ def test_the_modal_opens_answers_and_stage_to_a_technician_on_their_own_job_only
     the owner allowed), or the title/value/owner left live (a form that 403s)."""
     src = _read("components", "OpportunityDetail.tsx")
     assert "const techJob = techOnOwnJob(user)" in src
-    assert "disabled={!canStage}" in src
+    # gate(allowed, field) is the role check plus Zuper v2's mirror lock (2026-09-16).
+    assert "disabled={gate(canStage, 'stage_id').disabled}" in src
     assert src.count("disabled={!canAnswer}") == 3, "fieldset + both answer lists"
     assert "<fieldset disabled={!canAnswer}" in src
-    for field in ('aria-label="Opportunity name"', 'aria-label="Value" placeholder="0"',
-                  'aria-label="Business name"', 'aria-label="Source"'):
+    for field in ('aria-label="Business name"', 'aria-label="Source"'):
         at = src.index(field)
         assert "disabled={!canEdit}" in src[at - 120:at + 200], field
-    assert 'ariaLabel="Owner" disabled={!canEdit}' in src
-    assert 'ariaLabel="Pipeline" disabled={!canEdit}' in src
-    assert 'ariaLabel="Status" disabled={!canEdit}' in src
+    for field, key in (('aria-label="Opportunity name"', "title"),
+                       ('aria-label="Value" placeholder="0"', "value_cents"),
+                       ('ariaLabel="Owner"', "owner_id"), ('ariaLabel="Pipeline"', "pipeline_id"),
+                       ('ariaLabel="Status"', "status")):
+        at = src.index(field)
+        assert "disabled={gate(canEdit, '%s').disabled}" % key in src[at - 200:at + 200], field
     assert "canDelete = user.role === 'ADMIN'" in src
     assert "A technician can tick this, not change the contact\u2019s email" in src
     assert "<NotesTab opportunityId={o.id} user={user} />" in src

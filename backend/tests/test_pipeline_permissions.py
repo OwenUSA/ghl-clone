@@ -46,6 +46,7 @@ from app.models import (
     Stage,
     User,
 )
+from app.zuper import api as zuper_api
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -556,6 +557,16 @@ AUDITED = {
     "companycam_unlink": "ADMIN; pipeline_access.get_opportunity -> 404",
     "companycam_review_list": "ADMIN (sees all)",
     "companycam_review_link": "ADMIN (sees all)",
+    # Zuper sync (app/zuper/api.py, 2026-09-16): a hidden card has no money panel or photos.
+    "zuper_opportunity_panel": "pipeline_access.get_opportunity -> 404",
+    "zuper_contact_panel": "assigned_access.opportunities(scope) excludes hidden pipelines",
+    "zuper_opportunity_attachments": "_job_for -> pipeline_access.get_opportunity -> 404",
+    "zuper_attachment_file": "_job_for -> pipeline_access.get_opportunity -> 404",
+    "zuper_status": "ADMIN (sees all)", "zuper_restore_delete": "ADMIN (sees all)",
+    "zuper_deletes": "ADMIN (sees all)", "zuper_conflicts": "ADMIN (sees all)",
+    "zuper_send_opportunity": "pipeline_access.get_opportunity -> 404",
+    "bulk_lead_outcome": "_bulk_load visible_opportunities",
+    "report_lead_outcomes": "assigned_access.opportunities(scope) excludes hidden pipelines",
 }
 
 MARKERS = ("Opportunity", "Pipeline", "Stage", "_contact_detail", "_appointment_detail",
@@ -579,7 +590,8 @@ def test_every_route_that_reads_a_deal_is_on_the_audited_list():
     touching = set()
     for r in _routes():
         fn = r.endpoint
-        if getattr(fn, "__module__", "") not in (main_mod.__name__, companycam_mod.__name__):
+        if getattr(fn, "__module__", "") not in (main_mod.__name__, companycam_mod.__name__,
+                                                 zuper_api.__name__):
             continue
         src = inspect.getsource(fn)
         if any(m in src for m in MARKERS):

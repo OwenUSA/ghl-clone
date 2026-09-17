@@ -6,6 +6,7 @@ import {
   deleteOpportunity,
   getContact,
   getOpportunity,
+  getOpportunityZuper,
   listCustomFields,
   listFieldGroups,
   listPipelines,
@@ -33,6 +34,7 @@ import { NewAppointmentDialog } from './NewAppointmentDialog'
 import { AppointmentTab } from './opportunity/AppointmentTab'
 import { AssociatedTab } from './opportunity/AssociatedTab'
 import { PhotosTab } from './CompanyCamPhotos'
+import { ZuperMoneyPanel } from './ZuperMoneyPanel'
 import { NotesTab } from './opportunity/NotesTab'
 import { Chip, ContactSelect, MultiSelect, type Choice } from './opportunity/Pickers'
 import { TasksTab } from './opportunity/TasksTab'
@@ -43,6 +45,12 @@ import {
 import type { Me } from '../lib/auth'
 import { techOnOwnJob } from '../lib/access'
 import { canOpenAiAgents } from '../lib/aiAgents'
+import {
+  ADDRESS_LOCK_FIELDS, LOCK_REASON, contactFieldLocked, leadOutcomeProblem,
+  lockedField, showLeadOutcome, showMoneyNav,
+} from '../lib/zuper'
+import { ZuperSendLine } from './ZuperSend'
+import { LeadOutcomeFields } from './opportunity/LeadOutcomeFields'
 import { AiAgentPanel } from './AiSuggestions'
 
 /**
@@ -105,6 +113,9 @@ type Form = {
   answers: Record<string, unknown>
   /** The JOB's address — the card's own, never seeded from the contact. */
   address: AddressForm
+  /** Zuper v2: CRM-only, required when an unbooked card is closed. '' = none. */
+  leadOutcome: string
+  leadOutcomeNote: string
 }
 
 function formFrom(o: OppDetail): Form {
@@ -126,6 +137,8 @@ function formFrom(o: OppDetail): Form {
     probability: o.probability != null ? String(o.probability) : '',
     answers: { ...(o.custom_fields ?? {}) },
     address: addressForm(o),
+    leadOutcome: o.lead_outcome ?? '',
+    leadOutcomeNote: o.lead_outcome_note ?? '',
   }
 }
 
@@ -164,6 +177,10 @@ function changes(o: OppDetail, f: Form, probabilityShown = false): OpportunityPa
   const answers = changedAnswers(o.custom_fields ?? {}, f.answers)
   if (Object.keys(answers).length) body.custom_fields = answers
   Object.assign(body, addressChanges(o, f.address))
+  if (f.leadOutcome !== (o.lead_outcome ?? '')) body.lead_outcome = f.leadOutcome || null
+  if (f.leadOutcomeNote !== (o.lead_outcome_note ?? '')) {
+    body.lead_outcome_note = f.leadOutcomeNote.trim() || null
+  }
   return body
 }
 
@@ -198,7 +215,9 @@ export function OpportunityDetail({
 }) {
   const qc = useQueryClient()
   const [request, setRequest] = useState(() => takeModalTab(opportunityId))
-  const [tab, setTab] = useState<ModalTab>(request.tab)
+  // 'quotes' is the Zuper money panel (2026-09-16); no card icon asks for it, so it is not a
+  // ModalTab a request can carry.
+  const [tab, setTab] = useState<ModalTab | 'quotes'>(request.tab)
   const [form, setForm] = useState<Form | null>(null)
   // Which deal the form was seeded from — see the seeding effect below.
   const [seededFor, setSeededFor] = useState<number | null>(null)
@@ -213,12 +232,23 @@ export function OpportunityDetail({
   const { data: o } = useQuery({
     queryKey: ['opportunity', opportunityId],
     queryFn: () => getOpportunity(opportunityId),
+    // Zuper v2: while a send is queued, look again every few seconds for "Managed in Zuper".
+    refetchInterval: (q) => (q.state.data?.zuper?.state === 'queued' ? 3000 : false),
   })
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
   const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines })
   // Every definition, archived ones included; askedOn() decides what is drawn.
   const fields = useQuery({ queryKey: ['custom-fields'], queryFn: listCustomFields })
   const groups = useQuery({ queryKey: ['custom-field-groups'], queryFn: listFieldGroups })
+  // Zuper quotes and invoices (2026-09-16): fetched when the modal opens, so the nav item is
+  // drawn only for a job linked to Zuper or one with a document. A 404 (a card this reader
+  // cannot see) is no item — never a retry.
+  const zuperMoney = useQuery({
+    queryKey: ['opportunity-zuper', opportunityId],
+    queryFn: () => getOpportunityZuper(opportunityId),
+    retry: false,
+  })
+  const showMoney = showMoneyNav(zuperMoney.data)
   const contact = useQuery({
     queryKey: ['contact', form?.contact?.id],
     queryFn: () => getContact(form!.contact!.id),
@@ -266,6 +296,18 @@ export function OpportunityDetail({
   const why = techJob
     ? 'A technician can answer this job’s questions and change its stage, not its other details'
     : 'Your role cannot edit opportunities'
+  // Zuper v2 (2026-09-16): a card sent to Zuper is a mirror. Its Zuper-only fields are
+  // disabled with the server's own reason; notes, Checklist answers and tasks stay editable.
+  const zuper = o?.zuper
+  const lock = (field: string) => lockedField(zuper, field)
+  const addressLocked = ADDRESS_LOCK_FIELDS.some(lock)
+  /** Disabled look and reason for a control: the role's first, then Zuper's lock. */
+  const gate = (allowed: boolean, field: string) => ({
+    disabled: !allowed || lock(field),
+    title: lock(field) ? LOCK_REASON : allowed ? undefined : why,
+    style: !allowed || lock(field) ? { backgroundColor: 'rgb(249,250,251)', cursor: 'not-allowed' }
+      : {},
+  })
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['opportunities'] })
@@ -375,7 +417,10 @@ export function OpportunityDetail({
             : !form.contact && canEdit ? 'Choose a primary contact'
               : form.stageId == null ? `Choose a stage in ${current?.name ?? 'the new pipeline'}`
                 : badProbability ? 'Probability is a whole number from 0 to 100'
-                  : null
+                  : leadOutcomeProblem({ status: form.status, booked: !!o.booked,
+                    outcome: form.leadOutcome, note: form.leadOutcomeNote })
+          // Zuper v2: the contact's own details are Zuper's once they have a sent job.
+          const contactLock = (field: string) => contactFieldLocked(contact.data, field)
           const formTab = tab === 'details' || tab.startsWith('group:')
           const group = tab.startsWith('group:')
             ? sections.groups.find((g) => 'group:' + g.group.id === tab) : undefined
@@ -387,12 +432,14 @@ export function OpportunityDetail({
           // the contact) and the Address group below (saved on the card).
           const linked: LinkedValues = {
             email: { value: email, onChange: (v) => set('email', v),
-              disabled: !form.contact || !canEdit,
-              reason: canEdit ? undefined : 'A technician can tick this, not change the contact’s email',
+              disabled: !form.contact || !canEdit || contactLock('email'),
+              reason: contactLock('email') ? LOCK_REASON
+                : canEdit ? undefined : 'A technician can tick this, not change the contact’s email',
               hint: form.contact ? null : 'Choose a primary contact to record an email.' },
             address: { value: form.address, onChange: (v) => set('address', v),
-              disabled: !canEdit,
-              reason: canEdit ? undefined : 'A technician can tick this, not change the job’s address' },
+              disabled: !canEdit || addressLocked,
+              reason: addressLocked ? LOCK_REASON
+                : canEdit ? undefined : 'A technician can tick this, not change the job’s address' },
           }
 
           return (
@@ -412,6 +459,8 @@ export function OpportunityDetail({
                     </svg>
                   </button>
                 </div>
+                {/* Zuper v2: Send to Zuper, or "Managed in Zuper" once sent. */}
+                <ZuperSendLine opportunityId={o.id} zuper={o.zuper} />
                 <div style={{ fontSize: 14, color: MUTED, marginTop: 14, paddingBottom: 12,
                   borderBottom: '1px solid ' + DIVIDER }}>
                   Add and edit opportunity details, tasks, notes and appointments.
@@ -441,6 +490,12 @@ export function OpportunityDetail({
                       onClick={() => setTab('associated')} />
                     {/* CompanyCam job photos (2026-09-14): every role, like the card. */}
                     <NavItem label="Photos" active={tab === 'photos'} onClick={() => setTab('photos')} />
+                    {/* Zuper quotes & invoices (2026-09-16): read-only, only when there is a
+                        linked job or a document — otherwise no item at all. */}
+                    {showMoney && (
+                      <NavItem label="Quotes & invoices" active={tab === 'quotes'}
+                        onClick={() => setTab('quotes')} />
+                    )}
                     {/* AI Agents (2026-09-15): only for a user who can open the module. */}
                     {canOpenAiAgents(user) && (
                       <NavItem label="AI agent" active={tab === 'ai'} onClick={() => setTab('ai')} />
@@ -521,16 +576,22 @@ export function OpportunityDetail({
                           <div style={{ marginBottom: 16 }}>
                             <Label>Primary email</Label>
                             <input value={email} aria-label="Primary email" placeholder="Enter email"
-                              disabled={!form.contact || !canEdit}
-                              onChange={(e) => set('email', e.target.value)} style={{ ...INPUT, ...readOnly }} />
+                              disabled={!form.contact || !canEdit || contactLock('email')}
+                              title={contactLock('email') ? LOCK_REASON : undefined}
+                              onChange={(e) => set('email', e.target.value)}
+                              style={{ ...INPUT, ...readOnly,
+                                ...(contactLock('email') ? { backgroundColor: 'rgb(249,250,251)' } : {}) }} />
                           </div>
                         )}
                         {shows(phone) && (
                           <div style={{ marginBottom: 16 }}>
                             <Label>Primary phone</Label>
                             <input value={phone} aria-label="Primary phone" placeholder="Enter phone"
-                              disabled={!form.contact || !canEdit}
-                              onChange={(e) => set('phone', e.target.value)} style={{ ...INPUT, ...readOnly }} />
+                              disabled={!form.contact || !canEdit || contactLock('phone')}
+                              title={contactLock('phone') ? LOCK_REASON : undefined}
+                              onChange={(e) => set('phone', e.target.value)}
+                              style={{ ...INPUT, ...readOnly,
+                                ...(contactLock('phone') ? { backgroundColor: 'rgb(249,250,251)' } : {}) }} />
                           </div>
                         )}
                         {(!hideEmpty || form.additional.length > 0) && (
@@ -552,9 +613,10 @@ export function OpportunityDetail({
                       <div style={{ marginBottom: 16 }}>
                         <Label required>Opportunity name</Label>
                         <input value={form.title} maxLength={120} aria-label="Opportunity name"
-                          disabled={!canEdit} title={canEdit ? undefined : why}
+                          disabled={gate(canEdit, 'title').disabled} title={gate(canEdit, 'title').title}
                           placeholder="Enter opportunity name"
-                          onChange={(e) => set('title', e.target.value)} style={{ ...INPUT, ...readOnly }} />
+                          onChange={(e) => set('title', e.target.value)}
+                          style={{ ...INPUT, ...readOnly, ...gate(canEdit, 'title').style }} />
                       </div>
 
                       <div className="grid grid-cols-2 gap-x-3">
@@ -563,7 +625,9 @@ export function OpportunityDetail({
                               never returns one they cannot (pipeline_access.py), and
                               the server refuses a move into one regardless. */}
                           <Label>Pipeline</Label>
-                          <Select value={form.pipelineId} ariaLabel="Pipeline" disabled={!canEdit}
+                          <Select value={form.pipelineId} ariaLabel="Pipeline"
+                            disabled={gate(canEdit, 'pipeline_id').disabled}
+                            title={gate(canEdit, 'pipeline_id').title}
                             onChange={(v) => setForm((f) => f && ({
                               ...f, pipelineId: Number(v),
                               // A stage belongs to one pipeline: moving back restores the
@@ -575,7 +639,9 @@ export function OpportunityDetail({
                         </div>
                         <div style={{ marginBottom: 16 }}>
                           <Label required={moved}>Stage</Label>
-                          <Select value={form.stageId ?? ''} ariaLabel="Stage" disabled={!canStage}
+                          <Select value={form.stageId ?? ''} ariaLabel="Stage"
+                            disabled={gate(canStage, 'stage_id').disabled}
+                            title={gate(canStage, 'stage_id').title}
                             onChange={(v) => set('stageId', v ? Number(v) : null)}>
                             {form.stageId == null && <option value="">Select stage</option>}
                             {(current?.stages ?? []).map((s) => (
@@ -590,23 +656,36 @@ export function OpportunityDetail({
                         </div>
                         <div style={{ marginBottom: 16 }}>
                           <Label>Status</Label>
-                          <Select value={form.status} ariaLabel="Status" disabled={!canEdit}
+                          <Select value={form.status} ariaLabel="Status"
+                            disabled={gate(canEdit, 'status').disabled}
+                            title={gate(canEdit, 'status').title}
                             onChange={(v) => set('status', v)}>
                             {STATUSES.map((s) => (
                               <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>
                             ))}
                           </Select>
                         </div>
+                        {/* Zuper v2: why a lead closed without booking. Asked the moment the
+                            status becomes Lost or Abandoned; Update waits for it. */}
+                        {showLeadOutcome(form.status, form.leadOutcome || o.lead_outcome) && (
+                          <LeadOutcomeFields outcome={form.leadOutcome} note={form.leadOutcomeNote}
+                            required={!o.booked && ['lost', 'abandoned'].includes(form.status)}
+                            disabled={!canEdit} title={canEdit ? undefined : why}
+                            onOutcome={(v) => set('leadOutcome', v)}
+                            onNote={(v) => set('leadOutcomeNote', v)} />
+                        )}
                         <div style={{ marginBottom: 16 }}>
                           <Label>Value</Label>
                           <div className="relative">
                             <span className="pointer-events-none absolute"
                               style={{ left: 12, top: 17, fontSize: 14, color: TEXT }}>$</span>
                             <input type="number" min={0} step="0.01" value={form.value}
-                              disabled={!canEdit} title={canEdit ? undefined : why}
+                              disabled={gate(canEdit, 'value_cents').disabled}
+                              title={gate(canEdit, 'value_cents').title}
                               aria-label="Value" placeholder="0"
                               onChange={(e) => set('value', e.target.value)}
-                              style={{ ...INPUT, paddingLeft: 26, ...readOnly }} />
+                              style={{ ...INPUT, paddingLeft: 26, ...readOnly,
+                                ...gate(canEdit, 'value_cents').style }} />
                           </div>
                           {/* centsFromDollars( is what Update sends — see changes(). */}
                         </div>
@@ -628,7 +707,9 @@ export function OpportunityDetail({
                         {(!hideEmpty || form.ownerId) && (
                           <div style={{ marginBottom: 16 }}>
                             <Label>Owner</Label>
-                            <Select value={form.ownerId} ariaLabel="Owner" disabled={!canEdit}
+                            <Select value={form.ownerId} ariaLabel="Owner"
+                              disabled={gate(canEdit, 'owner_id').disabled}
+                              title={gate(canEdit, 'owner_id').title}
                               onChange={(v) => set('ownerId', v)}>
                               <option value="">Unassigned</option>
                               {(users.data ?? []).map((u) => (
@@ -742,7 +823,14 @@ export function OpportunityDetail({
                             style={{ ...HEADING, paddingBottom: 10, marginTop: 4, marginBottom: 16,
                               borderBottom: '1px solid ' + DIVIDER }}>
                             Address
-                            {fallback && canEdit && (
+                            {/* A sent job's address is Zuper's: no copy button, the reason instead. */}
+                            {addressLocked && (
+                              <span data-testid="address-locked"
+                                style={{ fontSize: 13, fontWeight: 400, color: FAINT }}>
+                                {LOCK_REASON}
+                              </span>
+                            )}
+                            {fallback && canEdit && !addressLocked && (
                               <button type="button"
                                 onClick={() => set('address', withContactAddress(form.address, contact.data))}
                                 style={{ fontSize: 14, fontWeight: 500, color: PRIMARY }}>
@@ -762,12 +850,12 @@ export function OpportunityDetail({
                                   gridColumn: key === 'address_street' ? 'span 2' : undefined }}>
                                   <Label>{label}</Label>
                                   <input value={form.address[key]} aria-label={label} maxLength={max}
-                                    disabled={!canEdit} title={canEdit ? undefined : why}
+                                    disabled={gate(canEdit, key).disabled} title={gate(canEdit, key).title}
                                     // The contact's value, greyed, while the card has none.
                                     placeholder={fallback?.[key] || placeholder}
                                     onChange={(e) => set('address',
                                       { ...form.address, [key]: e.target.value })}
-                                    style={{ ...INPUT, ...readOnly }} />
+                                    style={{ ...INPUT, ...readOnly, ...gate(canEdit, key).style }} />
                                 </div>
                               ))}
                           </div>
@@ -800,7 +888,8 @@ export function OpportunityDetail({
                   )}
 
                   {tab === 'appointment' && (
-                    <AppointmentTab appointments={o.appointments} canBook={canBook}
+                    <AppointmentTab appointments={o.appointments} canBook={canBook && !lock('appointments')}
+                      bookReason={lock('appointments') ? LOCK_REASON : undefined}
                       onBook={() => setBooking(true)} onOpen={setOpenAppointment} />
                   )}
                   {tab === 'tasks' && (
@@ -811,6 +900,9 @@ export function OpportunityDetail({
                     <AssociatedTab o={o} onOpenAppointment={setOpenAppointment} />
                   )}
                   {tab === 'photos' && <PhotosTab opportunityId={o.id} />}
+                  {tab === 'quotes' && showMoney && (
+                    <ZuperMoneyPanel opportunityId={o.id} data={zuperMoney.data} />
+                  )}
                   {tab === 'ai' && canOpenAiAgents(user) && (
                     <AiAgentPanel user={user} opportunityId={o.id} contactId={o.contact_id ?? undefined} />
                   )}

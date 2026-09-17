@@ -1,4 +1,5 @@
 import { useSortable } from '@dnd-kit/sortable'
+import { LOCK_REASON, cardDraggable } from '../lib/zuper'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -415,6 +416,14 @@ export function CardFace({
         >
           {o.title}
         </div>
+        {o.managed_in_zuper && (
+          <span data-testid="card-managed-in-zuper" title={LOCK_REASON}
+            style={{ flexShrink: 0, marginTop: 3, padding: '1px 8px', borderRadius: 10, fontSize: 11,
+              fontWeight: 500, lineHeight: '16px', color: 'rgb(23,92,211)',
+              backgroundColor: 'rgb(239,248,255)', whiteSpace: 'nowrap' }}>
+            Managed in Zuper
+          </span>
+        )}
         {live && <OwnerButton o={o} />}
         {selectable && (
           <input
@@ -556,11 +565,16 @@ export function Card({
   selected?: boolean
   onToggle?: (id: number) => void
 }) {
+  // Zuper v2 (2026-09-16): a card managed in Zuper takes its stage from Zuper, so it does
+  // not lift. It still counts as a place in the column for the cards around it.
+  const draggable = cardDraggable(o)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: cardDragId(o.id) })
+    useSortable({ id: cardDragId(o.id), disabled: { draggable: !draggable, droppable: false } })
   return (
     <div
       ref={setNodeRef}
+      data-managed-in-zuper={o.managed_in_zuper || undefined}
+      title={draggable ? undefined : LOCK_REASON}
       {...listeners}
       {...attributes}
       // A drag ends with a click on the card it started from, which opened the
@@ -580,7 +594,9 @@ export function Card({
       style={{
         ...CARD_SURFACE,
         marginBottom: 8,
-        cursor: 'grab',
+        cursor: draggable ? 'grab' : 'pointer',
+        // A press-and-move on a card that does not lift must not start a text selection.
+        userSelect: draggable ? undefined : 'none',
         // `touch-action: none` is what makes the pointer sensor work on a
         // trackpad and a touchscreen — without it the browser claims the gesture
         // as a scroll and the card never lifts.

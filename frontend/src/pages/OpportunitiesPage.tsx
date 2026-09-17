@@ -317,6 +317,8 @@ export function OpportunitiesPage({ user, focus, onNavigate }: {
 
   function onDragEnd(e: DragEndEvent) {
     setDragged(null)
+    // A card managed in Zuper never lifts (see Card); refuse a drop of one regardless.
+    if ((opps.data ?? []).find((o) => o.id === cardIdFrom(e.active.id))?.managed_in_zuper) return
     // Dropped on nothing, or dropped back where it already was: no request at
     // all. `moveForDrop` decides both -- see lib/boardOrder.ts.
     const next = moveForDrop(opps.data ?? [], e.active.id, e.over?.id ?? null)

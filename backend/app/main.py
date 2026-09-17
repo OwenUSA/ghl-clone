@@ -28,6 +28,7 @@ from . import (
     crmlink,
     custom_fields,
     dlr,
+    lead_outcomes,
     media_api,
     message_media,
     models,
@@ -72,6 +73,8 @@ from .models import (
 )
 from .phones import format_phone, phone_warning, store_phone
 from .transport import get_transport
+from .zuper import api as zuper_api
+from .zuper import locks as zuper_locks
 
 # The gate is applied ONCE, app-wide, rather than decorating 25 routes. Any route
 # added later is authenticated by default, so the cost of forgetting is a 401 rather
@@ -114,6 +117,9 @@ app.include_router(ai_api.router)
 # Pictures on a text message (2026-09-16): the bytes a signed-in browser reads, and the
 # upload/remove/retry the composer and the thread use. See app/media_api.py.
 app.include_router(media_api.router)
+# Zuper two-way sync (2026-09-16): Settings → Zuper, the money panels, Zuper's job photos and
+# the webhook (the one route here on auth.EXEMPT — it has its own token). See app/zuper/.
+app.include_router(zuper_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
@@ -409,7 +415,15 @@ def _contact_detail(c: Contact, s: assigned_access.Scope) -> dict:
                           "status": a.status, "location": a.location}
                          for a in c.appointments if a.id in theirs],
         "custom_fields": c.custom_fields or {},
+        # The customer on a job sent to Zuper (2026-09-16): these fields are Zuper's.
+        **_contact_zuper_lock(c),
     }
+
+
+def _contact_zuper_lock(c: Contact) -> dict:
+    locked = zuper_locks.contact_locked(object_session(c), c.id)
+    return {"zuper_locked": locked,
+            "zuper_locked_fields": list(zuper_locks.CONTACT_FIELDS) if locked else []}
 
 
 @app.get("/api/contacts/{contact_id}")
@@ -489,6 +503,9 @@ def update_contact(contact_id: int, body: ContactPatch,
     c = assigned_access.get_contact(db, principal, contact_id)
     if body.owner_id is not None and not db.get(User, body.owner_id):
         raise HTTPException(400, "unknown owner_id")
+    # A customer on a job sent to Zuper: their name, phone, email and address are Zuper's
+    # (2026-09-16). Refused before anything is written.
+    zuper_locks.check_contact(db, c, body.model_dump(exclude_unset=True))
     # exclude_unset so an omitted field is left alone rather than nulled.
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(c, k, v)
@@ -1424,7 +1441,10 @@ def list_opportunities(
     # STAFF only — the note count and first lines. A TECH's rows carry no note
     # key at all; see opportunity_workspace.card_extras.
     extras = opportunity_workspace.card_extras(db, list(rows), principal)
-    return [{"id": o.id, "title": o.title, "value_cents": o.value_cents,
+    # A card sent to Zuper is a mirror (2026-09-16): the board badges it and does not drag it.
+    managed = zuper_locks.sent_ids(db, [o.id for o in rows])
+    return [{"managed_in_zuper": o.id in managed,
+             "id": o.id, "title": o.title, "value_cents": o.value_cents,
              "stage_id": o.stage_id, "pipeline_id": o.pipeline_id,
              "status": o.status, "position": o.position,
              "contact_id": o.contact_id,
@@ -1466,6 +1486,8 @@ def move_to_stage(db: Session, principal: auth.Principal, o: Opportunity, stage_
     stage = db.get(Stage, body.stage_id)
     if not stage or stage.pipeline_id != o.pipeline_id:
         raise HTTPException(400, "stage is not in this opportunity's pipeline")
+    # A card sent to Zuper follows Zuper's status (2026-09-16).
+    zuper_locks.check_opportunity(db, o, {"stage_id": body.stage_id})
 
     old_stage_id = o.stage_id
     # Re-pack positions within the destination stage so ordering stays stable.
@@ -2057,6 +2079,10 @@ def ingest_ahs_job(body: ahs_jobs.AhsJobIn, response: Response,
         # The work order's card gets its CompanyCam project, like a card made by hand.
         card = db.get(Opportunity, out["opportunity"]["id"])
         companycam.request_project(db, card, "ahs_email")
+        # AHS cards go to Zuper automatically (2026-09-16) — only while the sync is switched on
+        # and the card has a customer name, phone and job address; otherwise it can be sent by
+        # hand later. The response is unchanged: owen-main's contract.
+        zuper_api.auto_send(db, card, by="AHS email")
         db.commit()
     response.status_code = code
     return out
@@ -2270,6 +2296,8 @@ def book_appointment(db: Session, principal: auth.Principal, body: AppointmentCr
     # A dangling id would be an IntegrityError rendered as a 500 in the dialog, the
     # same reason PATCH resolves its ids before writing.
     _check_appointment_opportunity(db, principal, body.opportunity_id)
+    # A visit on a job sent to Zuper is booked in Zuper (2026-09-16).
+    zuper_locks.check_visit(db, body.opportunity_id)
     _refuse_blocked_overlap(db, body.calendar_id, body.starts_at, body.ends_at,
                             body.allow_blocked_time)
     a = Appointment(
@@ -2294,7 +2322,8 @@ def book_appointment(db: Session, principal: auth.Principal, body: AppointmentCr
     return a, outcome
 
 
-def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
+def _opp_detail(o: Opportunity, db: Session | None = None,
+                principal: auth.Principal | None = None) -> dict:
     """Shape mirrors GHL's measured opportunity detail screen.
 
     `db` is optional only so the callers that already hold one do not have to be
@@ -2355,6 +2384,12 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
         "conversation_id": (db.scalar(select(Conversation.id).where(
             Conversation.contact_id == o.contact_id)) if db is not None
             and o.contact_id is not None else None),
+        # Lead outcome (2026-09-16): why a card closed without being booked.
+        "lead_outcome": o.lead_outcome,
+        "lead_outcome_note": o.lead_outcome_note,
+        "booked": lead_outcomes.booked(db, o) if db is not None else False,
+        # Send to Zuper and the mirror locks (2026-09-16).
+        "zuper": zuper_api.send_block(db, o, principal) if db is not None else None,
     }
 
 
@@ -2362,7 +2397,8 @@ def _opp_detail(o: Opportunity, db: Session | None = None) -> dict:
 def get_opportunity(opp_id: int, db: Session = Depends(get_db),
                     principal: auth.Principal = auth.ANY_USER):
     # 404, not 403, for a deal in a pipeline the caller cannot access.
-    return _opp_detail(pipeline_access.get_opportunity(db, principal, opp_id), db)
+    return _opp_detail(pipeline_access.get_opportunity(db, principal, opp_id), db,
+                       principal)
 
 
 # An opportunity name longer than this is refused before the database is touched,
@@ -2434,6 +2470,9 @@ class OpportunityPatch(BaseModel):
     # opportunity-level probability.
     probability: int | None = Field(None, ge=0, le=100)
     custom_fields: dict | None = None
+    # Lead outcome (2026-09-16): one of lead_outcomes.OUTCOMES; a note is required for Other.
+    lead_outcome: str | None = Field(None, max_length=40)
+    lead_outcome_note: str | None = Field(None, max_length=2000)
     # The job's address, one field at a time; null or blank clears that field.
     address_street: str | None = Field(None, max_length=255)
     address_city: str | None = Field(None, max_length=120)
@@ -2471,6 +2510,16 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
                                      "move its stage, but not change %s"
                                 % ", ".join(refused))
     o = pipeline_access.get_opportunity(db, principal, opp_id)
+    # A card sent to Zuper (2026-09-16): its title, stage, pipeline, status, value, owner and
+    # address are Zuper's. Refused before anything is written; an unchanged echo passes.
+    zuper_locks.check_opportunity(db, o, {k: v for k, v in data.items()
+                                          if not (k == "pipeline_id" and v is None)})
+    if "lead_outcome" in data or "lead_outcome_note" in data:
+        outcome, note = lead_outcomes.clean(
+            data.pop("lead_outcome", o.lead_outcome),
+            data.pop("lead_outcome_note", None))
+        lead_outcomes.apply(o, outcome, note)
+    lead_outcomes.require_on_close(db, o, data.get("status"))
 
     if "title" in data:
         data["title"] = _clean_opportunity_title(data["title"])
@@ -2556,7 +2605,7 @@ def update_opportunity(opp_id: int, body: OpportunityPatch,
     outcome = automations.on_opportunity_stage_changed(db, o, old_stage_id)
     db.commit()
     db.refresh(o)
-    return {**_opp_detail(o, db), "automation": outcome}
+    return {**_opp_detail(o, db, principal), "automation": outcome}
 
 
 def answer_questions(db: Session, o: Opportunity, answers: dict, *,
@@ -2593,6 +2642,8 @@ class OpportunityCreate(BaseModel):
     address_city: str | None = Field(None, max_length=120)
     address_state: str | None = Field(None, max_length=80)
     address_postal_code: str | None = Field(None, max_length=20)
+    lead_outcome: str | None = Field(None, max_length=40)
+    lead_outcome_note: str | None = Field(None, max_length=2000)
 
     _address = field_validator(*OPPORTUNITY_ADDRESS, mode="after")(_blank_to_none)
 
@@ -2622,6 +2673,10 @@ def create_opportunity(body: OpportunityCreate, db: Session = Depends(get_db),
                     business_name=(body.business_name or "").strip() or None,
                     source=(body.source or "").strip() or None,
                     **{k: getattr(body, k) for k in OPPORTUNITY_ADDRESS})
+    # A card filed closed (lost / abandoned) from the start was never booked: it needs its
+    # lead outcome (2026-09-16).
+    lead_outcomes.apply(o, *lead_outcomes.clean(body.lead_outcome, body.lead_outcome_note))
+    lead_outcomes.require_on_close(db, o, body.status)
     db.add(o)
     db.flush()
     if body.follower_ids:
@@ -2716,6 +2771,7 @@ def bulk_move_stage(body: BulkStageMove, db: Session = Depends(get_db),
 
     changed = [o for o in opps if o.stage_id != stage.id]
     unchanged = [o.id for o in opps if o.stage_id == stage.id]
+    zuper_locks.check_opportunities(db, changed, "stage_id")
     was = {o.id: o.stage_id for o in changed}
 
     # Read the destination's current occupants BEFORE moving anyone in, so the
@@ -2751,10 +2807,30 @@ def bulk_assign_owner(body: BulkOwnerAssign, db: Session = Depends(get_db),
     if body.owner_id is not None and not db.get(User, body.owner_id):
         raise HTTPException(400, "unknown owner_id")
     opps = _bulk_load(db, principal, body.ids)
+    zuper_locks.check_opportunities(db, [o for o in opps if o.owner_id != body.owner_id],
+                                    "owner_id")
     for o in opps:
         o.owner_id = body.owner_id
     db.commit()
     return {"owner_id": body.owner_id, "updated": [o.id for o in opps]}
+
+
+class BulkLeadOutcome(BulkIds):
+    lead_outcome: str = Field(max_length=40)
+    lead_outcome_note: str | None = Field(None, max_length=2000)
+
+
+@app.post("/api/opportunities/bulk/lead-outcome")
+def bulk_lead_outcome(body: BulkLeadOutcome, db: Session = Depends(get_db),
+                      principal: auth.Principal = auth.STAFF):
+    """Set one lead outcome on a selection (2026-09-16). Refused whole on a bad value or a
+    missing note for Other; CRM-only, so a card sent to Zuper is not locked for it."""
+    outcome, note = lead_outcomes.clean(body.lead_outcome, body.lead_outcome_note)
+    opps = _bulk_load(db, principal, body.ids)
+    for o in opps:
+        lead_outcomes.apply(o, outcome, note)
+    db.commit()
+    return {"lead_outcome": outcome, "updated": [o.id for o in opps]}
 
 
 # ---------- saved views (GHL's "smart lists") ----------
@@ -3565,6 +3641,8 @@ def list_appointments(
             select(Calendar.id).where(Calendar.pipeline_id.in_(_ids(pipeline_ids)))))
 
     rows = db.scalars(stmt.order_by(Appointment.starts_at)).all()
+    # Visits of jobs sent to Zuper are drawn read-only (2026-09-16).
+    locked = zuper_locks.sent_ids(db, {a.opportunity_id for a in rows})
     # A booking stays on the calendar whatever deal it is for — it is a visit, not
     # a deal. Only the link to a deal in a pipeline the reader cannot access is
     # blanked, so the deal's title does not leak through the calendar.
@@ -3576,6 +3654,7 @@ def list_appointments(
              "color": a.calendar.color if a.calendar else "#004eeb",
              **_appointment_deal(a, s),
              "location": a.location,
+             "zuper_locked": a.opportunity_id in locked,
              "contact_name": a.contact.name if a.contact else None} for a in rows]
 
 
@@ -3702,6 +3781,25 @@ def report_calls(
     }
 
 
+@app.get("/api/reports/lead-outcomes")
+def report_lead_outcomes(
+    db: Session = Depends(get_db),
+    since: datetime | None = None,
+    until: datetime | None = None,
+    pipeline_id: int | None = None,
+    principal: auth.Principal = assigned_access.REPORTING):
+    """Lead outcomes (2026-09-16): why cards closed without being booked, by source and by
+    campaign, for the cards the reader may see, in a period (when the outcome was set)."""
+    assigned_access.refuse_reporting(principal)
+    scope = assigned_access.scope(db, principal)
+
+    def visible(stmt):
+        stmt = assigned_access.opportunities(stmt, scope)
+        return stmt.where(Opportunity.pipeline_id == pipeline_id) if pipeline_id else stmt
+    return lead_outcomes.report(db, since=_range_utc(since), until=_range_utc(until),
+                                opportunities=visible)
+
+
 @app.get("/api/reports/appointments")
 def report_appointments(
     db: Session = Depends(get_db),
@@ -3810,6 +3908,7 @@ def _appointment_detail(a: Appointment, s: assigned_access.Scope,
             # Both directions of the link are readable: the deal lists its visits,
             # and the visit names its deal — when the reader may see the deal.
             **_appointment_deal(a, s),
+            "zuper_locked": zuper_locks.appointment_locked(object_session(a), a),
             "assigned_user_id": a.assigned_user_id}
 
 
@@ -3906,6 +4005,8 @@ def edit_appointment(db: Session, principal: auth.Principal, a: Appointment,
     and an AI agent's "reschedule appointment" action run exactly this, reminders and
     all. The caller resolved `a` and commits."""
     data = body.model_dump(exclude_unset=True)
+    # A visit on a job sent to Zuper — or moved onto one — is Zuper's (2026-09-16).
+    zuper_locks.check_visit(db, a.opportunity_id, data.get("opportunity_id"))
     allow_blocked = data.pop("allow_blocked_time", False)
     location_kind = data.pop("location_kind", None)
     if "status" in data and data["status"] not in APPOINTMENT_STATUSES:
@@ -4022,6 +4123,7 @@ def cancel_appointment_record(db: Session, a: Appointment, *,
     """Cancel a visit, as a service (2026-09-15): the route and an AI agent's "cancel
     appointment" action. The row survives; its reminders are retired and their keys
     released. Returns how many reminders were withdrawn. The caller commits."""
+    zuper_locks.check_visit(db, a.opportunity_id)
     was_cancelled = a.status == "cancelled"
     a.status = "cancelled"
     if ai_agent_id is not None:

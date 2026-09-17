@@ -167,7 +167,8 @@ def test_reporting_shows_only_the_three_tabs_that_can_work():
 
     tabs = source.split("const TABS: TabDef[] = [", 1)[1].split("\n]", 1)[0]
     labels = re.findall(r"label: '([^']+)'", tabs)
-    assert labels == ["Custom reports", "Call report", "Appointment report"], (
+    # "Lead outcomes" joined on 2026-09-16 (Zuper v2): a real report, not a stub.
+    assert labels == ["Custom reports", "Call report", "Appointment report", "Lead outcomes"], (
         f"the Reporting tab row is {labels}, not the three tabs that can work")
 
     # Custom reports is a stub on purpose -- it must keep saying why on hover.

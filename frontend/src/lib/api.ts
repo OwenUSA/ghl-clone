@@ -220,6 +220,8 @@ export type Opportunity = {
       means "this role may not see notes", never "no notes". */
   notes_count?: number
   note_previews?: string[]
+  /** Zuper v2 (2026-09-16): sent to Zuper — the card is a mirror and cannot be dragged. */
+  managed_in_zuper?: boolean
 }
 
 export const listOpportunities = (pipelineId: number, q = '', status = 'open') => {
@@ -501,6 +503,8 @@ export type Appointment = {
   opportunity_address?: string | null
   /** The Workiz Job # the deal was imported from, or null. */
   workiz_job_id?: string | null
+  /** Zuper v2: a visit of a job managed in Zuper — read-only here. */
+  zuper_locked?: boolean
 }
 
 export function listAppointments(p: {
@@ -584,6 +588,8 @@ export type AppointmentDetail = {
   opportunity_id: number | null
   opportunity_title: string | null
   assigned_user_id: number | null
+  /** Zuper v2: a visit of a job managed in Zuper — no edit, no cancel. */
+  zuper_locked?: boolean
 }
 
 export const getAppointment = (id: number) =>
@@ -687,6 +693,9 @@ export type ContactDetail = {
   opportunities: ContactOpportunity[]
   appointments: ContactAppointment[]
   custom_fields: Record<string, unknown>
+  /** Zuper v2: the customer of a sent job — these fields are Zuper's. */
+  zuper_locked?: boolean
+  zuper_locked_fields?: string[]
 }
 
 export const getContact = (id: number) => get<ContactDetail>(`/api/contacts/${id}`)
@@ -783,6 +792,14 @@ export type OpportunityDetail = {
   contact_tags: ContactTag[]
   /** The primary contact's thread, or null when there is none yet. */
   conversation_id: number | null
+  /** Zuper v2 (2026-09-16): Send to Zuper and the mirror's locks. Optional so older fixtures
+      type-check; absent reads as "nothing locked, no send control". */
+  zuper?: import('./zuper').OpportunityZuper
+  /** CRM-only: why a lead closed without booking (lib/zuper.ts LEAD_OUTCOMES). */
+  lead_outcome?: string | null
+  lead_outcome_note?: string | null
+  /** A live visit, or sent to Zuper: closing it needs no lead outcome. */
+  booked?: boolean
 }
 
 /** What the modal's Update sends. The two id lists REPLACE the set they name. */
@@ -802,6 +819,9 @@ export type OpportunityPatch = {
   custom_fields?: Record<string, unknown>
   /** 0-100, or null to clear it. */
   probability?: number | null
+  /** Zuper v2: required with status lost/abandoned on an unbooked card; Other needs the note. */
+  lead_outcome?: string | null
+  lead_outcome_note?: string | null
   address_street?: string | null
   address_city?: string | null
   address_state?: string | null
@@ -922,6 +942,9 @@ export const createOpportunity = (body: {
   address_city?: string | null
   address_state?: string | null
   address_postal_code?: string | null
+  /** Zuper v2: a card created lost/abandoned needs one. */
+  lead_outcome?: string | null
+  lead_outcome_note?: string | null
 }) => send<{ id: number; title: string; stage_id: number }>(
   '/api/opportunities', 'POST', body)
 
@@ -1900,3 +1923,65 @@ export const deleteAttachment = (id: number) =>
  *  state whatever happened — including "it failed again", with the sentence saying why. */
 export const retryAttachment = (id: number) =>
   send<Attachment>(`/api/attachments/${id}/retry`, 'POST')
+
+// ---------------- Zuper two-way sync (2026-09-16) ----------------
+// Routes: backend/app/zuper/api.py. Shapes and the words for them: lib/zuper.ts.
+
+/** Settings → Zuper, everything on one read. ADMIN. */
+export const getZuperStatus = () => get<import('./zuper').ZuperStatus>('/api/zuper/status')
+
+/** The switch and the Workiz cutover date. 409 (a sentence) while a blocker remains. */
+export const putZuperSettings = (body: { enabled?: boolean; workiz_cutover_date?: string | null }) =>
+  send<import('./zuper').ZuperStatus>('/api/zuper/settings', 'PUT', body)
+
+/** Read-only GETs against Zuper; the results gate the switch. */
+export const runZuperSetupCheck = () =>
+  send<import('./zuper').ZuperSetup>('/api/zuper/setup/check', 'POST')
+
+/** "Confirmed by hand" for an item the Zuper API cannot report. Un-ticking pauses the sync. */
+export const confirmZuperSetupItem = (key: string, confirmed: boolean) =>
+  send<import('./zuper').ZuperSetup>(
+    `/api/zuper/setup/confirmations/${encodeURIComponent(key)}`, 'PUT', { confirmed })
+
+export const listZuperConflicts = (page: number, pageSize: number) =>
+  get<import('./zuper').ZuperPage<import('./zuper').ZuperConflict>>(
+    `/api/zuper/conflicts?${new URLSearchParams({ page: String(page), page_size: String(pageSize) })}`)
+
+export const listZuperDeletes = (page: number, pageSize: number) =>
+  get<import('./zuper').ZuperPage<import('./zuper').ZuperDelete>>(
+    `/api/zuper/deletes?${new URLSearchParams({ page: String(page), page_size: String(pageSize) })}`)
+
+/** Restore a delete the sync mirrored — its whole batch, parents first. */
+export const restoreZuperDelete = (id: number) =>
+  send<import('./zuper').ZuperRestoreResult>(`/api/zuper/deletes/${id}/restore`, 'POST')
+
+/** A card's quotes and invoices as Zuper last reported them. 404 = a card the reader cannot see. */
+export const getOpportunityZuper = (opportunityId: number) =>
+  get<import('./zuper').ZuperOpportunityMoney>(`/api/opportunities/${opportunityId}/zuper`)
+
+/** The documents on this customer's cards that the reader can see. */
+export const getContactZuper = (contactId: number) =>
+  get<import('./zuper').ZuperContactMoney>(`/api/contacts/${contactId}/zuper`)
+
+/** Zuper's job attachments. Every `url` is a CRM relay path, never Zuper's. */
+export const getOpportunityZuperAttachments = (opportunityId: number) =>
+  get<import('./zuper').ZuperAttachments>(`/api/opportunities/${opportunityId}/zuper/attachments`)
+
+// ---------------- Zuper v2 (2026-09-16): Send to Zuper, lead outcomes ----------------
+
+/** 202 {state: "queued"}; 200 {state, already: true} for a second press; 409 with sentences. */
+export const sendToZuper = (opportunityId: number) =>
+  send<{ state: import('./zuper').ZuperSendState; already?: boolean }>(
+    `/api/opportunities/${opportunityId}/zuper/send`, 'POST')
+
+/** Set one lead outcome on a selection. STAFF. */
+export const bulkLeadOutcome = (ids: number[], leadOutcome: string, note: string | null) =>
+  send<{ updated: number[] }>('/api/opportunities/bulk/lead-outcome', 'POST',
+    { ids, lead_outcome: leadOutcome, lead_outcome_note: note })
+
+/** Outcomes by source and by campaign over a period (STAFF, like the other reports). */
+export const getLeadOutcomeReport = (p: { since: string; until: string; pipeline_id?: number | null }) => {
+  const sp = new URLSearchParams({ since: p.since, until: p.until })
+  if (p.pipeline_id) sp.set('pipeline_id', String(p.pipeline_id))
+  return get<import('./zuper').LeadOutcomeReport>(`/api/reports/lead-outcomes?${sp}`)
+}

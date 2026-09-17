@@ -69,6 +69,7 @@ from app.models import (
     Stage,
     User,
 )
+from app.zuper import api as zuper_api
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -1156,6 +1157,19 @@ AUDITED = {
     "companycam_status": "ADMIN", "companycam_review_list": "ADMIN",
     "companycam_review_link": "ADMIN", "companycam_review_dismiss": "ADMIN",
     "companycam_unlink": "ADMIN",
+    # Zuper sync (app/zuper/api.py, 2026-09-16): a money panel or a Zuper photo of a job that
+    # is not theirs is the same 404 as a missing one.
+    "zuper_opportunity_panel": "get_opportunity -> 404",
+    "zuper_contact_panel": "assigned_access.get_contact -> 404; opportunities(scope)",
+    "zuper_opportunity_attachments": "_job_for: get_opportunity -> 404",
+    "zuper_attachment_file": "_job_for: get_opportunity -> 404",
+    "zuper_status": "ADMIN", "zuper_update_settings": "ADMIN",
+    "zuper_run_setup_check": "ADMIN", "zuper_confirm_setup_item": "ADMIN",
+    "zuper_conflicts": "ADMIN", "zuper_deletes": "ADMIN", "zuper_restore_delete": "ADMIN",
+    "zuper_webhook": "exempt",
+    "zuper_send_opportunity": "may_send refuses restricted 403; get_opportunity -> 404",
+    "bulk_lead_outcome": "STAFF; _bulk_load (scope) refuses a foreign id",
+    "report_lead_outcomes": "refuse_reporting -> 403; assigned_access.opportunities(scope)",
     # admin, auth, machinery — no customer record
     "list_users": "roster; only_assigned_data ADMIN-only", "create_user": "ADMIN",
     "update_user": "ADMIN", "list_jobs": "ADMIN", "retry_job": "ADMIN",
@@ -1240,7 +1254,7 @@ def test_every_route_reading_customer_records_goes_through_a_scope():
         if fn.__name__ in exempt or fn.__module__ not in (
                 main_mod.__name__, opportunity_workspace.__name__,
                 companycam_api.__name__, softphone.__name__, openphone.__name__,
-                media_api.__name__):
+                media_api.__name__, zuper_api.__name__):
             continue
         src = inspect.getsource(fn)
         if any(m in src for m in reads) and not any(m in src for m in markers):
