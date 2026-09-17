@@ -66,6 +66,12 @@ class FakeZuper:
     # /jobs/status_new/{c}. A path not in the set answers an empty list (as live 09-17).
     statuses_listed_at: set[str] = field(default_factory=lambda: {"status"})
     status_create_echoes_uid: bool = True
+    # Live-like status creates: the only body form that really creates ("flat", "job_status",
+    # "job_statuses", "list", "plain"; None = flat and job_status both work, as before). Any
+    # other form answers {type, message} and makes nothing (live, 2026-09-17).
+    status_create_form: str | None = None
+    category_embeds_statuses: bool = False       # GET /jobs/category carries job_statuses
+    template_category_with_statuses: bool = False
     webhooks_listable: bool = True          # False: both list endpoints answer 404 (live, 09-17)
     users: list[dict] = field(default_factory=lambda: [dict(SYNC_USER), dict(OFFICE_USER)])
     me: dict = field(default_factory=lambda: dict(SYNC_USER))
@@ -195,13 +201,16 @@ class FakeZuper:
                 self.customers, u))),
             (r"/customers/([^/]+)/recover", ("POST", lambda p, b, u: self.recover(
                 self.customers, u))),
-            (r"/jobs/category", ("GET", lambda p, b: self.ok(list(self.categories.values())))),
+            (r"/jobs/category", ("GET", lambda p, b: self.ok(self.category_rows()))),
             (r"/jobs/category", ("POST", self.create_category)),
             (r"/jobs/status/([^/]+)", ("GET", lambda p, b, c: self.ok(
                 self.statuses.get(c, []) if "status" in self.statuses_listed_at else []))),
             (r"/jobs/status_new/([^/]+)", ("GET", lambda p, b, c: self.ok(
                 self.statuses.get(c, []) if "status_new" in self.statuses_listed_at else []))),
             (r"/jobs/status_new/([^/]+)", ("POST", self.create_status)),
+            (r"/jobs/status", ("POST", lambda p, b: self.create_status(
+                p, b, (b.get("job_status") or b).get("category_uid") if isinstance(b, dict)
+                else None, plain=True))),
             (r"/jobs/status/([^/]+)/([^/]+)", ("PUT", self.rename_status)),
             (r"/jobs", ("GET", lambda p, b: self.page(
                 self.filtered(list(self.jobs.values()), p), p))),
@@ -316,8 +325,32 @@ class FakeZuper:
         self.statuses[uid] = []
         return self.ok({"category_uid": uid})
 
-    def create_status(self, params, body, cat) -> httpx.Response:
-        fields = body.get("job_status") or body
+    def category_rows(self) -> list[dict]:
+        rows = []
+        if self.template_category_with_statuses:
+            rows.append({"category_uid": "cat-template", "category_name": "Roof Inspection",
+                         "job_statuses": [{"status_uid": "st-t1", "status_name": "New"}]})
+        for c in self.categories.values():
+            row = dict(c)
+            if self.category_embeds_statuses:
+                row["job_statuses"] = [dict(x) for x in self.statuses.get(c["category_uid"], [])]
+            rows.append(row)
+        return rows
+
+    def create_status(self, params, body, cat, plain: bool = False) -> httpx.Response:
+        form = ("plain" if plain else "list" if isinstance(body, list)
+                else "job_statuses" if "job_statuses" in body
+                else "job_status" if "job_status" in body else "flat")
+        if self.status_create_form is not None and form != self.status_create_form:
+            return self.ok(message="Job status updated successfully")      # and makes nothing
+        if form == "list":
+            fields = body[0]
+        elif form == "job_statuses":
+            fields = body["job_statuses"][0]
+        else:
+            fields = body.get("job_status") or body
+        if cat not in self.categories:
+            return self.not_found()
         if not fields.get("status_name"):
             return self.error("Status Name Missing")
         uid = self.uid("st")

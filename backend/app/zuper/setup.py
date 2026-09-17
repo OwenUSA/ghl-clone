@@ -361,8 +361,8 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
             db.commit()                      # a checkpoint: the category is made
         # None: Zuper would not list this category's statuses — then the CRM's own mapping
         # of each status it created is trusted, so a rerun never creates one twice.
-        listing, entry["status_sources"] = (zapi.status_sources(cat_uid) if cat_uid
-                                            else ([], []))
+        listing, entry["status_sources"], listed_reliably = (
+            zapi.statuses_reliably(cat_uid) if cat_uid else ([], [], True))
         entry["statuses_listed"] = listing is not None
         entry["zuper_statuses"] = [zapi.status_name(s) or "?" for s in listing or []]
         if listing:
@@ -387,8 +387,8 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
         taken = {sm.zuper_uid for sm in stage_maps}
         # Zuper's list is RELIABLE for this category when it shows a status the CRM knows it
         # made there: then a status missing from it was not made, and may be sent again.
-        reliable = any(sm.state == "linked" and sm.parent_uid == cat_uid
-                       and sm.zuper_uid in statuses for sm in stage_maps)
+        reliable = listed_reliably or any(sm.state == "linked" and sm.parent_uid == cat_uid
+                                          and sm.zuper_uid in statuses for sm in stage_maps)
         for i, (stage, name) in enumerate(zip(stages, status_names(stages), strict=True)):
             row = {"stage_id": stage.id, "status": name}
             sm = mapping.mapping_for(db, "stage", stage.id)
@@ -443,31 +443,19 @@ UNRESOLVED = ("The status “%s” in “%s” was sent to Zuper earlier but Zup
 def _create_status(db: Session, stage: Stage, cat_uid: str, name: str, status_type: str,
                    taken: set) -> str:
     """Create one status with a checkpoint: the stage's mapping is committed as "creating"
-    BEFORE the request. Refused by Zuper (nothing made): the checkpoint is removed. Answered
-    without a uid (live, 2026-09-17): the status is looked up by exact name — one unmapped
-    match is mapped; otherwise the checkpoint stays and the run stops, so a later run never
-    sends it again."""
+    BEFORE any request. `zapi.create_status` verifies what it made; when every way was
+    refused (nothing made) the checkpoint is removed, otherwise — an outage, an OK Zuper's
+    lists cannot confirm — it stays, and a later run sends it again only when Zuper's list
+    is reliable."""
     _map_stage(db, stage, None, cat_uid, state="creating")
     db.commit()
     try:
-        uid = zapi.create_status(cat_uid, name, status_type)
+        uid = zapi.create_status(cat_uid, name, status_type, taken)
     except ZuperError as exc:
         if exc.kind == "rejected":
             db.delete(mapping.mapping_for(db, "stage", stage.id))
             db.commit()
-            raise
-        if exc.kind != "bad_response":
-            raise
-        listing, notes = zapi.status_sources(cat_uid)
-        found = [zapi.status_uid(s) for s in listing or []
-                 if zapi.status_name(s) == name and zapi.status_uid(s)
-                 and zapi.status_uid(s) not in taken]
-        if len(found) != 1:
-            raise ZuperError("bad_response", "%s; the status “%s” was found %d time(s) in "
-                             "Zuper afterwards (%s), so it stays unresolved and is never sent "
-                             "again." % (exc.detail, name, len(found), "; ".join(notes))
-                             ) from None
-        uid = found[0]
+        raise
     _map_stage(db, stage, uid, cat_uid)
     db.commit()
     return uid
@@ -574,7 +562,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = run(db, commit=args.commit)
     except ZuperError as exc:
-        print("REFUSED: %s" % client.sentence(exc), file=sys.stderr)
+        # In full: Zuper's messages for every attempt are what the next fix is made from.
+        print("REFUSED: %s%s" % (client.SENTENCES.get(exc.kind, "Zuper sync error."),
+                                 " " + exc.detail if exc.detail else ""), file=sys.stderr)
         return 2
     finally:
         db.close()

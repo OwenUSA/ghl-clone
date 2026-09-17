@@ -135,6 +135,7 @@ PATHS = {
     "statuses": "/jobs/status/{category_uid}",
     "status_create": "/jobs/status_new/{category_uid}",
     "status_update": "/jobs/status/{category_uid}/{status_uid}",
+    "status_create_plain": "/jobs/status",          # a candidate create path (UNVERIFIED)
     "jobs": "/jobs",
     "job": "/jobs/{uid}",
     "job_delete": "/jobs/{uid}/delete",
@@ -174,7 +175,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("DELETE", _rx(PATHS["customer"])), ("POST", _rx(PATHS["customer_recover"])),
     ("GET", _rx(PATHS["categories"])), ("POST", _rx(PATHS["categories"])),
     ("GET", _rx(PATHS["statuses"])), ("POST", _rx(PATHS["status_create"])),
-    ("GET", _rx(PATHS["status_create"])),
+    ("GET", _rx(PATHS["status_create"])), ("POST", _rx(PATHS["status_create_plain"])),
     ("PUT", _rx(PATHS["status_update"])),
     ("GET", _rx(PATHS["jobs"])), ("POST", _rx(PATHS["jobs"])), ("PUT", _rx(PATHS["jobs"])),
     ("GET", _rx(PATHS["job"])), ("DELETE", _rx(PATHS["job_delete"])),
@@ -371,7 +372,7 @@ def rows_of(payload: Any) -> list[dict]:
                 rows = rows[key]
                 break
     if not isinstance(rows, list):
-        raise ZuperError("bad_response", "expected a list")
+        raise ZuperError("bad_response", "expected a list (%s)" % shape(payload))
     return [r for r in rows if isinstance(r, dict)]
 
 
