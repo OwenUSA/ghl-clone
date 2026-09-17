@@ -8,7 +8,17 @@ import json
 from collections.abc import Iterator
 from typing import Any
 
-from .client import ZuperError, data_of, iter_all, path, request, rows_of, total_of, uid_of
+from .client import (
+    ZuperError,
+    data_of,
+    iter_all,
+    path,
+    request,
+    rows_of,
+    shape,
+    total_of,
+    uid_of,
+)
 
 
 def _record(payload: Any) -> dict:
@@ -138,16 +148,22 @@ def statuses(category_uid: str) -> list[dict]:
 
 
 def status_sources(category_uid: str) -> tuple[list[dict] | None, list[str]]:
-    """Every status Zuper shows for a category, from every place it might (UNVERIFIED which):
-    GET /jobs/status_new/{uid} (the path statuses are created on), GET /jobs/status/{uid}
-    (live 2026-09-17: answers, but lists nothing — also right after a status create), and the
-    statuses embedded in the category record. Merged by uid; a record without a readable uid
-    is kept, so the caller can refuse to guess. None only when no source could be read.
-    The notes say what each source gave (counts and field names only)."""
+    """Every status Zuper shows for a category (UNVERIFIED where): GET /jobs/status_new/{uid},
+    GET /jobs/status/{uid}, and the `job_statuses` inside the category record. Live
+    2026-09-17: the first answers 404, the second is not a list, the category record carries
+    `job_statuses`. Merged by uid; a record without a readable uid is kept, so the caller can
+    refuse to guess. None only when no source could be read. The notes say what each source
+    gave (counts and field names only)."""
+    rows, notes, _ = _status_sources(category_uid)
+    return rows, notes
+
+
+def _status_sources(category_uid: str) -> tuple[list[dict] | None, list[str], bool]:
     merged: list[dict] = []
     seen: set[str] = set()
     notes: list[str] = []
     readable = False
+    reliable = False
 
     def take(rows: list[dict]) -> None:
         for r in rows:
@@ -165,36 +181,113 @@ def status_sources(category_uid: str) -> tuple[list[dict] | None, list[str]]:
         except ZuperError as exc:
             if exc.kind not in ("not_found", "bad_response", "rejected", "refused"):
                 raise
-            notes.append("GET %s: %s%s" % (api_path, exc.kind,
-                                           " (HTTP %d)" % exc.status if exc.status else ""))
+            notes.append("GET %s: %s%s%s" % (
+                api_path, exc.kind, " (HTTP %d)" % exc.status if exc.status else "",
+                " %s" % exc.detail if exc.kind == "bad_response" else ""))
             continue
         readable = True
         notes.append("GET %s: %d%s" % (api_path, len(rows), (" (fields: %s)" % ", ".join(
             sorted(rows[0].keys())[:20])) if rows else ""))
         take(rows)
+    others_with_statuses = 0
     for rec in categories():
+        embedded = rec.get("job_statuses")
         if category_uid_of(rec) != category_uid:
+            if isinstance(embedded, list) and embedded:
+                others_with_statuses += 1
             continue
         notes.append("category record fields: %s" % ", ".join(sorted(rec.keys())[:30]))
         for key in ("job_statuses", "statuses", "category_statuses", "job_status"):
             if isinstance(rec.get(key), list):
                 readable = True
+                reliable = reliable or key == "job_statuses"
                 rows = [r for r in rec[key] if isinstance(r, dict)]
-                notes.append("category record %s: %d" % (key, len(rows)))
+                notes.append("category record %s: %d%s" % (key, len(rows), (
+                    " (fields: %s)" % ", ".join(sorted(rows[0].keys())[:20])) if rows else ""))
                 take(rows)
-    return (merged if readable else None), notes
+    notes.append("other categories showing statuses in their record: %d" % others_with_statuses)
+    # The category list is Zuper's own record of each category's statuses. It is trusted to
+    # show a status that exists when it shows statuses for other categories too.
+    return (merged if readable else None), notes, reliable and others_with_statuses > 0
+
+
+def statuses_reliably(category_uid: str) -> tuple[list[dict] | None, list[str], bool]:
+    """(statuses, notes, reliable): reliable = a status missing from the list does not exist."""
+    return _status_sources(category_uid)
+
+
+STATUS_COLOR = "#1E88E5"
+
+
+def status_create_candidates(category_uid: str, name: str,
+                             status_type: str) -> list[tuple[str, str, str, Any]]:
+    """(label, method, path, body) — every way a status might be created (UNVERIFIED). Live
+    2026-09-17: POST /jobs/status_new/{c} {"status_name", "status_type"} answered
+    {type, message} and nothing appeared. The UI requires a colour."""
+    one = {"status_name": name, "status_type": status_type, "status_color": STATUS_COLOR}
+    new = path("status_create", category_uid=category_uid)
+    return [
+        ("status_new flat", "POST", new, dict(one)),
+        ("status_new job_status", "POST", new, {"job_status": dict(one)}),
+        ("status_new job_statuses[]", "POST", new, {"job_statuses": [dict(one)]}),
+        ("status_new [list]", "POST", new, [dict(one)]),
+        ("jobs/status flat", "POST", path("status_create_plain"),
+         {**one, "category_uid": category_uid}),
+        ("jobs/status job_status", "POST", path("status_create_plain"),
+         {"job_status": {**one, "category_uid": category_uid}}),
+    ]
 
 
 def statuses_or_none(category_uid: str) -> list[dict] | None:
     return status_sources(category_uid)[0]
 
 
-def create_status(category_uid: str, name: str, status_type: str) -> str:
-    fields = {"status_name": name, "status_type": status_type}
-    return uid_of(first_accepted("status", "POST", path("status_create",
-                                                      category_uid=category_uid), [
-        ("flat", dict(fields)), ("job_status", {"job_status": dict(fields)}),
-        ("status", {"status": dict(fields)})]), "status_uid", "job_status_uid")
+def create_status(category_uid: str, name: str, status_type: str,
+                  taken: set | frozenset = frozenset()) -> str:
+    """Create a status and return its uid, VERIFIED: an answer without a uid is only believed
+    when the status then shows in Zuper's own category record. Each candidate request is
+    tried in turn (the one that worked before first) and moves on only when Zuper refused it,
+    or when it said OK but nothing appeared AND Zuper's list is reliable — so a status is
+    never made twice. When the list cannot be trusted, it stops. Every attempt's outcome,
+    with Zuper's own message, is in the error."""
+    notes: list[str] = []
+    known = ACCEPTED_SHAPES.get("status")
+    candidates = sorted(status_create_candidates(category_uid, name, status_type),
+                        key=lambda c: c[0] != known)
+    for label, method, api_path, body in candidates:
+        try:
+            payload = request(method, api_path, body=body)
+        except ZuperError as exc:
+            if exc.kind not in ("rejected", "not_found"):
+                raise
+            notes.append("%s: refused (%s)" % (label, exc.detail or exc.kind))
+            continue
+        try:
+            uid = uid_of(payload, "status_uid", "job_status_uid")
+        except ZuperError:
+            uid = None
+        if uid:
+            ACCEPTED_SHAPES["status"] = label
+            return uid
+        rows, source_notes, reliable = _status_sources(category_uid)
+        found = [status_uid(r) for r in rows or [] if status_name(r) == name
+                 and status_uid(r) and status_uid(r) not in taken]
+        message = payload.get("message") if isinstance(payload, dict) else None
+        said = "“%s”" % str(message)[:200] if message else shape(payload)
+        if len(found) == 1:
+            ACCEPTED_SHAPES["status"] = label
+            return str(found[0])
+        if len(found) > 1:
+            raise ZuperError("bad_response", "%s: answered %s and “%s” now shows %d times; "
+                             "not mapped." % (label, said, name, len(found)))
+        notes.append("%s: answered %s, but no status “%s” appeared" % (label, said, name))
+        if not reliable:
+            raise ZuperError("bad_response", "Zuper said OK to a status create but the sync "
+                             "cannot tell whether it made “%s” (its lists are not reliable: "
+                             "%s). Stopped so it is never made twice. Attempts: %s." % (
+                                 name, "; ".join(source_notes), "; ".join(notes)))
+    raise ZuperError("rejected", "No way of creating the status “%s” worked. Attempts: %s."
+                     % (name, "; ".join(notes)))
 
 
 def rename_status(category_uid: str, status_uid: str, name: str) -> None:

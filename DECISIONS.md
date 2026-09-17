@@ -5450,3 +5450,16 @@ when Zuper's lists do not show it (never re-created). A "creating" status whose 
 learned is re-sent only when Zuper's list is shown reliable (it lists a status the CRM knows it
 made in that category); otherwise the setup stops with a sentence asking a person to look in
 Settings → Jobs → Categories — it is never sent twice.
+
+### Amendment 2026-09-17 (4): a status create that says OK and makes nothing
+
+Live (fix 3 deployed): GET /jobs/status_new/{c} is 404, GET /jobs/status/{c} is not a list, and the
+category record (GET /jobs/category) carries `job_statuses` — 0 for AHS, also right after
+POST /jobs/status_new/{c} {"status_name","status_type"} answered {type, message} with no uid. So that
+create made nothing. A status create is now VERIFIED: candidate requests (`zapi.status_create_candidates`,
+each with a `status_color`, which Zuper's UI requires) are tried in order; one that answers OK without a
+uid is believed only when the status then appears in the category record. The next candidate is tried
+only if Zuper refused, or said OK with nothing appearing while the category list is RELIABLE (it shows
+statuses for other categories); otherwise it stops, keeping the "creating" checkpoint. The candidate that
+worked is tried first from then on and named in the report. Refusals print in full (Zuper's message for
+every attempt).

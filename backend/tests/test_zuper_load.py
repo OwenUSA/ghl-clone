@@ -709,7 +709,7 @@ def test_empty_lists_and_no_uid_stop_once_and_never_send_that_status_again(zworl
 
 def test_a_refused_status_create_leaves_no_checkpoint(zworld, fake, monkeypatch):
     monkeypatch.setattr(fake, "create_status",
-                        lambda params, body, cat: fake.error("status_type invalid"))
+                        lambda params, body, cat, **kw: fake.error("status_type invalid"))
     assert setup.main(["--commit"]) == 2
     assert stage_states() == {}
 
@@ -736,3 +736,62 @@ def test_an_unknown_outcome_is_resent_only_when_zuper_s_list_is_shown_reliable(z
     assert stage_states() == {"linked": 11}
     for sts in fake.statuses.values():
         assert len({x["status_name"] for x in sts}) == len(sts)
+
+
+# ------------------------------------------------ live 2026-09-17 (4): OK without effect
+
+def live_like(fake, form: str = "job_statuses", *, reliable: bool = True) -> None:
+    fake.status_create_echoes_uid = False
+    fake.statuses_listed_at = set()
+    fake.category_embeds_statuses = True
+    fake.template_category_with_statuses = reliable
+    fake.status_create_form = form
+
+
+def test_status_creates_try_each_form_verify_in_the_category_record_and_remember(zworld,
+                                                                                 fake):
+    live_like(fake, "job_statuses")
+    report = run_setup(commit=True)
+    assert report["passed"], report["checks"]
+    assert stage_states() == {"linked": 11}
+    names = {c: [x["status_name"] for x in sts] for c, sts in fake.statuses.items()}
+    assert all(len(v) == len(set(v)) for v in names.values())            # none twice
+    # First status: flat (no effect), job_status (no effect), job_statuses[] (made);
+    # the other ten go straight to the form that worked.
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 3 + 10
+    assert report["categories"]["accepted_shapes"]["status"] == "status_new job_statuses[]"
+    for body in [c.body for c in fake.calls("POST", r"^/jobs/status_new/")]:
+        one = body if isinstance(body, dict) and "status_name" in body else (
+            body.get("job_status") or body.get("job_statuses", [None])[0])
+        assert one["status_color"]
+
+
+def test_ok_without_effect_and_an_unreliable_list_stops_at_once(zworld, fake):
+    live_like(fake, "plain", reliable=False)
+    assert setup.main(["--commit"]) == 2
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 1
+    assert stage_states() == {"creating": 1}
+    assert setup.main(["--commit"]) == 2
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 1        # never re-sent
+
+
+def test_every_form_without_effect_on_a_reliable_list_reports_each_message(zworld, fake,
+                                                                          capsys):
+    live_like(fake, "nothing-works")
+    assert setup.main(["--commit"]) == 2
+    err = capsys.readouterr().err
+    assert "No way of creating the status “New Lead” worked" in err
+    assert err.count("Job status updated successfully") == 6
+    assert stage_states() == {}                                     # nothing made: no checkpoint
+    assert all(not sts for sts in fake.statuses.values())
+
+
+def test_a_leftover_checkpoint_is_resent_once_the_list_is_reliable(zworld, fake):
+    live_like(fake, "plain", reliable=False)
+    assert setup.main(["--commit"]) == 2
+    assert stage_states() == {"creating": 1}
+    fake.template_category_with_statuses = True                      # the list proves reliable
+    report = run_setup(commit=True)
+    assert report["passed"], report["checks"]
+    assert stage_states() == {"linked": 11}
+    assert len(fake.calls("POST", r"^/jobs/status$")) == 11
