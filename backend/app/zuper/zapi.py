@@ -295,11 +295,9 @@ def webhooks() -> list[dict]:
     return rows_of(request("GET", path("webhooks")))
 
 
-def create_webhook(name: str, url: str, event: str, module: str) -> Any:
-    return request("POST", path("webhook_create"), body={"web_hook": {
-        "webhook_name": name, "webhook_event": event, "webhook_url": url,
-        "content_type": "application/json", "request_method": "POST",
-        "webhook_module": module}})
+def create_webhook(web_hook: dict) -> Any:
+    """POST /webhook {"web_hook": {...}} — the body is built by app/zuper/webhook.py."""
+    return request("POST", path("webhook_create"), body={"web_hook": web_hook})
 
 
 def total(path_name: str, params: dict | None = None) -> int | None:

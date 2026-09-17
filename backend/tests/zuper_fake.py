@@ -58,6 +58,10 @@ class FakeZuper:
     attachments: dict[str, list[dict]] = field(default_factory=dict)
     files: dict[str, tuple[bytes, str]] = field(default_factory=dict)
     webhooks: list[dict] = field(default_factory=list)
+    # POST /webhook: the (module, event) pairs Zuper accepts (None = any), and whether it
+    # keeps the custom headers it was sent.
+    webhook_events: set[tuple[str, str]] | None = None
+    keeps_webhook_headers: bool = True
     users: list[dict] = field(default_factory=lambda: [dict(SYNC_USER), dict(OFFICE_USER)])
     me: dict = field(default_factory=lambda: dict(SYNC_USER))
     # Settings the check reads. None = Zuper answers 404 (the "confirm by hand" path).
@@ -232,6 +236,7 @@ class FakeZuper:
                                          if self.lead_sources is None else self.ok(
                 self.lead_sources))),
             (r"/service/notifications/webhook", ("GET", lambda p, b: self.ok(self.webhooks))),
+            (r"/webhook", ("POST", self.create_webhook)),
         ]
 
     # ------------------------------------------------------------------ records
@@ -279,6 +284,18 @@ class FakeZuper:
         rec["updated_at"] = self.tick()
         rec["updated_by"] = {"user_uid": "u-sync"}
         return self.ok(message="updated")
+
+    def create_webhook(self, params, body) -> httpx.Response:
+        hook = dict(body["web_hook"])
+        pair = (hook.get("webhook_module"), hook.get("webhook_event"))
+        if self.webhook_events is not None and pair not in self.webhook_events:
+            return self.error("Invalid webhook_event %s for module %s" % (pair[1], pair[0]))
+        if not self.keeps_webhook_headers:
+            hook.pop("headers", None)
+        uid = self.uid("whk")
+        hook.update(webhook_uid=uid, is_active=True)
+        self.webhooks.append(hook)
+        return self.ok({"webhook_uid": uid})
 
     def create_category(self, params, body) -> httpx.Response:
         uid = self.uid("cat")

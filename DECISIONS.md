@@ -5404,3 +5404,15 @@ production-shaped rows, upgrades, and asserts every existing table's columns and
 three added columns at the end of `opportunities`, NULL), exactly the eight new tables, empty, their
 server defaults, a clean downgrade / upgrade round trip, and an `upgrade()` that only creates tables,
 creates indexes and adds columns.
+
+### Amendment 2026-09-17 (owner, via the go-live supervisor): register the webhook and switch on
+
+Replaces runbook steps 7-8's "the operator registers the webhook by hand" and the supervisor brief's
+"do not register the webhook, do not enable the sync": once the day-one load is verified the sync
+is switched ON. `python -m app.zuper.webhook` (dry run; `--commit`) registers one Zuper webhook per
+(module, event) for job, customer, appointment, note, service task, estimate and invoice, posting
+JSON to `/api/zuper/webhook` with the `X-Webhook-Token` header (or `?token=` if Zuper keeps no
+header). Idempotent by module + event + URL (query ignored); never edits or deletes a Zuper webhook;
+the first refusal stops it with Zuper's message. Event names and the header field are UNVERIFIED
+constants. Also: the initial load now STOPS on the first refused record of a kind (as the runbook
+already promised) and keeps the reason for later per-record refusals.
