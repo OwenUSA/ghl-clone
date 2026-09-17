@@ -365,6 +365,18 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
         # of each status it created is trusted, so a rerun never creates one twice.
         listing = zapi.statuses_or_none(cat_uid) if cat_uid else []
         entry["statuses_listed"] = listing is not None
+        entry["zuper_statuses"] = [zapi.status_name(s) or "?" for s in listing or []]
+        if listing:
+            entry["status_fields"] = sorted(listing[0].keys())[:30]
+        unreadable = [s for s in listing or [] if not (zapi.status_name(s)
+                                                       and zapi.status_uid(s))]
+        if commit and unreadable:
+            # A status the sync cannot name or identify may be one it already made: creating
+            # more could duplicate it. Stop and show the fields Zuper does send.
+            raise ZuperError("bad_response", "Zuper listed %d status(es) of “%s” whose name or "
+                             "uid the sync cannot read (fields: %s); nothing more was created."
+                             % (len(unreadable), category_name,
+                                ", ".join(sorted(unreadable[0].keys())[:30])))
         statuses = {zapi.status_uid(s): s for s in listing or []}
         by_name = {zapi.status_name(s): u for u, s in statuses.items()}
         stages = ordered_stages(db, p.id)
@@ -395,7 +407,9 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
                 row["action"] = "create"
                 report["created_statuses"] += 1
                 if commit and cat_uid:
-                    uid = zapi.create_status(cat_uid, name, "NEW" if i == 0 else "STARTED")
+                    uid = _create_status(cat_uid, name, "NEW" if i == 0 else "STARTED",
+                                         taken)
+                    taken.add(uid)
                     _map_stage(db, stage, uid, cat_uid)
                     db.commit()              # a checkpoint per status
             entry["statuses"].append(row)
@@ -404,6 +418,26 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
     report["accepted_shapes"] = {k: v for k, v in zapi.ACCEPTED_SHAPES.items()
                                  if k in ("category", "status")}
     return report
+
+
+def _create_status(cat_uid: str, name: str, status_type: str, taken: set) -> str:
+    """Create a status; when Zuper's answer carries no uid (live, 2026-09-17), find the one
+    just made by its name in the category's list — exactly one unmapped match, or stop."""
+    try:
+        return zapi.create_status(cat_uid, name, status_type)
+    except ZuperError as exc:
+        if exc.kind != "bad_response":
+            raise
+        listing = zapi.statuses_or_none(cat_uid) or []
+        found = [zapi.status_uid(s) for s in listing
+                 if zapi.status_name(s) == name and zapi.status_uid(s)
+                 and zapi.status_uid(s) not in taken]
+        if len(found) == 1:
+            return found[0]
+        raise ZuperError("bad_response", "%s; and the status “%s” was found %d time(s) in "
+                         "the category's list afterwards, so it is not mapped (statuses "
+                         "listed: %s)." % (exc.detail, name, len(found), ", ".join(
+                             zapi.status_name(s) or "?" for s in listing) or "none")) from None
 
 
 def _map_stage(db: Session, stage: Stage, status_uid: str, category_uid: str) -> None:
@@ -474,6 +508,13 @@ def render(report: dict) -> str:
             lines.append("  %s -> %s: %s%s (ordered by %s)" % (
                 c["pipeline"], c["category"], verb, c.get("action", c.get("problem")),
                 c.get("ordered_by", "—")))
+            if "zuper_statuses" in c:
+                lines.append("      Zuper lists %d status(es) here%s" % (
+                    len(c["zuper_statuses"]), (": " + ", ".join(
+                        "“%s”" % n for n in c["zuper_statuses"])) if c["zuper_statuses"]
+                    else ""))
+            if c.get("status_fields"):
+                lines.append("      status fields: " + ", ".join(c["status_fields"]))
             for s in c["statuses"]:
                 lines.append("      stage #%d -> status “%s”: %s%s" % (
                     s["stage_id"], s["status"], verb, s["action"]))

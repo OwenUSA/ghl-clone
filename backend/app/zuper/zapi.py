@@ -156,9 +156,10 @@ def statuses_or_none(category_uid: str) -> list[dict] | None:
 
 def create_status(category_uid: str, name: str, status_type: str) -> str:
     fields = {"status_name": name, "status_type": status_type}
-    return create_first_accepted("status", path("status_create", category_uid=category_uid), [
+    return uid_of(first_accepted("status", "POST", path("status_create",
+                                                      category_uid=category_uid), [
         ("flat", dict(fields)), ("job_status", {"job_status": dict(fields)}),
-        ("status", {"status": dict(fields)})], "status_uid")
+        ("status", {"status": dict(fields)})]), "status_uid", "job_status_uid")
 
 
 def rename_status(category_uid: str, status_uid: str, name: str) -> None:
@@ -180,12 +181,16 @@ def category_name(rec: dict) -> str | None:
 
 
 def status_uid(rec: dict) -> str | None:
-    value = rec.get("status_uid") or rec.get("uid")
+    value = rec.get("status_uid") or rec.get("job_status_uid") or rec.get("uid")
     return str(value) if value else None
 
 
 def status_name(rec: dict) -> str | None:
-    return rec.get("status_name") or rec.get("name")
+    for key in ("status_name", "job_status_name", "name"):
+        value = rec.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 # ------------------------------------------------------------------ jobs

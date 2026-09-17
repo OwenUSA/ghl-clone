@@ -383,17 +383,41 @@ def total_of(payload: Any) -> int | None:
     return None
 
 
-def uid_of(payload: Any, key: str) -> str:
-    """The uid a create answered with: at the top, in `data`, or as `data` itself."""
-    for holder in (payload, data_of(payload)):
-        if isinstance(holder, dict):
-            value = holder.get(key) or holder.get("uid")
-            if isinstance(value, str) and value:
-                return value
+def uid_of(payload: Any, key: str, *also: str) -> str:
+    """The uid a create answered with: at the top, in `data`, one level inside `data` (a
+    record wrapped once more), or as `data` itself. Not found: `bad_response` naming the
+    answer's field names only (never values), so the first live answer shows its shape."""
+    keys = (key, *also, "uid")
     data = data_of(payload)
+    holders = [payload, data]
+    if isinstance(data, dict):
+        holders += [v for v in data.values() if isinstance(v, dict)]
+    for holder in holders:
+        if isinstance(holder, dict):
+            for k in keys:
+                value = holder.get(k)
+                if isinstance(value, str) and value:
+                    return value
     if isinstance(data, str) and data:
         return data
-    raise ZuperError("bad_response", "the create answered without a %s" % key)
+    raise ZuperError("bad_response", "the create answered without a %s (%s)" % (
+        key, shape(payload)))
+
+
+def shape(payload: Any) -> str:
+    """An answer's structure as field names only — safe to print, no values."""
+    def one(value: Any, depth: int) -> str:
+        if isinstance(value, dict):
+            if depth >= 4:
+                return "{…}"
+            return "{%s}" % ", ".join(
+                k + ("" if not isinstance(v, (dict, list)) else one(v, depth + 1))
+                for k, v in list(value.items())[:25])
+        if isinstance(value, list):
+            return "[%d%s]" % (len(value), " of " + one(value[0], depth + 1)
+                               if value and isinstance(value[0], (dict, list)) else "")
+        return ""
+    return "answer fields: " + (one(payload, 0) or type(payload).__name__)
 
 
 def cents(value: Any) -> int | None:

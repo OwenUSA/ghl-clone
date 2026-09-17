@@ -595,3 +595,58 @@ def test_the_status_move_and_child_bodies_fall_back_and_remember_the_accepted_sh
         assert job.get("current_job_status", {}).get("status_uid")
     assert len(fake.appointments) == 2 and sum(len(v) for v in fake.notes.values()) == 1
     assert "Zuper accepted these request bodies" in load.render(report)
+
+
+def test_a_status_create_answered_without_a_uid_is_found_by_name_not_made_twice(
+        zworld, fake, monkeypatch):
+    """Live, 2026-09-17: the status create answered success with no status_uid."""
+    real = fake.create_status
+
+    def no_uid(params, body, cat):
+        real(params, body, cat)
+        return fake.ok(message="Status created")
+
+    monkeypatch.setattr(fake, "create_status", no_uid)
+    report = run_setup(commit=True)
+    assert report["passed"], report["checks"]
+    posts = len(fake.calls("POST", r"^/jobs/status_new/"))
+    assert posts == 11
+    with SessionLocal() as s:
+        for key, stage_id in zworld.ids["stages"].items():
+            if key.startswith("other:"):
+                continue
+            m = mapping_row(s, "stage", stage_id)
+            status = next(x for x in fake.statuses[m.parent_uid] if x["status_uid"] == m.zuper_uid)
+            assert status["status_name"] == s.get(Stage, stage_id).name
+    run_setup(commit=True)
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == posts
+    text = setup.render(report)
+    assert "Zuper lists" in text
+
+
+def test_statuses_zuper_lists_without_readable_names_stop_the_commit_before_creating(
+        zworld, fake, monkeypatch):
+    run_setup(commit=True)                            # categories and statuses exist
+    with SessionLocal() as s:
+        s.execute(text("DELETE FROM zuper_mappings WHERE crm_type = 'stage'"))
+        s.commit()
+    for sts in fake.statuses.values():
+        for x in sts:
+            x["label"] = x.pop("status_name")
+    posts = len(fake.calls("POST", r"^/jobs/status_new/"))
+    with pytest.raises(ZuperError) as caught, SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    assert "cannot read" in caught.value.detail and "label" in caught.value.detail
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == posts
+
+
+def test_a_create_answer_without_a_uid_names_its_fields_but_no_values():
+    with pytest.raises(ZuperError) as caught:
+        client.uid_of({"type": "success", "message": "Jane Roof created",
+                       "data": {"customer_name": "Jane", "items": [{"x": 1}]}}, "customer_uid")
+    detail = caught.value.detail
+    assert "customer_name" in detail and "items[1 of {x}]" in detail
+    assert "Jane" not in detail
+    assert client.uid_of({"data": {"customer": {"customer_uid": "c-1"}}}, "customer_uid") == "c-1"
+    assert client.uid_of({"data": {"job_status_uid": "s-1"}}, "status_uid",
+                         "job_status_uid") == "s-1"
