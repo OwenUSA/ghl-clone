@@ -137,21 +137,56 @@ def statuses(category_uid: str) -> list[dict]:
     return rows_of(request("GET", path("statuses", category_uid=category_uid)))
 
 
-def statuses_or_none(category_uid: str) -> list[dict] | None:
-    """The category's statuses, or None when Zuper will not say. The operator's first read
-    found GET /jobs/status empty (2026-09-16), so when the per-category list is not readable
-    the statuses embedded in the category record are used, if it carries any."""
-    try:
-        return statuses(category_uid)
-    except ZuperError as exc:
-        if exc.kind not in ("not_found", "bad_response", "rejected"):
-            raise
+def status_sources(category_uid: str) -> tuple[list[dict] | None, list[str]]:
+    """Every status Zuper shows for a category, from every place it might (UNVERIFIED which):
+    GET /jobs/status_new/{uid} (the path statuses are created on), GET /jobs/status/{uid}
+    (live 2026-09-17: answers, but lists nothing — also right after a status create), and the
+    statuses embedded in the category record. Merged by uid; a record without a readable uid
+    is kept, so the caller can refuse to guess. None only when no source could be read.
+    The notes say what each source gave (counts and field names only)."""
+    merged: list[dict] = []
+    seen: set[str] = set()
+    notes: list[str] = []
+    readable = False
+
+    def take(rows: list[dict]) -> None:
+        for r in rows:
+            uid = status_uid(r)
+            if uid and uid in seen:
+                continue
+            if uid:
+                seen.add(uid)
+            merged.append(r)
+
+    for name in ("status_create", "statuses"):
+        api_path = path(name, category_uid=category_uid)
+        try:
+            rows = rows_of(request("GET", api_path))
+        except ZuperError as exc:
+            if exc.kind not in ("not_found", "bad_response", "rejected", "refused"):
+                raise
+            notes.append("GET %s: %s%s" % (api_path, exc.kind,
+                                           " (HTTP %d)" % exc.status if exc.status else ""))
+            continue
+        readable = True
+        notes.append("GET %s: %d%s" % (api_path, len(rows), (" (fields: %s)" % ", ".join(
+            sorted(rows[0].keys())[:20])) if rows else ""))
+        take(rows)
     for rec in categories():
-        if category_uid_of(rec) == category_uid:
-            for key in ("job_statuses", "statuses", "category_statuses", "job_status"):
-                if isinstance(rec.get(key), list):
-                    return [r for r in rec[key] if isinstance(r, dict)]
-    return None
+        if category_uid_of(rec) != category_uid:
+            continue
+        notes.append("category record fields: %s" % ", ".join(sorted(rec.keys())[:30]))
+        for key in ("job_statuses", "statuses", "category_statuses", "job_status"):
+            if isinstance(rec.get(key), list):
+                readable = True
+                rows = [r for r in rec[key] if isinstance(r, dict)]
+                notes.append("category record %s: %d" % (key, len(rows)))
+                take(rows)
+    return (merged if readable else None), notes
+
+
+def statuses_or_none(category_uid: str) -> list[dict] | None:
+    return status_sources(category_uid)[0]
 
 
 def create_status(category_uid: str, name: str, status_type: str) -> str:

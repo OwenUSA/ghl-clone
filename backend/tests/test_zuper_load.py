@@ -519,7 +519,9 @@ def test_when_zuper_does_not_list_statuses_a_rerun_never_creates_them_twice(zwor
     """The first live read found the status list empty/unreadable: the CRM's own mapping of
     each status it created is trusted, the check passes on it and says so."""
     monkeypatch.setattr(fake, "routes", lambda real=fake.routes: [
-        (rx, fn) for rx, fn in real() if not (rx == r"/jobs/status/([^/]+)" and fn[0] == "GET")])
+        (rx, fn) for rx, fn in real()
+        if not (rx in (r"/jobs/status/([^/]+)", r"/jobs/status_new/([^/]+)")
+                and fn[0] == "GET")])
     report = run_setup(commit=True)
     created = len(fake.calls("POST", r"^/jobs/status_new/"))
     assert created == 11
@@ -547,7 +549,10 @@ def test_a_status_create_that_fails_midway_keeps_what_was_made(zworld, fake, mon
         setup.ensure_categories(s, commit=True)
     with SessionLocal() as s:
         assert s.scalar(select(func.count(ZuperMapping.id)).where(
-            ZuperMapping.crm_type == "stage")) == 2              # both checkpoints kept
+            ZuperMapping.crm_type == "stage", ZuperMapping.state == "linked")) == 2
+        # The third was sent into an outage: its outcome is unknown, its checkpoint stays.
+        assert s.scalar(select(func.count(ZuperMapping.id)).where(
+            ZuperMapping.crm_type == "stage", ZuperMapping.state == "creating")) == 1
         assert s.scalar(select(func.count(ZuperMapping.id)).where(
             ZuperMapping.crm_type == "pipeline")) == 1
     monkeypatch.setattr(fake, "create_status", real)
@@ -650,3 +655,84 @@ def test_a_create_answer_without_a_uid_names_its_fields_but_no_values():
     assert client.uid_of({"data": {"customer": {"customer_uid": "c-1"}}}, "customer_uid") == "c-1"
     assert client.uid_of({"data": {"job_status_uid": "s-1"}}, "status_uid",
                          "job_status_uid") == "s-1"
+
+
+# ------------------------------------------------ live 2026-09-17: statuses unlisted
+
+def stage_states() -> dict[str, int]:
+    with SessionLocal() as s:
+        rows = s.scalars(select(ZuperMapping.state).where(ZuperMapping.crm_type == "stage")).all()
+    return {st: rows.count(st) for st in set(rows)}
+
+
+def test_statuses_only_listed_at_status_new_are_found_there(zworld, fake):
+    fake.statuses_listed_at = {"status_new"}
+    fake.status_create_echoes_uid = False
+    report = run_setup(commit=True)
+    assert report["passed"], report["checks"]
+    assert stage_states() == {"linked": 11}
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 11
+    run_setup(commit=True)
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 11
+    ahs = report["categories"]["categories"][0]
+    assert any(n.startswith("GET /jobs/status_new/") for n in ahs["status_sources"])
+
+
+def test_empty_lists_and_uids_echoed_a_rerun_trusts_the_crm_s_mapping(zworld, fake):
+    fake.statuses_listed_at = set()                  # both lists answer, always empty
+    run_setup(commit=True)
+    assert stage_states() == {"linked": 11}
+    report = run_setup(commit=True)
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 11     # none twice
+    item = next(c for c in report["checks"] if c["key"] == "categories")
+    assert item["state"] == setup.PASS
+    assert "does not list the statuses" in " ".join(item["sentences"])
+    assert any(r["action"] == "mapped (not listed by Zuper)"
+               for c in report["categories"]["categories"] for r in c["statuses"])
+
+
+def test_empty_lists_and_no_uid_stop_once_and_never_send_that_status_again(zworld, fake):
+    fake.statuses_listed_at = set()
+    fake.status_create_echoes_uid = False
+    assert setup.main(["--commit"]) == 2
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 1
+    assert stage_states() == {"creating": 1}
+    assert setup.main(["--commit"]) == 2
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == 1        # never re-sent
+    with pytest.raises(ZuperError) as caught, SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    assert "never said what it made" in caught.value.detail
+    assert "Settings → Jobs → Categories" in caught.value.detail
+    dry = run_setup(commit=False)
+    assert dry["categories"]["categories"][0]["statuses"][0]["action"] == "unresolved"
+
+
+def test_a_refused_status_create_leaves_no_checkpoint(zworld, fake, monkeypatch):
+    monkeypatch.setattr(fake, "create_status",
+                        lambda params, body, cat: fake.error("status_type invalid"))
+    assert setup.main(["--commit"]) == 2
+    assert stage_states() == {}
+
+
+def test_an_unknown_outcome_is_resent_only_when_zuper_s_list_is_shown_reliable(zworld, fake,
+                                                                             monkeypatch):
+    """Zuper's list shows the statuses the CRM made, and not the one sent into an outage:
+    it was not made, so the rerun sends it — once."""
+    real = fake.create_status
+    state = {"n": 0}
+
+    def second_is_lost(params, body, cat):
+        state["n"] += 1
+        if state["n"] == 2:
+            return httpx.Response(503, json={"type": "error", "message": "down"})
+        return real(params, body, cat)
+
+    monkeypatch.setattr(fake, "create_status", second_is_lost)
+    assert setup.main(["--commit"]) == 2
+    assert stage_states() == {"linked": 1, "creating": 1}
+    monkeypatch.setattr(fake, "create_status", real)
+    report = run_setup(commit=True)
+    assert report["passed"]
+    assert stage_states() == {"linked": 11}
+    for sts in fake.statuses.values():
+        assert len({x["status_name"] for x in sts}) == len(sts)

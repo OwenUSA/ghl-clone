@@ -174,6 +174,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("DELETE", _rx(PATHS["customer"])), ("POST", _rx(PATHS["customer_recover"])),
     ("GET", _rx(PATHS["categories"])), ("POST", _rx(PATHS["categories"])),
     ("GET", _rx(PATHS["statuses"])), ("POST", _rx(PATHS["status_create"])),
+    ("GET", _rx(PATHS["status_create"])),
     ("PUT", _rx(PATHS["status_update"])),
     ("GET", _rx(PATHS["jobs"])), ("POST", _rx(PATHS["jobs"])), ("PUT", _rx(PATHS["jobs"])),
     ("GET", _rx(PATHS["job"])), ("DELETE", _rx(PATHS["job_delete"])),

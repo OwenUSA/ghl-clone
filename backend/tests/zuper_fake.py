@@ -62,6 +62,10 @@ class FakeZuper:
     # keeps the custom headers it was sent.
     webhook_events: set[tuple[str, str]] | None = None
     keeps_webhook_headers: bool = True
+    # Where GET shows a category's statuses: "status" = /jobs/status/{c}, "status_new" =
+    # /jobs/status_new/{c}. A path not in the set answers an empty list (as live 09-17).
+    statuses_listed_at: set[str] = field(default_factory=lambda: {"status"})
+    status_create_echoes_uid: bool = True
     webhooks_listable: bool = True          # False: both list endpoints answer 404 (live, 09-17)
     users: list[dict] = field(default_factory=lambda: [dict(SYNC_USER), dict(OFFICE_USER)])
     me: dict = field(default_factory=lambda: dict(SYNC_USER))
@@ -193,7 +197,10 @@ class FakeZuper:
                 self.customers, u))),
             (r"/jobs/category", ("GET", lambda p, b: self.ok(list(self.categories.values())))),
             (r"/jobs/category", ("POST", self.create_category)),
-            (r"/jobs/status/([^/]+)", ("GET", lambda p, b, c: self.ok(self.statuses.get(c, [])))),
+            (r"/jobs/status/([^/]+)", ("GET", lambda p, b, c: self.ok(
+                self.statuses.get(c, []) if "status" in self.statuses_listed_at else []))),
+            (r"/jobs/status_new/([^/]+)", ("GET", lambda p, b, c: self.ok(
+                self.statuses.get(c, []) if "status_new" in self.statuses_listed_at else []))),
             (r"/jobs/status_new/([^/]+)", ("POST", self.create_status)),
             (r"/jobs/status/([^/]+)/([^/]+)", ("PUT", self.rename_status)),
             (r"/jobs", ("GET", lambda p, b: self.page(
@@ -317,6 +324,8 @@ class FakeZuper:
         self.statuses.setdefault(cat, []).append(
             {"status_uid": uid, "status_name": fields["status_name"],
              "status_type": fields.get("status_type")})
+        if not self.status_create_echoes_uid:
+            return self.ok(message="Status created")
         return self.ok({"status_uid": uid})
 
     def rename_status(self, params, body, cat, status) -> httpx.Response:
