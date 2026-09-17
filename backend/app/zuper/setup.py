@@ -242,17 +242,15 @@ def check_categories(db: Session) -> dict:
                             "python -m app.zuper.setup --commit." % category)
             continue
         listing = zapi.statuses_or_none(pm.zuper_uid)
-        if listing is None:
-            unlisted.append(category)
         statuses = {zapi.status_uid(s): s for s in listing or []}
         for stage in ordered_stages(db, found[name].id):
             sm = mapping.mapping_for(db, "stage", stage.id)
-            ok = sm is not None and sm.state == "linked" and (
-                sm.zuper_uid in statuses
-                if listing is not None else sm.parent_uid == pm.zuper_uid)
-            if not ok:
+            if sm is None or sm.state != "linked" or not sm.zuper_uid or (
+                    sm.zuper_uid not in statuses and sm.parent_uid != pm.zuper_uid):
                 problems.append("Stage “%s” (%s) has no status in “%s” yet." % (
                     stage.name, name, category))
+            elif sm.zuper_uid not in statuses and category not in unlisted:
+                unlisted.append(category)
     if problems:
         return item("categories", title, FAIL, *problems)
     return item("categories", title, PASS, "Both categories match their pipelines.",
@@ -363,7 +361,8 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
             db.commit()                      # a checkpoint: the category is made
         # None: Zuper would not list this category's statuses — then the CRM's own mapping
         # of each status it created is trusted, so a rerun never creates one twice.
-        listing = zapi.statuses_or_none(cat_uid) if cat_uid else []
+        listing, entry["status_sources"] = (zapi.status_sources(cat_uid) if cat_uid
+                                            else ([], []))
         entry["statuses_listed"] = listing is not None
         entry["zuper_statuses"] = [zapi.status_name(s) or "?" for s in listing or []]
         if listing:
@@ -383,14 +382,21 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
         entry["ordered_by"] = ("id (every stage has the same position)"
                                if len({s.position for s in stages}) <= 1 and len(stages) > 1
                                else "position, then id")
-        taken = {sm.zuper_uid for sm in db.scalars(select(ZuperMapping).where(
-            ZuperMapping.crm_type == "stage")).all()}
+        stage_maps = db.scalars(select(ZuperMapping).where(
+            ZuperMapping.crm_type == "stage")).all()
+        taken = {sm.zuper_uid for sm in stage_maps}
+        # Zuper's list is RELIABLE for this category when it shows a status the CRM knows it
+        # made there: then a status missing from it was not made, and may be sent again.
+        reliable = any(sm.state == "linked" and sm.parent_uid == cat_uid
+                       and sm.zuper_uid in statuses for sm in stage_maps)
         for i, (stage, name) in enumerate(zip(stages, status_names(stages), strict=True)):
             row = {"stage_id": stage.id, "status": name}
             sm = mapping.mapping_for(db, "stage", stage.id)
-            if sm is not None and sm.state == "linked" and listing is None \
-                    and sm.parent_uid == cat_uid:
-                row["action"] = "mapped"
+            if sm is not None and sm.state == "linked" and sm.parent_uid == cat_uid \
+                    and sm.zuper_uid not in statuses:
+                # Made and mapped by the CRM, not shown by Zuper's lists (which live answer
+                # empty): trusted — re-creating it could only make a duplicate.
+                row["action"] = "mapped (not listed by Zuper)"
             elif sm is not None and sm.zuper_uid in statuses:
                 row["action"] = "mapped"
                 if zapi.status_name(statuses[sm.zuper_uid]) != name:
@@ -403,15 +409,23 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
                 report["linked_statuses"] += 1
                 if commit:
                     _map_stage(db, stage, by_name[name], cat_uid)
+            elif sm is not None and sm.state == "creating" and not reliable:
+                # An earlier run sent this create and never learned its uid: it may exist in
+                # Zuper, and Zuper's lists cannot be trusted to show it (they do not show the
+                # statuses the CRM knows are there). Never sent again — a person checks.
+                row["action"] = "unresolved"
+                entry["statuses"].append(row)
+                if commit:
+                    raise ZuperError("bad_response", UNRESOLVED % (name, category_name, "; ".join(
+                        entry["status_sources"])))
+                continue
             else:
                 row["action"] = "create"
                 report["created_statuses"] += 1
                 if commit and cat_uid:
-                    uid = _create_status(cat_uid, name, "NEW" if i == 0 else "STARTED",
-                                         taken)
+                    uid = _create_status(db, stage, cat_uid, name,
+                                         "NEW" if i == 0 else "STARTED", taken)
                     taken.add(uid)
-                    _map_stage(db, stage, uid, cat_uid)
-                    db.commit()              # a checkpoint per status
             entry["statuses"].append(row)
     if commit:
         db.commit()
@@ -420,32 +434,52 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
     return report
 
 
-def _create_status(cat_uid: str, name: str, status_type: str, taken: set) -> str:
-    """Create a status; when Zuper's answer carries no uid (live, 2026-09-17), find the one
-    just made by its name in the category's list — exactly one unmapped match, or stop."""
+UNRESOLVED = ("The status “%s” in “%s” was sent to Zuper earlier but Zuper never said what it "
+              "made, and does not list it now (%s). It is not sent again, so it is never "
+              "made twice: check Settings → Jobs → Categories in Zuper, then tell the "
+              "operator whether it exists.")
+
+
+def _create_status(db: Session, stage: Stage, cat_uid: str, name: str, status_type: str,
+                   taken: set) -> str:
+    """Create one status with a checkpoint: the stage's mapping is committed as "creating"
+    BEFORE the request. Refused by Zuper (nothing made): the checkpoint is removed. Answered
+    without a uid (live, 2026-09-17): the status is looked up by exact name — one unmapped
+    match is mapped; otherwise the checkpoint stays and the run stops, so a later run never
+    sends it again."""
+    _map_stage(db, stage, None, cat_uid, state="creating")
+    db.commit()
     try:
-        return zapi.create_status(cat_uid, name, status_type)
+        uid = zapi.create_status(cat_uid, name, status_type)
     except ZuperError as exc:
+        if exc.kind == "rejected":
+            db.delete(mapping.mapping_for(db, "stage", stage.id))
+            db.commit()
+            raise
         if exc.kind != "bad_response":
             raise
-        listing = zapi.statuses_or_none(cat_uid) or []
-        found = [zapi.status_uid(s) for s in listing
+        listing, notes = zapi.status_sources(cat_uid)
+        found = [zapi.status_uid(s) for s in listing or []
                  if zapi.status_name(s) == name and zapi.status_uid(s)
                  and zapi.status_uid(s) not in taken]
-        if len(found) == 1:
-            return found[0]
-        raise ZuperError("bad_response", "%s; and the status “%s” was found %d time(s) in "
-                         "the category's list afterwards, so it is not mapped (statuses "
-                         "listed: %s)." % (exc.detail, name, len(found), ", ".join(
-                             zapi.status_name(s) or "?" for s in listing) or "none")) from None
+        if len(found) != 1:
+            raise ZuperError("bad_response", "%s; the status “%s” was found %d time(s) in "
+                             "Zuper afterwards (%s), so it stays unresolved and is never sent "
+                             "again." % (exc.detail, name, len(found), "; ".join(notes))
+                             ) from None
+        uid = found[0]
+    _map_stage(db, stage, uid, cat_uid)
+    db.commit()
+    return uid
 
 
-def _map_stage(db: Session, stage: Stage, status_uid: str, category_uid: str) -> None:
+def _map_stage(db: Session, stage: Stage, status_uid: str | None, category_uid: str, *,
+               state: str = "linked") -> None:
     sm = mapping.mapping_for(db, "stage", stage.id)
     if sm is None:
         sm = ZuperMapping(crm_type="stage", crm_id=stage.id, zuper_type="status")
         db.add(sm)
-    sm.zuper_uid, sm.parent_uid, sm.state = status_uid, category_uid, "linked"
+    sm.zuper_uid, sm.parent_uid, sm.state = status_uid, category_uid, state
     sm.updated_at = datetime.now(UTC)
     db.flush()
 
@@ -515,6 +549,8 @@ def render(report: dict) -> str:
                     else ""))
             if c.get("status_fields"):
                 lines.append("      status fields: " + ", ".join(c["status_fields"]))
+            for note in c.get("status_sources") or []:
+                lines.append("      source: " + note)
             for s in c["statuses"]:
                 lines.append("      stage #%d -> status “%s”: %s%s" % (
                     s["stage_id"], s["status"], verb, s["action"]))

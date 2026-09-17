@@ -5438,3 +5438,15 @@ is adopted from the category's list by exact name (exactly one unmapped match, e
 refuses to create any status while Zuper lists statuses whose name or uid it cannot read (they may be
 ones it made); an answer without a uid names its field NAMES (never values) so the next live answer
 shows its shape; the setup report lists the statuses Zuper holds per category.
+
+### Amendment 2026-09-17 (3): Zuper lists no statuses, even right after creating one
+
+Live after fix 2: GET /jobs/status/{AHS} answers an EMPTY list, although the first status create
+answered success (without a uid). Now: statuses are read from GET /jobs/status_new/{c}, GET
+/jobs/status/{c} and any list inside the category record, merged, with a note per source (counts
+and field names) in the setup report. Each status create is checkpointed as a "creating" stage
+mapping BEFORE the POST (removed if Zuper refuses). A status the CRM made and mapped is trusted
+when Zuper's lists do not show it (never re-created). A "creating" status whose uid was never
+learned is re-sent only when Zuper's list is shown reliable (it lists a status the CRM knows it
+made in that category); otherwise the setup stops with a sentence asking a person to look in
+Settings → Jobs → Categories — it is never sent twice.
