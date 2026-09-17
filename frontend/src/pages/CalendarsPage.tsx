@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconChevronDown, IconPlus, IconSettings } from '../components/Icon'
+import { LOCK_REASON, visitLocked } from '../lib/zuper'
 import { AppointmentDetailDialog } from '../components/AppointmentDetailDialog'
 import { NewAppointmentDialog } from '../components/NewAppointmentDialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -687,8 +688,10 @@ function MonthGrid({
                   <div
                     key={a.id}
                     data-appointment={a.id}
+                    data-zuper-locked={visitLocked(a) || undefined}
                     title={`${a.title} — ${timeRange(a.starts_at, a.ends_at)}`
                            + (a.status === 'cancelled' ? ' (cancelled)' : '')
+                           + (visitLocked(a) ? ` — managed in Zuper (${LOCK_REASON})` : '')
                            + ' — click for details'}
                     onClick={(e) => onOpen(a.id, e)}
                     onDoubleClick={(e) => e.stopPropagation()}
@@ -850,9 +853,12 @@ function AppointmentBlock({ a, box, onOpen }: {
     .filter((x): x is string => !!x)
   const lines = Math.max(1, Math.floor((box.height - box.textTop - 4) / LINE_PX))
   return (
-    <div data-appointment={a.id}
+    <div data-appointment={a.id} data-zuper-locked={visitLocked(a) || undefined}
+      // Zuper v2: a sent job's visit is scheduled in Zuper — read-only here (the grid has
+      // no drag or resize; its detail panel offers no edit or cancel).
       title={[a.title + (off ? ' (cancelled)' : ''), range, ...extra,
-              a.calendar_name, 'Click for details'].filter(Boolean).join('\n')}
+              a.calendar_name, visitLocked(a) ? `Managed in Zuper — ${LOCK_REASON}` : null,
+              'Click for details'].filter(Boolean).join('\n')}
       onClick={(ev) => onOpen(a.id, ev)}
       onDoubleClick={(ev) => ev.stopPropagation()}
       style={{

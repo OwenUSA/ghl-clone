@@ -177,15 +177,18 @@ export type ZuperAttachments = {
 
 // ------------------------------------------------------------------ words
 
-/** The rule names `app/zuper/engine.py` writes to the conflict log, in plain words. */
+/** The rule names `app/zuper/engine.py` writes to the conflict log, in plain words.
+    (v2, 2026-09-16: no automatic outcome runs on a Zuper job, so there is no "invoice paid"
+    rule to name — an old row of that kind reads as its humanised key.) */
 export const RULE_LABELS: Record<string, string> = {
   zuper_money: 'Zuper owns money',
   workiz_before_cutover: 'Workiz wins before cutover',
   zuper_schedule_after_cutover: 'Zuper owns the schedule after cutover',
   latest_edit: 'Latest edit wins',
+  // v2: a sent card is a mirror — stage, schedule, address, value, title, status, owner.
+  zuper_owned: 'Zuper owns this field',
   crm_owned: 'CRM-owned field',
   crm_cannot_hold: 'The CRM question cannot hold Zuper’s answer',
-  invoice_paid: 'Invoice fully paid → Won',
   mirrored_cancel: 'Deleted in Zuper → visit cancelled',
 }
 
@@ -469,4 +472,159 @@ export function withoutRecordParam(pathname: string, search: string): string {
   params.delete('contact')
   const rest = params.toString()
   return (pathname || '/') + (rest ? '?' + rest : '')
+}
+
+// ------------------------------------------------------------------ v2: Send to Zuper and the mirror
+
+/** The one reason every Zuper-only control gives, word for word the server's refusal. */
+export const LOCK_REASON = 'Change this in Zuper'
+
+export type ZuperSendState = 'not_sent' | 'queued' | 'sent' | 'failed'
+
+/** `GET /api/opportunities/{id}` → `zuper`. */
+export type OpportunityZuper = {
+  state: ZuperSendState
+  job_uid: string | null
+  /** A Zuper web link; may be null (then no link is drawn). */
+  job_url: string | null
+  sent_at: string | null
+  /** Why a send failed, as a sentence. */
+  error: string | null
+  /** Empty unless queued / sent. */
+  locked_fields: string[]
+  /** False for a TECH or an "Only assigned data" user: then NO send control at all. */
+  may_send: boolean
+  can_send: boolean
+  send_problems: string[]
+}
+
+/** The fields a sent card can lock, in the server's names. */
+export const LOCKABLE_FIELDS = ['title', 'stage_id', 'pipeline_id', 'status', 'value_cents',
+  'owner_id', 'address_street', 'address_city', 'address_state', 'address_postal_code',
+  'appointments'] as const
+
+export const ADDRESS_LOCK_FIELDS = ['address_street', 'address_city', 'address_state',
+  'address_postal_code']
+
+/** Is this field Zuper's on this card? Only a queued or sent card locks anything. */
+export function lockedField(z: OpportunityZuper | null | undefined, field: string): boolean {
+  return !!z && (z.state === 'queued' || z.state === 'sent') && z.locked_fields.includes(field)
+}
+
+/** The reason a control gives when it is locked, else the fallback (or undefined). */
+export function lockTitle(z: OpportunityZuper | null | undefined, field: string,
+  fallback?: string): string | undefined {
+  return lockedField(z, field) ? LOCK_REASON : fallback
+}
+
+/**
+ * What the modal header draws for Send to Zuper:
+ *   managed   "Managed in Zuper" badge (+ a link when job_url is set)
+ *   queued    "Sending to Zuper…"
+ *   failed    the error sentence, and the button again when this user may send
+ *   send      the button (disabled with the reasons when it cannot work yet)
+ *   none      nothing — a TECH / restricted user on an unsent card, or no answer yet
+ */
+export function sendView(z: OpportunityZuper | null | undefined):
+  'none' | 'send' | 'queued' | 'managed' | 'failed' {
+  if (!z) return 'none'
+  if (z.state === 'sent') return 'managed'
+  if (z.state === 'queued') return 'queued'
+  if (z.state === 'failed') return 'failed'
+  return z.may_send ? 'send' : 'none'
+}
+
+/** The button's own state: drawn only when `may_send`; disabled with the sentences. */
+export function sendButton(z: OpportunityZuper | null | undefined):
+  { shown: boolean; enabled: boolean; reason: string | null } {
+  if (!z || !z.may_send || z.state === 'sent' || z.state === 'queued') {
+    return { shown: false, enabled: false, reason: null }
+  }
+  const reason = z.can_send ? null : (z.send_problems.join(' ') || 'This card cannot be sent yet.')
+  return { shown: true, enabled: z.can_send, reason }
+}
+
+/** A board card managed in Zuper cannot be dragged: its stage is Zuper's. */
+export function cardDraggable(o: { managed_in_zuper?: boolean }): boolean {
+  return !o.managed_in_zuper
+}
+
+/** A visit on a sent job is Zuper's: read-only everywhere in the CRM. */
+export function visitLocked(a: { zuper_locked?: boolean } | null | undefined): boolean {
+  return !!a?.zuper_locked
+}
+
+/** The contact's own fields a sent job locks (`zuper_locked_fields`). */
+export function contactFieldLocked(
+  c: { zuper_locked?: boolean; zuper_locked_fields?: string[] } | null | undefined,
+  field: string,
+): boolean {
+  return !!c?.zuper_locked && (c.zuper_locked_fields ?? []).includes(field)
+}
+
+export const CONTACT_LOCK_SENTENCE =
+  'This customer has a job managed in Zuper: change their name, phone, email and address in Zuper.'
+
+// ------------------------------------------------------------------ v2: lead outcome (CRM-only)
+
+/** Exactly the server's list, in this order. */
+export const LEAD_OUTCOMES = ['Spam', 'Wrong number', 'Not interested', 'Price shopping',
+  'Out of service area', 'Duplicate', 'No response', 'Other'] as const
+
+export const CLOSED_STATUSES = ['lost', 'abandoned']
+
+/** The field is drawn when the card is (being) closed, or already carries an outcome. */
+export function showLeadOutcome(status: string, outcome: string | null | undefined): boolean {
+  return CLOSED_STATUSES.includes(status) || !!outcome
+}
+
+/** The server's own sentences (app/lead_outcomes.py NEEDED / NOTE_NEEDED), pinned by a test. */
+export const LEAD_OUTCOME_NEEDED = 'Choose a lead outcome before closing this card: it was never '
+  + 'booked, so the report needs to know why it closed (' + LEAD_OUTCOMES.join(', ') + ').'
+export const LEAD_OUTCOME_NOTE_NEEDED = 'The lead outcome “Other” needs a note saying what happened.'
+
+/** Why the form cannot be saved yet, in the server's words — or null. A booked card (a live
+    visit, or sent to Zuper) closes without an outcome. */
+export function leadOutcomeProblem(p: {
+  status: string; booked: boolean; outcome: string | null | undefined; note: string | null | undefined
+}): string | null {
+  if (p.outcome === 'Other' && !(p.note ?? '').trim()) {
+    return LEAD_OUTCOME_NOTE_NEEDED
+  }
+  if (CLOSED_STATUSES.includes(p.status) && !p.booked && !p.outcome) {
+    return LEAD_OUTCOME_NEEDED
+  }
+  return null
+}
+
+export type LeadOutcomeRow = { counts: Record<string, number>; total: number }
+export type LeadOutcomeReport = {
+  outcomes: string[]
+  total: number
+  by_source: (LeadOutcomeRow & { source: string | null })[]
+  by_campaign: (LeadOutcomeRow & { campaign: string | null })[]
+  since: string | null
+  until: string | null
+}
+
+/** One report table: a row per source (or campaign), a cell per outcome, blanks named. */
+export function outcomeTable(rows: (LeadOutcomeRow & { source?: string | null;
+  campaign?: string | null })[], outcomes: readonly string[], kind: 'source' | 'campaign') {
+  return rows.map((r) => {
+    const name = kind === 'source' ? r.source : r.campaign
+    return {
+      label: name && name.trim() ? name : kind === 'source' ? 'No source' : 'No campaign',
+      cells: outcomes.map((o) => r.counts?.[o] ?? 0),
+      total: r.total,
+    }
+  })
+}
+
+/** The report's `until` for a period whose END DAY is included: the day after, as
+    YYYY-MM-DD (the server counts outcomes set before it). */
+export function dayAfter(date: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+  if (!m) return date
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1))
+  return d.toISOString().slice(0, 10)
 }

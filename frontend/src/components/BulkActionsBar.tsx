@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
   bulkAssignOwner,
+  bulkLeadOutcome,
   bulkMoveStage,
   listUsers,
   money,
@@ -11,6 +12,7 @@ import {
 import { csvFilename, opportunitiesCsv } from '../lib/csv'
 import { downloadCsv } from '../lib/download'
 import type { Me } from '../lib/auth'
+import { LEAD_OUTCOMES, LEAD_OUTCOME_NOTE_NEEDED } from '../lib/zuper'
 
 /**
  * The Opportunities > Bulk Actions bar. OUR design — GHL's own Bulk Actions tab
@@ -48,6 +50,9 @@ export function BulkActionsBar({
   const qc = useQueryClient()
   const [stageId, setStageId] = useState<number | null>(null)
   const [ownerId, setOwnerId] = useState<string>('')
+  // Zuper v2 (2026-09-16): one lead outcome for a selection. STAFF, like Assign owner.
+  const [outcome, setOutcome] = useState('')
+  const [outcomeNote, setOutcomeNote] = useState('')
   const [note, setNote] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -97,6 +102,19 @@ export function BulkActionsBar({
     onError: (e: Error) => setError(e.message),
   })
 
+  const setLeadOutcome = useMutation({
+    mutationFn: () => bulkLeadOutcome(ids, outcome, outcomeNote.trim() || null),
+    onSuccess: (r) => {
+      setNote(`Lead outcome “${outcome}” set on ${r.updated.length} card${r.updated.length === 1 ? '' : 's'}.`)
+      setOutcome('')
+      setOutcomeNote('')
+      done()
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+  const outcomeProblem = !outcome ? 'Choose a lead outcome'
+    : outcome === 'Other' && !outcomeNote.trim() ? LEAD_OUTCOME_NOTE_NEEDED : null
+
   const exportSelection = () => {
     const names = new Map(stages.map((s) => [s.id, s.name]))
     const text = opportunitiesCsv(chosen, (id) => names.get(id) ?? '')
@@ -104,7 +122,7 @@ export function BulkActionsBar({
     setNote(`Exported ${chosen.length} row${chosen.length === 1 ? '' : 's'}.`)
   }
 
-  const busy = move.isPending || assign.isPending
+  const busy = move.isPending || assign.isPending || setLeadOutcome.isPending
   const none = ids.length === 0
   const control = {
     height: 34,
@@ -197,6 +215,32 @@ export function BulkActionsBar({
         </button>
 
         <span style={{ width: 1, height: 24, backgroundColor: 'rgb(234,236,240)' }} />
+
+        {/* A TECH cannot set it (STAFF on the server), so the control is not drawn. */}
+        {canAssign && (
+          <>
+            <select value={outcome} aria-label="Lead outcome" onChange={(e) => setOutcome(e.target.value)}
+              style={control}>
+              <option value="">Lead outcome…</option>
+              {LEAD_OUTCOMES.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+            {outcome === 'Other' && (
+              <input value={outcomeNote} aria-label="Lead outcome note" placeholder="Note (required)"
+                maxLength={500} onChange={(e) => setOutcomeNote(e.target.value)}
+                style={{ ...control, width: 180 }} />
+            )}
+            <button
+              onClick={() => { setError(null); setNote(null); setLeadOutcome.mutate() }}
+              disabled={none || !!outcomeProblem || busy}
+              title={none ? 'Nothing is selected' : outcomeProblem ?? undefined}
+              style={action(!none && !outcomeProblem && !busy)}
+            >
+              {setLeadOutcome.isPending ? 'Setting…' : 'Set lead outcome'}
+            </button>
+
+            <span style={{ width: 1, height: 24, backgroundColor: 'rgb(234,236,240)' }} />
+          </>
+        )}
 
         <button
           onClick={exportSelection}

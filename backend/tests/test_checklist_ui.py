@@ -170,7 +170,8 @@ def test_the_edit_modal_counts_the_checklist_and_links_the_real_values():
     # mutation), the address the Address group's (saved by the detail PATCH), and a
     # TECH gets both dead.
     assert "email: { value: email, onChange: (v) => set('email', v)," in src
-    assert "disabled: !form.contact || !canEdit," in src
+    # ...and, Zuper v2 (2026-09-16), dead with "Change this in Zuper" for a locked contact.
+    assert "disabled: !form.contact || !canEdit || contactLock('email')," in src
     assert "address: { value: form.address, onChange: (v) => set('address', v)," in src
     assert src.count("linked={linked}") == 2, "a tab draws linked questions without values"
 

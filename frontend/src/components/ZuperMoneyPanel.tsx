@@ -1,10 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { getOpportunityZuper } from '../lib/api'
 import {
   TONES, dateText, documentStatus, money, stamp, valueSourceSentence,
   type Tone, type ZuperDocument, type ZuperOpportunityMoney,
 } from '../lib/zuper'
-import { BODY, DIVIDER, FAINT, HEADING, MUTED, TEXT } from './opportunity/ui'
+import {
+  BODY, BUTTON, DANGER, DIVIDER, FAINT, HEADING, MUTED, PRIMARY_BUTTON, TEXT, dead,
+} from './opportunity/ui'
 
 /**
  * The opportunity modal's "Quotes & invoices" (Zuper sync, 2026-09-16). READ-ONLY: Zuper owns
@@ -28,6 +31,39 @@ export function Chip({ text, tone }: { text: string; tone: Tone }) {
       fontWeight: 500, whiteSpace: 'nowrap', color: TONES[tone].color,
       backgroundColor: TONES[tone].background,
     }}>{text}</span>
+  )
+}
+
+/** A confirm dialog in My Staff's style — Settings → Zuper and Send to Zuper share it. */
+export function Confirm({ title, children, action, danger = false, busy, onConfirm, onCancel }: {
+  title: string; children: React.ReactNode; action: string; danger?: boolean; busy: boolean
+  onConfirm: () => void; onCancel: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onCancel() } }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onCancel])
+  return (
+    <div className="fixed inset-0 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(52,64,84,0.6)', zIndex: 60 }}
+      onClick={(e) => { e.stopPropagation(); onCancel() }}>
+      <div role="alertdialog" aria-modal="true" aria-label={title}
+        onClick={(e) => e.stopPropagation()} className="bg-white"
+        style={{ width: 480, maxWidth: '94vw', borderRadius: 8, padding: 20,
+          boxShadow: '0 20px 24px -4px rgba(16,24,40,0.08)' }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: TEXT }}>{title}</div>
+        <div style={{ fontSize: 14, color: BODY, marginTop: 8, lineHeight: 1.5 }}>{children}</div>
+        <div className="flex justify-end gap-3" style={{ marginTop: 18 }}>
+          <button type="button" onClick={onCancel} style={{ ...BUTTON, height: 36 }}>Cancel</button>
+          <button type="button" disabled={busy} onClick={onConfirm}
+            style={{ ...PRIMARY_BUTTON, height: 36, ...dead(!busy),
+              ...(danger ? { backgroundColor: DANGER, borderColor: DANGER } : {}) }}>
+            {busy ? 'Working…' : action}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

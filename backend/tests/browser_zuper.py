@@ -38,8 +38,11 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import traceback
 import zlib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from tests.browser_dialer import BACKEND, FRONTEND, Checks, free_port, wait_http
@@ -87,6 +90,7 @@ def serve(port: int, db_path: str, ids_file: str) -> None:
     from app.db import SessionLocal
     from app.main import app
     from app.models import (
+        Appointment,
         Contact,
         Opportunity,
         Pipeline,
@@ -106,41 +110,65 @@ def serve(port: int, db_path: str, ids_file: str) -> None:
                     password_hash=auth.hash_password(PASSWORD))
         db.add_all([admin, tech])
         db.flush()
-        stages: dict[str, list[Stage]] = {}
+        stages: dict[str, dict[str, Stage]] = {}
         for name, names in ((mapping.AHS_PIPELINE, ["New Lead", "Inspection", "Submit Invoices"]),
-                            (mapping.RETAIL_PIPELINE, ["New Lead", "Estimate Sent", "Sold"]),
+                            (mapping.RETAIL_PIPELINE, ["New Lead", "Follow Up", "Scheduled",
+                                                       "Inspection / Estimate", "Estimate Sent",
+                                                       "Invoice"]),
                             ("Warranty", ["Open"])):
             p = Pipeline(name=name)
             db.add(p)
             db.flush()
-            stages[name] = []
+            ids["pipeline_" + name] = p.id
+            stages[name] = {}
             for i, stage_name in enumerate(names):
                 s = Stage(pipeline_id=p.id, name=stage_name, position=i)
                 db.add(s)
-                stages[name].append(s)
+                stages[name][stage_name] = s
             db.flush()
         people = {}
         for key, first, last, phone in (("jane", "Jane", "Doe", "+19415550101"),
                                         ("bob", "Bob", "Roof", "+19415550150"),
                                         ("carl", "Carl", "Keys", "+19415550160"),
-                                        ("dan", "Dan", "Ward", "+19415550170")):
+                                        ("dan", "Dan", "Ward", "+19415550170"),
+                                        ("erin", "Erin", "Lake", "+19415550180"),
+                                        ("fay", "Fay", "Hill", "+19415550190"),
+                                        ("gus", "Gus", "Moss", "+19415550195")):
             c = Contact(first_name=first, last_name=last, phone=phone,
                         email="%s@example.test" % key)
             db.add(c)
             people[key] = c
         db.flush()
         cards = {}
-        for key, title, pipeline, owner in (("jane", "Jane roof", mapping.AHS_PIPELINE, admin),
-                                            ("bob", "Bob roof", mapping.RETAIL_PIPELINE, tech),
-                                            ("carl", "Carl gutter", mapping.RETAIL_PIPELINE, admin),
-                                            ("dan", "Dan warranty", "Warranty", admin)):
+        AHS, RETAIL = mapping.AHS_PIPELINE, mapping.RETAIL_PIPELINE
+        # Day one sends every AHS card and Retail cards in Scheduled / Inspection / Estimate /
+        # Estimate Sent / Invoice. Retail New Lead stays CRM-only until someone presses Send.
+        for key, title, pipeline, stage, owner, street, source in (
+                ("jane", "Jane roof", AHS, "New Lead", admin, "12 Palm Ave", None),
+                ("bob", "Bob roof", RETAIL, "Scheduled", tech, "40 Bay Rd", None),
+                ("carl", "Carl gutter", RETAIL, "Estimate Sent", admin, "7 Gulf Dr", None),
+                ("dan", "Dan warranty", "Warranty", "Open", admin, "9 Oak St", None),
+                ("erin", "Erin roof", RETAIL, "New Lead", admin, "88 Pine Ln", "Google"),
+                ("fay", "Fay leak", RETAIL, "New Lead", admin, None, "Google"),
+                ("gus", "Gus porch", RETAIL, "New Lead", tech, "5 Elm Ct", None)):
             o = Opportunity(title=title, contact_id=people[key].id,
-                            pipeline_id=stages[pipeline][0].pipeline_id,
-                            stage_id=stages[pipeline][0].id, owner_id=owner.id,
-                            value_cents=100_00, created_by="Browser check")
+                            pipeline_id=stages[pipeline][stage].pipeline_id,
+                            stage_id=stages[pipeline][stage].id, owner_id=owner.id,
+                            value_cents=100_00, created_by="Browser check", source=source,
+                            address_street=street, address_city="Bradenton" if street else None,
+                            address_state="FL" if street else None,
+                            address_postal_code="34205" if street else None)
             db.add(o)
             cards[key] = o
+        db.flush()
+        # A visit on Jane's (AHS, so sent on day one) job: read-only in the CRM afterwards.
+        start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=2)
+        visit = Appointment(title="Jane roof inspection", contact_id=people["jane"].id,
+                            opportunity_id=cards["jane"].id, starts_at=start,
+                            ends_at=start + timedelta(hours=1), status="confirmed")
+        db.add(visit)
         db.commit()
+        ids["visit_jane"] = visit.id
         for key in people:
             ids["contact_" + key] = people[key].id
             ids["opp_" + key] = cards[key].id
@@ -191,6 +219,32 @@ def serve(port: int, db_path: str, ids_file: str) -> None:
         ]
         _ = setup   # imported so a missing module fails here, not mid-drive
     Path(ids_file).write_text(json.dumps(ids))
+
+    # The worker's Zuper half, every second instead of every 20 (queued sends, pushes and
+    # deletes; only while the sync is armed — `drain` is what the real thread calls). After each
+    # pass the fake's WRITE counts go to a file, so the parent can prove a send created one
+    # customer and one job, and a second press created nothing.
+    from app.zuper import config as zuper_config
+    from app.zuper import worker as zuper_worker
+    counts_file = Path(ids_file).with_name("zuper_writes.json")
+
+    def worker_loop():
+        while True:
+            try:
+                with SessionLocal() as wdb:
+                    if zuper_config.armed(wdb):
+                        zuper_worker.drain(engine.mark_quiet(wdb))
+            except Exception as exc:  # noqa: BLE001 - the drive reads the heartbeat instead
+                print("zuper drain:", repr(exc), flush=True)
+            writes: dict[str, int] = {}
+            for r in list(fake.requests):
+                if r.method != "GET":
+                    key = "%s %s" % (r.method, r.path)
+                    writes[key] = writes.get(key, 0) + 1
+            counts_file.write_text(json.dumps(writes))
+            time.sleep(1)
+
+    threading.Thread(target=worker_loop, name="zuper-drive-worker", daemon=True).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
@@ -347,22 +401,24 @@ def run(shots: Path, keep: bool) -> int:
                 return str(db_one("select count(*) from zuper_mappings where crm_type = ? "
                                   "and state = ?", kind, state))
 
+            # v2 day one: Jane (AHS), Bob (Scheduled) and Carl (Estimate Sent) were sent; only
+            # their customers reached Zuper. Carl's job was then deleted in Zuper.
             checks.ok(cells("contact") == [mapped("contact", "linked"), "0", "0"]
-                      and cells("contact")[0] == "4",
-                      f"Contacts: 4 linked ({cells('contact')})")
+                      and cells("contact")[0] == "3",
+                      f"Contacts: the 3 customers of sent jobs are linked ({cells('contact')})")
             checks.ok(cells("opportunity") == [mapped("opportunity", "linked"), "0",
                                                mapped("opportunity", "deleted")]
                       == ["2", "0", "1"],
                       f"Opportunities: 2 linked, 1 deleted ({cells('opportunity')})")
-            checks.ok(cells("stage")[0] == "6" and cells("pipeline")[0] == "2",
-                      "both pipelines and all six stages are linked")
+            checks.ok(cells("stage")[0] == "9" and cells("pipeline")[0] == "2",
+                      f"both pipelines and all nine stages are linked ({cells('stage')})")
             load_card = page.locator('[data-card="load-report"]')
             checks.ok(load_card.is_visible() and "Commit" in load_card.inner_text()
                       and "No mismatches" in load_card.inner_text(),
                       "the initial load report shows (commit, no mismatches)")
             conflicts = page.locator('[data-section="conflicts"]')
             text = conflicts.inner_text()
-            checks.ok("Zuper owns money" in text and "Invoice fully paid → Won" in text
+            checks.ok("Zuper owns money" in text and "Won" not in text
                       and "Checklist: How many leaks?" in text
                       and "The CRM question cannot hold Zuper\u2019s answer" in text,
                       "the conflict log shows rules and fields in plain words")
@@ -430,9 +486,11 @@ def run(shots: Path, keep: bool) -> int:
                       "read-only subtitle and the value-source sentence")
             checks.ok(panel.locator("input, select, textarea").count() == 0,
                       "nothing in the panel is editable")
-            checks.ok(db_one("select status from opportunities where id = ?", jane) == "won"
+            checks.ok(db_one("select status from opportunities where id = ?", jane) == "open"
                       and db_one("select value_cents from opportunities where id = ?", jane)
-                      == 950000, "the paid invoice made the card Won at $9,500 (engine)")
+                      == 950000,
+                      "v2: a paid invoice sets the value but never marks the card Won")
+            checks.ok("Won" not in panel.inner_text(), "the panel promises no automatic outcome")
             page.screenshot(path=str(shots / "07-quotes-and-invoices.png"))
 
             nav.get_by_role("button", name="Photos", exact=True).click()
@@ -477,6 +535,178 @@ def run(shots: Path, keep: bool) -> int:
             docs.first.get_by_role("button", name="Jane roof").click()
             expect(page.get_by_role("dialog", name='Edit "Jane roof"')).to_be_visible(timeout=10000)
             checks.ok(True, "the card's title opens that card")
+            page.goto(f"{app_url}contacts?contact={ids['contact_jane']}")
+            expect(page.get_by_test_id("contact-zuper-locked")).to_be_visible(timeout=10000)
+            first = page.locator('[data-locked-field="First name"]')
+            checks.ok(first.count() == 1 and first.get_attribute("title") == "Change this in Zuper",
+                      "a sent job's customer: name, phone and email are locked with the reason")
+            first.click()
+            page.wait_for_timeout(300)
+            checks.ok(page.locator('[data-locked-field="First name"]').count() == 1,
+                      "clicking a locked field opens no editor")
+
+            # ==== v2: the mirror's locks ===================================================
+            def api(method, path, body=None):
+                return page.evaluate("""async ([method, path, body]) => {
+                    const hit = document.cookie.split('; ').find((c) => c.startsWith('ghl_csrf='))
+                    const r = await fetch(path, { method, credentials: 'include',
+                      headers: { 'Content-Type': 'application/json',
+                                 'X-CSRF-Token': hit ? decodeURIComponent(hit.slice(9)) : '' },
+                      body: body == null ? undefined : JSON.stringify(body) })
+                    let data = null
+                    try { data = await r.json() } catch (e) { data = null }
+                    return [r.status, data]
+                }""", [method, path, body])
+
+            def writes():
+                f = work / "zuper_writes.json"
+                return json.loads(f.read_text()) if f.exists() else {}
+
+            bob = ids["opp_bob"]
+            retail = ids["pipeline_" + "Retail"]
+            page.goto(f"{app_url}opportunities?pipeline={retail}")
+            bob_card = page.locator("[data-managed-in-zuper]", has_text="Bob roof")
+            expect(bob_card).to_be_visible(timeout=10000)
+            checks.ok(bob_card.get_by_test_id("card-managed-in-zuper").is_visible()
+                      and bob_card.get_attribute("title") == "Change this in Zuper",
+                      "a sent card shows Managed in Zuper and says why it cannot move")
+            erin_card = page.locator("div", has_text="Erin roof").last
+            stage_before = db_one("select stage_id from opportunities where id = ?", bob)
+            a, b = bob_card.bounding_box(), erin_card.bounding_box()
+            page.mouse.move(a["x"] + a["width"] / 2, a["y"] + 12)
+            page.mouse.down()
+            page.mouse.move(a["x"] + a["width"] / 2 + 20, a["y"] + 30, steps=5)
+            page.mouse.move(b["x"] + b["width"] / 2, b["y"] + b["height"] / 2, steps=15)
+            page.mouse.up()
+            page.wait_for_timeout(1500)
+            checks.ok(db_one("select stage_id from opportunities where id = ?", bob)
+                      == stage_before, "dragging a managed card moves nothing")
+            page.keyboard.press("Escape")
+            page.screenshot(path=str(shots / "11-board-managed-card.png"))
+
+            status, body = api("PATCH", f"/api/opportunities/{bob}/detail", {"title": "Renamed"})
+            checks.ok(status == 409 and str(body.get("detail", "")).startswith(
+                "Change this in Zuper")
+                      and db_one("select title from opportunities where id = ?", bob) == "Bob roof",
+                      f"a title edit on a sent card is refused and nothing changes ({status})")
+            page.goto(f"{app_url}opportunities?opportunity={bob}")
+            bmodal = page.get_by_role("dialog", name='Edit "Bob roof"')
+            expect(bmodal).to_be_visible(timeout=10000)
+            name_input = bmodal.get_by_label("Opportunity name")
+            checks.ok(bmodal.get_by_test_id("managed-in-zuper").is_visible(),
+                      "the modal header says Managed in Zuper")
+            checks.ok(name_input.is_disabled()
+                      and name_input.get_attribute("title") == "Change this in Zuper"
+                      and bmodal.get_by_label("Stage", exact=True).is_disabled()
+                      and bmodal.get_by_label("Value", exact=True).is_disabled()
+                      and bmodal.get_by_label("Owner", exact=True).is_disabled(),
+                      "title, stage, value and owner are disabled with the reason")
+            checks.ok(bmodal.get_by_role("button", name="Use contact address").count() == 0
+                      and bmodal.get_by_test_id("address-locked").is_visible(),
+                      "the job address is locked; no Use contact address")
+            page.screenshot(path=str(shots / "12-managed-modal.png"))
+
+            # A visit on a sent job is read-only.
+            status, body = api("GET", f"/api/appointments/{ids['visit_jane']}")
+            checks.ok(status == 200 and body.get("zuper_locked") is True,
+                      "the API marks the sent job's visit zuper_locked")
+            page.goto(f"{app_url}opportunities?opportunity={jane}")
+            jmodal = page.get_by_role("dialog", name='Edit "Jane roof"')
+            expect(jmodal).to_be_visible(timeout=10000)
+            jmodal.get_by_role("button", name="Book or update appointment").click()
+            expect(jmodal.get_by_test_id("visits-locked")).to_be_visible(timeout=5000)
+            jmodal.get_by_role("button", name="Update", exact=True).first.click()
+            vdialog = page.get_by_role("dialog", name="Appointment details")
+            expect(vdialog.get_by_test_id("visit-zuper-locked")).to_be_visible(timeout=10000)
+            checks.ok(vdialog.get_by_role("button", name="Save changes").count() == 0
+                      and vdialog.get_by_role("button", name="Cancel appointment").count() == 0,
+                      "the visit panel offers no Save and no Cancel appointment")
+            page.screenshot(path=str(shots / "13-locked-visit.png"))
+            vdialog.get_by_role("button", name="Close", exact=True).last.click()
+
+            # ==== v2: Send to Zuper from the modal ==========================================
+            erin = ids["opp_erin"]
+            before = writes()
+            page.goto(f"{app_url}opportunities?opportunity={erin}")
+            emodal = page.get_by_role("dialog", name='Edit "Erin roof"')
+            expect(emodal).to_be_visible(timeout=10000)
+            send = emodal.get_by_role("button", name="Send to Zuper")
+            checks.ok(send.is_enabled(),
+                      "a Retail lead with name, phone and job address can be sent")
+            page.screenshot(path=str(shots / "14-send-button.png"))
+            send.click()
+            confirm = page.get_by_role("alertdialog", name="Send this job to Zuper?")
+            checks.ok(confirm.is_visible() and "managed in Zuper" in confirm.inner_text(),
+                      "Send to Zuper asks first and says the card becomes managed in Zuper")
+            confirm.get_by_role("button", name="Send to Zuper").click()
+            expect(emodal.get_by_test_id("managed-in-zuper")).to_be_visible(timeout=45000)
+            page.screenshot(path=str(shots / "15-sent.png"))
+            after = writes()
+
+            def grew(key, a, b):
+                return b.get(key, 0) - a.get(key, 0)
+
+            checks.ok(grew("POST /customers_new", before, after) == 1
+                      and grew("POST /jobs", before, after) == 1,
+                      f"the fake got one customer and one job ({after})")
+            status, body = api("POST", f"/api/opportunities/{erin}/zuper/send")
+            page.wait_for_timeout(3000)
+            again = writes()
+            checks.ok(status == 200 and body.get("already") is True
+                      and grew("POST /customers_new", after, again) == 0
+                      and grew("POST /jobs", after, again) == 0,
+                      f"a second press does nothing ({status}, {body})")
+            checks.ok(emodal.get_by_role("button", name="Send to Zuper").count() == 0,
+                      "a sent card offers no Send button")
+
+            # ==== v2: lead outcome on close, and a card that cannot be sent yet =============
+            fay = ids["opp_fay"]
+            page.goto(f"{app_url}opportunities?opportunity={fay}")
+            fmodal = page.get_by_role("dialog", name='Edit "Fay leak"')
+            expect(fmodal).to_be_visible(timeout=10000)
+            fsend = fmodal.get_by_role("button", name="Send to Zuper")
+            checks.ok(fsend.is_disabled()
+                      and "The job needs its address" in (fsend.get_attribute("title") or "")
+                      and "The job needs its address" in fmodal.get_by_test_id(
+                          "zuper-send-problems").inner_text(),
+                      "without a job address, Send is disabled and says what is missing")
+            fmodal.get_by_label("Status", exact=True).select_option("lost")
+            update = fmodal.get_by_role("button", name="Update", exact=True)
+            expect(fmodal.get_by_role("alert")).to_contain_text(
+                "Choose a lead outcome before closing this card", timeout=5000)
+            checks.ok(update.is_disabled(), "closing without an outcome cannot be saved")
+            fmodal.get_by_label("Lead outcome", exact=True).select_option("Other")
+            expect(fmodal.get_by_role("alert")).to_contain_text("needs a note", timeout=5000)
+            checks.ok(update.is_disabled(), "Other without a note cannot be saved")
+            page.screenshot(path=str(shots / "16-lead-outcome-other.png"))
+            fmodal.get_by_label("Lead outcome note").fill("Went with a cousin's company")
+            expect(update).to_be_enabled(timeout=5000)
+            update.click()
+            expect(fmodal).to_be_hidden(timeout=10000)
+            checks.ok(db_one("select status from opportunities where id = ?", fay) == "lost"
+                      and db_one("select lead_outcome from opportunities where id = ?", fay)
+                      == "Other"
+                      and db_one("select lead_outcome_note from opportunities where id = ?", fay)
+                      == "Went with a cousin's company",
+                      "the card closed with its outcome and note")
+            status, body = api("PATCH", f"/api/opportunities/{ids['opp_gus']}/detail",
+                               {"status": "abandoned"})
+            checks.ok(status == 400 and "lead outcome" in str(body.get("detail", "")).lower()
+                      and db_one("select status from opportunities where id = ?", ids["opp_gus"])
+                      == "open", f"the server refuses a close without an outcome too ({status})")
+
+            page.get_by_role("button", name="Reporting", exact=True).first.click()
+            page.get_by_role("button", name="Lead outcomes", exact=True).click()
+            table = page.get_by_role("table", name="Lead outcomes by source")
+            expect(table).to_be_visible(timeout=10000)
+            row = table.locator('[data-outcome-row="Google"]')
+            cells_ = [c.strip() for c in row.locator("td").all_inner_texts()]
+            checks.ok(cells_[0] == "Google" and cells_[8] == "1" and cells_[-1] == "1",
+                      f"the report counts Fay's Other under Google ({cells_})")
+            checks.ok(page.get_by_role("table", name="Lead outcomes by campaign").locator(
+                '[data-outcome-row="No campaign"]').count() == 1,
+                "a card with no campaign is counted as No campaign")
+            page.screenshot(path=str(shots / "17-lead-outcomes-report.png"))
 
             checks.ok(not errors, f"no uncaught page errors ({errors[:2]})")
 
@@ -508,6 +738,20 @@ def run(shots: Path, keep: bool) -> int:
             checks.ok("INV-9" in text and "Sent" in text and "$1,200.00" in text,
                       "the technician's own card shows its invoice")
             tpage.screenshot(path=str(shots / "10-tech-own-card.png"))
+            tpage.goto(f"{app_url}opportunities?opportunity={ids['opp_gus']}")
+            gmodal = tpage.get_by_role("dialog", name='Edit "Gus porch"')
+            expect(gmodal).to_be_visible(timeout=10000)
+            tpage.wait_for_timeout(800)
+            checks.ok(gmodal.get_by_role("button", name="Send to Zuper").count() == 0,
+                      "a technician gets no Send to Zuper button at all")
+            refused = tpage.evaluate("""async (id) => {
+                const hit = document.cookie.split('; ').find((c) => c.startsWith('ghl_csrf='))
+                const r = await fetch(`/api/opportunities/${id}/zuper/send`, { method: 'POST',
+                  credentials: 'include',
+                  headers: { 'X-CSRF-Token': hit ? decodeURIComponent(hit.slice(9)) : '' } })
+                return r.status
+            }""", ids["opp_gus"])
+            checks.ok(refused == 403, f"and the server refuses the send ({refused})")
             checks.ok(not terrors, f"no uncaught page errors for the technician ({terrors[:2]})")
             browser.close()
     except Exception:  # noqa: BLE001 - any failure is one failed check, then clean up

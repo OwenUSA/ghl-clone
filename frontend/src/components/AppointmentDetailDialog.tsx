@@ -11,6 +11,7 @@ import {
   timeInput as timeInputValue, whenLabel, zoneLabel,
 } from '../lib/accountTime'
 import { reminderSentence } from '../lib/reminders'
+import { LOCK_REASON, visitLocked } from '../lib/zuper'
 import { ContactPicker } from './ContactPicker'
 
 /**
@@ -145,13 +146,16 @@ export function AppointmentDetailDialog({
   // here rather than let a TECH fill the form and be refused on submit — the
   // precedent d1f7c50 (Add Contact) and b943f4b set, and the same flag shape the
   // page already uses for `New`. Reading is ANY_USER, so a TECH still sees it.
-  const canWrite = user.role !== 'TECH'
-  const why = 'Editing an appointment is staff-only, and your role is TECH'
-
   const detail = useQuery({
     queryKey: ['appointment', appointmentId],
     queryFn: () => getAppointment(appointmentId),
   })
+  // Zuper v2 (2026-09-16): a visit of a job managed in Zuper is scheduled there. The panel
+  // reads it, and offers neither Save nor Cancel appointment — the server refuses both.
+  const zuperLocked = visitLocked(detail.data)
+  const canWrite = user.role !== 'TECH' && !zuperLocked
+  const why = zuperLocked ? LOCK_REASON
+    : 'Editing an appointment is staff-only, and your role is TECH'
   const calendars = useQuery({ queryKey: ['calendars'], queryFn: listCalendars })
   const users = useQuery({ queryKey: ['users'], queryFn: listUsers })
   // Open deals across every pipeline, for binding this booking to one.
@@ -349,7 +353,12 @@ export function AppointmentDetailDialog({
               </div>
             </div>
 
-            {!canWrite && (
+            {zuperLocked ? (
+              <div data-testid="visit-zuper-locked"
+                style={{ fontSize: 13, color: 'rgb(102,112,133)', marginTop: 10 }}>
+                This visit belongs to a job managed in Zuper. {LOCK_REASON}.
+              </div>
+            ) : !canWrite && (
               <div style={{ fontSize: 13, color: 'rgb(102,112,133)', marginTop: 10 }}>
                 {why}. You can read the booking but not change it.
               </div>
@@ -554,6 +563,21 @@ export function AppointmentDetailDialog({
             {/* Cancelling is irreversible and customer-facing, so the confirmation
                 NAMES the appointment — title, day and time — rather than asking
                 "are you sure". Same two-step shape as the contact panel's delete. */}
+            {/* Zuper v2: a visit managed in Zuper offers Close only — no Save, no Cancel. */}
+            {zuperLocked && (
+              <div className="mt-5 flex justify-end">
+                <button
+                  onClick={onClose}
+                  style={{
+                    height: 36, padding: '0 14px', borderRadius: 6, fontSize: 14,
+                    border: '1px solid rgb(234,236,240)',
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            )}
+            {!zuperLocked && <>
             {confirmingCancel ? (
               <div
                 role="alert"
@@ -642,6 +666,7 @@ export function AppointmentDetailDialog({
                 </div>
               </div>
             )}
+            </>}
           </>
         )}
       </div>

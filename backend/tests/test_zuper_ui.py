@@ -55,13 +55,13 @@ def run_js(body: str, tz: str = "Europe/Berlin"):
 def test_every_rule_reads_in_plain_words():
     got = run_js("""
         out(['zuper_money', 'workiz_before_cutover', 'zuper_schedule_after_cutover',
-             'latest_edit', 'crm_owned', 'crm_cannot_hold', 'invoice_paid', 'mirrored_cancel',
-             'something_new'].map(z.ruleLabel))
+             'latest_edit', 'crm_owned', 'crm_cannot_hold', 'mirrored_cancel',
+             'zuper_owned', 'something_new'].map(z.ruleLabel))
     """)
     assert got == ["Zuper owns money", "Workiz wins before cutover",
                    "Zuper owns the schedule after cutover", "Latest edit wins",
                    "CRM-owned field", "The CRM question cannot hold Zuper\u2019s answer",
-                   "Invoice fully paid → Won", "Deleted in Zuper → visit cancelled",
+                   "Deleted in Zuper → visit cancelled", "Zuper owns this field",
                    "Something new"]
 
 
@@ -71,9 +71,24 @@ def test_every_rule_the_engine_can_log_has_a_label():
     engine = (BACKEND / "app" / "zuper" / "engine.py").read_text(encoding="utf-8")
     rules = set(re.findall(r'"rule": "([a-z_]+)"', engine))
     rules |= set(re.findall(r'return [A-Z_]+, "([a-z_]+)", "', engine))
-    assert {"zuper_money", "crm_owned", "latest_edit", "invoice_paid"} <= rules, rules
+    assert {"zuper_money", "crm_owned", "latest_edit"} <= rules, rules
     got = run_js("out(Object.keys(z.RULE_LABELS))")
-    assert rules <= set(got), rules - set(got)
+    # v2 (2026-09-16) dropped every automatic outcome on a Zuper job: no label may promise one.
+    assert "invoice_paid" not in got
+    assert rules - DROPPED_RULES <= set(got), rules - DROPPED_RULES - set(got)
+
+
+DROPPED_RULES = {"invoice_paid"}
+
+
+def test_nothing_in_the_ui_says_zuper_marks_a_card_won_or_makes_a_task():
+    """Owner v2: no automation runs on a Zuper job in the CRM."""
+    for parts in (("lib", "zuper.ts"), ("components", "ZuperSettings.tsx"),
+                  ("components", "ZuperMoneyPanel.tsx"), ("components", "ZuperSend.tsx"),
+                  ("components", "ContactDetailsPanel.tsx")):
+        src = _read(*parts)
+        assert "→ Won" not in src and "marked Won" not in src, parts
+        assert not re.search(r"declined[^\n]{0,40}task", src, re.IGNORECASE), parts
 
 
 @node
@@ -369,3 +384,178 @@ def test_api_helpers_were_appended_at_the_end():
                  "restoreZuperDelete", "getOpportunityZuper", "getContactZuper",
                  "getOpportunityZuperAttachments"):
         assert "export const %s" % name in tail and name not in head, name
+
+
+# ---------------- v2 (2026-09-16): Send to Zuper, the mirror, lead outcomes ----------------
+
+@node
+def test_the_lead_outcomes_are_exactly_the_owners_list():
+    from app import lead_outcomes
+
+    got = run_js("out(z.LEAD_OUTCOMES)")
+    assert got == ["Spam", "Wrong number", "Not interested", "Price shopping",
+                   "Out of service area", "Duplicate", "No response", "Other"]
+    assert got == lead_outcomes.OUTCOMES, "the UI and the server disagree on the list"
+
+
+@node
+def test_closing_an_unbooked_card_needs_an_outcome_and_other_needs_a_note():
+    got = run_js("""
+        const p = (status, booked, outcome, note) =>
+          z.leadOutcomeProblem({ status, booked, outcome, note })
+        out([p('lost', false, '', ''), p('abandoned', false, null, null), p('lost', true, '', ''),
+             p('open', false, '', ''), p('lost', false, 'Spam', ''), p('lost', false, 'Other', ' '),
+             p('lost', true, 'Other', ''), p('open', false, 'Other', 'moved away'),
+             z.showLeadOutcome('open', ''), z.showLeadOutcome('lost', ''),
+             z.showLeadOutcome('won', 'Spam')])
+    """)
+    from app import lead_outcomes
+
+    need, note = lead_outcomes.NEEDED, lead_outcomes.NOTE_NEEDED
+    assert got == [need, need, None, None, None, note, note, None, False, True, True]
+
+
+@node
+def test_the_lock_reason_and_what_it_locks():
+    got = run_js("""
+        const z1 = (state, fields) => ({ state, job_uid: 'job-1', job_url: null, sent_at: null,
+          error: null, locked_fields: fields, may_send: true, can_send: true, send_problems: [] })
+        out([z.LOCK_REASON,
+             z.lockedField(z1('sent', ['title', 'stage_id']), 'title'),
+             z.lockedField(z1('sent', ['title']), 'notes'),
+             z.lockedField(z1('queued', ['value_cents']), 'value_cents'),
+             z.lockedField(z1('not_sent', ['title']), 'title'),
+             z.lockedField(undefined, 'title'),
+             z.lockTitle(z1('sent', ['owner_id']), 'owner_id', 'role'),
+             z.lockTitle(z1('sent', []), 'owner_id', 'role'),
+             z.cardDraggable({ managed_in_zuper: true }), z.cardDraggable({}),
+             z.visitLocked({ zuper_locked: true }), z.visitLocked({}),
+             z.contactFieldLocked({ zuper_locked: true, zuper_locked_fields: ['phone'] }, 'phone'),
+             z.contactFieldLocked({ zuper_locked: true, zuper_locked_fields: ['phone'] }, 'source'),
+             z.contactFieldLocked({ zuper_locked: false, zuper_locked_fields: [] }, 'phone')])
+    """)
+    assert got == ["Change this in Zuper", True, False, True, False, False,
+                   "Change this in Zuper", "role", False, True, True, False, True, False, False]
+
+
+@node
+def test_the_send_control_is_hidden_unless_this_user_may_send():
+    got = run_js("""
+        const z1 = (state, may, can, problems = [], error = null) => ({ state, job_uid: null,
+          job_url: null, sent_at: null, error, locked_fields: [], may_send: may, can_send: can,
+          send_problems: problems })
+        out([z.sendView(undefined), z.sendView(z1('not_sent', false, true)),
+             z.sendView(z1('not_sent', true, true)), z.sendView(z1('queued', false, false)),
+             z.sendView(z1('sent', false, false)), z.sendView(z1('failed', true, true, [], 'x')),
+             z.sendButton(z1('not_sent', false, true)),
+             z.sendButton(z1('not_sent', true, true)),
+             z.sendButton(z1('not_sent', true, false, ['The job has no address.', 'No phone.'])),
+             z.sendButton(z1('failed', false, true)), z.sendButton(z1('failed', true, true)),
+             z.sendButton(z1('sent', true, true))])
+    """)
+    hidden = {"shown": False, "enabled": False, "reason": None}
+    assert got == ["none", "none", "send", "queued", "managed", "failed",
+                   hidden, {"shown": True, "enabled": True, "reason": None},
+                   {"shown": True, "enabled": False,
+                    "reason": "The job has no address. No phone."},
+                   hidden, {"shown": True, "enabled": True, "reason": None}, hidden]
+
+
+@node
+def test_the_lead_outcome_report_tables_name_blanks():
+    got = run_js("""
+        out([z.outcomeTable([{ source: null, counts: { Spam: 2 }, total: 2 },
+                             { source: 'Google', counts: { Other: 1, Spam: 1 }, total: 2 }],
+                            ['Spam', 'Other'], 'source'),
+             z.outcomeTable([{ campaign: '  ', counts: {}, total: 0 }], ['Spam'], 'campaign'),
+             z.dayAfter('2026-09-30'), z.dayAfter('2026-12-31'), z.dayAfter('garbage')])
+    """)
+    assert got[2:] == ["2026-10-01", "2027-01-01", "garbage"]
+    assert got[:2] == [[{"label": "No source", "cells": [2, 0], "total": 2},
+                    {"label": "Google", "cells": [1, 1], "total": 2}],
+                   [{"label": "No campaign", "cells": [0], "total": 0}]]
+
+
+def test_the_modal_disables_every_zuper_only_control_with_the_reason():
+    src = _read("components", "OpportunityDetail.tsx")
+    assert "const lock = (field: string) => lockedField(zuper, field)" in src
+    assert "title: lock(field) ? LOCK_REASON" in src
+    for label, key in (('aria-label="Opportunity name"', "title"),
+                       ('ariaLabel="Pipeline"', "pipeline_id"),
+                       ('ariaLabel="Stage"', "stage_id"), ('ariaLabel="Status"', "status"),
+                       ('aria-label="Value"', "value_cents"), ('ariaLabel="Owner"', "owner_id")):
+        at = src.index(label)
+        assert "'%s').disabled" % key in src[at - 200:at + 200], label
+    # The job address: every input, "Use contact address", and the Checklist's linked address.
+    assert "disabled={gate(canEdit, key).disabled}" in src
+    assert "{fallback && canEdit && !addressLocked && (" in src
+    assert "disabled: !canEdit || addressLocked," in src
+    assert "reason: addressLocked ? LOCK_REASON" in src
+    # Visits: no booking, and the reason.
+    assert "canBook={canBook && !lock('appointments')}" in src
+    assert "bookReason={lock('appointments') ? LOCK_REASON : undefined}" in src
+    # Notes, Checklist answers and tasks are NOT gated by the lock.
+    assert "<fieldset disabled={!canAnswer}" in src
+    assert "<NotesTab opportunityId={o.id} user={user} />" in src
+    assert "<ZuperSendLine opportunityId={o.id} zuper={o.zuper} />" in src
+
+
+def test_the_send_line_draws_no_button_for_a_user_who_may_not_send():
+    src = _read("components", "ZuperSend.tsx")
+    assert "if (view === 'none' && !error) return null" in src
+    assert "{button.shown && (" in src
+    assert "title={button.reason ?? 'Send this job to Zuper'}" in src
+    assert "Send this job to Zuper?" in src and "send.mutate()" in src, "sending must confirm first"
+    assert "Managed in Zuper" in src and "zuper?.job_url && (" in src
+    assert "Sending to Zuper…" in src
+
+
+def test_a_managed_card_does_not_lift_on_the_board():
+    card = _read("components", "OpportunityCard.tsx")
+    assert "const draggable = cardDraggable(o)" in card
+    assert "disabled: { draggable: !draggable, droppable: false }" in card
+    assert "title={draggable ? undefined : LOCK_REASON}" in card
+    assert "Managed in Zuper" in card
+    page = _read("pages", "OpportunitiesPage.tsx")
+    assert "?.managed_in_zuper) return" in page.split("function onDragEnd(", 1)[1][:400]
+
+
+def test_a_locked_visit_offers_no_edit_or_cancel():
+    dialog = _read("components", "AppointmentDetailDialog.tsx")
+    assert "const zuperLocked = visitLocked(detail.data)" in dialog
+    assert "const canWrite = user.role !== 'TECH' && !zuperLocked" in dialog
+    assert "{!zuperLocked && <>" in dialog
+    assert "data-zuper-locked={visitLocked(a) || undefined}" in _read("pages", "CalendarsPage.tsx")
+
+
+def test_a_locked_contact_cannot_be_edited_in_the_panel():
+    panel = _read("components", "ContactDetailsPanel.tsx")
+    assert "locked={contactFieldLocked(c, f.key) ? LOCK_REASON : null}" in panel
+    field = panel.split("function Field(", 1)[1].split("\nfunction ", 1)[0]
+    locked = field.split("{locked ? (", 1)[1].split(") : editing ? (", 1)[0]
+    assert "onClick" not in locked, "a locked field still opens its editor"
+
+
+def test_lead_outcome_in_the_modal_add_opportunity_bulk_and_reporting():
+    modal = _read("components", "OpportunityDetail.tsx")
+    assert "leadOutcomeProblem({ status: form.status, booked: !!o.booked," in modal
+    assert "body.lead_outcome = f.leadOutcome || null" in modal
+    add = _read("components", "AddOpportunityModal.tsx")
+    assert ("leadOutcomeProblem({ status, booked: false, outcome: leadOutcome, "
+            "note: leadOutcomeNote })") in add
+    bulk = _read("components", "BulkActionsBar.tsx")
+    assert "bulkLeadOutcome(ids, outcome, outcomeNote.trim() || null)" in bulk
+    assert "{canAssign && (" in bulk.split("Lead outcome…", 1)[0][-1200:]
+    report = _read("pages", "ReportingPage.tsx")
+    assert "{ key: 'lead-outcomes', label: 'Lead outcomes' }" in report
+    assert "getLeadOutcomeReport({ since: startDate, until: dayAfter(endDate)," in report
+    assert "kind === 'source' ? 'Source' : 'Campaign'" in report
+
+
+def test_ai_actions_render_from_the_catalogue_generically():
+    """suggest_send_to_zuper and set_lead_outcome need no special case: the builder lists
+    every catalogue action, and a suggestion card draws the server's summary."""
+    builder = _read("components", "ai", "AgentBuilder.tsx")
+    assert "(cat.data?.actions ?? []).filter((a) => a.channels.includes('text'))" in builder
+    assert "offered.map((a) => (" in builder
+    assert "{s.summary}" in _read("components", "AiSuggestions.tsx")

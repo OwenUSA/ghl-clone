@@ -14,7 +14,7 @@ import {
   BODY, BORDER, BUTTON, DANGER, DIVIDER, ErrorLine, FAINT, HEADING, INPUT, MUTED, PRIMARY,
   PRIMARY_BUTTON, TEXT, dead,
 } from './opportunity/ui'
-import { Chip } from './ZuperMoneyPanel'
+import { Chip, Confirm } from './ZuperMoneyPanel'
 
 /**
  * Settings → Zuper (2026-09-16). ADMIN only: the section is not drawn for anyone else, and
@@ -80,38 +80,6 @@ function Pager({ page, total, onPage }: { page: number; total: number; onPage: (
           color: PRIMARY }}>{page}</span>
         <button type="button" disabled={page >= pages} onClick={() => onPage(page + 1)}
           style={{ ...pager, color: page >= pages ? 'rgb(152,162,179)' : TEXT }}>Next</button>
-      </div>
-    </div>
-  )
-}
-
-/** A confirm dialog in My Staff's style. */
-function Confirm({ title, children, action, danger = false, busy, onConfirm, onCancel }: {
-  title: string; children: React.ReactNode; action: string; danger?: boolean; busy: boolean
-  onConfirm: () => void; onCancel: () => void
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onCancel])
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(52,64,84,0.6)' }} onClick={onCancel}>
-      <div role="alertdialog" aria-modal="true" aria-label={title}
-        onClick={(e) => e.stopPropagation()} className="bg-white"
-        style={{ width: 480, maxWidth: '94vw', borderRadius: 8, padding: 20,
-          boxShadow: '0 20px 24px -4px rgba(16,24,40,0.08)' }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: TEXT }}>{title}</div>
-        <div style={{ fontSize: 14, color: BODY, marginTop: 8, lineHeight: 1.5 }}>{children}</div>
-        <div className="flex justify-end gap-3" style={{ marginTop: 18 }}>
-          <button type="button" onClick={onCancel} style={{ ...BUTTON, height: 36 }}>Cancel</button>
-          <button type="button" disabled={busy} onClick={onConfirm}
-            style={{ ...PRIMARY_BUTTON, height: 36, ...dead(!busy),
-              ...(danger ? { backgroundColor: DANGER, borderColor: DANGER } : {}) }}>
-            {busy ? 'Working…' : action}
-          </button>
-        </div>
       </div>
     </div>
   )

@@ -9,9 +9,11 @@ import { AddBar, BODY, BORDER, FAINT, HEADING, MUTED, PRIMARY } from './ui'
  * (DECISIONS.md, 2026-09-10). Both dialogs are rendered by OpportunityDetail
  * itself, OUTSIDE its backdrop — this tab only asks for them.
  */
-export function AppointmentTab({ appointments, canBook, onBook, onOpen }: {
+export function AppointmentTab({ appointments, canBook, bookReason, onBook, onOpen }: {
   appointments: LinkedAppointment[]
   canBook: boolean
+  /** Why booking is off when it is not the role (Zuper v2: "Change this in Zuper"). */
+  bookReason?: string
   onBook: () => void
   onOpen: (appointmentId: number) => void
 }) {
@@ -20,7 +22,13 @@ export function AppointmentTab({ appointments, canBook, onBook, onOpen }: {
       <div style={{ ...HEADING, fontWeight: 600 }}>Book or update appointment</div>
       <div style={{ marginTop: 14 }}>
         <AddBar label="Book appointment" onClick={onBook} disabled={!canBook}
-          title={canBook ? 'Book a visit for this deal' : 'Your role cannot create an appointment'} />
+          title={canBook ? 'Book a visit for this deal'
+            : bookReason ?? 'Your role cannot create an appointment'} />
+        {bookReason && (
+          <div data-testid="visits-locked" style={{ fontSize: 13, color: FAINT, marginTop: 8 }}>
+            This job’s visits are scheduled in Zuper. {bookReason}.
+          </div>
+        )}
       </div>
       {appointments.length === 0 && (
         <div style={{ marginTop: 18, fontSize: 14, color: FAINT, textAlign: 'center' }}>

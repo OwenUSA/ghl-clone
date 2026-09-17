@@ -159,11 +159,12 @@ def test_reporting_says_so_when_the_date_range_is_backwards():
         "nothing compares the two dates, so a backwards range is never noticed")
     assert "function InvertedRange(" in source and 'role="alert"' in source, (
         "there is no surface saying the range is backwards")
-    for query in ("'call' && !inverted", "'appointment' && !inverted"):
+    for query in ("'call' && !inverted", "'appointment' && !inverted",
+                  "'lead-outcomes' && !inverted"):
         assert query in source, (
             f"the {query.split(' ')[0]} report still asks the server for an empty range")
-    assert source.count("<InvertedRange start={startDate} end={endDate} />") == 2, (
-        "both the call and the appointment tab share the range, so both must warn")
+    assert source.count("<InvertedRange start={startDate} end={endDate} />") == 3, (
+        "the call, appointment and lead outcomes tabs share the range, so all must warn")
 
 
 def test_add_opportunity_is_disabled_for_a_role_that_cannot_create():

@@ -2,7 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Donut } from '../components/Donut'
 import { IconCalendar, IconFilter, IconGrid, IconSearch } from '../components/Icon'
-import { getAppointmentReport, getCallReport, listCalendars } from '../lib/api'
+import {
+  getAppointmentReport, getCallReport, getLeadOutcomeReport, listCalendars, listPipelines,
+} from '../lib/api'
+import { LEAD_OUTCOMES, dayAfter, outcomeTable, type LeadOutcomeReport } from '../lib/zuper'
 
 /**
  * Reporting — rebuilt from captures/reporting/*.png + computed styles.
@@ -40,6 +43,8 @@ const TABS: TabDef[] = [
   { key: 'custom', label: 'Custom reports', off: 'Report builder is a separate product; not in v1' },
   { key: 'call', label: 'Call report' },
   { key: 'appointment', label: 'Appointment report' },
+  // Zuper v2 (2026-09-16): why leads closed without booking, by source and by campaign.
+  { key: 'lead-outcomes', label: 'Lead outcomes' },
 ]
 
 const PALETTE = ['rgb(83,155,245)', 'rgb(93,205,235)', 'rgb(140,141,222)',
@@ -231,6 +236,16 @@ export function ReportingPage() {
       calendar_ids: calendarId ? [Number(calendarId)] : [],
     }),
     enabled: tab === 'appointment' && !inverted,
+  })
+
+  const [pipelineId, setPipelineId] = useState<number | ''>('')
+  const pipelines = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines,
+    enabled: tab === 'lead-outcomes' })
+  const outcomes = useQuery({
+    queryKey: ['report-lead-outcomes', startDate, endDate, pipelineId],
+    queryFn: () => getLeadOutcomeReport({ since: startDate, until: dayAfter(endDate),
+      pipeline_id: pipelineId || null }),
+    enabled: tab === 'lead-outcomes' && !inverted,
   })
 
   const segs = (m: Record<string, number>) =>
@@ -534,7 +549,44 @@ export function ReportingPage() {
           </>
         )}
 
-        {!['call', 'appointment'].includes(tab) && (
+        {tab === 'lead-outcomes' && (
+          <>
+            <div style={{ fontSize: 30, fontWeight: 500, color: 'rgb(16,24,40)', marginBottom: 16 }}>
+              Lead outcomes
+            </div>
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <DateRange start={startDate} end={endDate}
+                onStart={setStartDate} onEnd={setEndDate} />
+              <div className="ml-auto flex items-center gap-3">
+                <select value={pipelineId} aria-label="Pipeline"
+                  onChange={(e) => setPipelineId(e.target.value ? Number(e.target.value) : '')}
+                  style={{
+                    height: 40, borderRadius: 8, border: '1px solid rgb(234,236,240)',
+                    padding: '0 10px', fontSize: 15, backgroundColor: '#fff',
+                  }}>
+                  <option value="">All pipelines</option>
+                  {pipelines.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {inverted && <InvertedRange start={startDate} end={endDate} />}
+            {outcomes.error && <LoadFailed error={outcomes.error} />}
+
+            <div style={{ fontSize: 14, color: 'rgb(102,112,133)', marginBottom: 12 }}>
+              Cards closed as Lost or Abandoned without booking, and why. Cards closed before lead
+              outcomes existed have none and are not counted.
+              {outcomes.data && <> {outcomes.data.total} in this period.</>}
+            </div>
+
+            <div className="grid gap-4">
+              <OutcomeCard title="By source" kind="source" report={outcomes.data} />
+              <OutcomeCard title="By campaign" kind="campaign" report={outcomes.data} />
+            </div>
+          </>
+        )}
+
+        {!['call', 'appointment', 'lead-outcomes'].includes(tab) && (
           <div className="bg-white"
             style={{ borderRadius: 8, border: '1px solid rgb(234,236,240)', padding: 32 }}>
             <div style={{ fontSize: 24, fontWeight: 600, color: 'rgb(16,24,40)' }}>
@@ -547,5 +599,51 @@ export function ReportingPage() {
         )}
       </div>
     </div>
+  )
+}
+
+/** One lead-outcome table: a row per source (or campaign), a column per outcome, and a total. */
+function OutcomeCard({ title, kind, report }: {
+  title: string; kind: 'source' | 'campaign'; report: LeadOutcomeReport | undefined
+}) {
+  const names = report?.outcomes?.length ? report.outcomes : [...LEAD_OUTCOMES]
+  const rows = outcomeTable((kind === 'source' ? report?.by_source : report?.by_campaign) ?? [],
+    names, kind)
+  const th: React.CSSProperties = {
+    height: 40, fontSize: 14, fontWeight: 500, color: 'rgb(52,64,84)', padding: '0 10px',
+    borderBottom: '1px solid rgb(234,236,240)', whiteSpace: 'nowrap',
+  }
+  const td: React.CSSProperties = {
+    height: 44, fontSize: 14, color: 'rgb(52,64,84)', padding: '0 10px',
+    borderBottom: '1px solid rgb(242,244,247)',
+  }
+  return (
+    <Card title={title}>
+      {rows.length === 0 ? <NoData /> : (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="w-full" aria-label={`Lead outcomes ${title.toLowerCase()}`}>
+            <thead>
+              <tr>
+                <th className="text-left" style={th}>{kind === 'source' ? 'Source' : 'Campaign'}</th>
+                {names.map((o) => <th key={o} className="text-right" style={th}>{o}</th>)}
+                <th className="text-right" style={th}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.label + i} data-outcome-row={r.label}>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.label}</td>
+                  {r.cells.map((n, j) => (
+                    <td key={j} className="text-right"
+                      style={{ ...td, color: n ? 'rgb(52,64,84)' : 'rgb(152,162,179)' }}>{n}</td>
+                  ))}
+                  <td className="text-right" style={{ ...td, fontWeight: 500 }}>{r.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   )
 }

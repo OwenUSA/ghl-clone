@@ -18,7 +18,10 @@ import {
 } from '../lib/api'
 import type { Me } from '../lib/auth'
 import { canOpenRecords, openRecord } from '../lib/openRecord'
-import { documentStatus, kindLabel, money, showContactMoney } from '../lib/zuper'
+import {
+  CONTACT_LOCK_SENTENCE, LOCK_REASON, contactFieldLocked, documentStatus, kindLabel, money,
+  showContactMoney,
+} from '../lib/zuper'
 import { Chip } from './ZuperMoneyPanel'
 
 /**
@@ -57,6 +60,7 @@ function Field({
   onSave,
   type = 'text',
   hint = null,
+  locked = null,
 }: {
   label: string
   value: string | null
@@ -64,6 +68,8 @@ function Field({
   type?: string
   /** Shown under the value, never in place of it. The value was saved either way. */
   hint?: string | null
+  /** Zuper v2: the reason this field cannot be edited here ("Change this in Zuper"). */
+  locked?: string | null
 }) {
   const [draft, setDraft] = useState(value ?? '')
   const [editing, setEditing] = useState(false)
@@ -72,7 +78,12 @@ function Field({
   return (
     <div style={{ marginBottom: 18 }}>
       <div style={LABEL}>{label}</div>
-      {editing ? (
+      {locked ? (
+        <div data-locked-field={label} title={locked}
+          style={{ ...VALUE, marginTop: 4, minHeight: 21, cursor: 'not-allowed' }}>
+          {value && value.trim() ? value : '--'}
+        </div>
+      ) : editing ? (
         <input
           autoFocus
           type={type}
@@ -460,6 +471,13 @@ export function ContactDetailsPanel({
               <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(16,24,40)', margin: '16px 0 12px' }}>
                 Contact
               </div>
+              {/* Zuper v2: a customer with a job managed in Zuper is edited there. */}
+              {c?.zuper_locked && (
+                <div data-testid="contact-zuper-locked"
+                  style={{ fontSize: 13, color: 'rgb(102,112,133)', marginBottom: 12 }}>
+                  {CONTACT_LOCK_SENTENCE}
+                </div>
+              )}
               {fields.length === 0 && (
                 <div style={{ fontSize: 14, color: 'rgb(102,112,133)' }}>
                   No fields match “{search}”.
@@ -471,6 +489,7 @@ export function ContactDetailsPanel({
                   label={f.label}
                   value={f.value}
                   hint={'hint' in f ? f.hint : null}
+                  locked={contactFieldLocked(c, f.key) ? LOCK_REASON : null}
                   onSave={(v) => patch.mutate({ [f.key]: v } as Partial<ContactDetail>)}
                 />
               ))}
