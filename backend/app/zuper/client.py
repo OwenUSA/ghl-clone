@@ -101,7 +101,7 @@ SENTENCES = {
     "no_key": config.NO_KEY_SENTENCE,
     "refused": "The sync refused to make that request to Zuper (it is not one it may make).",
     "unauthorized": "Zuper refused the API key (401/403). Check the key and that its user "
-                    "is \"CRM Sync\" with Admin rights.",
+                    "has Admin rights.",
     "not_found": "Zuper has no such record (404).",
     "rate_limited": "Zuper kept answering \"too many requests\" (429) after backing off.",
     "unavailable": "Zuper could not be reached or answered with a server error.",

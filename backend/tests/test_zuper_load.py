@@ -126,8 +126,8 @@ def test_setup_check_fails_in_plain_sentences(zworld, fake):
     report = run_setup(commit=True)
     by_key = {r["key"]: r for r in report["checks"]}
     assert not report["passed"]
-    assert by_key["sync_user"]["state"] == setup.FAIL
-    assert "belongs to “Owen Owner”, not “CRM Sync”" in by_key["sync_user"]["sentences"][0]
+    assert by_key["sync_user"]["state"] == setup.PASS
+    assert "belongs to “Owen Owner” (Admin)" in by_key["sync_user"]["sentences"][0]
     checklist = " ".join(by_key["job_fields_checklist"]["sentences"])
     assert "The job field “How many leaks?” is missing" in checklist
     assert "“How old is the roof?” is missing the options “5-10 yrs”" in checklist
@@ -137,7 +137,7 @@ def test_setup_check_fails_in_plain_sentences(zworld, fake):
     with SessionLocal() as s:
         assert s.get(ZuperSettings, 1).setup_passed is False
         blockers = setup.blockers(s)
-    assert any("CRM Sync" in b for b in blockers)
+    assert any("How many leaks?" in b for b in blockers)
 
 
 def test_undocumented_settings_become_confirm_by_hand_not_a_guess(zworld, fake):
@@ -335,7 +335,8 @@ def test_an_outage_stops_the_load_with_a_sentence_and_the_rerun_finishes(armed, 
 
 
 def test_load_refuses_when_setup_fails_and_writes_nothing_to_zuper(zworld, fake):
-    fake.me = {"user_uid": "x", "first_name": "Someone", "last_name": "Else"}
+    fake.me = {"user_uid": "x", "first_name": "Someone", "last_name": "Else",
+               "role": "Field Executive"}
     code, report = load.run(SessionLocal(), commit=True)
     assert code == 3 and "setup check failed" in report["refused"]
     assert fake.customers == {} and fake.jobs == {} and fake.categories == {}
@@ -370,3 +371,27 @@ def test_zuper_error_kinds_are_plain_sentences():
     assert "API key" in client.sentence(ZuperError("unauthorized"))
     assert client.sentence(ZuperError("rejected", "field x is bad")) == \
         "Zuper rejected the request. field x is bad"
+
+
+def test_a_person_admin_key_is_accepted_and_never_treated_as_the_sync_itself(zworld, fake):
+    """No seat for a dedicated user: the owner's own Admin key. Its user id must not be
+    recorded as the sync's, or that person's real edits in Zuper would be dropped."""
+    with SessionLocal() as s:
+        config.settings(s).sync_user_uid = "u-stale"
+        s.commit()
+    fake.me = {"user_uid": "u-owner", "first_name": "Owen", "last_name": "Owner",
+               "role": "Admin"}
+    report = run_setup(commit=True)
+    by_key = {r["key"]: r for r in report["checks"]}
+    assert by_key["sync_user"]["state"] == setup.PASS
+    with SessionLocal() as s:
+        assert s.get(ZuperSettings, 1).sync_user_uid is None
+
+
+def test_a_non_admin_key_still_fails_with_a_sentence(zworld, fake):
+    fake.me = {"user_uid": "u-fe", "first_name": "Field", "last_name": "Tech",
+               "role": "Field Executive"}
+    report = run_setup(commit=True)
+    by_key = {r["key"]: r for r in report["checks"]}
+    assert by_key["sync_user"]["state"] == setup.FAIL
+    assert "must be Admin" in by_key["sync_user"]["sentences"][0]

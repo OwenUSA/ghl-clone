@@ -130,32 +130,44 @@ def check_region() -> dict:
 
 
 def check_sync_user(db: Session, commit: bool) -> dict:
-    title = "The API key belongs to the “CRM Sync” user (B1, B2)"
+    """Whose key is this, and can the sync tell its own writes apart by user?
+
+    Preferred: a dedicated "CRM Sync" user, whose events are dropped as echoes before Zuper
+    is even read. The owner's Zuper plan had no seat left for one (2026-09-17), so a key
+    that belongs to a PERSON with Admin rights is accepted too. Then the user id is NOT
+    recorded as the sync's own: that person's real edits in Zuper must keep syncing, and
+    echoes are recognised by content alone (`crm_hash` / `zuper_hash`, engine.py).
+    """
+    title = "The API key's user has Admin rights (B1, B2)"
     try:
         user = zapi.me()
     except ZuperError as exc:
         if exc.kind in ("not_found", "bad_response"):
             return item("sync_user", title, BY_HAND,
-                        "Zuper did not say which user the key belongs to; confirm it was "
-                        "generated for “CRM Sync” (role Admin, full access).")
+                        "Zuper did not say which user the key belongs to; confirm it is an "
+                        "Admin user's key with full access.")
         raise
     first = str(user.get("first_name") or "").strip()
     last = str(user.get("last_name") or "").strip()
     uid = zapi.user_uid(user)
-    if (first, last) != ("CRM", "Sync"):
-        return item("sync_user", title, FAIL,
-                    "The API key belongs to “%s %s”, not “CRM Sync”. Generate the key while "
-                    "signed in as (or for) the CRM Sync user." % (first, last))
-    if commit and uid:
-        config.settings(db).sync_user_uid = uid
     role = user.get("role") or user.get("role_details") or ""
     if isinstance(role, dict):
         role = role.get("role_name") or role.get("name") or ""
     role = str(role)
     if role and "admin" not in role.lower():
         return item("sync_user", title, FAIL,
-                    "The CRM Sync user's role is “%s”; it must be Admin." % role)
-    return item("sync_user", title, PASS, "The key belongs to CRM Sync.")
+                    "The key belongs to “%s %s”, whose role is “%s”; it must be Admin."
+                    % (first, last, role))
+    dedicated = (first, last) == ("CRM", "Sync")
+    if commit:
+        config.settings(db).sync_user_uid = uid if (dedicated and uid) else None
+    if dedicated:
+        return item("sync_user", title, PASS, "The key belongs to CRM Sync.")
+    return item("sync_user", title, PASS,
+                "The key belongs to “%s %s” (Admin), not a dedicated CRM Sync user. The sync "
+                "recognises its own writes by content only, so this person's edits in Zuper "
+                "keep syncing; Zuper's activity log will show the sync's changes under this "
+                "person's name." % (first, last))
 
 
 def check_lead_sources(db: Session, commit: bool) -> dict:

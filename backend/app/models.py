@@ -1480,7 +1480,7 @@ class ZuperSettings(Base):
     # {item key: {"by": email, "at": iso}} — an ADMIN's "confirmed by hand" for what the
     # Zuper API cannot report (notification switches, the tag, the company's time zone).
     confirmations: Mapped[dict | None] = mapped_column(JSONType)
-    # The Zuper user the API key belongs to ("CRM Sync"): events it caused are echoes.
+    # Set only for a dedicated CRM Sync user: events it caused are echoes. None for a person key.
     sync_user_uid: Mapped[str | None] = mapped_column(String(64))
     # {lead source name: source uid}, learned by the setup check when Zuper lists them.
     lead_sources: Mapped[dict | None] = mapped_column(JSONType)

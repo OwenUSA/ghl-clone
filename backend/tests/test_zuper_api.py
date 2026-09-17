@@ -496,3 +496,17 @@ def test_setup_check_says_which_base_url_to_set_when_the_region_differs(zworld, 
         region = next(r for r in setup.run_checks(s, commit=False) if r["key"] == "region")
     assert region["state"] == setup.FAIL
     assert "Set ZUPER_BASE_URL=https://us-west-1c.zuperpro.com/api" in region["sentences"][0]
+
+
+def test_with_a_person_key_that_persons_own_edit_in_zuper_still_syncs(loaded, fake):
+    """sync_user_uid is None for a shared key: an event by that person is read and applied."""
+    with SessionLocal() as s:
+        config.settings(s).sync_user_uid = None
+        s.commit()
+    uid = uid_of("opportunity", loaded.ids["jane_card"])
+    fake.edit_job(uid, job_title="Edited by the owner in Zuper")
+    post_webhook({"module": "JOB", "job_uid": uid, "updated_by": {"user_uid": "u-owner"}})
+    with SessionLocal() as s:
+        webhooks.process_inbox(s)
+    with SessionLocal() as s:
+        assert s.get(Opportunity, loaded.ids["jane_card"]).title == "Edited by the owner in Zuper"
