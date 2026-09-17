@@ -7,6 +7,7 @@ commit is proven by what the fake holds; idempotency by a second commit that sen
 import hashlib
 import json
 
+import httpx
 import pytest
 from app.db import SessionLocal, engine
 from app.models import Contact, Opportunity, Stage, ZuperMapping, ZuperSettings
@@ -395,3 +396,202 @@ def test_a_non_admin_key_still_fails_with_a_sentence(zworld, fake):
     by_key = {r["key"]: r for r in report["checks"]}
     assert by_key["sync_user"]["state"] == setup.FAIL
     assert "must be Admin" in by_key["sync_user"]["sentences"][0]
+
+
+def test_a_refused_first_create_stops_the_load_with_zuper_s_message(armed, fake, monkeypatch):
+    """The create bodies are UNVERIFIED. If Zuper refuses the very first customer, the load
+    stops there with Zuper's own sentence instead of trying (and losing the reason for)
+    every other record; fixing the body and running again finishes without duplicates."""
+    real = fake.create_customer
+    monkeypatch.setattr(fake, "create_customer", lambda params, body: fake.error(
+        "customer_contact_no.mobile must be a valid phone number"))
+    code, report = load.run(SessionLocal(), commit=True)
+    assert code == 2
+    assert "customer_contact_no.mobile must be a valid phone number" in report["stopped"]
+    assert "The first contact sent" in report["stopped"]
+    assert "Run the same command again to resume" in report["stopped"]
+    assert "STOPPED: " in load.render(report)
+    assert len(fake.calls("POST", r"^/customers_new$")) == 1       # not one per contact
+    assert fake.customers == {} and fake.jobs == {}
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count(ZuperMapping.id)).where(
+            ZuperMapping.crm_type == "contact", ZuperMapping.state == "linked")) == 0
+    monkeypatch.setattr(fake, "create_customer", real)
+    code, report = load.run(SessionLocal(), commit=True)
+    assert code == 0, report
+    assert len(fake.customers) == 3 and len(fake.jobs) == 3
+
+
+def test_a_refusal_after_the_first_success_is_counted_with_its_reason(armed, fake, monkeypatch):
+    real = fake.create_customer
+    state = {"n": 0}
+
+    def second_refused(params, body):
+        state["n"] += 1
+        if state["n"] == 2:
+            return fake.error("customer_email is not a valid email")
+        return real(params, body)
+
+    monkeypatch.setattr(fake, "create_customer", second_refused)
+    code, report = load.run(SessionLocal(), commit=True)
+    contacts = report["phases"]["contact"]
+    assert "stopped" not in report
+    assert (contacts["created"], contacts["failed"]) == (2, 1)
+    assert len(contacts["failed_ids"]) == 1
+    assert contacts["failed_reasons"] == {
+        "Zuper rejected the request. customer_email is not a valid email": 1}
+    text_report = load.render(report)
+    assert "failed 1: Zuper rejected the request. customer_email is not a valid email" \
+        in text_report
+    assert "failed_reasons" not in text_report
+    # The refused customer is tried again when its card is sent, and made exactly once.
+    crm_ids = [mapping.custom_values(c)["CRM Contact ID"] for c in fake.customers.values()]
+    assert len(crm_ids) == 3 == len(set(crm_ids))
+
+
+# ------------------------------------------------------------------ unverified create bodies
+
+def test_setup_commit_uses_the_category_body_zuper_accepts(zworld, fake):
+    """Live Zuper refused {"job_category": {...}} with "Category Name Missing" (2026-09-17):
+    the flat body goes first, one POST per category, and the report names the shape."""
+    report = run_setup(commit=True)
+    assert {c["category_name"] for c in fake.categories.values()} == {"AHS", "Retail"}
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 2
+    assert report["categories"]["accepted_shapes"]["category"] == "flat"
+    assert "Zuper accepted these create bodies: category = flat" in setup.render(report)
+
+
+def test_a_refused_body_shape_falls_through_to_the_next_without_duplicates(zworld, fake,
+                                                                          monkeypatch):
+    real = fake.create_category
+
+    def wrapped_only(params, body):
+        if "category" not in body:
+            return fake.error("Unexpected field category_name")
+        return real(params, body["category"])
+
+    monkeypatch.setattr(fake, "create_category", wrapped_only)
+    report = run_setup(commit=True)
+    assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
+    # AHS: flat refused, then wrapped; Retail goes straight to the shape Zuper accepted.
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 3
+    assert report["categories"]["accepted_shapes"]["category"] == "category"
+    assert report["passed"]
+
+
+def test_every_shape_refused_stops_with_each_message_and_creates_nothing(zworld, fake,
+                                                                         monkeypatch):
+    monkeypatch.setattr(fake, "create_category",
+                        lambda params, body: fake.error("Category Name Missing"))
+    assert setup.main(["--commit"]) == 2
+    assert fake.categories == {}
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count(ZuperMapping.id))) == 0
+    with pytest.raises(ZuperError) as caught, SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    assert "refused every category body tried" in caught.value.detail
+    assert caught.value.detail.count("Category Name Missing") == 3
+
+
+def test_an_unreadable_answer_to_a_create_is_never_retried_with_another_shape(zworld, fake,
+                                                                            monkeypatch):
+    """The create may have gone through: trying another body could make a second category."""
+    real = fake.create_category
+
+    def made_but_unreadable(params, body):
+        real(params, body)
+        return fake.ok(message="created")                   # no category_uid anywhere
+
+    monkeypatch.setattr(fake, "create_category", made_but_unreadable)
+    with pytest.raises(ZuperError) as caught, SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    assert caught.value.kind == "bad_response"
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 1
+    assert len(fake.categories) == 1
+    # The rerun links the category Zuper already has by name: still one "AHS".
+    monkeypatch.setattr(fake, "create_category", real)
+    run_setup(commit=True)
+    assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
+
+
+def test_when_zuper_does_not_list_statuses_a_rerun_never_creates_them_twice(zworld, fake,
+                                                                            monkeypatch):
+    """The first live read found the status list empty/unreadable: the CRM's own mapping of
+    each status it created is trusted, the check passes on it and says so."""
+    monkeypatch.setattr(fake, "routes", lambda real=fake.routes: [
+        (rx, fn) for rx, fn in real() if not (rx == r"/jobs/status/([^/]+)" and fn[0] == "GET")])
+    report = run_setup(commit=True)
+    created = len(fake.calls("POST", r"^/jobs/status_new/"))
+    assert created == 11
+    assert all(c["statuses_listed"] is False for c in report["categories"]["categories"])
+    report = run_setup(commit=True)
+    assert len(fake.calls("POST", r"^/jobs/status_new/")) == created      # none again
+    assert len(fake.calls("POST", r"^/jobs/category$")) == 2
+    item = next(c for c in report["checks"] if c["key"] == "categories")
+    assert item["state"] == setup.PASS
+    assert "does not list the statuses" in " ".join(item["sentences"])
+
+
+def test_a_status_create_that_fails_midway_keeps_what_was_made(zworld, fake, monkeypatch):
+    real = fake.create_status
+    state = {"n": 0}
+
+    def third_is_down(params, body, cat):
+        state["n"] += 1
+        if state["n"] == 3:
+            return httpx.Response(503, json={"type": "error", "message": "down"})
+        return real(params, body, cat)
+
+    monkeypatch.setattr(fake, "create_status", third_is_down)
+    with pytest.raises(ZuperError), SessionLocal() as s, client.operator_mode():
+        setup.ensure_categories(s, commit=True)
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count(ZuperMapping.id)).where(
+            ZuperMapping.crm_type == "stage")) == 2              # both checkpoints kept
+        assert s.scalar(select(func.count(ZuperMapping.id)).where(
+            ZuperMapping.crm_type == "pipeline")) == 1
+    monkeypatch.setattr(fake, "create_status", real)
+    run_setup(commit=True)
+    names = [x["status_name"] for sts in fake.statuses.values() for x in sts]
+    assert len(names) == 11 and len(fake.categories) == 2
+    for sts in fake.statuses.values():                        # no status made twice
+        assert len({x["status_name"] for x in sts}) == len(sts)
+
+
+def test_verification_says_what_zuper_would_not_read_back_instead_of_stopping(loaded, fake,
+                                                                             monkeypatch):
+    monkeypatch.setattr(fake, "routes", lambda real=fake.routes: [
+        (rx, (m, (lambda *a: fake.error("service tasks module disabled"))
+              if rx == r"/jobs/([^/]+)/service_tasks" and m == "GET" else f))
+        for rx, (m, f) in real()])
+    code, report = load.run(SessionLocal(), commit=True)
+    assert "stopped" not in report, report
+    task = report["verification"]["task"]
+    assert "service tasks module disabled" in task["zuper_unreadable"]
+    assert "mapped_not_in_zuper" not in task
+    assert "Zuper could not be read back" in load.render(report)
+
+
+def test_the_status_move_and_child_bodies_fall_back_and_remember_the_accepted_shape(
+        armed, fake, monkeypatch):
+    """Zuper wants the wrapped status move here: the first job tries flat (refused) then
+    wrapped; every later job goes straight to the wrapped shape. Nothing is made twice."""
+    from app.zuper import zapi
+    zapi.ACCEPTED_SHAPES.pop("job_status", None)
+    real_move = fake.move
+
+    def wrapped_only(uid, body, *, back):
+        if "job_status" not in body:
+            return fake.error("status_uid is required")
+        return real_move(uid, {"status_uid": body["job_status"]["status_uid"]}, back=back)
+
+    monkeypatch.setattr(fake, "move", wrapped_only)
+    code, report = load.run(SessionLocal(), commit=True)
+    assert code == 0, report
+    moves = fake.calls("PUT", r"^/jobs/[^/]+/status$")
+    assert len(moves) == len(fake.jobs) + 1                   # one refused, then one per job
+    assert report["accepted_shapes"]["job_status"] == "job_status"
+    for job in fake.jobs.values():
+        assert job.get("current_job_status", {}).get("status_uid")
+    assert len(fake.appointments) == 2 and sum(len(v) for v in fake.notes.values()) == 1
+    assert "Zuper accepted these request bodies" in load.render(report)

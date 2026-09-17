@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Pipeline, Stage, ZuperMapping
-from . import client, config, engine, mapping, zapi
+from . import client, config, engine, mapping, webhook, zapi
 from .client import ZuperError
 
 PASS, FAIL, BY_HAND = "pass", "fail", "confirm_by_hand"
@@ -40,7 +40,8 @@ PASS, FAIL, BY_HAND = "pass", "fail", "confirm_by_hand"
 # Items the Zuper API cannot report: always confirmed by hand (checklist letters in brackets).
 HAND_ITEMS = [
     ("company", "Company time zone America/New_York and currency USD (A)"),
-    ("old_key_deleted", "The earlier API key under the owner's own user is deleted (B3)"),
+    ("old_key_deleted", ("The API key the sync uses is NOT deleted — with no free seat it is "
+                         "the owner's own Admin key, so checklist step B3 does not apply (B3)")),
     ("lead_tag", "Master tag “Lead” exists (F)"),
     ("portal_invites", "Customer portal welcome / invite emails are OFF (G1)"),
     ("job_notifications",
@@ -197,21 +198,10 @@ def check_lead_sources(db: Session, commit: bool) -> dict:
                 % len(mapping.ZUPER_LEAD_SOURCES))
 
 
-def check_webhook() -> dict:
+def check_webhook(db: Session) -> dict:
     title = "A Zuper webhook points at this CRM"
-    url = config.crm_base_url() + "/api/zuper/webhook"
-    try:
-        rows = zapi.webhooks()
-    except ZuperError as exc:
-        if exc.kind in ("not_found", "bad_response"):
-            return item("webhook", title, BY_HAND,
-                        "Zuper did not list its webhooks; confirm one posts to %s with the "
-                        "X-Webhook-Token header." % url)
-        raise
-    ours = [w for w in rows if url in str(w.get("webhook_url") or w.get("url") or "")]
-    if not ours:
-        return item("webhook", title, FAIL, "No webhook posts to %s yet (runbook step 7)." % url)
-    return item("webhook", title, PASS, "%d webhook(s) post to this CRM." % len(ours))
+    state, sentence = webhook.setup_state(db)
+    return item("webhook", title, {"pass": PASS, "fail": FAIL}.get(state, BY_HAND), sentence)
 
 
 def pipelines(db: Session) -> dict[str, Pipeline]:
@@ -240,6 +230,7 @@ def status_names(stages: list[Stage]) -> list[str]:
 def check_categories(db: Session) -> dict:
     title = "Job categories “AHS” and “Retail” hold each pipeline's stages 1:1"
     problems = []
+    unlisted: list[str] = []
     found = pipelines(db)
     for name, category in mapping.CATEGORIES.items():
         if name not in found:
@@ -250,15 +241,24 @@ def check_categories(db: Session) -> dict:
             problems.append("The job category “%s” is not created and mapped yet — run "
                             "python -m app.zuper.setup --commit." % category)
             continue
-        statuses = {zapi.status_uid(s): s for s in zapi.statuses(pm.zuper_uid)}
+        listing = zapi.statuses_or_none(pm.zuper_uid)
+        if listing is None:
+            unlisted.append(category)
+        statuses = {zapi.status_uid(s): s for s in listing or []}
         for stage in ordered_stages(db, found[name].id):
             sm = mapping.mapping_for(db, "stage", stage.id)
-            if sm is None or sm.zuper_uid not in statuses:
+            ok = sm is not None and sm.state == "linked" and (
+                sm.zuper_uid in statuses
+                if listing is not None else sm.parent_uid == pm.zuper_uid)
+            if not ok:
                 problems.append("Stage “%s” (%s) has no status in “%s” yet." % (
                     stage.name, name, category))
     if problems:
         return item("categories", title, FAIL, *problems)
-    return item("categories", title, PASS, "Both categories match their pipelines.")
+    return item("categories", title, PASS, "Both categories match their pipelines.",
+                ("Zuper does not list the statuses of %s through its API; each status was "
+                 "mapped by the CRM when it created it." % " and ".join(
+                     "“%s”" % c for c in unlisted)) if unlisted else "")
 
 
 def run_checks(db: Session, *, commit: bool) -> list[dict]:
@@ -285,7 +285,7 @@ def run_checks(db: Session, *, commit: bool) -> list[dict]:
                              "Job fields in group “Checklist” (D)"),
         lambda: check_lead_sources(db, commit),
         lambda: check_categories(db),
-        check_webhook,
+        lambda: check_webhook(db),
     ]
     for check in checks:
         try:
@@ -332,6 +332,8 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
     ctx = engine.Ctx(db)
     report = {"categories": [], "created_categories": 0, "created_statuses": 0,
               "linked_statuses": 0, "renamed_statuses": 0}
+    for kind in ("category", "status"):
+        zapi.ACCEPTED_SHAPES.pop(kind, None)
     existing = {zapi.category_name(c): c for c in zapi.categories()}
     found = pipelines(db)
     for pipeline_name, category_name in mapping.CATEGORIES.items():
@@ -358,10 +360,12 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
                 pm = ZuperMapping(crm_type="pipeline", crm_id=p.id, zuper_type="category")
                 db.add(pm)
             pm.zuper_uid, pm.state, pm.updated_at = cat_uid, "linked", ctx.now
-            db.flush()
-        statuses = {}
-        if cat_uid:
-            statuses = {zapi.status_uid(s): s for s in zapi.statuses(cat_uid)}
+            db.commit()                      # a checkpoint: the category is made
+        # None: Zuper would not list this category's statuses — then the CRM's own mapping
+        # of each status it created is trusted, so a rerun never creates one twice.
+        listing = zapi.statuses_or_none(cat_uid) if cat_uid else []
+        entry["statuses_listed"] = listing is not None
+        statuses = {zapi.status_uid(s): s for s in listing or []}
         by_name = {zapi.status_name(s): u for u, s in statuses.items()}
         stages = ordered_stages(db, p.id)
         entry["ordered_by"] = ("id (every stage has the same position)"
@@ -372,7 +376,10 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
         for i, (stage, name) in enumerate(zip(stages, status_names(stages), strict=True)):
             row = {"stage_id": stage.id, "status": name}
             sm = mapping.mapping_for(db, "stage", stage.id)
-            if sm is not None and sm.zuper_uid in statuses:
+            if sm is not None and sm.state == "linked" and listing is None \
+                    and sm.parent_uid == cat_uid:
+                row["action"] = "mapped"
+            elif sm is not None and sm.zuper_uid in statuses:
                 row["action"] = "mapped"
                 if zapi.status_name(statuses[sm.zuper_uid]) != name:
                     row["action"] = "rename"
@@ -390,9 +397,12 @@ def ensure_categories(db: Session, *, commit: bool) -> dict:
                 if commit and cat_uid:
                     uid = zapi.create_status(cat_uid, name, "NEW" if i == 0 else "STARTED")
                     _map_stage(db, stage, uid, cat_uid)
+                    db.commit()              # a checkpoint per status
             entry["statuses"].append(row)
     if commit:
         db.commit()
+    report["accepted_shapes"] = {k: v for k, v in zapi.ACCEPTED_SHAPES.items()
+                                 if k in ("category", "status")}
     return report
 
 
@@ -457,6 +467,9 @@ def render(report: dict) -> str:
         lines.append("categories: %d to create; statuses: %d to create, %d to link, %d to "
                      "rename" % (cats["created_categories"], cats["created_statuses"],
                                  cats["linked_statuses"], cats["renamed_statuses"]))
+        if cats.get("accepted_shapes"):
+            lines.append("Zuper accepted these create bodies: %s" % ", ".join(
+                "%s = %s" % kv for kv in sorted(cats["accepted_shapes"].items())))
         for c in cats["categories"]:
             lines.append("  %s -> %s: %s%s (ordered by %s)" % (
                 c["pipeline"], c["category"], verb, c.get("action", c.get("problem")),

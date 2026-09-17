@@ -5404,3 +5404,27 @@ production-shaped rows, upgrades, and asserts every existing table's columns and
 three added columns at the end of `opportunities`, NULL), exactly the eight new tables, empty, their
 server defaults, a clean downgrade / upgrade round trip, and an `upgrade()` that only creates tables,
 creates indexes and adds columns.
+
+### Amendment 2026-09-17 (owner, via the go-live supervisor): register the webhook and switch on
+
+Replaces runbook steps 7-8's "the operator registers the webhook by hand" and the supervisor brief's
+"do not register the webhook, do not enable the sync": once the day-one load is verified the sync
+is switched ON. `python -m app.zuper.webhook` (dry run; `--commit`) registers one Zuper webhook per
+(module, event) for job, customer, appointment, note, service task, estimate and invoice, posting
+JSON to `/api/zuper/webhook` with the `X-Webhook-Token` header (or `?token=` if Zuper keeps no
+header). Idempotent by module + event + URL (query ignored); never edits or deletes a Zuper webhook;
+the first refusal stops it with Zuper's message. Event names and the header field are UNVERIFIED
+constants. Zuper did not list webhooks on the first live read (both candidate list endpoints are
+tried), so each registered webhook is also recorded as a `zuper_mappings` row (crm_type "webhook",
+committed "creating" before the POST; a refused create drops it; an unknown outcome is never
+retried) — that record keeps it idempotent and lets the setup check pass. The first live
+`setup --commit` was refused "Category Name Missing" for `{"job_category": {...}}`: category and
+status creates now try candidate body shapes (flat first) ONLY while Zuper refuses, never after an
+answer that may have created something. Checklist item B3 now reads "do NOT delete the key" (the
+sync uses the owner's own key). The same refusal-only fallback covers the job status move (and
+rollback), appointment and note creates; the accepted shape is tried first from then on and the
+load report names it. When Zuper does not list a category's statuses, the CRM's mapping of each
+status it created is trusted (checkpoint committed per status), so a rerun never duplicates
+one; the load's final read-back reports an unreadable list instead of stopping. Also: the
+initial load now STOPS on the first refused record of a kind (as the runbook
+already promised) and keeps the reason for later per-record refusals.

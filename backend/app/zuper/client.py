@@ -156,6 +156,7 @@ PATHS = {
     "lead_sources": "/settings/lead_sources",       # MCP-only per research: unverified
     "webhooks": "/service/notifications/webhook",
     "webhook_create": "/webhook",
+    "webhook_list": "/webhook",                     # a second guess at the list (UNVERIFIED)
 }
 
 _UID = r"[^/]+"
@@ -190,6 +191,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("GET", _rx(PATHS["invoices"])), ("GET", _rx(PATHS["invoice"])),
     ("GET", _rx(PATHS["custom_fields"])), ("GET", _rx(PATHS["lead_sources"])),
     ("GET", _rx(PATHS["webhooks"])), ("POST", _rx(PATHS["webhook_create"])),
+    ("GET", _rx(PATHS["webhook_list"])),
 ]
 
 ANY = "*"

@@ -568,4 +568,15 @@ quotes, invoices, payments and reports. Every rule: the 2026-09-16 Zuper amendme
 ```bash
 uv run python -m app.zuper.setup            # DRY RUN checks; --commit makes the AHS / Retail categories
 uv run python -m app.zuper.load             # DRY RUN day-one load; --commit sends, resumable
+uv run python -m app.zuper.webhook          # DRY RUN lists Zuper's webhooks; --commit registers ours
 ```
+The load STOPS on the first record of a kind Zuper refuses (the bodies are unverified), with Zuper's
+message; later refusals are counted with their reason. The webhook command makes one webhook per
+(module, event) in `webhook.EVENTS` (UNVERIFIED names — fix that one constant on a refusal), with
+the `X-Webhook-Token` header (`TOKEN_IN = "url"` puts `?token=` on the URL instead); never prints
+the token. Zuper did not list webhooks on the first live check, so every webhook the CRM registers
+is also a `zuper_mappings` row (crm_type "webhook", "creating" before the POST): no duplicates even
+unlisted, and the setup check's webhook item passes on those rows. Category / status create bodies
+are UNVERIFIED: `zapi.create_first_accepted` tries each candidate shape only while Zuper REFUSES
+(live: the wrapped category body got "Category Name Missing"), and the setup report names the one
+accepted.

@@ -136,9 +136,15 @@ def plan_phase(db: Session, kind: str, pipelines: set[int], idx: dict[int, dict]
 
 
 def commit_phase(ctx: engine.Ctx, kind: str, pipelines: set[int]) -> dict:
+    """Push every selected record of one kind. An outage stops the load. A record Zuper
+    refuses STOPS the load too while nothing of this kind has gone through yet: the create
+    bodies are UNVERIFIED, and a wrong one would otherwise be refused for every record in
+    turn with the reason thrown away. Once one record of the kind has gone through, a refusal
+    is that record's own: it is counted, its id listed, and Zuper's sentence kept."""
     db = ctx.db
     counts: dict = {"crm": 0, "already_linked": 0, "linked_existing": 0, "created": 0,
-                    "updated": 0, "unchanged": 0, "failed": 0, "failed_ids": []}
+                    "updated": 0, "unchanged": 0, "failed": 0, "failed_ids": [],
+                    "failed_reasons": {}}
     ctx.sending = True
     for obj in crm_records(db, kind, pipelines):
         counts["crm"] += 1
@@ -152,7 +158,18 @@ def commit_phase(ctx: engine.Ctx, kind: str, pipelines: set[int]) -> dict:
             engine.mark_quiet(db)
             if exc.kind in ("unavailable", "rate_limited", "unauthorized", "off", "no_key"):
                 raise
+            if not (counts["already_linked"] or counts["linked_existing"]
+                    or counts["created"]):
+                why = ("HTTP 404 on %s" % exc.detail if exc.kind == "not_found"
+                       else exc.detail or exc.kind)
+                raise ZuperError(exc.kind if exc.kind in ("rejected", "bad_response", "refused")
+                                 else "rejected",
+                                 "The first %s sent (CRM id %d) was not accepted, so the load "
+                                 "stopped before trying the rest: %s" % (kind, obj.id, why),
+                                 exc.status) from None
             counts["failed"] += 1
+            reason = client.sentence(exc)
+            counts["failed_reasons"][reason] = counts["failed_reasons"].get(reason, 0) + 1
             if len(counts["failed_ids"]) < MAX_IDS:
                 counts["failed_ids"].append(obj.id)
             continue
@@ -204,8 +221,15 @@ def verify(db: Session, pipelines: set[int], *, deep: bool) -> dict:
                 try:
                     seen |= {uid_fn(r) for r in lister(jm.zuper_uid) if uid_fn(r)} - digests
                 except ZuperError as exc:
-                    if exc.kind != "not_found":
+                    if exc.kind in ("unavailable", "rate_limited", "unauthorized"):
                         raise
+                    if exc.kind != "not_found":
+                        # Unreadable in Zuper: say so instead of stopping a finished load.
+                        entry["zuper_unreadable"] = client.sentence(exc)
+                        break
+            if entry.get("zuper_unreadable"):
+                out[kind] = entry                 # no count to compare: not a mismatch list
+                continue
             mapped_uids = {m.zuper_uid for m in maps.values()}
             entry["zuper"] = len(seen)
             entry["mapped_not_in_zuper"] = _ids(cid for cid, m in maps.items()
@@ -260,6 +284,7 @@ def run(db: Session, *, commit: bool) -> tuple[int, dict]:
                 report["phases"][kind] = commit_phase(ctx, kind, pipelines)
                 _checkpoint(db, report)
             setup.record_results(db, setup.run_checks(db, commit=True))
+            report["accepted_shapes"] = dict(zapi.ACCEPTED_SHAPES)
             report["verification"] = verify(db, pipelines, deep=True)
             _checkpoint(db, report)
         except selection.Refused as why:
@@ -317,9 +342,14 @@ def render(report: dict) -> str:
             c["created_statuses"], "to create" if dry else "created"))
     for kind, counts in report["phases"].items():
         lines.append("%s: %s" % (kind, ", ".join("%s %s" % (k, v) for k, v in counts.items()
-                                                 if k != "failed_ids")))
+                                                 if k not in ("failed_ids", "failed_reasons"))))
         if counts.get("failed_ids"):
             lines.append("  failed ids: %s" % ", ".join(map(str, counts["failed_ids"])))
+        for reason, n in (counts.get("failed_reasons") or {}).items():
+            lines.append("  failed %d: %s" % (n, reason))
+    if report.get("accepted_shapes"):
+        lines.append("Zuper accepted these request bodies: %s" % ", ".join(
+            "%s = %s" % kv for kv in sorted(report["accepted_shapes"].items())))
     if report.get("verification"):
         v = report["verification"]
         lines.append("verification: %d mismatch(es)" % v["mismatches"])
@@ -327,6 +357,8 @@ def render(report: dict) -> str:
             e = v.get(kind, {})
             lines.append("  %s: CRM %s, mapped %s, Zuper %s" % (
                 kind, e.get("crm"), e.get("mapped"), e.get("zuper", "—")))
+            if e.get("zuper_unreadable"):
+                lines.append("    Zuper could not be read back: %s" % e["zuper_unreadable"])
             for key in ("crm_not_mapped", "mapped_not_in_zuper", "zuper_not_mapped"):
                 if e.get(key):
                     lines.append("    %s: %s" % (key, ", ".join(map(str, e[key]))))

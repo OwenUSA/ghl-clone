@@ -89,24 +89,85 @@ def categories() -> list[dict]:
     return rows_of(request("GET", path("categories")))
 
 
+# Which body shape Zuper accepted for a create whose shape is UNVERIFIED, by kind — shown by
+# the setup report so the first live run tells which one is right.
+ACCEPTED_SHAPES: dict[str, str] = {}
+
+
+def first_accepted(kind: str, method: str, api_path: str,
+                   shapes: list[tuple[str, dict]]) -> Any:
+    """Send each candidate body in turn until Zuper accepts one; return Zuper's answer.
+
+    Only a REJECTION (Zuper's 4xx or {"type": "error"}) moves on to the next shape: a
+    refused request changed nothing. Anything else — an outage, an unreadable answer —
+    is raised at once, so nothing is ever made twice. The shape Zuper accepted is tried
+    first from then on. All refused: one error carrying Zuper's message for every shape."""
+    known = ACCEPTED_SHAPES.get(kind)
+    ordered = sorted(shapes, key=lambda sh: sh[0] != known)
+    refused = []
+    for name, body in ordered:
+        try:
+            payload = request(method, api_path, body=body)
+        except ZuperError as exc:
+            if exc.kind != "rejected":
+                raise
+            refused.append("%s → %s" % (name, exc.detail or "rejected"))
+            continue
+        ACCEPTED_SHAPES[kind] = name
+        return payload
+    raise ZuperError("rejected", "Zuper refused every %s body tried: %s" % (
+        kind, "; ".join(refused)))
+
+
+def create_first_accepted(kind: str, api_path: str, shapes: list[tuple[str, dict]],
+                          key: str) -> str:
+    """`first_accepted` for a create: the new uid (an unreadable answer is never retried)."""
+    return uid_of(first_accepted(kind, "POST", api_path, shapes), key)
+
+
 def create_category(name: str) -> str:
-    return uid_of(request("POST", path("categories"),
-                          body={"job_category": {"category_name": name}}), "category_uid")
+    # 2026-09-17, live: {"job_category": {"category_name": …}} → "Category Name Missing".
+    fields = {"category_name": name}
+    return create_first_accepted("category", path("categories"), [
+        ("flat", dict(fields)), ("category", {"category": dict(fields)}),
+        ("job_category", {"job_category": dict(fields)})], "category_uid")
 
 
 def statuses(category_uid: str) -> list[dict]:
     return rows_of(request("GET", path("statuses", category_uid=category_uid)))
 
 
+def statuses_or_none(category_uid: str) -> list[dict] | None:
+    """The category's statuses, or None when Zuper will not say. The operator's first read
+    found GET /jobs/status empty (2026-09-16), so when the per-category list is not readable
+    the statuses embedded in the category record are used, if it carries any."""
+    try:
+        return statuses(category_uid)
+    except ZuperError as exc:
+        if exc.kind not in ("not_found", "bad_response", "rejected"):
+            raise
+    for rec in categories():
+        if category_uid_of(rec) == category_uid:
+            for key in ("job_statuses", "statuses", "category_statuses", "job_status"):
+                if isinstance(rec.get(key), list):
+                    return [r for r in rec[key] if isinstance(r, dict)]
+    return None
+
+
 def create_status(category_uid: str, name: str, status_type: str) -> str:
-    body = {"job_status": {"status_name": name, "status_type": status_type}}
-    return uid_of(request("POST", path("status_create", category_uid=category_uid), body=body),
-                  "status_uid")
+    fields = {"status_name": name, "status_type": status_type}
+    return create_first_accepted("status", path("status_create", category_uid=category_uid), [
+        ("flat", dict(fields)), ("job_status", {"job_status": dict(fields)}),
+        ("status", {"status": dict(fields)})], "status_uid")
 
 
 def rename_status(category_uid: str, status_uid: str, name: str) -> None:
     request("PUT", path("status_update", category_uid=category_uid, status_uid=status_uid),
             body={"job_status": {"status_name": name}})
+
+
+def category_uid_of(rec: dict) -> str | None:
+    return category_uid(rec)
 
 
 def category_uid(rec: dict) -> str | None:
@@ -153,14 +214,22 @@ def recover_job(uid: str) -> None:
     request("POST", path("job_recover", uid=uid))
 
 
+def _status_shapes(uid: str, status: str) -> list[tuple[str, dict]]:
+    # UNVERIFIED body; a refused move changed nothing, so the next shape is safe to try.
+    return [("flat", {"job_uid": uid, "status_uid": status}),
+            ("job_status", {"job_status": {"status_uid": status}}),
+            ("job", {"job": {"job_uid": uid, "status_uid": status}})]
+
+
 def set_job_status(uid: str, status: str) -> None:
-    request("PUT", path("job_status", uid=uid), body={"job_uid": uid, "status_uid": status})
+    first_accepted("job_status", "PUT", path("job_status", uid=uid),
+                   _status_shapes(uid, status))
 
 
 def rollback_job_status(uid: str, status: str) -> None:
     """Zuper only moves a job BACK through its statuses with the rollback endpoint."""
-    request("PUT", path("job_status_rollback", uid=uid),
-            body={"job_uid": uid, "status_uid": status})
+    first_accepted("job_status_rollback", "PUT", path("job_status_rollback", uid=uid),
+                   _status_shapes(uid, status))
 
 
 def find_jobs_by_crm_id(crm_id: int) -> list[dict]:
@@ -179,7 +248,8 @@ def job_notes(job_uid: str) -> list[dict]:
 
 
 def create_note(job_uid: str, body: dict) -> str:
-    return uid_of(request("POST", path("job_notes", uid=job_uid), body=body), "note_uid")
+    return create_first_accepted("note", path("job_notes", uid=job_uid), [
+        ("flat", dict(body)), ("note", {"note": dict(body)})], "note_uid")
 
 
 def update_note(job_uid: str, note_uid: str, body: dict) -> None:
@@ -233,8 +303,9 @@ def appointment(uid: str) -> dict:
 
 
 def create_appointment(body: dict) -> str:
-    return uid_of(request("POST", path("appointments"), body={"appointment": body}),
-                  "appointment_uid")
+    return create_first_accepted("appointment", path("appointments"), [
+        ("appointment", {"appointment": dict(body)}), ("flat", dict(body))],
+        "appointment_uid")
 
 
 def update_appointment(uid: str, body: dict) -> None:
@@ -291,15 +362,13 @@ def lead_sources() -> list[dict]:
     return rows_of(request("GET", path("lead_sources")))
 
 
-def webhooks() -> list[dict]:
-    return rows_of(request("GET", path("webhooks")))
+def webhooks(path_name: str = "webhooks") -> list[dict]:
+    return rows_of(request("GET", path(path_name)))
 
 
-def create_webhook(name: str, url: str, event: str, module: str) -> Any:
-    return request("POST", path("webhook_create"), body={"web_hook": {
-        "webhook_name": name, "webhook_event": event, "webhook_url": url,
-        "content_type": "application/json", "request_method": "POST",
-        "webhook_module": module}})
+def create_webhook(web_hook: dict) -> Any:
+    """POST /webhook {"web_hook": {...}} — the body is built by app/zuper/webhook.py."""
+    return request("POST", path("webhook_create"), body={"web_hook": web_hook})
 
 
 def total(path_name: str, params: dict | None = None) -> int | None:
