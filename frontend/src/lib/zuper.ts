@@ -258,6 +258,8 @@ export function directionLabel(direction: string): string {
 
 export const DELETE_STATE_LABELS: Record<string, string> = {
   pending: 'Waiting', mirrored: 'Mirrored', skipped: 'Skipped', failed: 'Failed',
+  // A contact a Zuper customer delete did not remove (unsent cards or conversations).
+  kept: 'Kept',
   restored: 'Restored', restore_failed: 'Restore failed',
 }
 

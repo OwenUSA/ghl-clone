@@ -420,7 +420,8 @@ function ProblemsCard({ s }: { s: ZuperStatus }) {
             {s.queue.recent_failures.map((f) => (
               <tr key={f.id}>
                 <td style={{ ...cell, whiteSpace: 'nowrap' }}>{stamp(f.at)}</td>
-                <td style={cell}>{f.type === 'zuper_delete' ? 'Mirror a delete' : 'Push a change'}</td>
+                <td style={cell}>{f.type === 'zuper_delete' ? 'Mirror a delete'
+                  : f.type === 'zuper_send' ? 'Send a card' : 'Push a change'}</td>
                 <td style={{ ...cell, color: DANGER }}>{f.error ?? 'No reason was recorded.'}</td>
               </tr>
             ))}
