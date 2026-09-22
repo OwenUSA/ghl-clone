@@ -5471,3 +5471,168 @@ status_name, status_type, ...}]}}` — AHS holds 2 statuses there — while the 
 `job_statuses` is empty for every category. That endpoint is now read (`rows_of` unwraps
 `job_statuses`) and is the RELIABLE list for verified creates; a status name Zuper holds more than
 once is reported ("delete the extra in Zuper") and one of them is linked.
+
+## AMENDMENT (2026-09-22): voice AI agents — the CRM defines them, owen-main runs them
+
+The owner wants AI agents answering calls on **both** systems' numbers: every BulkVS number in
+owen-main (an agent per lead campaign), the Quo number's no-answer overflow, and the CRM's own
+line — where an agent must be *customer-aware*, because the CRM is the only system that holds the
+customer, their pipeline stage and their appointments. Decided by grilling on 2026-09-22 (four
+rounds, Q1–Q26). This section is the plan; NOTHING below is built yet.
+
+### The shape: three layers, one owner each
+
+| Layer | Question it answers | Owner | Where it lives |
+|---|---|---|---|
+| Line | which number was called? | owen-main | `numbers`, `campaigns`, the CRM link |
+| Routing | who answers, and when? | owen-main | the flow on that number |
+| Agent | what does it say and do? | **the CRM** | `ai_agents` — persona, rules, knowledge, actions, versions, runs |
+
+The rule that keeps it organised: **a number never holds agent logic, and an agent never knows
+which number it is on.** The flow joins them. Every call — the CRM line included — already lands
+on owen-main's Asterisk, so there is exactly ONE voice runtime (`owen-voice`) and the CRM never
+grows a second one.
+
+### What this AMENDS, explicitly
+
+* **"AI Agents, phase 1 … Text/Chat agents only" (2026-09-15)** — phase 3 is now specified.
+  `channel = voice` becomes creatable; the three blocks (`config.CHANNELS["voice"]`,
+  `publish_problems`, `ai_create_agent`'s 400) come off together, with voice agents refused a
+  `send_text` action.
+* **"an unknown number is never a contact" (2026-09-13)** — narrowed, for AI-answered calls ONLY.
+  A call the agent QUALIFIED (a name **and** a roofing need **and** the property address, all
+  three, checked by the CRM and not by the model's judgement) creates a Contact and an
+  Opportunity. Everything else — spam, hang-ups, wrong numbers, a caller who gives two of the
+  three — still lands on a number-only thread and creates nothing. Q2.
+* **"Agents never create contacts or opportunities" (2026-09-15)** — the same narrowing, and the
+  only one. A voice agent still cannot create either directly: it fills a capture, and the CRM
+  decides. The action does not exist for text agents.
+* **`agents/tools.py` `send_sms`** (owen-main) — removed rather than kept, since owen-voice has no
+  such tool and silently drops it today. No agent texts anybody from the voice side; texting
+  stays manual (2026-09-15).
+
+### The owner's decisions, as agreed
+
+1. **Autonomy (Q1, Q23).** The conversation is live, but every CRM write an agent makes after the
+   call starts in **Suggest**: a person approves the lead, the note, the task. An agent is
+   promoted to Auto-pilot individually, on a written test — **2 weeks AND 50 calls, no wrong lead
+   created, no missed transfer, every escalation correct** — recorded on the agent.
+2. **Qualified lead (Q2, Q17).** Name + roofing need + property address. It lands in the pipeline
+   and stage named **per agent** (default: the retail pipeline's first stage), owner unassigned,
+   source = the campaign name, tagged `ai-intake`, with `owen_call_id` written into
+   `custom_fields` — the join key this file has protected since day one finally gets written by
+   something.
+3. **Known callers (Q3).** Every agent gets the customer brief when the caller is known, whichever
+   number they rang: name, stage, next appointment, open cards. No duplicate contact is created; a
+   note goes on the existing one. Customers ring campaign numbers to chase their own job, and an
+   agent that treats them as a stranger is the failure mode to avoid.
+4. **Follow-ups are READ-ONLY (Q12).** The agent tells a customer their appointment and status. A
+   reschedule request becomes an urgent task plus an offer to transfer in hours. **No calendar
+   writes in v1** — moving a crew's day on an unverified phone call is the riskiest write there is.
+   Booking is deliberately out (the owner did not pick it); the text agents' `book_appointment`
+   already exists when it is wanted.
+5. **Transfers name a ROLE, not a number (Q4, Q16).** The agent asks for `office`, `on-call` or
+   `owner`; owen-main maps each role to a real number per campaign/number and enforces its
+   existing allowlist. Phone numbers stay with the phone system, so a prompt can never dial
+   somewhere unintended. In hours: office (browser staff), falling back to the owner's cell after
+   ~20s. After hours: **no transfer** — take the details, urgent task, alert (Q25). Emergency
+   (active leak, storm damage in progress): the on-call phone, any hour.
+6. **Routing per number (Q11, Q19).** Campaign numbers answer with AI immediately; the campaign
+   carries the agent, so a number added to a campaign needs no new setup, and the campaign's name,
+   offer and service area are passed into the agent's context (owen-main has no per-campaign
+   variables today — this is new). The CRM line rings staff first, then AI. The Quo number forwards
+   its no-answer to a BulkVS DID that answers with AI. **Business hours live in the flow, in
+   owen-main, and NOWHERE else** — a voice agent's CRM schedule stays off, so two schedules can
+   never disagree at 3am.
+7. **Disclosure is not the agent's to omit (Q10).** A fixed notice plays before the agent speaks,
+   English and Spanish: *"This call is recorded for quality. You're speaking with Dream Team
+   Roofing's virtual assistant."* Florida is an all-party-consent state, and today a flow-assigned
+   number plays NO notice at all while a custom greeting silently replaces the default AI
+   disclosure. Publishing a voice agent is refused if its greeting drops the disclosure.
+8. **English and Spanish, detected (Q9, Q22).** Deepgram **Flux Multilingual** hears both on one
+   stream; the caller does nothing. Voices: `aura-2-andromeda-en` (English) and a Spanish Aura-2
+   voice, `aura-2-celeste-es` as the starting point, judged by ear. ONE English knowledge base,
+   translated by the model as it answers — **except prices, warranty wording and anything legal**,
+   which a person writes in Spanish as their own FAQ. ~15 places hard-code English today.
+9. **The model (Q8).** OpenAI `gpt-4o-mini`-class for v1, because the caller is waiting; the choice
+   is stored per agent in the CRM so it is a setting, not a rebuild. Claude in owen-voice (Haiku
+   4.5) is a later task, decided by measured latency — owen-voice has no Anthropic provider today.
+10. **Knowledge (Q20).** The agent's FAQs are compiled into the call setup (instant, ~6k character
+    cap) AND a live search tool covers the rest; a miss records a knowledge gap, as text agents do.
+11. **Supervision (Q13, Q24, Q26).** ADMIN and DISPATCHER only — owen-main's monitor routes have
+    **no role check today** and get one. While an AI call is live the CRM shows "AI is on a call
+    with …" with **Listen** / **Take over**, which ring the operator's browser line
+    (`PJSIP/operator-<slug>`) — structurally the same endpoint the CRM softphone already
+    registers as. The thread carries the transcript and **plays the recording** (`recording_url`
+    is null on ingest today). A named dispatcher reviews suggestions daily; the alert bell raises
+    anything pending over 2 hours in business hours.
+12. **Cost and capacity (Q6, Q15).** **$5/day**, alert at 80%. A call of 3–4 minutes is roughly
+    $0.05–0.10 in STT/TTS/LLM, so that is ~50–100 calls. Two fixes to the cap as built: it is a
+    **calendar day in America/New_York**, not a rolling 24h, and a check that ERRORS sends the
+    call to voicemail instead of letting it through (it fails open today). Concurrency 4 → **6**;
+    beyond that the flow fallback takes it (voicemail + an urgent callback task).
+13. **Publishing (Q21).** Publish succeeds in the CRM and the push to owen-main's `agent_versions`
+    retries in the background. The screen says "Published · not yet live on the phone system"
+    until owen-main confirms. It must never claim live when it is not.
+14. **Everything operational is a SETTING (Q14).** On-call phone, owner cell, business hours,
+    role→number maps, which Quo number forwards where, the reviewing dispatcher: configured, with
+    no defaults invented here. A number does not go live until its settings are filled in.
+
+### Per call, end to end
+
+1. **Pickup.** owen-main resolves number → flow → agent, and asks the CRM for that agent's
+   published version plus a **customer brief** for the caller (last ten digits, the shared rule).
+   Unknown caller: no brief.
+2. **Notice**, then the agent speaks.
+3. **During.** Tools call the CRM: capture lead, search knowledge, escalate. Transfer and hangup
+   stay in owen-main. The CRM shows the live alert with Listen / Take over.
+4. **After.** owen-main posts ONE event to `/api/events` carrying a **dedupe_key**, the transcript,
+   the recording URL, the captured fields, the campaign and `owen_call_id`. It lands on the thread
+   and in Agent Logs. Qualified → a suggestion to create the lead (Suggest) or the lead itself
+   (Auto-pilot). A Quo-forwarded call is shown **linked** under its missed Quo call, "forwarded
+   from Quo" (Q18).
+
+### Build order
+
+**Phase 0 — prerequisites (nothing AI-facing until these land).**
+* owen-main: per-agent call/silence limits are ignored — the backend sends
+  `max_call_seconds` / `max_silence_seconds` per agent (`agents/remote.py:89-90`) but
+  owen-voice's guardrail reads only the env-wide `settings.AGENT_MAX_*`
+  (`owen-voice/app/pipeline.py:514-519`); `_enqueue_crm_report` runs BEFORE the transfer so
+  `transfer` is always null (`flows/runtime.py:646` vs `:655`); `duration_s` is hardcoded
+  None (`:430`).
+* owen-main: `_ai_agent_seam` always returns False (`integrations/crm/handler.py:67-87`), so a
+  CRM-linked number can never reach an agent. Wire it.
+* owen-main: stop the agent path reading and writing **real GoHighLevel**
+  (`api/agent_runtime.py:173-235`, `:248-287`) — the system being replaced.
+* CRM: `/api/events` de-duplicates on `dedupe_key`; today a retried POST inserts a second CALL row.
+* Both: delete owen-voice's duplicate tool registry; one definition.
+
+**Phase 1 — visibility (no CRM-defined agents yet).** Agent calls land in the CRM with transcript,
+recording, captures and campaign; qualified-lead suggestions; the live alert with Listen /
+Take over; role check on the monitor routes. Run it on the **Quo overflow DID first** (Q5) — those
+calls are already unanswered, so the downside is bounded — for 1–2 supervised weeks.
+
+**Phase 2 — the CRM defines voice agents.** Unblock `channel = voice`; publish pushes the version;
+CRM runtime endpoints for the voice tools (the SAME `actions.py` the text agents use, so the rules
+are written and tested once) behind a scoped machine token; role→number transfer maps.
+
+**Phase 3 — routing.** Campaign → agent binding and campaign context; the CRM line humans-first;
+then campaigns one at a time.
+
+**Phase 4 — Spanish.** Flux Multilingual, the Spanish voice, the ~15 English hard-codings, the
+human-written Spanish FAQs for price/warranty/legal.
+
+**Later, deliberately not now:** booking and rescheduling from a call; Claude in owen-voice;
+outbound AI calls.
+
+### Open questions, to be answered by measurement not by argument
+
+* **What caller ID arrives when Quo forwards an unanswered call?** Nothing in either repo documents
+  it. If the Quo number arrives instead of the caller's, the brief and lead matching both break and
+  the linking in (Q18) becomes the only way to know who rang. **One real test call answers this,
+  and it blocks Phase 1.**
+* Whether an owen-main monitor call can ring the CRM user's browser line depends on the CRM user
+  mapping to the same operator slug. Verify before promising Listen in the UI.
+* Real latency with Flux Multilingual and the Spanish voice, measured on real calls, decides
+  whether the model choice in (Q9) holds.
