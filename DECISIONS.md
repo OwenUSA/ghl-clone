@@ -5605,8 +5605,17 @@ grows a second one.
   CRM-linked number can never reach an agent. Wire it.
 * owen-main: stop the agent path reading and writing **real GoHighLevel**
   (`api/agent_runtime.py:173-235`, `:248-287`) — the system being replaced.
-* CRM: `/api/events` de-duplicates on `dedupe_key`; today a retried POST inserts a second CALL row.
 * Both: delete owen-voice's duplicate tool registry; one definition.
+
+**CORRECTION (2026-09-22, same day).** Two tasks listed here when this was written were
+already built, and the list said otherwise because it was drafted against a checkout 139
+commits behind. `POST /api/events` **already** takes an opt-in `dedupe_key` (unique per
+`conversation_events` / `number_thread_events`; a repeat returns the row that exists) and
+**already** takes `transcript` and `recording_url`. Nothing is needed on the CRM side of
+either. The gap is entirely owen-main's: its BulkVS/agent path sends **no** `dedupe_key`
+(so a retried "call ended" writes a second CALL row and, with rules re-armed, a second
+text), always sends `recording_url = null`, and carries the agent transcript nowhere. Those
+are owen-main tasks, and they are the ones that matter for phase 1.
 
 **Phase 1 — visibility (no CRM-defined agents yet).** Agent calls land in the CRM with transcript,
 recording, captures and campaign; qualified-lead suggestions; the live alert with Listen /
