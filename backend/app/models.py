@@ -552,6 +552,21 @@ class ConversationEvent(Base):
     # everything a person, an automation or a feed wrote. A plain integer, not a foreign
     # key: the column is ADDED to a live table, and an agent is archived, never deleted.
     ai_agent_id: Mapped[int | None] = mapped_column(Integer)
+    # A call an AI agent ANSWERED, as reported by owen-main (2026-09-22, phase 1 of the
+    # voice-agent amendment). `ai_agent_id` above cannot carry this: that column names a
+    # CRM agent row, and the voice agent lives in owen-main with no row here until phase 2.
+    #
+    # One JSON column rather than five typed ones, for the same reason `custom_fields` is
+    # JSON: the shape is owned by the feed, it will grow (a run id, a promotion to a CRM
+    # agent), and each addition would otherwise be an ALTER on two live tables. Nothing in
+    # the CRM queries inside it — it is read whole, by the thread and by the lead-capture
+    # panel. Keys written today:
+    #   agent    the agent's name as owen-main published it, e.g. "Roofing Receptionist"
+    #   version  its version number, so a bad answer can be traced to a prompt
+    #   outcome  how the conversation ended: end_call | transfer | default | failed
+    #   captured what the agent recorded from the caller (name/address/intent/urgency/...)
+    #   campaign the campaign that owns the number, for attribution on a lead made later
+    ai_call: Mapped[dict | None] = mapped_column(JSONType)
 
     conversation: Mapped[Conversation] = relationship(back_populates="events")
 
@@ -941,6 +956,10 @@ class NumberThreadEvent(Base):
     # Column for column with ConversationEvent (test_number_threads pins it). An agent never
     # writes to a number-only thread — it never acts without a contact — so this stays NULL.
     ai_agent_id: Mapped[int | None] = mapped_column(Integer)
+    # ...but `ai_call` is the opposite case, and the reason the two columns are separate.
+    # A voice agent ANSWERS strangers: a first-time caller has no contact, so the very
+    # calls this column exists to record are the ones that land here. See ConversationEvent.
+    ai_call: Mapped[dict | None] = mapped_column(JSONType)
 
     thread: Mapped[NumberThread] = relationship(back_populates="events")
 
@@ -951,7 +970,7 @@ EVENT_PAYLOAD_COLUMNS = (
     "type", "direction", "occurred_at", "body", "subject", "duration_seconds",
     "call_status", "recording_url", "transcript", "delivery_status",
     "delivery_detail", "provider_ref", "dedupe_key", "source_system",
-    "source_number", "ai_agent_id",
+    "source_number", "ai_agent_id", "ai_call",
 )
 
 
