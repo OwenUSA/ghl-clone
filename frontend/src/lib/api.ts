@@ -348,6 +348,29 @@ export type ThreadEvent = {
   source_number: string | null
   /** What was said on a call, when the far side transcribed it (Quo does). */
   transcript?: string | null
+  /**
+   * What an AI agent did on this call (2026-09-22). Null on every row a person, a feed
+   * or an automation wrote, which is almost all of them.
+   *
+   * `captured` is what the agent heard and wrote down, NOT a customer record: a call on a
+   * number-only thread stays a number-only thread until a person promotes it. The CRM
+   * never treats a capture as a contact by itself.
+   */
+  ai_call?: AiCall | null
+}
+
+/** The agent's own record of a call it answered, as owen-main reported it. */
+export type AiCall = {
+  /** The agent's name as owen-main published it, e.g. "Roofing Receptionist". */
+  agent?: string | null
+  /** Its version number, so a bad answer can be traced back to a prompt. */
+  version?: number | null
+  /** How the conversation ended: end_call | transfer | default | failed. */
+  outcome?: string | null
+  /** The campaign that owns the line the call came in on. */
+  campaign?: string | null
+  /** name / phone / address / intent / urgency / notes - whatever the caller gave. */
+  captured?: Record<string, string> | null
 }
 
 /**

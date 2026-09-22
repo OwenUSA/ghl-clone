@@ -7,6 +7,7 @@ import {
   FromQuo, NotAContactPill, NumberDetailsPanel, canAddContact, prefillFromQuo,
 } from '../components/NumberDetailsPanel'
 import { AddContactDialog } from '../components/AddContactDialog'
+import { AiCallRecord } from '../components/AiCallRecord'
 import { AiAuthorChip } from '../components/AiSuggestions'
 import { CallRecordingPlayer } from '../components/CallRecordingPlayer'
 import { CallNumberDialog } from '../components/CallNumberDialog'
@@ -450,12 +451,16 @@ function EventBubble({ e, onRetry, retrying, who, onPicturesChanged }: {
                   knownDuration={e.duration_seconds} />
               )}
               {e.transcript && (
-                // Quo transcribes its calls; the words are part of the record.
+                // Quo transcribes its calls, and so does the AI agent's own runtime; the
+                // words are part of the record either way.
                 <details style={{ marginTop: 6, fontSize: 13, color: 'rgb(71,84,103)' }}>
                   <summary style={{ cursor: 'pointer', color: 'rgb(0,78,235)' }}>Transcript</summary>
                   <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{e.transcript}</div>
                 </details>
               )}
+              {/* An AI agent answered this one: who, how it ended, and what it wrote
+                  down (2026-09-22). Draws nothing for every other call. */}
+              <AiCallRecord call={e.ai_call} />
             </div>
           ) : (
             <MessageBody
