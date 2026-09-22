@@ -5507,9 +5507,15 @@ grows a second one.
 * **"Agents never create contacts or opportunities" (2026-09-15)** — the same narrowing, and the
   only one. A voice agent still cannot create either directly: it fills a capture, and the CRM
   decides. The action does not exist for text agents.
-* **`agents/tools.py` `send_sms`** (owen-main) — removed rather than kept, since owen-voice has no
-  such tool and silently drops it today. No agent texts anybody from the voice side; texting
-  stays manual (2026-09-15).
+* **`agents/tools.py` `send_sms`** (owen-main) — this said "removed rather than kept", and that
+  is NOT what shipped. `send_sms` turned out to be implemented for the `openai_realtime` and
+  `dummy` engines and missing only from `owen_voice`, the engine that answers real calls, so
+  deleting it would have thrown away working code to fix a gap that is really about which
+  engine is running. **What shipped instead** (owen-main `e25a69d`): the registry records which
+  engines implement each tool, and activation REFUSES a tool the effective engine cannot
+  honour, naming the engines that can. The outcome this amendment wanted is unchanged — no
+  agent texts anybody from the voice side, and texting stays manual (2026-09-15) — and a
+  version with `send_sms` on `owen_voice` now refuses to re-activate rather than pretending.
 
 ### The owner's decisions, as agreed
 
@@ -5616,6 +5622,18 @@ either. The gap is entirely owen-main's: its BulkVS/agent path sends **no** `ded
 (so a retried "call ended" writes a second CALL row and, with rules re-armed, a second
 text), always sends `recording_url = null`, and carries the agent transcript nowhere. Those
 are owen-main tasks, and they are the ones that matter for phase 1.
+
+**Phase 0 progress (2026-09-22).** Done and deployed to owen-main the same day: the per-agent
+guardrails, the CRM report's transfer and duration, and the tool-registry gap (owen-main
+`a5cc2ed`, `e25a69d`; the pre-deploy gate itself was broken without a venv and fixed in
+`1904d9f`). **Moved to phase 2, deliberately:** the role check on owen-main's monitor routes —
+owen-main has a `role` column defaulting to `admin` that NO route reads, so gating it now would
+invent a role vocabulary and could remove a live user's access; the CRM is the thing that will
+initiate Listen, and it enforces ADMIN/DISPATCHER before it ever calls owen-main. Also moved:
+stopping the agent path reading GoHighLevel, because its replacement (the CRM lookup) IS phase
+2 — switching it off first would leave agents with no customer context at all. **Left for
+phase 1**, where the flow can be pointed at an agent deliberately rather than as a side effect:
+wiring `_ai_agent_seam`, which changes live call routing on the CRM line the moment it lands.
 
 **Phase 1 — visibility (no CRM-defined agents yet).** Agent calls land in the CRM with transcript,
 recording, captures and campaign; qualified-lead suggestions; the live alert with Listen /
