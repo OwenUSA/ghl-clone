@@ -35,6 +35,7 @@ from . import (
     number_threads,
     openphone,
     opportunity_workspace,
+    owen_recordings,
     phone_match,
     pipeline_access,
     softphone,
@@ -102,6 +103,9 @@ app.include_router(softphone.router)
 # no code here -- owen-main posts mirrored events to /api/events like any other
 # telephony feed. See app/openphone.py.
 app.include_router(openphone.router)
+# Agent call audio (2026-09-22): the same proxy shape, for calls owen-main recorded
+# itself rather than ones it mirrored from Quo.
+app.include_router(owen_recordings.router)
 # The top-bar status dot (2026-09-14): one GET that asks owen-main how the link and
 # the Quo sync are, server-side, cached 30s. See app/connection_status.py.
 app.include_router(connection_status.router)

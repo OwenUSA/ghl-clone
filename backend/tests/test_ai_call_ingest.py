@@ -37,7 +37,7 @@ STRANGER = "+18135550142"
 
 
 @pytest.fixture()
-def world():
+def voice():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -91,8 +91,8 @@ def read(fn):
         db.close()
 
 
-def test_an_agent_call_from_a_stranger_is_recorded_without_inventing_a_customer(world):
-    r = post(world)
+def test_an_agent_call_from_a_stranger_is_recorded_without_inventing_a_customer(voice):
+    r = post(voice)
     assert r.status_code == 201, r.text
     out = r.json()
     assert out["contact_id"] is None and out["conversation_id"] is None
@@ -111,14 +111,14 @@ def test_an_agent_call_from_a_stranger_is_recorded_without_inventing_a_customer(
     assert counts == (1, 0, 1), "one seeded contact, no deal, one number-only thread"
 
 
-def test_the_capture_arrives_on_the_second_report_and_does_not_duplicate_the_call(world):
-    first = post(world, duration_seconds=None, call_status=None,
+def test_the_capture_arrives_on_the_second_report_and_does_not_duplicate_the_call(voice):
+    first = post(voice, duration_seconds=None, call_status=None,
                  ai_call={"agent": "Roofing Receptionist", "version": 10})
     assert first.status_code == 201
     event_id = first.json()["id"]
 
     # The call ends: NOW owen-main knows the outcome, the transcript and what was said.
-    second = post(world, transcript="caller: my roof is leaking\nagent: I've got it.",
+    second = post(voice, transcript="caller: my roof is leaking\nagent: I've got it.",
                   ai_call={"agent": "Roofing Receptionist", "version": 10,
                            "outcome": "end_call",
                            "captured": {"name": "Maria Ruiz", "address": "412 Palm Ave",
@@ -138,9 +138,9 @@ def test_the_capture_arrives_on_the_second_report_and_does_not_duplicate_the_cal
     assert ev.ai_call["outcome"] == "end_call"
 
 
-def test_a_later_report_completes_but_never_rewrites(world):
-    post(world, ai_call={"agent": "Roofing Receptionist", "captured": {"name": "Maria"}})
-    post(world, ai_call={"agent": "SOMETHING ELSE", "captured": {"name": "WRONG"},
+def test_a_later_report_completes_but_never_rewrites(voice):
+    post(voice, ai_call={"agent": "Roofing Receptionist", "captured": {"name": "Maria"}})
+    post(voice, ai_call={"agent": "SOMETHING ELSE", "captured": {"name": "WRONG"},
                          "outcome": "transfer"})
 
     ev = read(lambda db: db.scalars(select(NumberThreadEvent)).one())
@@ -150,31 +150,31 @@ def test_a_later_report_completes_but_never_rewrites(world):
     assert ev.ai_call["outcome"] == "transfer"
 
 
-def test_a_known_customer_gets_the_agent_call_on_their_own_thread(world):
-    r = post(world, from_number=world.ids["known_phone"])
+def test_a_known_customer_gets_the_agent_call_on_their_own_thread(voice):
+    r = post(voice, from_number=voice.ids["known_phone"])
     assert r.status_code == 201
     out = r.json()
-    assert out["contact_id"] == world.ids["known"]
+    assert out["contact_id"] == voice.ids["known"]
 
     ev = read(lambda db: db.get(ConversationEvent, out["id"]))
     assert ev.ai_call["agent"] == "Roofing Receptionist"
     assert ev.conversation_id == out["conversation_id"]
 
 
-def test_a_call_no_agent_answered_records_nothing_about_one(world):
-    r = post(world, ai_call=None, dedupe_key="owen:human:1")
+def test_a_call_no_agent_answered_records_nothing_about_one(voice):
+    r = post(voice, ai_call=None, dedupe_key="owen:human:1")
     ev = read(lambda db: db.get(NumberThreadEvent, r.json()["id"]))
     assert ev.ai_call is None, "a human-handled call must not claim an empty agent record"
 
 
-def test_the_thread_hands_the_agent_record_to_the_browser(world):
-    post(world, from_number=world.ids["known_phone"],
+def test_the_thread_hands_the_agent_record_to_the_browser(voice):
+    post(voice, from_number=voice.ids["known_phone"],
          ai_call={"agent": "Roofing Receptionist", "outcome": "end_call",
                   "captured": {"intent": "active leak"}})
     conv_id = read(lambda db: db.scalars(select(ConversationEvent)).one().conversation_id)
 
-    rows = world.get("/api/conversations/%d/events" % conv_id,
-                     headers={"Authorization": "Bearer " + world.tokens["admin"]}).json()
+    rows = voice.get("/api/conversations/%d/events" % conv_id,
+                     headers={"Authorization": "Bearer " + voice.tokens["admin"]}).json()
     call = [e for e in rows if e["type"] == "CALL"][0]
     assert call["ai_call"]["agent"] == "Roofing Receptionist"
     assert call["ai_call"]["captured"]["intent"] == "active leak"
