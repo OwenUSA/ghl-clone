@@ -346,6 +346,45 @@ def fetch_openphone_recording(call_id: str) -> tuple[bytes, str] | LinkResult:
     return resp.content, resp.headers.get("content-type", "audio/mpeg")
 
 
+# The AI agent's own call audio (2026-09-22). A sibling of the OpenPhone path above and
+# deliberately a separate route on owen-main: that one asks OpenPhone for a mirrored call,
+# this one reads a file owen-main recorded itself. Keyed on `calls.id`, the value both
+# systems already agree on — the CRM stores it as the event's `provider_ref`.
+OWEN_RECORDING_PATH = "/api/crm-link/recordings"
+
+
+def fetch_owen_recording(call_id: str) -> tuple[bytes, str] | LinkResult:
+    """`GET /api/crm-link/recordings/{calls.id}` on owen-main.
+
+    Same two shapes as `fetch_openphone_recording`, for the same reason: the caller has to
+    tell "there is no recording" from "we could not ask". owen-main adds a third answer this
+    one passes through as-is — 409, the audio exists but has not been fetched to its disk
+    yet, which is the only one of the three worth retrying.
+    """
+    cfg = current()
+    if not cfg.configured:
+        return LinkResult(False, 0, "the phone link is not configured")
+
+    url = f"{cfg.base_url}{OWEN_RECORDING_PATH}/{call_id}"
+    try:
+        resp = httpx.get(url, timeout=cfg.timeout_seconds,
+                         headers={"X-OWEN-Key": cfg.api_key})
+    except Exception as exc:  # noqa: BLE001 - any transport failure is one outcome
+        log.warning("crm-link: agent recording GET failed: %r", exc)
+        return LinkResult(False, 0, "could not reach the phone system")
+
+    if resp.status_code >= 400:
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = {}
+        raw = _detail_text(payload, resp.status_code)
+        log.info("crm-link: agent recording %s unavailable (%d): %s",
+                 call_id, resp.status_code, raw)
+        return LinkResult(False, resp.status_code, _human(raw))
+    return resp.content, resp.headers.get("content-type", "audio/wav")
+
+
 # --- pictures on a text (2026-09-16) -----------------------------------------------------
 #
 # Two directions, and they are asymmetric on purpose.

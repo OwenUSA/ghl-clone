@@ -35,6 +35,7 @@ from . import (
     number_threads,
     openphone,
     opportunity_workspace,
+    owen_recordings,
     phone_match,
     pipeline_access,
     softphone,
@@ -102,6 +103,9 @@ app.include_router(softphone.router)
 # no code here -- owen-main posts mirrored events to /api/events like any other
 # telephony feed. See app/openphone.py.
 app.include_router(openphone.router)
+# Agent call audio (2026-09-22): the same proxy shape, for calls owen-main recorded
+# itself rather than ones it mirrored from Quo.
+app.include_router(owen_recordings.router)
 # The top-bar status dot (2026-09-14): one GET that asks owen-main how the link and
 # the Quo sync are, server-side, cached 30s. See app/connection_status.py.
 app.include_router(connection_status.router)
@@ -261,6 +265,11 @@ class EventOut(BaseModel):
     transcript: str | None = None
     # "AI: <agent name>" when an AI agent wrote this event (2026-09-15), else null.
     ai_author: str | None = None
+    # What an AI agent did on this call (2026-09-22): {agent, version, outcome, captured,
+    # campaign}. Null on every row a person, a feed or an automation wrote, which is almost
+    # all of them. Sent WHOLE rather than flattened into fields, because the thread renders
+    # it as a block and the lead-capture panel reads the same object.
+    ai_call: dict | None = None
     # The pictures on this message (2026-09-16), in the order the carrier sent them.
     # ALWAYS a list, empty for the overwhelming majority of rows — a null would make every
     # caller write the same `?? []`, and the thread renders nothing for an empty one.
@@ -1652,6 +1661,15 @@ class EventIngest(BaseModel):
     # (2026-09-13). Shown on a number-only thread labelled "from Quo". It creates
     # nothing and never renames an existing contact.
     source_contact_name: str | None = Field(default=None, max_length=200)
+    # An AI agent ANSWERED this call (2026-09-22, phase 1 of the voice-agent amendment):
+    # which agent, which version, how it ended, what it recorded from the caller, and the
+    # campaign that owns the line. owen-main sends it; see `models.ConversationEvent.ai_call`
+    # for why it is one JSON field rather than five columns.
+    #
+    # It creates NOTHING on its own. A capture here is a record of what was said, not a
+    # lead: promoting it to a Contact and an Opportunity is a person's decision while the
+    # agent is supervised (DECISIONS.md, Q1/Q2).
+    ai_call: dict | None = None
     # A call's summary, as Quo wrote it. On a FIRST delivery it is already inside
     # `body`; it is carried separately so a summary Quo finishes after the call was
     # mirrored can be added to that one row (see `_enrich`).
@@ -1743,13 +1761,43 @@ def _duplicate_event(db: Session, key: str):
 # call and must land on the one row rather than a second (2026-09-13). Only BLANKS
 # are filled — nothing already recorded is ever overwritten by a repeat delivery.
 ENRICHABLE_FIELDS = ("recording_url", "transcript", "call_status", "duration_seconds",
-                     "source_number")
+                     "source_number", "ai_call")
+
+
+def _merge_ai_call(seen, new: dict | None) -> bool:
+    """Fold a later `ai_call` into the one already stored. Returns True if anything changed.
+
+    MERGED rather than filled-if-blank, which is what every other enrichable field does,
+    because an agent call is reported in stages: owen-main can say "agent X answered" the
+    moment the conversation starts and only knows the outcome, the captured details and
+    the transcript when it ends. Fill-if-blank would keep the first, emptiest version
+    forever — the row would name the agent and never say what it learned.
+
+    A key already present is NOT overwritten. A correction is a different problem from a
+    completion, and silently accepting one would let a retry of an early phase erase what
+    the end of the call established.
+    """
+    if not isinstance(new, dict) or not new:
+        return False
+    current = dict(seen.ai_call or {})
+    added = {k: v for k, v in new.items()
+             if v not in (None, "", {}, []) and current.get(k) in (None, "", {}, [])}
+    if not added:
+        return False
+    # Reassigned, never mutated in place: JSON columns have no mutation tracking, so
+    # `seen.ai_call["x"] = y` is a change SQLAlchemy never sees and never writes.
+    seen.ai_call = {**current, **added}
+    return True
 
 
 def _enrich(seen, body: EventIngest) -> list[str]:
     filled = []
     for name in ENRICHABLE_FIELDS:
         new = getattr(body, name)
+        if name == "ai_call":
+            if _merge_ai_call(seen, new):
+                filled.append(name)
+            continue
         if new in (None, "") or getattr(seen, name) not in (None, ""):
             continue
         if name == "call_status" and seen.type is not EventType.CALL:
@@ -1807,6 +1855,7 @@ def _ingest_to_number(db: Session, body: EventIngest, key: str) -> dict:
         source_system=body.source_system,
         source_number=body.source_number,
         transcript=body.transcript,
+        ai_call=body.ai_call or None,
     )
     if body.occurred_at is not None:
         ev.occurred_at = body.occurred_at
@@ -1916,6 +1965,7 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
         source_system=body.source_system,
         source_number=body.source_number,
         transcript=body.transcript,
+        ai_call=body.ai_call or None,
     )
     # Omitted means "now", which is what every caller before the mirror meant and
     # what the column default already does. Set means the feed observed the real
@@ -3200,7 +3250,8 @@ def _thread_events(model, parent_clause, db: Session, filter: str,
                      delivery_detail=e.delivery_detail,
                      transcript=e.transcript,
                      source_system=e.source_system,
-                     source_number=e.source_number) for e in rows]
+                     source_number=e.source_number,
+                     ai_call=e.ai_call or None) for e in rows]
 
 
 # ---------- appointments ----------
