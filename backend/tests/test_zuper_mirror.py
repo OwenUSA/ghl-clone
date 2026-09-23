@@ -228,3 +228,35 @@ def test_two_zuper_customers_pointing_at_one_contact_do_not_collide(zworld, fake
     assert code == 0, report["problems"]
     assert report["links"]["jobs_linked"] == 2
     assert report["links"]["contacts_linked"] + report["links"]["contacts_taken"] == 2
+
+
+def test_a_job_still_syncs_when_a_child_module_is_not_available(zworld, fake, monkeypatch):
+    """Live Zuper answers 403 for appointments (the account has no Appointments module) and
+    404 for the service-task path. A mirror must take the job anyway."""
+    monkeypatch.setenv("ZUPER_PULL_ONLY", "true")
+    ahs_uid, _ = boards_of(fake)
+    cust = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
+    job = fake.new_job(ahs_uid, job_title="Jane Roof - leak", customer={"customer_uid": cust})
+    fake.set_custom(fake.jobs[job], "Workiz Job #", "WZ-99")
+    fake.move_job(job, "st-ahs-8")                       # "Repair Scheduled"
+    with SessionLocal() as s:
+        card = s.get(Opportunity, zworld.ids["jane_card"])
+        card.custom_fields = {**(card.custom_fields or {}), "workiz_id": "WZ-99"}
+        s.commit()
+
+    from app.zuper import client as zclient
+    real = zclient.request
+
+    def refuse_children(method, path, **kw):
+        if "/appointments" in path:
+            raise zclient.ZuperError("unauthorized", "HTTP 403")
+        if "/service_tasks" in path:
+            raise zclient.ZuperError("not_found", path)
+        return real(method, path, **kw)
+
+    monkeypatch.setattr(zclient, "request", refuse_children)
+    code, report = run(commit=True, phases={"boards", "links", "backfill"})
+    assert code == 0, report["problems"]
+    with SessionLocal() as s:
+        card = s.get(Opportunity, zworld.ids["jane_card"])
+        assert s.get(Stage, card.stage_id).name == "Repair Scheduled"

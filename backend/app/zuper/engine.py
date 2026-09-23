@@ -71,6 +71,7 @@ from ..models import (
 from ..phones import store_phone
 from . import config, mapping, outcomes, zapi
 from .client import ZuperError, cents, is_read_only
+from .client import sentence as client_sentence
 
 log = logging.getLogger("zuper.engine")
 
@@ -1044,10 +1045,18 @@ def pull_children(ctx: Ctx, o: Opportunity, jm: ZuperMapping) -> None:
         try:
             rows = lister(job_uid)
         except ZuperError as exc:
-            if exc.kind == "not_found":
-                rows = []
-            else:
-                raise
+            # A module this account does not have (live: appointments answers 403, and
+            # service tasks 404 for the path the research named) must not stop the job
+            # itself from syncing — the rest of the mirror is worth more than one child
+            # list. Counted so the sweep's report says it happened, and logged once a run.
+            if exc.kind in ("not_found", "unauthorized", "refused", "rejected"):
+                key = "children_unavailable:" + kind
+                if not ctx.counts.get(key):
+                    log.warning("zuper %s list unavailable (%s): %s", kind, exc.kind,
+                                client_sentence(exc))
+                ctx.count(key)
+                continue
+            raise
         seen: set[str] = set()
         for rec in rows:
             child_uid = uid_fn(rec)
