@@ -163,6 +163,14 @@ _HUMAN = (
     ("telephony is not enabled",
      "The phone system is not accepting calls right now."),
     ("no operator to ring", _NO_OPERATOR),
+    # Listen / Take over (2026-09-23). owen-main's softphone roster refusals, and a call that
+    # ended between the banner drawing and the click.
+    ("not a provisioned OWEN operator",
+     ("You do not have a browser phone line in the phone system yet, so it cannot ring you "
+      "in. Ask an admin to add you as an operator in owen-main.")),
+    ("no CRM softphone operators are provisioned",
+     "Nobody has a browser phone line in the phone system yet, so it cannot ring you in."),
+    ("no live agent session", "That call has already ended."),
 )
 
 
@@ -383,6 +391,57 @@ def fetch_owen_recording(call_id: str) -> tuple[bytes, str] | LinkResult:
                  call_id, resp.status_code, raw)
         return LinkResult(False, resp.status_code, _human(raw))
     return resp.content, resp.headers.get("content-type", "audio/wav")
+
+
+# --- a live AI-agent call: see it, hear it, take it (2026-09-23) --------------------------
+#
+# owen-main runs the call; the CRM only asks. `GET /live-calls` is owen-voice's list of live
+# agent sessions with who rang which line; listen / takeover ring the signed-in user's own
+# browser line (`PJSIP/operator-<slug>`), resolved on owen-main's side from the EMAIL sent
+# here through the same operator roster the softphone credentials use. That is why the
+# email is a parameter of these functions and never of the route: `app/live_calls.py` passes
+# the principal's own, so nobody can ring someone else in to a customer's call.
+
+LIVE_CALLS_PATH = "/api/crm-link/live-calls"
+LIVE_CALL_ACTIONS = ("listen", "takeover")
+
+
+def live_calls() -> LinkResult:
+    """`GET /api/crm-link/live-calls`. `data["calls"]` on success.
+
+    A LinkResult rather than a bare list, so the route can tell "nothing is live" (ok, empty)
+    from "we could not ask" — the banner draws nothing for either, but only one of them is
+    worth a log line."""
+    cfg = current()
+    if not cfg.configured:
+        return LinkResult(False, 0, "the phone link is not configured")
+    try:
+        resp = httpx.get(cfg.base_url + LIVE_CALLS_PATH, timeout=cfg.timeout_seconds,
+                         headers={"X-OWEN-Key": cfg.api_key, "Accept": "application/json"})
+    except Exception as exc:  # noqa: BLE001 - any transport failure is one outcome
+        log.warning("crm-link: live-calls GET failed: %r", exc)
+        return LinkResult(False, 0, "could not reach the phone system")
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {}
+    if resp.status_code >= 400:
+        return LinkResult(False, resp.status_code,
+                          _human(_detail_text(payload, resp.status_code)))
+    return LinkResult(True, resp.status_code, "",
+                      payload if isinstance(payload, dict) else None)
+
+
+def live_call_action(linkedid: str, action: str, operator_email: str) -> LinkResult:
+    """`POST /api/crm-link/live-calls/{linkedid}/{listen|takeover}`.
+
+    `action` is checked against LIVE_CALL_ACTIONS here, not trusted: this function builds a
+    URL on a machine key, and "anything after the linkedid" is not a surface to leave open.
+    The linkedid is the route's to validate (it answers 404 without calling this)."""
+    if action not in LIVE_CALL_ACTIONS:
+        raise ValueError("unknown live-call action %r" % action)
+    return _post("%s/%s/%s" % (LIVE_CALLS_PATH, linkedid, action),
+                 {"operator_email": operator_email})
 
 
 # --- pictures on a text (2026-09-16) -----------------------------------------------------

@@ -16,17 +16,17 @@ Revision ID: 50c12ee623e2
 Revises: f5c1e9a3d742
 Create Date: 2026-09-22 17:34:10.189375
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = '50c12ee623e2'
-down_revision: Union[str, Sequence[str], None] = 'f5c1e9a3d742'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = 'f5c1e9a3d742'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

@@ -29,6 +29,7 @@ from . import (
     custom_fields,
     dlr,
     lead_outcomes,
+    live_calls,
     media_api,
     message_media,
     models,
@@ -109,6 +110,9 @@ app.include_router(owen_recordings.router)
 # The top-bar status dot (2026-09-14): one GET that asks owen-main how the link and
 # the Quo sync are, server-side, cached 30s. See app/connection_status.py.
 app.include_router(connection_status.router)
+# A live AI-agent call (2026-09-23): the banner's list, Listen and Take over, relayed to
+# owen-main with the signed-in user's own email. See app/live_calls.py.
+app.include_router(live_calls.router)
 # The opportunity modal's tasks, notes and custom-field tabs (2026-09-13). One
 # router, under the same app-level gate — see app/opportunity_workspace.py.
 app.include_router(opportunity_workspace.router)
