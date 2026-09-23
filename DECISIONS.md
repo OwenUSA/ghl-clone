@@ -5664,6 +5664,34 @@ outbound AI calls.
 * Real latency with Flux Multilingual and the Spanish voice, measured on real calls, decides
   whether the model choice in (Q9) holds.
 
+**Phase 1, slice E — the live alert with Listen / Take over (2026-09-23).** Built on
+`feature/voice-agents-phase1e` here and `feature/live-agent-calls` in owen-main; not merged,
+not deployed.
+
+* **The monitor role check is no longer deferred.** "Moved to phase 2" above worried that
+  gating would invent a role vocabulary and could remove a live user's access. Neither holds:
+  owen-main's `users.role` defaults to `admin` and `scripts/create_admin.py` writes `admin`, so
+  gating `/monitor/active|listen|takeover` to `deps.MONITOR_ROLES = {"admin"}` removes nobody,
+  and it is one constant, not a role system. `/monitor/stop` stays on any login — it can only
+  end the caller's own snoop.
+* **The CRM's door is three crm-link routes** (`GET /live-calls`,
+  `POST /live-calls/{linkedid}/listen|takeover`, scope `crm_link`; the route fences now name
+  fourteen). Listen and takeover resolve the CRM user's email through the SAME operator roster
+  as the softphone credentials, so the leg that rings is the `PJSIP/operator-<slug>` the CRM
+  softphone registers as — the open question above ("depends on the CRM user mapping to the
+  same operator slug") is answered in code by construction. It is **not** answered by a call:
+  nobody has listened to or taken over a real call through the CRM.
+* **Every live agent call is listed, not only calls on CRM-bound DIDs** — the opposite of the
+  media route's rule, on purpose: supervising AI calls is the CRM's job for every number an
+  agent answers (Q13), and a live call the CRM cannot see is one nobody can take over.
+* **The CRM** (`app/live_calls.py`): ADMIN / DISPATCHER by the AI module's own gate
+  (`ai.api.VIEW`), always the signed-in user's own email, `{"calls": []}` and no request when
+  the link is unset. The banner (`components/LiveAgentCall.tsx`) polls every 5s only for
+  `canOpenAiAgents`, and offers Listen / Take over only while the browser phone is Ready and
+  idle, because both ring it. **Take over while listening** is two steps — hang up, then take
+  over, and the phone rings again — because the CRM cannot name the snoop channels OWEN's own
+  UI can pass to reuse the listening leg.
+
 ---
 
 ## AMENDMENT (2026-09-23): the CRM imitates Zuper — one-way mirror, `ZUPER_PULL_ONLY`, `app.zuper.mirror`

@@ -531,6 +531,16 @@ pending suggestion staff approve (`POST /api/ai/suggestions/{id}/approve`, exact
 - The worker runs agent runs as ordinary jobs; a failed run is logged as `error` and never retried
   (a retry could text a customer twice). See the 2026-09-15 AI Agents amendment in `DECISIONS.md`.
 
+## A live AI call: Listen / Take over (2026-09-23)
+
+While an AI agent is on a call, `components/LiveAgentCall.tsx` (mounted once in `App.tsx`, left of
+the bell) shows "AI is on a call with …" with **Listen** and **Take over** (confirmed first). It
+polls `GET /api/live-calls` every 5s, and only for `canOpenAiAgents`. `app/live_calls.py` relays to
+owen-main's `/api/crm-link/live-calls[/{linkedid}/listen|takeover]` through `crmlink`, ADMIN /
+DISPATCHER only (`ai.api.VIEW`), always with the SIGNED-IN user's email — owen-main rings that
+user's `PJSIP/operator-<slug>` browser line, and refuses an email not on its softphone roster.
+Unconfigured link: `{"calls": []}`, no request. Never exercised on a real call. See DECISIONS.md.
+
 ## Zuper: the source of truth for jobs — built, switched OFF (2026-09-16)
 
 `backend/app/zuper/` (read `__init__.py` first). The CRM captures customers; Zuper owns jobs,

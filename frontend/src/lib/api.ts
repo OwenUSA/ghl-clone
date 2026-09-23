@@ -1860,6 +1860,28 @@ export const aiAlerts = () => get<{ unread: number; items: AiAlert[] }>('/api/ai
 export const readAiAlert = (id: number) => send<{ id: number; read: boolean }>(`/api/ai/alerts/${id}/read`, 'POST')
 export const readAllAiAlerts = () => send<{ marked: number }>('/api/ai/alerts/read-all', 'POST')
 
+// ---------------- A live AI-agent call (2026-09-23) ----------------
+
+/** One AI-agent call in progress, as `GET /api/live-calls` answers it (app/live_calls.py).
+ *  `contact` is the CRM contact holding the caller's number, when there is one. */
+export type LiveCall = {
+  linkedid: string
+  caller_number: string | null
+  dialed_number: string | null
+  agent: string | null
+  started_at: string | null
+  duration_s: number | null
+  turns: number | null
+  contact: { id: number; name: string | null } | null
+}
+/** Never an error for an unconfigured or unreachable phone system: `calls` is simply empty. */
+export const listLiveCalls = () => get<{ calls: LiveCall[] }>('/api/live-calls')
+/** Both ring the SIGNED-IN user's own browser line — the server sends their email, never ours. */
+export const listenToLiveCall = (linkedid: string) =>
+  send<{ ok: boolean; operator: string | null }>(`/api/live-calls/${encodeURIComponent(linkedid)}/listen`, 'POST')
+export const takeOverLiveCall = (linkedid: string) =>
+  send<{ ok: boolean; operator: string | null }>(`/api/live-calls/${encodeURIComponent(linkedid)}/takeover`, 'POST')
+
 // ---------------- New message to any number (2026-09-15) ----------------
 
 /** What `POST /api/messages/new` answers. `recorded: false` means nothing was written — a

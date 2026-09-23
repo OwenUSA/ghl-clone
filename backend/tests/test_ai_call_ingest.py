@@ -175,7 +175,7 @@ def test_the_thread_hands_the_agent_record_to_the_browser(voice):
 
     rows = voice.get("/api/conversations/%d/events" % conv_id,
                      headers={"Authorization": "Bearer " + voice.tokens["admin"]}).json()
-    call = [e for e in rows if e["type"] == "CALL"][0]
+    call = next(e for e in rows if e["type"] == "CALL")
     assert call["ai_call"]["agent"] == "Roofing Receptionist"
     assert call["ai_call"]["captured"]["intent"] == "active leak"
     assert all(e.get("ai_call") is None for e in rows if e["type"] != "CALL")

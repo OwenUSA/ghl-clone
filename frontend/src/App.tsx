@@ -16,6 +16,7 @@ import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AiAgentsPage } from './pages/AiAgentsPage'
 import { AiAlertBell } from './components/AiAlertBell'
+import { LiveAgentCall } from './components/LiveAgentCall'
 import { canOpenAiAgents } from './lib/aiAgents'
 import { me } from './lib/auth'
 import { viewFor } from './lib/access'
@@ -161,6 +162,9 @@ export default function App() {
       <Softphone />
       <StatusIndicator />
       <AiAlertBell user={user} />
+      {/* "AI is on a call with …" with Listen / Take over (2026-09-23). Left of the bell;
+          draws and polls nothing unless the user can open AI Agents. */}
+      <LiveAgentCall user={user} />
       {/* The one in-call window, for every call this browser is on (2026-09-14). */}
       <InCallWindow user={user} />
       <Sidebar

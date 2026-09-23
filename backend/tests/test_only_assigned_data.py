@@ -32,6 +32,7 @@ from app import (
     assigned_access,
     companycam,
     companycam_api,
+    live_calls,
     media_api,
     openphone,
     opportunity_workspace,
@@ -1181,6 +1182,12 @@ AUDITED = {
     "me": "own", "change_password": "own", "create_token": "own",
     "list_tokens": "own", "revoke_token": "own", "health": "exempt",
     "connection_status": "link health, no record",
+    # A live AI-agent call (app/live_calls.py, 2026-09-23): the AI module's own gate
+    # (`ai.api.VIEW`) refuses a TECH or any restricted user 403 before anything is read or
+    # relayed; the list's caller names still go through assigned_access.scope.
+    "list_live_calls": "AI_VIEW: restricted refused 403; caller names via assigned_access",
+    "listen_to_live_call": "AI_VIEW: restricted refused 403; own email only, no record",
+    "take_over_live_call": "AI_VIEW: restricted refused 403; own email only, no record",
     # AI Agents (app/ai/api.py, 2026-09-15): the whole module refuses a restricted user
     # 403 before anything is read (`_viewer`), whatever their role — pinned by
     # tests/test_ai_permissions.py route by route.
@@ -1258,7 +1265,7 @@ def test_every_route_reading_customer_records_goes_through_a_scope():
         if fn.__name__ in exempt or fn.__module__ not in (
                 main_mod.__name__, opportunity_workspace.__name__,
                 companycam_api.__name__, softphone.__name__, openphone.__name__,
-                media_api.__name__, zuper_api.__name__):
+                media_api.__name__, zuper_api.__name__, live_calls.__name__):
             continue
         src = inspect.getsource(fn)
         if any(m in src for m in reads) and not any(m in src for m in markers):

@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app import companycam_api as companycam_mod
+from app import live_calls as live_calls_mod
 from app import main as main_mod
 from app.auth import mint_api_token
 from app.db import Base, SessionLocal, engine
@@ -569,6 +570,12 @@ AUDITED = {
     "report_lead_outcomes": "assigned_access.opportunities(scope) excludes hidden pipelines",
 }
 
+# Scanned above, and deliberately NOT in AUDITED: a live AI call is a phone call, not a
+# deal. app/live_calls.py reads no opportunity or pipeline — it names the caller from
+# Contacts and relays to owen-main — so a pipeline restriction has nothing to hide there.
+# If one of its routes ever starts reading a deal, the scan catches it.
+READS_NO_DEAL = ("list_live_calls", "listen_to_live_call", "take_over_live_call")
+
 MARKERS = ("Opportunity", "Pipeline", "Stage", "_contact_detail", "_appointment_detail",
            "_appointment_deal", "_opportunities_in_range", "_search_opportunities",
            "_bulk_load", "_check_view_pipeline", "_check_pipelines", "_saved_view_public",
@@ -591,7 +598,8 @@ def test_every_route_that_reads_a_deal_is_on_the_audited_list():
     for r in _routes():
         fn = r.endpoint
         if getattr(fn, "__module__", "") not in (main_mod.__name__, companycam_mod.__name__,
-                                                 zuper_api.__name__):
+                                                 zuper_api.__name__,
+                                                 live_calls_mod.__name__):
             continue
         src = inspect.getsource(fn)
         if any(m in src for m in MARKERS):
@@ -609,3 +617,12 @@ def test_every_route_that_reads_a_deal_is_on_the_audited_list():
 def test_every_audited_route_still_exists():
     names = {r.endpoint.__name__ for r in _routes()}
     assert set(AUDITED) <= names, sorted(set(AUDITED) - names)
+
+
+def test_the_live_call_routes_read_no_deal():
+    """The record above is TRUE in the source, and the routes it names exist."""
+    by_name = {r.endpoint.__name__: r.endpoint for r in _routes()}
+    for name in READS_NO_DEAL:
+        assert name in by_name, name
+        src = inspect.getsource(by_name[name])
+        assert not any(m in src for m in MARKERS), name
