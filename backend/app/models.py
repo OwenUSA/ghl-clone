@@ -33,6 +33,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 # plain JSON on SQLite so the dev bootstrap still works.
 JSONType = JSON().with_variant(JSONB, "postgresql")
 
+# The same, for a NULLABLE json column: `None` is SQL NULL, not the JSON value `null`.
+#
+# SQLAlchemy's default is the opposite, and it is a trap worth naming. Assigning None to a
+# plain JSON column serialises it — the row ends up holding `null` the JSON scalar — so
+# `WHERE col IS NOT NULL` is TRUE for every row ever written, and a partial index or a
+# "has anyone used this?" count silently answers "all of them". Caught on production the
+# day after `ai_call` shipped: 71 rows claimed an AI record and none of them had one.
+#
+# Use this for any nullable JSON column where "absent" is a real, queryable state.
+NullableJSONType = JSON(none_as_null=True).with_variant(
+    JSONB(none_as_null=True), "postgresql")
+
 from .db import Base  # noqa: E402  (must follow JSONType: the models below use it)
 
 
@@ -566,7 +578,7 @@ class ConversationEvent(Base):
     #   outcome  how the conversation ended: end_call | transfer | default | failed
     #   captured what the agent recorded from the caller (name/address/intent/urgency/...)
     #   campaign the campaign that owns the number, for attribution on a lead made later
-    ai_call: Mapped[dict | None] = mapped_column(JSONType)
+    ai_call: Mapped[dict | None] = mapped_column(NullableJSONType)
 
     conversation: Mapped[Conversation] = relationship(back_populates="events")
 
@@ -959,7 +971,7 @@ class NumberThreadEvent(Base):
     # ...but `ai_call` is the opposite case, and the reason the two columns are separate.
     # A voice agent ANSWERS strangers: a first-time caller has no contact, so the very
     # calls this column exists to record are the ones that land here. See ConversationEvent.
-    ai_call: Mapped[dict | None] = mapped_column(JSONType)
+    ai_call: Mapped[dict | None] = mapped_column(NullableJSONType)
 
     thread: Mapped[NumberThread] = relationship(back_populates="events")
 
