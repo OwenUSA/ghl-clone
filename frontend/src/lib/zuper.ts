@@ -190,6 +190,10 @@ export const RULE_LABELS: Record<string, string> = {
   crm_owned: 'CRM-owned field',
   crm_cannot_hold: 'The CRM question cannot hold Zuper’s answer',
   mirrored_cancel: 'Deleted in Zuper → visit cancelled',
+  // The one-way mirror (ZUPER_PULL_ONLY, 2026-09-23): Zuper wins every field it has a
+  // value for, because the CRM is a copy of its boards. Without a label here the conflict
+  // log would show the raw rule name, which is what test_zuper_ui pins against.
+  zuper_mirror: 'Zuper is the source — the CRM mirrors it',
 }
 
 export function ruleLabel(rule: string): string {
