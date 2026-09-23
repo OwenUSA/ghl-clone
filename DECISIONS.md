@@ -5716,3 +5716,16 @@ and makes the decision visible in `GET /api/health`-style settings rather than i
 Nothing about customer contact: the CRM still sends no automatic text (2026-09-15) and no agent
 acts by itself. The Zuper account's own workflows and notification rules stay off (that is the
 dispatch project's safety gate, checked before every write there).
+
+### Amendment (2026-09-23, later): Zuper Connect holds a calling number, so checklist item G4 asks about texting
+
+Zuper Connect was given a local number, +1 (954) 420-7373, for CALLS (Owen, Luis and Antonio
+may dial from it; recording is on, and the greeting must say so — Florida needs every party's
+consent). The setup checklist asked the owner to confirm "Zuper Connect (texting / calling) is
+not enabled", which is no longer true and would have been ticked dishonestly.
+
+What the item guards is a customer being MESSAGED, so it now reads "No Zuper Connect number can
+text a customer: SMS is disabled on every number (G4)". That is the state today: the number's
+`message_status` is DISABLED and its 10DLC registration is Unregistered, so US carriers would
+refuse business SMS from it anyway. The CRM cannot check this itself — `client.py` denylists
+every `/telephony/*` path by construction — so it stays a by-hand item.

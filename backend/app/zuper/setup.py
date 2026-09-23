@@ -47,7 +47,10 @@ HAND_ITEMS = [
     ("job_notifications",
      "Customer notifications for jobs and appointments are OFF for email AND SMS (G2)"),
     ("quote_invoice_reminders", "Automatic quote and invoice follow-up reminders are OFF (G3)"),
-    ("zuper_connect", "Zuper Connect (texting / calling) is not enabled (G4)"),
+    # 2026-09-23: Connect now holds a number for CALLS (+1 954-420-7373). What this item
+    # guards is customer MESSAGING, so it asks about texting, not about the phone line.
+    ("zuper_connect", "No Zuper Connect number can text a customer: SMS is disabled on "
+                      "every number (G4)"),
     ("workflows", "No active workflow emails or texts customers (G5)"),
     ("booking_widget", "The booking widget is not published (G6)"),
 ]
