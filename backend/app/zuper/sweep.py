@@ -71,7 +71,18 @@ def changed_since(path_name: str, since: datetime, narrows: bool, extra: dict | 
 
 def _pull_zuper(ctx: engine.Ctx, since: datetime, checks: dict) -> None:
     for name, path_name, what in MODULES:
-        narrows = filter_narrows(path_name, ctx.now)
+        try:
+            narrows = filter_narrows(path_name, ctx.now)
+        except client.ZuperError as exc:
+            # A module this account does not have: live, appointments answers 403 on every
+            # read. Skipping it keeps the sweep a success, so the cursor moves and the rest
+            # of the mirror stays level; one module's absence is not an outage.
+            if exc.kind in ("unauthorized", "not_found", "refused", "rejected"):
+                checks[name] = None
+                ctx.count("module_unavailable:" + name)
+                log.warning("zuper %s unavailable (%s) - skipped", name, exc.kind)
+                continue
+            raise
         checks[name] = narrows
         for rec in changed_since(path_name, since, narrows):
             uid = {"customer": lambda r: mapping.uid(r, "customer_uid"),

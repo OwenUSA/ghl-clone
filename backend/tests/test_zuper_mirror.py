@@ -245,7 +245,8 @@ def test_a_job_still_syncs_when_a_child_module_is_not_available(zworld, fake, mo
         s.commit()
 
     from app.zuper import client as zclient
-    real = zclient.request
+    from app.zuper import zapi
+    real = zapi.request
 
     def refuse_children(method, path, **kw):
         if "/appointments" in path:
@@ -254,9 +255,35 @@ def test_a_job_still_syncs_when_a_child_module_is_not_available(zworld, fake, mo
             raise zclient.ZuperError("not_found", path)
         return real(method, path, **kw)
 
-    monkeypatch.setattr(zclient, "request", refuse_children)
+    # zapi does `from .client import request`, so the name to replace is zapi's own.
+    monkeypatch.setattr(zapi, "request", refuse_children)
     code, report = run(commit=True, phases={"boards", "links", "backfill"})
     assert code == 0, report["problems"]
     with SessionLocal() as s:
         card = s.get(Opportunity, zworld.ids["jane_card"])
         assert s.get(Stage, card.stage_id).name == "Repair Scheduled"
+
+
+def test_a_sweep_succeeds_when_a_whole_module_is_refused(armed, fake, monkeypatch):
+    """Live Zuper answers 403 for every appointments read (no Appointments module on this
+    plan). The sweep must skip that module and still succeed, or its cursor never moves and
+    every sweep re-reads the whole account."""
+    from app.zuper import client as zclient
+    from app.zuper import engine as zengine
+    from app.zuper import sweep, zapi
+    monkeypatch.setenv("ZUPER_PULL_ONLY", "true")
+    real = zapi.request
+
+    def refuse_appointments(method, path, **kw):
+        if path.startswith("/appointments"):
+            raise zclient.ZuperError("unauthorized", "HTTP 403")
+        return real(method, path, **kw)
+
+    monkeypatch.setattr(zapi, "request", refuse_appointments)
+    with SessionLocal() as s:
+        counts = sweep.run(s)
+    assert counts.get("module_unavailable:appointments") == 1, counts
+    with SessionLocal() as s:
+        state = zengine.sync_state(s)
+        assert state.last_sweep_success_at is not None, state.last_error
+        assert state.last_error is None
