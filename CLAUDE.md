@@ -565,7 +565,19 @@ quotes, invoices, payments and reports. Every rule: the 2026-09-16 Zuper amendme
 - **Workiz cutover date** (Settings → Zuper): before it the importer's job changes are pushed; on
   and after it the importer refuses (exit 10).
 
+**The CRM imitates Zuper (2026-09-23).** The direction is reversed: Zuper's boards are the
+truth and the CRM copies them — same AHS / Retail pipelines, same stage names in Zuper's order,
+same job information, every change replicated by webhook (instant) and the 15-minute sweep
+(backstop). `ZUPER_PULL_ONLY=true` makes it one way: the engine drops what it would have
+written, the listener queues no push, the sweep runs its Zuper half only, Send to Zuper answers
+409, and `client.request` refuses every non-GET before a connection exists — except registering
+the webhook from the operator's command. `python -m app.zuper.mirror` (dry run; `--commit`)
+lines the two sides up: `boards` (stages become the category's statuses; a renamed stage keeps
+its deals — `mirror.ALIASES`), `links` (job ↔ card by Workiz job number, customer ↔ contact),
+`backfill` (pull every job). See the 2026-09-23 amendment in `DECISIONS.md`.
+
 ```bash
+uv run python -m app.zuper.mirror           # DRY RUN; --commit; --phase boards|links|backfill
 uv run python -m app.zuper.setup            # DRY RUN checks; --commit makes the AHS / Retail categories
 uv run python -m app.zuper.load             # DRY RUN day-one load; --commit sends, resumable
 uv run python -m app.zuper.webhook          # DRY RUN lists Zuper's webhooks; --commit registers ours

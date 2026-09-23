@@ -99,6 +99,10 @@ def _old_value(obj, attr: str):
 
 
 def before_flush(session: Session) -> None:
+    # A one-way mirror queues nothing: CRM edits never travel to Zuper. Deletes are not
+    # snapshotted either, because nothing here deletes anything there.
+    if config.pull_only():
+        return
     if not config.env_enabled() or session.info.get("zuper_quiet"):
         return
     touched = [o for o in chain(session.new, session.dirty, session.deleted)

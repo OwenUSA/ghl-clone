@@ -44,6 +44,18 @@ def env_enabled() -> bool:
     return _flag("ZUPER_SYNC_ENABLED", False)
 
 
+PULL_ONLY_SENTENCE = ("This deployment mirrors Zuper one way (ZUPER_PULL_ONLY): Zuper's jobs, "
+                      "statuses and customers are copied into the CRM, and the CRM never "
+                      "writes to Zuper.")
+
+
+def pull_only() -> bool:
+    """One-way mirror (2026-09-23, the owner's choice): Zuper is the source of truth and the
+    CRM imitates it. Every path that would write to Zuper — a push, a status move, a stamp on
+    a pulled record, Send to Zuper, the sweep's CRM half — is skipped, counted and logged."""
+    return _flag("ZUPER_PULL_ONLY", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

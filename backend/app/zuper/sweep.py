@@ -193,8 +193,12 @@ def run(db: Session, now: datetime | None = None) -> dict:
     checks: dict[str, bool] = {}
     try:
         _pull_zuper(ctx, since, checks)
-        _send_new_workiz_jobs(ctx)
-        _push_crm(ctx)
+        if config.pull_only():
+            # One-way mirror: the sweep only reads Zuper.
+            ctx.count("crm_half_skipped")
+        else:
+            _send_new_workiz_jobs(ctx)
+            _push_crm(ctx)
         state = engine.sync_state(db)
         state.sweep_cursor = start
         state.last_sweep_success_at = datetime.now(UTC)
