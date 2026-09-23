@@ -1112,6 +1112,10 @@ AUDITED = {
     "list_messages": "_search_events(scope)",
     "search": "contacts/opportunities/messages over one scope",
     "stream_recording": "event with that recording_url on a scope contact, else 404",
+    # The AI agent's own call audio (2026-09-22). Same rule as the Quo player above,
+    # and the same 404: a number-only thread has no assignment to check, so a
+    # stranger's call is nobody's job and a restricted technician is refused it.
+    "stream_agent_recording": "event with that recording_url on a scope contact, else 404",
     # Pictures on a text (2026-09-16). The bytes follow the THREAD's rule, asked through
     # the same scope; an upload is a draft of the operator's own with no customer in it.
     "get_attachment": "message_media.visible -> 404 (the thread's own rule)",

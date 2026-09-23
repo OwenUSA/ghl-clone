@@ -95,7 +95,19 @@ def test_the_path_is_the_one_owen_main_writes():
     assert owen_recordings.RECORDINGS_PATH == "/api/owen/recordings"
     # ...and the route really is mounted there, rather than the constant merely agreeing
     # with itself.
-    paths = {getattr(r, "path", None) for r in app.routes}
+    #
+    # Walked rather than read off `app.routes`: this FastAPI version wraps an included
+    # router in an object with no `path` of its own, so a flat scan finds NONE of the
+    # mounted routers — softphone and openphone included — and a test written that way
+    # passes or fails for reasons that have nothing to do with the route. The same walk
+    # test_only_assigned_data.py and test_auth.py use.
+    stack, paths = list(app.routes), set()
+    while stack:
+        r = stack.pop()
+        stack.extend(getattr(getattr(r, "original_router", None), "routes", []) or [])
+        stack.extend(getattr(r, "routes", []) or [])
+        if getattr(r, "endpoint", None) is not None:
+            paths.add(getattr(r, "path", ""))
     assert "/api/owen/recordings/{call_id}" in paths
 
 
