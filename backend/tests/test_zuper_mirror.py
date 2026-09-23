@@ -206,3 +206,25 @@ def test_the_webhook_may_still_be_registered_while_the_mirror_is_one_way(fake, m
     with client.operator_mode():
         client.request("POST", "/webhook", body=HOOK)
     assert [w.path for w in fake.writes()] == ["/webhook"]
+
+
+def test_two_zuper_customers_pointing_at_one_contact_do_not_collide(zworld, fake):
+    """The owner split customers who shared a phone in Workiz, so two Zuper customers can be
+    the same person here. A mapping is one-to-one on both sides: the first pairing wins and
+    the second is counted, never attempted (it would break the whole run)."""
+    ahs_uid, _ = boards_of(fake)
+    run(commit=True, phases={"boards"})
+    with SessionLocal() as s:
+        for i, cid in enumerate(["WZ-A", "WZ-B"]):
+            card = s.get(Opportunity, zworld.ids["jane_card" if i == 0 else "noaddr_card"])
+            card.custom_fields = {**(card.custom_fields or {}), "workiz_id": cid}
+        s.commit()
+    one = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
+    two = fake.new_customer(customer_first_name="Coco", customer_last_name="Torres")
+    for cid, cust in (("WZ-A", one), ("WZ-B", two)):
+        job = fake.new_job(ahs_uid, job_title="j " + cid, customer={"customer_uid": cust})
+        fake.set_custom(fake.jobs[job], "Workiz Job #", cid)
+    code, report = run(commit=True, phases={"links"})
+    assert code == 0, report["problems"]
+    assert report["links"]["jobs_linked"] == 2
+    assert report["links"]["contacts_linked"] + report["links"]["contacts_taken"] == 2

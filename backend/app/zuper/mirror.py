@@ -180,7 +180,15 @@ def _crm_id(record: dict, label: str) -> int | None:
 def links(db: Session, commit: bool, report: Report) -> None:
     """Pair what already exists on both sides: job <-> card, customer <-> contact."""
     counts = {"jobs_seen": 0, "jobs_linked": 0, "jobs_already": 0, "jobs_unmatched": 0,
-              "contacts_linked": 0, "contacts_already": 0, "cards_without_job": 0}
+              "contacts_linked": 0, "contacts_already": 0, "contacts_taken": 0,
+              "cards_without_job": 0}
+    # A mapping is one-to-one on both sides (two unique indexes). Two Zuper customers can
+    # point at the SAME CRM contact — the owner split customers who shared a phone in Workiz
+    # (2026-09-23) — so the first pairing wins and the second is counted, not attempted.
+    taken_cards = {m.crm_id for m in db.scalars(
+        select(ZuperMapping).where(ZuperMapping.crm_type == "opportunity"))}
+    taken_contacts = {m.crm_id for m in db.scalars(
+        select(ZuperMapping).where(ZuperMapping.crm_type == "contact"))}
     cards = list(db.scalars(select(Opportunity)))
     by_workiz: dict[str, Opportunity] = {}
     for o in cards:
@@ -207,22 +215,28 @@ def links(db: Session, commit: bool, report: Report) -> None:
         if o is None:
             wid = _workiz(record)
             o = by_workiz.get(wid) if wid else None
-        if o is None or o.id in matched:
+        if o is None or o.id in matched or o.id in taken_cards:
             counts["jobs_unmatched"] += 1
             continue
         matched.add(o.id)
+        taken_cards.add(o.id)
         counts["jobs_linked"] += 1
         if commit:
             _link(db, "opportunity", o.id, "job", uid)
+            db.flush()
         cust_uid = mapping.uid(record, "customer_uid") or mapping.uid(
             record.get("customer") or {}, "customer_uid")
         if cust_uid and o.contact_id:
             if mapping.mapping_by_uid(db, "customer", cust_uid) is not None:
                 counts["contacts_already"] += 1
+            elif o.contact_id in taken_contacts:
+                counts["contacts_taken"] += 1
             else:
+                taken_contacts.add(o.contact_id)
                 counts["contacts_linked"] += 1
                 if commit:
                     _link(db, "contact", o.contact_id, "customer", cust_uid)
+                    db.flush()
     counts["cards_without_job"] = sum(
         1 for o in cards if mapping.mapping_for(db, "opportunity", o.id) is None)
     if commit:
