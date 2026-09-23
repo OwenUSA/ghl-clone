@@ -5757,3 +5757,42 @@ text a customer: SMS is disabled on every number (G4)". That is the state today:
 `message_status` is DISABLED and its 10DLC registration is Unregistered, so US carriers would
 refuse business SMS from it anyway. The CRM cannot check this itself — `client.py` denylists
 every `/telephony/*` path by construction — so it stays a by-hand item.
+
+---
+
+## AMENDMENT (2026-09-24): phase 2a — the voice agent knows who is calling
+
+Decision 3 of the 2026-09-22 voice-agent amendment ("every agent gets the customer brief when
+the caller is known"), built. Branches `feature/agent-caller-context` in both repos; not merged,
+not deployed. It also does the phase-0 item that was moved to phase 2: owen-main's agent path
+no longer NEEDS the GoHighLevel lookup — an agent version set to `context_provider.kind:
+crm_link` asks the CRM instead. The `ghl` kind is left in place (switching the live agent is a
+config change on its version, not this branch).
+
+* **One endpoint, `POST /api/agent-context`** (`app/agent_context.py`), the feed's `events:write`
+  token, added to `auth.EVENTS_WRITE_PATHS`. The body is the number and nothing else — a contact
+  id is refused (422), so owen-main can never choose whose brief it reads.
+* **Identity:** last ten digits (`phone_match`), and only for a complete number. Exactly one
+  contact or nothing: a household of two on one line is `{"known": false}`, because greeting the
+  wrong person by name is worse than greeting nobody (owen-main CRM_CONTEXT_SPEC C3). The words
+  the agent is given still tell it to confirm who it is speaking with.
+* **What it may say:** name, the most recently updated OPEN card (title / stage / pipeline), the
+  next visit whose status is not in `automations.NO_REMINDER_STATUSES`, and when we were last in
+  touch. Built from named columns, never a serialised row. **Never:** `value_cents`, opportunity
+  notes, thread notes and internal comments (not their bodies, not their timestamps), the
+  Checklist or any custom field, email, address, other customers. `auth.sees_internal` is True
+  for every principal that reaches this route and is deliberately NOT the gate: the reader is
+  a caller on the phone, not the token's owner.
+* **Pipeline access:** the token owner's, through `pipeline_access.hidden_pipeline_ids` — on the
+  card, on the visit's deal and on the visit's calendar. The feed is not a second, wider door.
+* **"Only assigned data"** does not describe a feed, but a token inherits its owner's switch: a
+  restricted owner's token is refused (403), not narrowed.
+* **owen-main** (`context_provider.kind: crm_link`): resolved to OWEN's own adapter
+  `/api/agent-runtime/crm-link/lookup` like `ghl`, so `CRM_LINK_TOKEN` never enters an agent
+  version or owen-voice. The CRM request has `CRM_LINK_CONTEXT_TIMEOUT_SECONDS` (0.8s) in total,
+  inside owen-voice's 1.2s; down / slow / refused → `{}` and a WARNING (owen-voice records the
+  call as context-degraded); `known: false` → empty fields. `caller_brief.py` renders times in
+  America/New_York ("Tuesday 29 September at 9:00 AM"). owen-voice is unchanged.
+* **Not verified:** no real call has used it, and no request has gone from the owen-main container
+  to the CRM's `/api/agent-context` (same unknown as every crm-link path). The live agent's
+  version still says whatever it says today until someone sets `kind: crm_link` on it.

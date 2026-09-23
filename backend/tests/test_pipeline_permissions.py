@@ -528,6 +528,8 @@ AUDITED = {
     "create_opportunity": "can_see -> same 400 as a wrong pair",
     "ingest_ahs_job": "ahs_jobs._board: can_see, a hidden AHS board is 'not found'",
     "ingest_ahs_cancellation": "ahs_jobs.deliver_cancellation: can_see -> no_card",
+    "agent_context": "agent_context.brief: hidden_pipeline_ids(token owner) on card, "
+                     "visit's deal and visit's calendar",
     "delete_opportunity": "ADMIN; pipeline_access.get_opportunity",
     "bulk_move_stage": "_bulk_load visible_opportunities + stage can_see",
     "bulk_assign_owner": "_bulk_load visible_opportunities",

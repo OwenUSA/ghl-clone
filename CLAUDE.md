@@ -541,6 +541,19 @@ DISPATCHER only (`ai.api.VIEW`), always with the SIGNED-IN user's email — owen
 user's `PJSIP/operator-<slug>` browser line, and refuses an email not on its softphone roster.
 Unconfigured link: `{"calls": []}`, no request. Never exercised on a real call. See DECISIONS.md.
 
+## The voice agent knows who is calling (2026-09-24)
+
+`POST /api/agent-context` (`app/agent_context.py`) — owen-main asks it as a voice agent answers,
+with the feed's `events:write` token (`auth.EVENTS_WRITE_PATHS`; a TECH or a restricted owner is
+refused). Body: `{"caller_number"}` only (any other key is 422). Last ten digits, exactly ONE
+contact: none, a fragment, or a household of two is `{"known": false}` and nothing else. Known:
+`contact{first_name,last_name}`, the most recently updated OPEN card's `{title,stage,pipeline}`,
+the next visit not cancelled `{starts_at,title}`, `last_contact_at` (call/text/email/WhatsApp,
+never a note, never an unsent text). **Never** money, notes of any kind, Checklist, email,
+address. Pipelines hidden from the token's owner (`pipeline_access`) are hidden here too.
+owen-main renders it (`integrations/crm/caller_brief.py`, `context_provider.kind: crm_link`).
+See DECISIONS.md.
+
 ## Zuper: the source of truth for jobs — built, switched OFF (2026-09-16)
 
 `backend/app/zuper/` (read `__init__.py` first). The CRM captures customers; Zuper owns jobs,
