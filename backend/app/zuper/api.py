@@ -450,6 +450,8 @@ def send_block(db: Session, o: Opportunity, principal: auth.Principal | None) ->
     state = send_state(m)
     problems: list[str] = []
     if state in ("not_sent", "failed"):
+        if config.pull_only():
+            problems.append(config.PULL_ONLY_SENTENCE)
         if not config.armed(db):
             problems.append("The Zuper sync is not switched on (Settings → Zuper), so nothing "
                             "can be sent yet.")
@@ -479,6 +481,8 @@ def queue_send(db: Session, o: Opportunity, *, by: str) -> tuple[bool, str]:
     if state in ("queued", "sent"):
         return False, state
     why = []
+    if config.pull_only():
+        why.append(config.PULL_ONLY_SENTENCE)
     if not config.armed(db):
         why.append("The Zuper sync is not switched on (Settings → Zuper), so nothing can be "
                    "sent yet.")

@@ -5663,3 +5663,56 @@ outbound AI calls.
   mapping to the same operator slug. Verify before promising Listen in the UI.
 * Real latency with Flux Multilingual and the Spanish voice, measured on real calls, decides
   whether the model choice in (Q9) holds.
+
+---
+
+## AMENDMENT (2026-09-23): the CRM imitates Zuper — one-way mirror, `ZUPER_PULL_ONLY`, `app.zuper.mirror`
+
+The owner reversed the direction of the 2026-09-16 design. Zuper is now live for the whole
+business (jobs, boards, routes, technicians, proposals), so **Zuper's boards are the truth and
+the CRM copies them**: the same AHS and Retail pipelines, the same stage names in the same
+order, the same information on each job, and every create, update or status move in Zuper
+replicated here. The CRM writes nothing back.
+
+### What changed
+
+* **`ZUPER_PULL_ONLY`** (`zuper/config.py`) — a fourth switch, beside the env flag, the Settings
+  switch and the key. With it set:
+  * `engine.write_zuper` drops what it would have sent (counted `zuper_writes_suppressed`),
+    and `engine.move_job_status` moves nothing (`status_moves_suppressed`) — so a pull can no
+    longer stamp `CRM Opportunity ID` on a job or roll a status back;
+  * `engine.policy` answers ZUPER for **every** field of every kind, so the Workiz-before-cutover
+    exception and "latest edit wins" stop arbitrating — a mirror has nothing to arbitrate. The
+    CRM's own `crm:` group stays CRM-owned because it is computed here and travels nowhere;
+  * the flush listener queues nothing, so a CRM edit never becomes a push;
+  * the sweep runs its Zuper half only (`crm_half_skipped`);
+  * Send to Zuper answers 409 with the sentence, in the modal and in the route;
+  * `client.request` refuses every non-GET before a connection exists. **The one exception is
+    registering the webhook** (`/webhook`, `/service/notifications/webhook`) from the operator's
+    command: that write is how Zuper is asked to TELL the CRM about a change.
+* **`python -m app.zuper.mirror`** (dry run; `--commit` writes) lines the two sides up once:
+  * `boards` — each pipeline's stages become the category's statuses, in Zuper's order. A stage
+    whose name matches is kept; one in `mirror.ALIASES` is RENAMED, so its deals, colour and
+    report switches survive ("Inspection" → "Inspecting", "Submit The Invoice" → "Invoice
+    Submitted to AHS", …); the rest are created. A stage Zuper does not have is emptied — its
+    deals move to the stage the alias names, else the first — and then deleted. Writes the
+    pipeline↔category and stage↔status rows the pull reads.
+  * `links` — pairs what already exists: a Zuper job to the card holding the same Workiz job
+    number (or the card its `CRM Opportunity ID` names), and that job's customer to the card's
+    contact. Nothing is duplicated and nothing is created in Zuper.
+  * `backfill` — pulls every in-scope job through the ordinary engine, which brings stage,
+    title, address, owner, Checklist answers, notes, tasks and visits across.
+* `setup.py` is unchanged and still passes: after the mirror every stage is already mapped to a
+  status of the same name, so its reconciliation writes nothing.
+
+### Why a switch rather than deleting the push
+
+The two-way code is tested and the owner may want a field to travel back one day (the CRM's
+technicians, say). A switch keeps one code path, refuses writes at the client as a backstop,
+and makes the decision visible in `GET /api/health`-style settings rather than in a diff.
+
+### What this does NOT change
+
+Nothing about customer contact: the CRM still sends no automatic text (2026-09-15) and no agent
+acts by itself. The Zuper account's own workflows and notification rules stay off (that is the
+dispatch project's safety gate, checked before every write there).

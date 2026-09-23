@@ -185,7 +185,16 @@ def policy(ctx: Ctx, kind: str, f: str, obj: Any) -> tuple[str, str, str]:
     owner, and its customer's details, are Zuper's. The CRM's own fields (the "CRM" field
     group) are the CRM's. Notes, Checklist answers and tasks are edited on both sides: latest
     edit wins. Before the Workiz cutover, a Workiz-origin job's title, stage, address and its
-    Workiz visit's schedule are Workiz's — the CRM holds what the importer wrote."""
+    Workiz visit's schedule are Workiz's — the CRM holds what the importer wrote.
+
+    Under the one-way mirror (`ZUPER_PULL_ONLY`, 2026-09-23) there is nothing to arbitrate:
+    Zuper wins every field it has a value for, including a Workiz-origin card's stage and a
+    Checklist answer, because the CRM is a copy. The CRM's own "crm:" group stays the CRM's —
+    it is computed here (the card's link, its technicians) and never travels either way."""
+    if config.pull_only():
+        if kind == "opportunity" and f.startswith("crm:"):
+            return CRM, "crm_owned", "crm"
+        return ZUPER, "zuper_mirror", "zuper"
     if kind == "contact":
         return ZUPER, "zuper_owned", "zuper"
     if kind == "opportunity":
@@ -447,6 +456,10 @@ def stage_order(db: Session, stage: Stage) -> int:
 def move_job_status(ctx: Ctx, job_uid: str, from_stage_id: int | None,
                     to_stage_id: int) -> None:
     db = ctx.db
+    if config.pull_only():
+        ctx.count("status_moves_suppressed")
+        log.info("pull-only: not moving Zuper job %s to stage %s", job_uid, to_stage_id)
+        return
     target = status_for_stage(db, to_stage_id)
     if not target:
         raise ZuperError("rejected", "stage %d has no Zuper status yet — run the setup "
@@ -485,6 +498,13 @@ def _job_body(ctx: Ctx, o: Opportunity, view: dict) -> dict:
 
 def write_zuper(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping, merged: dict,
                 record: dict, to_zuper: dict) -> None:
+    if config.pull_only():
+        # One-way mirror: Zuper is the truth, so what the CRM would have sent is dropped here
+        # (counted, not raised) and the next pull brings Zuper's value back.
+        ctx.count("zuper_writes_suppressed")
+        log.info("pull-only: not writing %s %s to Zuper (%s)", kind, m.zuper_uid,
+                 ",".join(sorted(to_zuper)))
+        return
     if kind == "contact":
         tags = record.get("customer_tags") or record.get("tags") or []
         zapi.update_customer(m.zuper_uid, mapping.customer_payload(

@@ -288,6 +288,16 @@ def _check_host(url: str) -> None:
         raise ZuperError("refused", "the Zuper base URL must be https under zuperpro.com")
 
 
+# Registering the webhook is the one write a one-way mirror still makes: it is how Zuper is
+# asked to TELL the CRM about a change, and only the operator's command sends it.
+MIRROR_WRITES = (PATHS["webhook_create"], PATHS["webhooks"])
+
+
+def _mirror_write_allowed(path: str) -> bool:
+    return bool(_OPERATOR.get()) and any(path == p or path.startswith(p + "/")
+                                         for p in MIRROR_WRITES)
+
+
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None) -> Any:
     method = method.upper()
@@ -303,6 +313,10 @@ def request(method: str, path: str, *, params: dict | None = None,
         raise ZuperError("no_key")
     if method != "GET" and _READ_ONLY.get():
         raise ZuperError("refused", "a dry run makes no %s request" % method)
+    if method != "GET" and config.pull_only() and not _mirror_write_allowed(path):
+        # Backstop for the one-way mirror: every caller checks config.pull_only() first, so
+        # reaching here is a bug — refuse before a connection exists rather than write.
+        raise ZuperError("refused", config.PULL_ONLY_SENTENCE)
     base = config.base_url()
     _check_host(base)
     headers = {"x-api-key": config.api_key(), "Accept": "application/json"}
