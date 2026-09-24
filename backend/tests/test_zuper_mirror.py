@@ -230,6 +230,62 @@ def test_a_card_follows_its_job_from_retail_to_a_regional_board(zworld, fake, mo
     assert not fake.writes()
 
 
+def test_a_regional_pipeline_leaves_the_setup_check_and_the_switch_alone(armed, fake):
+    """Setup, its check and the Settings switch know AHS and Retail only: a mirrored regional
+    pipeline is neither a problem there nor something setup tries to make in Zuper."""
+    board(fake, GUTTERS, RETAIL_STATUSES)
+    code, report = run(commit=True, phases={"boards"})
+    assert code == 0, report["problems"]
+    writes = len(fake.writes())
+    from app.zuper import setup
+    with SessionLocal() as s:
+        checked = setup.run(s, commit=False)
+        assert checked["passed"], checked["checks"]
+        assert GUTTERS not in repr(checked)
+        assert not setup.blockers(s)
+    assert len(fake.writes()) == writes
+
+
+def test_a_card_on_a_regional_board_is_never_sent_to_zuper(armed, fake):
+    """Pull-only off and the sync on: a Retail card may be sent, a hand-made card in a
+    regional pipeline may not — its jobs are made in Zuper — and refusing queues nothing."""
+    from app.models import Job
+    from sqlalchemy import func
+    board(fake, GUTTERS, RETAIL_STATUSES)
+    run(commit=True, phases={"boards"})
+    assert not config.pull_only()
+    c = armed.client("owner")
+    who = c.post("/api/contacts", json={"first_name": "Gil", "last_name": "Gutter",
+                                        "phone": "+19415550142"}).json()
+    address = {"address_street": "1 Main St", "address_city": "Miami",
+               "address_state": "FL", "address_postal_code": "33101"}
+    with SessionLocal() as s:
+        p = s.scalar(select(Pipeline).where(Pipeline.name == GUTTERS))
+        first = s.scalars(select(Stage).where(Stage.pipeline_id == p.id)
+                          .order_by(Stage.position, Stage.id)).first()
+        retail = s.scalar(select(Pipeline).where(Pipeline.name == "Retail"))
+        retail_first = s.scalars(select(Stage).where(Stage.pipeline_id == retail.id)
+                                 .order_by(Stage.position, Stage.id)).first()
+        pid, sid, rid, rsid = p.id, first.id, retail.id, retail_first.id
+    regional = c.post("/api/opportunities", json={
+        "title": "Gil - gutters", "pipeline_id": pid, "stage_id": sid,
+        "contact_id": who["id"], **address}).json()["id"]
+    at_retail = c.post("/api/opportunities", json={
+        "title": "Gil - roof", "pipeline_id": rid, "stage_id": rsid,
+        "contact_id": who["id"], **address}).json()["id"]
+    block = c.get("/api/opportunities/%d" % regional).json()["zuper"]
+    assert block["can_send"] is False
+    assert any("copied from Zuper" in p for p in block["send_problems"]), block
+    assert c.get("/api/opportunities/%d" % at_retail).json()["zuper"]["can_send"] is True
+    writes = len(fake.writes())
+    r = c.post("/api/opportunities/%d/zuper/send" % regional)
+    assert r.status_code == 409 and "copied from Zuper" in r.json()["detail"]
+    with SessionLocal() as s:
+        assert mapping_row(s, "opportunity", regional) is None
+        assert s.scalar(select(func.count(Job.id)).where(Job.type == "zuper_send")) == 0
+    assert len(fake.writes()) == writes
+
+
 # ------------------------------------------------------------------ the one-way guard
 
 def test_pull_only_makes_a_pull_write_nothing_back_to_zuper(zworld, fake, monkeypatch):

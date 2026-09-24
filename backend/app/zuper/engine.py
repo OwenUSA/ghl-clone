@@ -58,6 +58,7 @@ from ..models import (
     OpportunityFollower,
     OpportunityNote,
     OpportunityTask,
+    Pipeline,
     Stage,
     Tag,
     User,
@@ -742,7 +743,12 @@ def send_problems(db: Session, o: Opportunity) -> list[str]:
     phone, and the JOB's address (the card's own — the contact's can be copied onto it with
     "Use contact address"). Not the switches or the role: those are the route's."""
     problems = []
-    if pipeline_category(db, o.pipeline_id) is None:
+    p = db.get(Pipeline, o.pipeline_id) if o.pipeline_id else None
+    if p is not None and p.name in mapping.MIRROR_ONLY_CATEGORIES:
+        # A regional board (2026-09-24) is only COPIED from Zuper: its jobs are made there.
+        problems.append("“%s” is copied from Zuper, so its jobs are made in Zuper, not sent "
+                        "from here." % p.name)
+    elif pipeline_category(db, o.pipeline_id) is None:
         problems.append("Only cards in the AHS or Retail pipeline go to Zuper, and that "
                         "pipeline's category must be set up first (python -m "
                         "app.zuper.setup --commit).")

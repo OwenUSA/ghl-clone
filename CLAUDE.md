@@ -599,6 +599,11 @@ lines the two sides up: `boards` (stages become the category's statuses; a renam
 its deals — `mirror.ALIASES`), `links` (job ↔ card by Workiz job number, customer ↔ contact),
 `backfill` (pull every job). See the 2026-09-23 amendment in `DECISIONS.md`.
 
+**Six regional boards (2026-09-24)** — Miami / Sarasota repair, roof replacement and gutters —
+are in `mapping.MIRROR_ONLY_CATEGORIES`: `mirror --phase boards` makes a CRM pipeline for each
+one the account has, and links / backfill / webhook / sweep pull their jobs. Setup, its check, the
+load and Send to Zuper still know `CATEGORIES` (AHS, Retail) only; a regional card is never sent.
+
 ```bash
 uv run python -m app.zuper.mirror           # DRY RUN; --commit; --phase boards|links|backfill
 uv run python -m app.zuper.setup            # DRY RUN checks; --commit makes the AHS / Retail categories
