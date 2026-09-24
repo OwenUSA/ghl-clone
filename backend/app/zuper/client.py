@@ -144,7 +144,9 @@ PATHS = {
     "job_status_rollback": "/jobs/{uid}/status/rollback",
     "job_notes": "/jobs/{uid}/note",
     "job_note": "/jobs/{uid}/note/{note_uid}",
-    "job_attachments": "/jobs/{uid}/attachments",
+    # Live (2026-09-24): /jobs/{uid}/attachments answers 404; a job's files come from
+    # the attachments module, filtered by the record they hang on.
+    "job_attachments": "/attachments",
     "job_service_tasks": "/jobs/{uid}/service_tasks",
     "job_service_task": "/jobs/{uid}/service_tasks/{task_uid}",
     "appointments": "/appointments",

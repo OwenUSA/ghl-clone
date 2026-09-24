@@ -350,7 +350,16 @@ def _att_id(rec: dict) -> str | None:
 
 
 def _att_url(rec: dict) -> str | None:
-    return rec.get("url") or rec.get("file_url") or rec.get("attachment_url")
+    # Live rows carry `attachment_path` (2026-09-24); the others are the documented names.
+    return (rec.get("attachment_path") or rec.get("url") or rec.get("file_url")
+            or rec.get("attachment_url"))
+
+
+def _internal(rec: dict) -> bool:
+    """Zuper marks a file INTERNAL or PUBLIC. INTERNAL means staff-only here too: the CRM
+    already keeps internal notes from a technician (2026-09-10), and a photo the office
+    filed as internal is the same kind of thing."""
+    return str(rec.get("attachment_visibility") or "").upper() == "INTERNAL"
 
 
 def _att_type(rec: dict) -> str:
@@ -378,9 +387,12 @@ def zuper_opportunity_attachments(opp_id: int, refresh: bool = False,
     except client.ZuperError:
         return {"state": "unavailable", "message": UNAVAILABLE, "attachments": []}
     out = []
+    staff = auth.sees_internal(principal)
     for rec in rows:
         aid = _att_id(rec)
         if not aid or not _att_url(rec):
+            continue
+        if _internal(rec) and not staff:
             continue
         ctype = _att_type(rec)
         name = rec.get("file_name") or rec.get("attachment_name") or rec.get("name")
@@ -402,7 +414,7 @@ def zuper_attachment_file(opp_id: int, attachment_id: str, db: Session = Depends
     try:
         rec = next((r for r in _attachments(job_uid, False) if _att_id(r) == attachment_id),
                    None)
-        if rec is None:
+        if rec is None or (_internal(rec) and not auth.sees_internal(principal)):
             raise HTTPException(404, "attachment not found")
         data, ctype = client.fetch_file(_att_url(rec))
     except client.ZuperError as exc:

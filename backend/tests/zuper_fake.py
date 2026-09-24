@@ -232,8 +232,13 @@ class FakeZuper:
             (r"/jobs/([^/]+)/service_tasks/([^/]+)", ("PUT", self.update_task)),
             (r"/jobs/([^/]+)/service_tasks/([^/]+)", ("DELETE", lambda p, b, j, t: self.drop_child(
                 self.tasks, j, t, "service_task_uid"))),
-            (r"/jobs/([^/]+)/attachments", ("GET", lambda p, b, u: self.ok(
-                self.attachments.get(u, [])))),
+            # Live (2026-09-24): a job's files come from the attachments module, narrowed by
+            # `filter.module_uid`. WITHOUT that filter the account's whole library answers,
+            # which is the bug this fake would otherwise hide.
+            (r"/attachments", ("GET", lambda p, b: self.ok(
+                self.attachments.get(p.get("filter.module_uid") or "", [])
+                if p.get("filter.module_uid")
+                else [f for rows in self.attachments.values() for f in rows]))),
             (r"/appointments", ("GET", lambda p, b: self.page(
                 self.filtered(list(self.appointments.values()), p), p))),
             (r"/appointments", ("POST", self.create_appointment)),

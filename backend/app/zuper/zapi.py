@@ -486,7 +486,11 @@ def invoice(uid: str) -> dict:
 # ------------------------------------------------------------------ attachments
 
 def job_attachments(job_uid: str) -> list[dict]:
-    return rows_of(request("GET", path("job_attachments", uid=job_uid)))
+    """A job's own files. `filter.module_uid` is what narrows them: WITHOUT it the live
+    endpoint answers the whole account's attachments (537 of them, 2026-09-24), so the
+    filter is not optional - it is the difference between this job and everyone's."""
+    return rows_of(request("GET", path("job_attachments"),
+                           params={"filter.module_uid": job_uid, "page": 1, "count": 100}))
 
 
 # ------------------------------------------------------------------ settings the setup check reads
