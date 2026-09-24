@@ -84,13 +84,16 @@ def _link(db: Session, crm_type: str, crm_id: int, zuper_type: str, uid: str,
 def boards(db: Session, commit: bool, report: Report) -> None:
     """The CRM's stages become Zuper's statuses, in Zuper's order."""
     by_name = {zapi.category_name(c): c for c in zapi.categories()}
-    for pipeline_name, category_name in mapping.CATEGORIES.items():
+    for pipeline_name, category_name in mapping.mirrored_categories().items():
+        mirror_only = pipeline_name in mapping.MIRROR_ONLY_CATEGORIES
         entry: dict = {"pipeline": pipeline_name, "category": category_name,
                        "renamed": [], "created": [], "kept": [], "removed": []}
-        report.boards.append(entry)
         p = db.scalars(select(Pipeline).where(Pipeline.name == pipeline_name)).first()
         cat = by_name.get(category_name)
-        if p is None or cat is None:
+        if mirror_only and cat is None:
+            continue       # an optional board the account does not have (yet): nothing to copy
+        report.boards.append(entry)
+        if cat is None or (p is None and not mirror_only):
             entry["problem"] = ("no CRM pipeline named %r" % pipeline_name if p is None
                                 else "no Zuper category named %r" % category_name)
             report.problems.append(entry["problem"])
@@ -102,7 +105,17 @@ def boards(db: Session, commit: bool, report: Report) -> None:
             entry["problem"] = "Zuper listed no statuses for %r" % category_name
             report.problems.append(entry["problem"])
             continue
-        have = _stages(db, p.id)
+        if p is None:
+            # A mirror-only board the CRM does not have yet: the pipeline is made here, open to
+            # everyone (no permission rows), after the existing ones.
+            entry["pipeline_created"] = True
+            if commit:
+                last = db.scalar(select(func.max(Pipeline.position))) or 0
+                p = Pipeline(name=pipeline_name, position=last + 1,
+                             updated_at=datetime.now(UTC))
+                db.add(p)
+                db.flush()
+        have = _stages(db, p.id) if p is not None else []
         by_stage_name = {s.name.strip().lower(): s for s in have}
         aliases = {k.strip().lower(): v for k, v in ALIASES.get(pipeline_name, {}).items()}
         taken: set[int] = set()
@@ -196,7 +209,7 @@ def links(db: Session, commit: bool, report: Report) -> None:
         if wid:
             by_workiz.setdefault(wid, o)
     in_scope = {zapi.category_uid(c): zapi.category_name(c) for c in zapi.categories()
-                if zapi.category_name(c) in set(mapping.CATEGORIES.values())}
+                if zapi.category_name(c) in set(mapping.mirrored_categories().values())}
     matched: set[int] = set()
     for record in zapi.jobs():
         if mapping.job_category_uid(record) not in in_scope:
@@ -296,7 +309,8 @@ def render(report: dict) -> str:
     if not report["pull_only"]:
         lines.append("  ! ZUPER_PULL_ONLY is not set: the CRM may still write to Zuper")
     for b in report["boards"]:
-        lines.append("  %s <- %s" % (b["pipeline"], b["category"]))
+        made = " (new CRM pipeline)" if b.get("pipeline_created") else ""
+        lines.append("  %s <- %s%s" % (b["pipeline"], b["category"], made))
         if b.get("problem"):
             lines.append("     problem: %s" % b["problem"])
             continue

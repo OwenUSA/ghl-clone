@@ -143,6 +143,93 @@ def test_a_dry_run_changes_nothing(zworld, fake):
     assert report["boards"][0]["created"], "a dry run still says what it would do"
 
 
+# ------------------------------------------------------- the regional boards (2026-09-24)
+# The owner made six more Zuper categories with Retail's statuses (Miami / Sarasota x repair,
+# roof replacement, gutters). The mirror makes a CRM pipeline for each one the account has.
+
+GUTTERS = "Miami Gutters"
+
+
+def test_a_regional_zuper_board_becomes_a_new_crm_pipeline(zworld, fake):
+    boards_of(fake)
+    cat = board(fake, GUTTERS, RETAIL_STATUSES)
+    code, report = run(commit=True, phases={"boards"})
+    assert code == 0, report["problems"]
+    assert stages(GUTTERS) == RETAIL_STATUSES
+    with SessionLocal() as s:
+        p = s.scalar(select(Pipeline).where(Pipeline.name == GUTTERS))
+        assert mapping_row(s, "pipeline", p.id).zuper_uid == cat
+        for st in s.scalars(select(Stage).where(Stage.pipeline_id == p.id)):
+            m = mapping_row(s, "stage", st.id)
+            assert m.parent_uid == cat and mapping.stage_for_status(s, m.zuper_uid) == st.id
+    # A second run finds the pipeline it made: still one, with the same stages.
+    run(commit=True, phases={"boards"})
+    with SessionLocal() as s:
+        assert len(s.scalars(select(Pipeline).where(Pipeline.name == GUTTERS)).all()) == 1
+    assert stages(GUTTERS) == RETAIL_STATUSES
+
+
+def test_a_regional_board_the_account_lacks_is_skipped_not_a_problem(zworld, fake):
+    boards_of(fake)                                        # AHS and Retail only
+    code, report = run(commit=True, phases={"boards"})
+    assert code == 0 and [b["pipeline"] for b in report["boards"]] == [AHS, "Retail"]
+    with SessionLocal() as s:
+        assert s.scalar(select(Pipeline).where(Pipeline.name == GUTTERS)) is None
+
+
+def test_a_dry_run_names_the_pipeline_it_would_make_and_makes_none(zworld, fake):
+    boards_of(fake)
+    board(fake, GUTTERS, RETAIL_STATUSES)
+    run(commit=False, phases={"boards"})
+    code, report = run(commit=False, phases={"boards"})
+    entry = next(b for b in report["boards"] if b["pipeline"] == GUTTERS)
+    assert entry.get("pipeline_created") and entry["created"] == RETAIL_STATUSES
+    assert "Miami Gutters <- Miami Gutters (new CRM pipeline)" in mirror.render(report)
+    with SessionLocal() as s:
+        assert s.scalar(select(Pipeline).where(Pipeline.name == GUTTERS)) is None
+
+
+def test_a_job_on_a_regional_board_lands_in_that_pipeline(zworld, fake, monkeypatch):
+    monkeypatch.setenv("ZUPER_PULL_ONLY", "true")
+    boards_of(fake)
+    cat = board(fake, GUTTERS, RETAIL_STATUSES)
+    cust = fake.new_customer(customer_first_name="Gus", customer_last_name="Gutter")
+    job = fake.new_job(cat, job_title="Gus Gutter - gutters", customer={"customer_uid": cust})
+    fake.move_job(job, "st-miami gutters-6")               # "Scheduled"
+    run(commit=True, phases={"boards", "links", "backfill"})
+    with SessionLocal() as s:
+        m = s.scalar(select(ZuperMapping).where(ZuperMapping.crm_type == "opportunity",
+                                                ZuperMapping.zuper_uid == job))
+        card = s.get(Opportunity, m.crm_id)
+        assert s.get(Pipeline, card.pipeline_id).name == GUTTERS
+        assert s.get(Stage, card.stage_id).name == "Scheduled"
+    assert not fake.writes()
+
+
+def test_a_card_follows_its_job_from_retail_to_a_regional_board(zworld, fake, monkeypatch):
+    monkeypatch.setenv("ZUPER_PULL_ONLY", "true")
+    _, retail_uid = boards_of(fake)
+    cat = board(fake, GUTTERS, RETAIL_STATUSES)
+    cust = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
+    job = fake.new_job(retail_uid, job_title="Jane Roof - gutters",
+                       customer={"customer_uid": cust})
+    fake.set_custom(fake.jobs[job], "Workiz Job #", "WZ-99")
+    with SessionLocal() as s:
+        card = s.get(Opportunity, zworld.ids['jane_card'])
+        card.custom_fields = {**(card.custom_fields or {}), "workiz_id": "WZ-99"}
+        s.commit()
+    run(commit=True, phases={"boards", "links", "backfill"})
+    # The office moves the job to the regional board in Zuper; the next pull moves the card.
+    fake.jobs[job]["job_category"] = {"category_uid": cat}
+    fake.move_job(job, "st-miami gutters-8")               # "Repair Complete"
+    run(commit=True, phases={"backfill"})
+    with SessionLocal() as s:
+        card = s.get(Opportunity, zworld.ids['jane_card'])
+        assert s.get(Pipeline, card.pipeline_id).name == GUTTERS
+        assert s.get(Stage, card.stage_id).name == "Repair Complete"
+    assert not fake.writes()
+
+
 # ------------------------------------------------------------------ the one-way guard
 
 def test_pull_only_makes_a_pull_write_nothing_back_to_zuper(zworld, fake, monkeypatch):

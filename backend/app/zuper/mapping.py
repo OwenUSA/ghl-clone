@@ -42,6 +42,17 @@ AHS_PIPELINE = "Dream Team Roofing AHS"
 RETAIL_PIPELINE = "Retail"
 # Pipeline name -> the Zuper job category the setup command creates for it.
 CATEGORIES = {AHS_PIPELINE: "AHS", RETAIL_PIPELINE: "Retail"}
+# Zuper categories the CRM only COPIES (2026-09-24): the owner's six regional pipelines, made
+# in Zuper with Retail's statuses. `python -m app.zuper.mirror` creates a CRM pipeline of the
+# same name for each; setup, the day-one load and Send to Zuper never touch them.
+MIRROR_ONLY_CATEGORIES = {name: name for name in (
+    "Miami Retail Repair", "Miami Retail Roof Replacement", "Miami Gutters",
+    "Sarasota Repairs", "Sarasota Roof Replacement", "Sarasota Gutters")}
+
+
+def mirrored_categories() -> dict[str, str]:
+    """Every CRM pipeline -> Zuper category pair the one-way mirror lines up."""
+    return {**CATEGORIES, **MIRROR_ONLY_CATEGORIES}
 
 LEAD_TAG = "Lead"
 
