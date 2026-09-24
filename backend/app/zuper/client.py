@@ -144,8 +144,10 @@ PATHS = {
     "job_status_rollback": "/jobs/{uid}/status/rollback",
     "job_notes": "/jobs/{uid}/note",
     "job_note": "/jobs/{uid}/note/{note_uid}",
-    # Live (2026-09-24): /jobs/{uid}/attachments answers 404; a job's files come from
-    # the attachments module, filtered by the record they hang on.
+    # Live (2026-09-24): /jobs/{uid}/attachments answers 404 and the job record carries no
+    # files; a job's pictures hang on its NOTES, so zapi.job_attachments reads job_notes.
+    # The account-wide attachments module is listed here only as a read for the setup check:
+    # nothing in it says which record a row belongs to, so it can never answer "this job's".
     "job_attachments": "/attachments",
     "job_service_tasks": "/jobs/{uid}/service_tasks",
     "job_service_task": "/jobs/{uid}/service_tasks/{task_uid}",

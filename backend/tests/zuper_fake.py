@@ -55,6 +55,8 @@ class FakeZuper:
     appointments: dict[str, dict] = field(default_factory=dict)
     estimates: dict[str, dict] = field(default_factory=dict)
     invoices: dict[str, dict] = field(default_factory=dict)
+    # A job's pictures, keyed by job uid. Served as a note of note_type IMAGE, which is how
+    # Zuper actually holds them (2026-09-24).
     attachments: dict[str, list[dict]] = field(default_factory=dict)
     files: dict[str, tuple[bytes, str]] = field(default_factory=dict)
     webhooks: list[dict] = field(default_factory=list)
@@ -222,7 +224,7 @@ class FakeZuper:
             (r"/jobs/([^/]+)/recover", ("POST", lambda p, b, u: self.recover(self.jobs, u))),
             (r"/jobs/([^/]+)/status", ("PUT", lambda p, b, u: self.move(u, b, back=False))),
             (r"/jobs/([^/]+)/status/rollback", ("PUT", lambda p, b, u: self.move(u, b, back=True))),
-            (r"/jobs/([^/]+)/note", ("GET", lambda p, b, u: self.children(self.notes, u))),
+            (r"/jobs/([^/]+)/note", ("GET", lambda p, b, u: self.ok(self.note_rows(u)))),
             (r"/jobs/([^/]+)/note", ("POST", self.create_note)),
             (r"/jobs/([^/]+)/note/([^/]+)", ("PUT", self.update_note)),
             (r"/jobs/([^/]+)/note/([^/]+)", ("DELETE", lambda p, b, j, n: self.drop_child(
@@ -232,13 +234,10 @@ class FakeZuper:
             (r"/jobs/([^/]+)/service_tasks/([^/]+)", ("PUT", self.update_task)),
             (r"/jobs/([^/]+)/service_tasks/([^/]+)", ("DELETE", lambda p, b, j, t: self.drop_child(
                 self.tasks, j, t, "service_task_uid"))),
-            # Live (2026-09-24): a job's files come from the attachments module, narrowed by
-            # `filter.module_uid`. WITHOUT that filter the account's whole library answers,
-            # which is the bug this fake would otherwise hide.
-            (r"/attachments", ("GET", lambda p, b: self.ok(
-                self.attachments.get(p.get("filter.module_uid") or "", [])
-                if p.get("filter.module_uid")
-                else [f for rows in self.attachments.values() for f in rows]))),
+            # Live (2026-09-24): a job's pictures hang on its NOTES, as a note of note_type
+            # IMAGE with the files under `attachments[]` - see zapi.job_attachments. The
+            # account-wide /attachments module cannot be narrowed to a job at all, so this
+            # fake does not offer it: asking for it is the bug, not the fix.
             (r"/appointments", ("GET", lambda p, b: self.page(
                 self.filtered(list(self.appointments.values()), p), p))),
             (r"/appointments", ("POST", self.create_appointment)),
@@ -451,6 +450,15 @@ class FakeZuper:
             return self.not_found()
         store[job_uid] = kept
         return self.ok(message="deleted")
+
+    def note_rows(self, job_uid: str) -> list[dict]:
+        """The job's notes, plus the IMAGE note that carries its pictures (if any)."""
+        rows = list(self.notes.get(job_uid, []))
+        pics = self.attachments.get(job_uid)
+        if pics:
+            rows.append({"note_uid": "note-pics-%s" % job_uid, "note_type": "IMAGE",
+                         "note": None, "attachments": pics})
+        return rows
 
     def create_note(self, params, body, job_uid) -> httpx.Response:
         if job_uid not in self.jobs:

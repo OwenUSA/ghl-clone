@@ -445,37 +445,39 @@ def test_zuper_attachments_are_listed_and_relayed_without_the_key_or_url(loaded,
 
 
 def test_a_card_shows_its_own_jobs_photos_and_nobody_elses(loaded, fake):
-    """Live, `GET /attachments` without `filter.module_uid` answers the WHOLE account's files
-    (537 of them, 2026-09-24). A card must show its own job's and no one else's."""
+    """The pictures come off the job's own notes (2026-09-24). The account-wide attachments
+    module cannot be narrowed to a job at all, so a card must never be fed from it."""
     mine, other = loaded.ids["jane_card"], loaded.ids["bob_card"]
     fake.attachments[uid_of("opportunity", mine)] = [
         {"attachment_uid": "mine-1", "attachment_name": "jane-roof.jpg",
-         "mime_type": "image/jpeg", "attachment_path": "https://files.zuperpro.com/j.jpg"}]
+         "attachment_type": "IMAGE", "attachment": "https://files.zuperpro.com/j.jpg"}]
     fake.attachments[uid_of("opportunity", other)] = [
         {"attachment_uid": "theirs-1", "attachment_name": "bob-roof.jpg",
-         "mime_type": "image/jpeg", "attachment_path": "https://files.zuperpro.com/t.jpg"}]
+         "attachment_type": "IMAGE", "attachment": "https://files.zuperpro.com/t.jpg"}]
     listing = loaded.client("owner").get(
         "/api/opportunities/%d/zuper/attachments" % mine).json()
     assert [a["id"] for a in listing["attachments"]] == ["mine-1"]
+    assert listing["attachments"][0]["is_image"] is True      # named .jpg, no mime type
     assert "bob-roof.jpg" not in json.dumps(listing)
 
 
-def test_a_photo_zuper_calls_internal_is_staff_only(loaded, fake):
-    """Internal notes are already kept from a technician (2026-09-10); a file the office filed
-    INTERNAL in Zuper means the same thing, on the list and by id."""
+def test_a_photo_on_a_private_note_is_staff_only(loaded, fake):
+    """Internal notes are already kept from a technician (2026-09-10); a picture on a note the
+    office kept private means the same thing, on the list and by id."""
     card = loaded.ids["jane_card"]         # terry is an unrestricted TECH: he sees the card
-    fake.attachments[uid_of("opportunity", card)] = [
-        {"attachment_uid": "pub-1", "attachment_name": "front.jpg", "mime_type": "image/jpeg",
-         "attachment_path": "https://files.zuperpro.com/front.jpg",
-         "attachment_visibility": "PUBLIC"},
-        {"attachment_uid": "int-1", "attachment_name": "damage.jpg", "mime_type": "image/jpeg",
-         "attachment_path": "https://files.zuperpro.com/dmg.jpg",
-         "attachment_visibility": "INTERNAL"}]
+    job_uid = uid_of("opportunity", card)
+    fake.attachments[job_uid] = [
+        {"attachment_uid": "pub-1", "attachment_name": "front.jpg",
+         "attachment": "https://files.zuperpro.com/front.jpg"}]
+    fake.notes.setdefault(job_uid, []).append(
+        {"note_uid": "private-note", "note": "damage, do not share", "is_private": True,
+         "attachments": [{"attachment_uid": "int-1", "attachment_name": "damage.jpg",
+                          "attachment": "https://files.zuperpro.com/dmg.jpg"}]})
     fake.files["https://files.zuperpro.com/dmg.jpg"] = (b"JPEGDATA", "image/jpeg")
     staff = loaded.client("owner")
-    assert [a["id"] for a in staff.get(
-        "/api/opportunities/%d/zuper/attachments" % card).json()["attachments"]] == [
-        "pub-1", "int-1"]
+    assert sorted(a["id"] for a in staff.get(
+        "/api/opportunities/%d/zuper/attachments" % card).json()["attachments"]) == [
+        "int-1", "pub-1"]
     assert staff.get("/api/opportunities/%d/zuper/attachments/int-1"
                      % card).status_code == 200
     tech = loaded.client("terry")

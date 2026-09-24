@@ -5796,3 +5796,27 @@ config change on its version, not this branch).
 * **Not verified:** no real call has used it, and no request has gone from the owen-main container
   to the CRM's `/api/agent-context` (same unknown as every crm-link path). The live agent's
   version still says whatever it says today until someone sets `kind: crm_link` on it.
+
+## A job's pictures come off its notes (2026-09-24)
+
+The Photos tab on a Zuper-linked card said "unavailable" for every card, because the CRM asked
+`GET /jobs/{uid}/attachments` and the live account answers 404. Measured on the production
+account (422 jobs, read-only):
+
+* **The job record holds no files.** `attachments`, `assets` and `cover_image` were empty on
+  every one of the 422; `gallery` is not pictures but a block of customer-portal URLs, present
+  on every job whether or not anything was photographed.
+* **The account-wide attachments module cannot answer "this job's".** `GET /attachments` exists
+  (~620 rows, 62 pages), but a row carries no field naming the record it hangs on, it answers
+  ten a page whatever `count` says, and `filter.module_uid` matches nothing at all. Every other
+  key tried (`module_uid`, `filter.job_uid`, `filter.module_id`, `reference_uid`, …) is ignored
+  — a bogus uid answers exactly what a real one answers. Feeding a card from it would show one
+  customer another customer's photographs, so `zuper_fake` deliberately does not serve it.
+* **What Zuper actually does:** a picture a technician takes is filed as a job NOTE of
+  `note_type: IMAGE`, with the files under `attachments[]` (`attachment` is the S3 URL,
+  `attachment_name`, `attachment_type`). So `zapi.job_attachments` reads `/jobs/{uid}/note`
+  and flattens the notes' files. On the day this was measured 3 of 422 jobs had any.
+* **Private stays private.** A picture on a note marked `is_private` (or a row the attachments
+  module marks `INTERNAL`) is staff-only, the same rule as internal notes (2026-09-10): it is
+  left out of the list and `GET …/zuper/attachments/{id}` answers 404, never 403.
+* The browser still never sees a Zuper URL or the API key — the relay is unchanged.

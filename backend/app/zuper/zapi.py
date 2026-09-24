@@ -486,11 +486,25 @@ def invoice(uid: str) -> dict:
 # ------------------------------------------------------------------ attachments
 
 def job_attachments(job_uid: str) -> list[dict]:
-    """A job's own files. `filter.module_uid` is what narrows them: WITHOUT it the live
-    endpoint answers the whole account's attachments (537 of them, 2026-09-24), so the
-    filter is not optional - it is the difference between this job and everyone's."""
-    return rows_of(request("GET", path("job_attachments"),
-                           params={"filter.module_uid": job_uid, "page": 1, "count": 100}))
+    """A job's pictures, which live on its NOTES (measured live, 2026-09-24).
+
+    Three endpoints do NOT hold them: `/jobs/{uid}/attachments` is 404; the job record's own
+    `attachments`, `assets` and `cover_image` were empty on all 422 jobs; and the account-wide
+    attachments module (`GET /attachments`, ~620 rows) carries no field saying which record a
+    row belongs to, answers 10 a page whatever `count` says, and `filter.module_uid` matches
+    nothing at all. What a technician takes in the field is filed as a note of `note_type`
+    IMAGE with the pictures under `attachments[]`, so a job's notes are the job's pictures.
+    """
+    out: list[dict] = []
+    for note in job_notes(job_uid):
+        for rec in note.get("attachments") or []:
+            if not isinstance(rec, dict):
+                continue
+            out.append({**rec, "note_uid": note.get("note_uid"),
+                        "note": note.get("note"),
+                        "is_private": note.get("is_private"),
+                        "created_at": rec.get("created_at") or note.get("created_at")})
+    return out
 
 
 # ------------------------------------------------------------------ settings the setup check reads

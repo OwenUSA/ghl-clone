@@ -350,21 +350,27 @@ def _att_id(rec: dict) -> str | None:
 
 
 def _att_url(rec: dict) -> str | None:
-    # Live rows carry `attachment_path` (2026-09-24); the others are the documented names.
-    return (rec.get("attachment_path") or rec.get("url") or rec.get("file_url")
-            or rec.get("attachment_url"))
+    # A note's picture carries `attachment`, the attachments module `attachment_path`
+    # (both measured live, 2026-09-24); the others are the documented names.
+    return (rec.get("attachment") or rec.get("attachment_path") or rec.get("url")
+            or rec.get("file_url") or rec.get("attachment_url"))
 
 
 def _internal(rec: dict) -> bool:
-    """Zuper marks a file INTERNAL or PUBLIC. INTERNAL means staff-only here too: the CRM
-    already keeps internal notes from a technician (2026-09-10), and a photo the office
-    filed as internal is the same kind of thing."""
-    return str(rec.get("attachment_visibility") or "").upper() == "INTERNAL"
+    """A picture on a PRIVATE note, or one Zuper marks INTERNAL, is staff-only here too: the
+    CRM already keeps internal notes from a technician (2026-09-10), and a photo filed on a
+    note the office kept private is the same kind of thing."""
+    return (str(rec.get("attachment_visibility") or "").upper() == "INTERNAL"
+            or bool(rec.get("is_private")))
 
 
 def _att_type(rec: dict) -> str:
-    return str(rec.get("mime_type") or rec.get("file_type") or rec.get("content_type")
+    mime = str(rec.get("mime_type") or rec.get("file_type") or rec.get("content_type")
                or "").lower()
+    if "/" in mime:
+        return mime
+    # A note's picture says only `attachment_type: "IMAGE"`; the name carries the rest.
+    return ""
 
 
 def _job_for(db: Session, principal: auth.Principal, opp_id: int) -> str | None:
