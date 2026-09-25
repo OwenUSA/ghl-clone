@@ -16,6 +16,10 @@ from app.zuper.client import ZuperError
 from sqlalchemy import func, inspect, select, text
 from tests.zuper_support import AHS, RETAIL, arm, mapping_row, uid_of
 
+# The Zuper category names setup creates (2026-09-25: "AHS" became "AHS - Inspection").
+AHS_CATEGORY = mapping.CATEGORIES[mapping.AHS_PIPELINE]
+CATEGORY_NAMES = sorted(mapping.CATEGORIES.values())
+
 
 def crm_fingerprint() -> str:
     """A hash of every row of every table: equal before and after means nothing was written."""
@@ -50,7 +54,7 @@ def test_setup_dry_run_reads_only_and_writes_nothing_on_either_side(zworld, fake
 def test_setup_commit_creates_both_categories_with_every_stage_mapped_by_uid(zworld, fake):
     report = run_setup(commit=True)
     names = {c["category_name"] for c in fake.categories.values()}
-    assert names == {"AHS", "Retail"}
+    assert names == set(mapping.CATEGORIES.values())
     with SessionLocal() as s:
         for key, stage_id in zworld.ids["stages"].items():
             m = mapping_row(s, "stage", stage_id)
@@ -455,7 +459,7 @@ def test_setup_commit_uses_the_category_body_zuper_accepts(zworld, fake):
     """Live Zuper refused {"job_category": {...}} with "Category Name Missing" (2026-09-17):
     the flat body goes first, one POST per category, and the report names the shape."""
     report = run_setup(commit=True)
-    assert {c["category_name"] for c in fake.categories.values()} == {"AHS", "Retail"}
+    assert {c["category_name"] for c in fake.categories.values()} == set(CATEGORY_NAMES)
     assert len(fake.calls("POST", r"^/jobs/category$")) == 2
     assert report["categories"]["accepted_shapes"]["category"] == "flat"
     assert "Zuper accepted these create bodies: category = flat" in setup.render(report)
@@ -472,7 +476,7 @@ def test_a_refused_body_shape_falls_through_to_the_next_without_duplicates(zworl
 
     monkeypatch.setattr(fake, "create_category", wrapped_only)
     report = run_setup(commit=True)
-    assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
+    assert sorted(c["category_name"] for c in fake.categories.values()) == CATEGORY_NAMES
     # AHS: flat refused, then wrapped; Retail goes straight to the shape Zuper accepted.
     assert len(fake.calls("POST", r"^/jobs/category$")) == 3
     assert report["categories"]["accepted_shapes"]["category"] == "category"
@@ -511,7 +515,7 @@ def test_an_unreadable_answer_to_a_create_is_never_retried_with_another_shape(zw
     # The rerun links the category Zuper already has by name: still one "AHS".
     monkeypatch.setattr(fake, "create_category", real)
     run_setup(commit=True)
-    assert sorted(c["category_name"] for c in fake.categories.values()) == ["AHS", "Retail"]
+    assert sorted(c["category_name"] for c in fake.categories.values()) == CATEGORY_NAMES
 
 
 def test_when_zuper_does_not_list_statuses_a_rerun_never_creates_them_twice(zworld, fake,
@@ -813,7 +817,7 @@ def test_the_wrapped_status_list_is_read_trusted_and_duplicates_reported(zworld,
     # Zuper already holds the AHS category with two "New Lead" statuses, and the CRM has the
     # category mapped and a "creating" checkpoint for its first stage (the live state).
     uid = "cat-ahs"
-    fake.categories[uid] = {"category_uid": uid, "category_name": "AHS"}
+    fake.categories[uid] = {"category_uid": uid, "category_name": AHS_CATEGORY}
     fake.statuses[uid] = [{"status_uid": "st-a", "status_name": "New Lead"},
                           {"status_uid": "st-b", "status_name": "New Lead"}]
     with SessionLocal() as s:
