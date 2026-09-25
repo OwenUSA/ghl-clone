@@ -506,8 +506,8 @@ technician gets a calendar, and the last active admin cannot be removed. See DEC
 
 ## AI Agents, phase 1 — the foundation (2026-09-15)
 
-`backend/app/ai/` (read `__init__.py` first) and the AI Agents page. Text/Chat agents only; Voice
-exists as a value for phase 3. **Every agent is created Off**; Suggest turns every write into a
+`backend/app/ai/` (read `__init__.py` first) and the AI Agents page. Text/Chat agents, and since
+2026-09-25 Voice agents (next section). **Every agent is created Off**; Suggest turns every write into a
 pending suggestion staff approve (`POST /api/ai/suggestions/{id}/approve`, exactly once); Auto-pilot
 (ADMIN, confirmed) executes. Try-it runs the draft with real reads and never writes.
 
@@ -530,6 +530,46 @@ pending suggestion staff approve (`POST /api/ai/suggestions/{id}/approve`, exact
   metrics, gaps, connections and settings are ADMIN. `test_ai_permissions.py` enumerates the router.
 - The worker runs agent runs as ordinary jobs; a failed run is logged as `error` and never retried
   (a retry could text a customer twice). See the 2026-09-15 AI Agents amendment in `DECISIONS.md`.
+
+## Voice agents are edited here and published to owen-main (2026-09-25)
+
+A Voice agent is created and edited in AI Agents; owen-main runs the call. **`app/ai/voice.py` is
+the ONE place** a CRM config meets owen-main's `agent_versions.config` (its docstring is the key
+table). A voice agent may have only `transfer_call`, `end_call`, `capture_lead` — **never
+`send_text`** (owen-main refuses `send_sms` on owen_voice) — and no triggers, schedule, AI
+connection, knowledge bases or escalation users: the API refuses them (`voice.clean`), not just
+the UI. **Knowledge over 6,000 characters refuses to publish**, with the number.
+
+- **Publish never waits on owen-main.** It writes the version, an `ai_voice_pushes` row and one
+  `ai_voice_push` job (`app/ai/push.py`); the worker sends `POST /api/crm-link/agent-versions`.
+  Unreachable → retried by `app.queue` (10 attempts); a 4xx → refused, not retried. Until owen-main
+  answers with the version it stored the agent reads **"Published · not yet live on the phone
+  system"** — never "live". Retry: `POST /api/ai/agents/{id}/push` (ADMIN). A newer publish
+  supersedes a push in flight and releases its dedupe key.
+- **owen-main** (`app/integrations/crm/agent_versions.py`): finds the agent by NAME and never
+  creates one (404), validates as activation does (422), and is idempotent on `crm_version` —
+  pushing CRM version 7 twice makes one owen-main version.
+- **Import the live agent once** (from `backend/`): `uv run python -m app.ai.import_voice_agent`
+  (DRY RUN; `--commit` writes; `--agent NAME`). Creates the agent ANSWERING calls with mode
+  Off (phase 2c) + version 1, recorded live only when it maps back to exactly the live config;
+  never overwrites an existing CRM agent; never writes to owen-main; prints no persona or
+  knowledge. See DECISIONS.md.
+
+### Answering calls is its own switch (phase 2c, 2026-09-25)
+
+A voice agent has TWO controls and they never stand for each other: **"Answering calls"**
+(`ai_agents.answering_calls`, default false; does owen-main have this agent's version ACTIVE?)
+and the mode, shown as **"What it may write here"** (Off / Suggest / Auto-pilot — CRM writes
+only). `POST /api/ai/agents/{id}/answering` `{"on", "confirm"}` is ADMIN only and confirmed both
+ways; a text agent refuses it (400). On → the published version is activated on owen-main (no
+new version there); Off → owen-main's `{"agent_name", "deactivate": true}`, and a caller then
+reaches the flow's fallback (voicemail) — not a failed call. Publish sends `activate =
+answering_calls` and never deactivates by itself. All of it rides the ONE queued push in
+`app/ai/push.py`. The chip is the server's label ("Answering calls", "Not answering calls",
+"Answering calls — not with this version", "Published · not yet live on the phone system", …);
+never "Answering" unless owen-main said THIS version is active. The import creates the live
+agent **answering, mode Off**. Making Off block activation was tried and rejected — the import
+would have read "off" about the live receptionist. See DECISIONS.md.
 
 ## A live AI call: Listen / Take over (2026-09-23)
 

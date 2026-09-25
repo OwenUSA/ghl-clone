@@ -82,11 +82,23 @@ def test_every_rule_that_texts_a_customer_is_off():
     # nothing on their own account: `ai_agent_run` runs an agent (whose own sends go through
     # the same switches and are Off by default), and `fetch_message_media` COPIES AN INBOUND
     # PICTURE onto our disk — it has no transport call in it at all (2026-09-16).
-    not_a_rule = {"ai_agent_run", "fetch_message_media"}
+    # `ai_voice_push` (2026-09-25) sends a voice agent's CONFIGURATION to owen-main; it
+    # texts nobody and places no call — pinned below.
+    not_a_rule = {"ai_agent_run", "fetch_message_media", "ai_voice_push"}
     assert set(rules) == set(automations.HANDLERS) - not_a_rule
     for key, r in rules.items():
         if r["texts_customer"]:
             assert r["enabled"] is False and r["reason"].startswith("Off."), key
+
+
+def test_the_voice_push_handler_cannot_text_or_call():
+    import inspect
+
+    from app.ai import push
+    src = inspect.getsource(push)
+    for forbidden in ("send_sms", "place_call", "get_transport", "send_outbound"):
+        assert forbidden not in src, forbidden
+    assert "crmlink.publish_agent_version(" in src
 
 
 def test_the_picture_fetch_handler_cannot_send_anything(world):

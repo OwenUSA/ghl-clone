@@ -1208,7 +1208,12 @@ AUDITED = {
         "ai_search_kbs", "ai_list_gaps", "ai_resolve_gap", "ai_dismiss_gap", "ai_list_runs",
         "ai_get_run", "ai_metrics", "ai_list_suggestions", "ai_approve_suggestion",
         "ai_dismiss_suggestion", "ai_wake_agent", "ai_list_alerts", "ai_read_alert",
-        "ai_read_all_alerts"), "AI_MODULE: restricted refused 403"),
+        "ai_read_all_alerts",
+        # Retry a voice agent's push to owen-main (2026-09-25): ADMIN, no customer record.
+        "ai_push_agent",
+        # A voice agent's "Answering calls" switch (phase 2c, 2026-09-25): ADMIN, no
+        # customer record — it tells owen-main to activate / deactivate an agent version.
+        "ai_set_answering"), "AI_MODULE: restricted refused 403"),
 }
 
 

@@ -1152,8 +1152,15 @@ class AiAgent(Base):
     folder_id: Mapped[int | None] = mapped_column(ForeignKey("ai_folders.id"), index=True)
     channel: Mapped[str] = mapped_column(String(20), default=TEXT, server_default=TEXT)
     description: Mapped[str | None] = mapped_column(Text)
-    # Every agent starts Off, and nothing but an explicit change turns one on.
+    # Every agent starts Off, and nothing but an explicit change turns one on. The mode
+    # governs what the agent may WRITE in the CRM — never whether it answers the phone.
     mode: Mapped[str] = mapped_column(String(20), default=OFF, server_default=OFF)
+    # VOICE only (phase 2c, 2026-09-25): does it answer calls? A switch of its own, because
+    # "answers the phone" and "may write here" are different facts — the imported live
+    # receptionist is answering=True with mode Off. False for every new agent and for every
+    # text agent (the API refuses it there). `ai/push.py` makes owen-main match it.
+    answering_calls: Mapped[bool] = mapped_column(Boolean, default=False,
+                                                  server_default=false())
     draft: Mapped[dict] = mapped_column(JSONType, default=dict)
     published_version_id: Mapped[int | None] = mapped_column(Integer)
     draft_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1166,8 +1173,9 @@ class AiAgent(Base):
 
 
 class AiAgentVersion(Base):
-    """An IMMUTABLE published config — the shape owen-main's `agent_versions` keeps, so a
-    voice agent's version can be pushed there as-is in phase 3. Nothing updates a row."""
+    """An IMMUTABLE published config. Nothing updates a row. A VOICE version is mapped to
+    owen-main's `agent_versions` shape by `ai/voice.py` and pushed; how that push stands is
+    `AiVoicePush`, never a column here."""
     __tablename__ = "ai_agent_versions"
     __table_args__ = (UniqueConstraint("agent_id", "version", name="uq_ai_agent_version"),)
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1177,6 +1185,50 @@ class AiAgentVersion(Base):
     published_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
     published_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AiVoicePush(Base):
+    """Where a published VOICE version stands on the phone system (phase 2b, 2026-09-25).
+
+    Its own table, because a version is immutable and a push is not: it is attempted,
+    retried, refused, superseded. One row per version, written by `ai/push.py` only.
+    `status` is what the screen says — it never claims "live" until owen-main answered
+    with the version it stored."""
+    __tablename__ = "ai_voice_pushes"
+    PENDING = "pending"          # queued, not yet answered
+    RETRYING = "retrying"        # could not reach owen-main; the queue will try again
+    REFUSED = "refused"          # owen-main said no (validation, unknown agent) — no retry
+    FAILED = "failed"            # retries used up, or the link is not configured
+    LIVE = "live"                # owen-main confirmed THIS version is the one answering
+    # owen-main confirmed this version is NOT the one answering: stored while answering was
+    # off, or the agent deactivated (phase 2c). `owen_answering` says whether another is.
+    NOT_ANSWERING = "not_answering"
+    SUPERSEDED = "superseded"    # a newer version was published before this one landed
+    STATUSES = (PENDING, RETRYING, REFUSED, FAILED, LIVE, NOT_ANSWERING, SUPERSEDED)
+    PUSH = "push"                # send the version, activate = the agent's answering_calls
+    DEACTIVATE = "deactivate"    # "Answering calls" switched off: clear owen-main's pointer
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("ai_agent_versions.id"), unique=True)
+    agent_id: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(20), default=PENDING, server_default=PENDING)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    owen_agent_id: Mapped[str | None] = mapped_column(String(64))
+    owen_version_id: Mapped[str | None] = mapped_column(String(64))
+    owen_version: Mapped[int | None] = mapped_column(Integer)
+    # True when the version came FROM owen-main (the import) rather than being pushed to it.
+    imported: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # What the last queued request for this version is (phase 2c): PUSH or DEACTIVATE.
+    op: Mapped[str] = mapped_column(String(20), default=PUSH, server_default=PUSH)
+    # owen-main's last ANSWER about the agent as a whole: is any version answering, and
+    # which. Reality, never what the CRM asked for. None until owen-main has answered.
+    owen_answering: Mapped[bool | None] = mapped_column(Boolean)
+    owen_active_version: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
 
 
 class AiKnowledgeBase(Base):

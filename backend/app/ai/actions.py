@@ -19,8 +19,10 @@ Agents act with DISPATCHER rules and are never narrowed by "Only assigned data".
 as a system principal with no user id, so a pipeline restricted to named users is hidden
 from every agent. What they write carries `ai_agent_id` and reads "AI: <agent name>".
 
-Voice-only actions (transfer_call, end_call) are defined for phase 3 and offered to no Text
-agent. Agents never create contacts or opportunities: there is no such action, and a tool
+Voice-only actions (transfer_call, end_call, capture_lead) are offered to Voice agents only,
+and are carried out by owen-main during the call — never here (`voice.py` maps them to
+owen-main's tools). A Voice agent may have nothing else (`voice.clean` says why).
+Agents never create contacts or opportunities: there is no such action, and a tool
 that would need a record that does not exist is refused.
 """
 from __future__ import annotations
@@ -60,7 +62,7 @@ INTERNAL = "internal"  # AI-only bookkeeping (a knowledge gap): runs except in T
 WRITE = "write"        # a change to the CRM or a message: Auto executes, Suggest suggests
 # Always a pending suggestion, whatever the mode (2026-09-16): only a person may carry it out.
 SUGGEST_ONLY = "suggest_only"
-VOICE = "voice"        # phase 3
+VOICE = "voice"        # runs in owen-main during a call, never in the CRM
 
 
 class Refused(Exception):
@@ -835,7 +837,8 @@ class SetLeadOutcome(Action):
 
 class VoiceOnly(Action):
     def prepare(self, ctx, args):
-        raise Refused("%s is a voice action (phase 3)" % self.name)
+        raise Refused("%s is a voice action: the phone system carries it out during a "
+                      "call, never the CRM" % self.name)
 
 
 CATALOGUE: dict[str, Action] = {a.name: a for a in (
@@ -917,6 +920,10 @@ CATALOGUE: dict[str, Action] = {a.name: a for a in (
     VoiceOnly("transfer_call", "Transfer call", "Transfer the live call to a person.",
               _obj({"to": _str("who", 100)}, ("to",)), VOICE, ("voice",)),
     VoiceOnly("end_call", "End call", "End the live call.", _obj({}), VOICE, ("voice",)),
+    VoiceOnly("capture_lead", "Capture lead",
+              "Record the caller's name, roofing need and property address. The CRM decides "
+              "whether that is a qualified lead; the agent never creates one.",
+              _obj({}), VOICE, ("voice",)),
 )}
 
 
@@ -927,7 +934,8 @@ def actions_for_channel(channel: str) -> list[str]:
 def catalogue_payload() -> list[dict]:
     return [{"name": a.name, "label": a.label, "description": a.description,
              "kind": a.kind, "channels": list(a.channels),
-             "phase": 3 if a.kind == VOICE else 1} for a in CATALOGUE.values()]
+             "runs_in": "phone system" if a.kind == VOICE else "crm"}
+            for a in CATALOGUE.values()]
 
 
 def result_text(result: dict) -> str:

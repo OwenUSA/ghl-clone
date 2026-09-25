@@ -2,15 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import {
   aiAgent, aiCatalogue, aiConnectionNames, aiFolders, aiKbs, getContact, listContacts, listPipelines,
-  listUsers, previewAiPrompt, publishAiAgent, setAiAgentMode, tryAiAgent, updateAiAgent,
+  listUsers, previewAiPrompt, publishAiAgent, pushAiAgent, setAiAgentAnswering, setAiAgentMode, tryAiAgent,
+  updateAiAgent,
   type AiAgentDetail, type AiWould,
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  addItem, BUILDER_SECTIONS, DAYS, dayLabel, draftForSave, formatCost, formatLatency, formatTokens,
-  isAiAdmin, MODE_LABEL, MODE_TONE, modeLabel, modesFor, moveItem, needsConfirm, newTrigger,
-  outcomeLabel, removeItem, sameDraft, scheduleSummary, setItem, stamp, toggle,
-  TRIGGER_LABEL, triggerSummary, wouldText,
+  actionsFor, addItem, ANSWERING_TITLE, answeringConfirm, channelLabel, DAYS, dayLabel, draftForSave, formatCost, formatLatency, formatTokens,
+  isAiAdmin, knowledgeBudget, MODE_LABEL, MODE_TONE, modeLabel, modesFor, moveItem, needsConfirm, newTrigger,
+  offerTakeOff, outcomeLabel, phoneSystemPending, phoneSystemTone, removeItem, sameDraft, scheduleSummary,
+  sectionsFor, setItem, stamp, toggle,
+  TRIGGER_LABEL, triggerSummary, wouldText, WRITE_MODE_TITLE,
   type BuilderSection, type Draft, type Mode, type Trigger,
 } from '../../lib/aiAgents'
 import { IconChevronLeft, IconSparkle } from '../Icon'
@@ -29,9 +31,21 @@ type Props = { user: Me; agentId: number; onBack: () => void }
  * opportunity modal's left section nav (refs/opps/22), the form, and a right-hand Try it
  * panel for an ADMIN. Editing saves a DRAFT; Publish freezes a version. A dispatcher sees
  * the same sections as plain text, with no control that would be refused.
+ *
+ * A VOICE agent (2026-09-25) has its own sections (`sectionsFor`), no Try it (it is tried by
+ * calling it), and a line under the top bar saying whether the published version is live on
+ * the phone system — only what owen-main confirmed, never what the CRM hopes.
+ *
+ * Phase 2c: a voice agent shows TWO controls, side by side and never merged — the
+ * "Answering calls" switch (does it answer the phone? its own confirmation) and the mode,
+ * titled "What it may write here" (Off / Suggest / Auto-pilot governs CRM writes only).
  */
 export function AgentBuilder({ user, agentId, onBack }: Props) {
-  const detail = useQuery({ queryKey: ['ai-agent', agentId], queryFn: () => aiAgent(agentId) })
+  const detail = useQuery({
+    queryKey: ['ai-agent', agentId], queryFn: () => aiAgent(agentId),
+    // While a push is on its way, ask again so the line changes when it lands.
+    refetchInterval: (q) => (phoneSystemPending(q.state.data?.phone_system?.status) ? 10_000 : false),
+  })
   if (detail.isError) {
     return (
       <div style={{ padding: 24 }}>
@@ -54,9 +68,12 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
   const [description, setDescription] = useState(agent.description ?? '')
   const [folderId, setFolderId] = useState<number | null>(agent.folder_id)
   const [section, setSection] = useState<BuilderSection>('basics')
+  const voice = agent.channel === 'voice'
+  const phoneState = agent.phone_system
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmAuto, setConfirmAuto] = useState(false)
+  const [confirmAnswering, setConfirmAnswering] = useState<boolean | null>(null)
 
   const dirty = !sameDraft(draftForSave(draft), draftForSave(agent.draft)) || name !== agent.name
     || description !== (agent.description ?? '') || folderId !== agent.folder_id
@@ -79,7 +96,16 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
         folder_id: folderId, draft: draftForSave(draft) })
       return publishAiAgent(agent.id)
     },
-    onSuccess: (a) => { refreshAll(a); setError(null); setNotice(`Published version ${a.published_version}.`) },
+    onSuccess: (a) => {
+      refreshAll(a); setError(null)
+      setNotice(voice ? `Published version ${a.published_version}. ${a.phone_system?.detail ?? ''}`
+        : `Published version ${a.published_version}.`)
+    },
+    onError: (e: Error) => { setNotice(null); setError(e.message) },
+  })
+  const retryPush = useMutation({
+    mutationFn: () => pushAiAgent(agent.id),
+    onSuccess: (a) => { refreshAll(a); setError(null); setNotice(a.phone_system?.detail ?? null) },
     onError: (e: Error) => { setNotice(null); setError(e.message) },
   })
   const mode = useMutation({
@@ -87,6 +113,16 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
     onSuccess: (a) => { setConfirmAuto(false); refreshAll(a); setError(null); setNotice(`“${a.name}” is ${modeLabel(a.mode)}.`) },
     onError: (e: Error) => { setConfirmAuto(false); setNotice(null); setError(e.message) },
   })
+  const answering = useMutation({
+    mutationFn: (on: boolean) => setAiAgentAnswering(agent.id, on, true),
+    onSuccess: (a) => {
+      setConfirmAnswering(null); refreshAll(a); setError(null)
+      setNotice(a.phone_system?.detail ?? null)
+    },
+    onError: (e: Error) => { setConfirmAnswering(null); setNotice(null); setError(e.message) },
+  })
+  const answeringCopy = confirmAnswering == null ? null
+    : answeringConfirm(confirmAnswering, agent.name, agent.published_version)
   const chooseMode = (to: Mode) => {
     if (to === agent.mode) return
     if (needsConfirm(agent.mode, to)) setConfirmAuto(true)
@@ -107,15 +143,31 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
         <Chip text={agent.published_version != null ? `Published v${agent.published_version}` : 'Draft — not published'}
           fg={agent.published_version != null ? 'rgb(2,122,72)' : 'rgb(71,84,103)'}
           bg={agent.published_version != null ? 'rgb(236,253,243)' : 'rgb(242,244,247)'} />
+        {voice && phoneState && phoneState.status !== 'unpublished' && (
+          <Chip text={phoneState.label} {...phoneSystemTone(phoneState.status)} />
+        )}
         {(dirty || (agent.published_version != null && agent.has_unpublished_changes)) && admin && (
           <span style={{ fontSize: 12, color: 'rgb(181,71,8)' }}>
             {dirty ? 'Unsaved changes' : 'Unpublished changes'}
           </span>
         )}
         <div className="ml-auto flex items-center gap-8">
-          <span style={{ fontSize: 13, color: MUTED }}>Mode</span>
+          {voice && (
+            <>
+              <span style={{ fontSize: 13, color: MUTED }}>{ANSWERING_TITLE}</span>
+              {admin ? (
+                <Switch checked={!!agent.answering_calls} label={ANSWERING_TITLE}
+                  onChange={(on) => setConfirmAnswering(on)} />
+              ) : (
+                <Chip text={agent.answering_calls ? 'On' : 'Off'}
+                  {...phoneSystemTone(agent.answering_calls ? 'live' : 'not_answering')} />
+              )}
+              <div style={{ width: 1, height: 20, backgroundColor: LINE }} />
+            </>
+          )}
+          <span style={{ fontSize: 13, color: MUTED }}>{voice ? WRITE_MODE_TITLE : 'Mode'}</span>
           {admin ? (
-            <div role="radiogroup" aria-label="Mode" className="flex"
+            <div role="radiogroup" aria-label={voice ? WRITE_MODE_TITLE : 'Mode'} className="flex"
               style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
               {modesFor(user).map((m) => (
                 <button key={m} type="button" role="radio" aria-checked={agent.mode === m}
@@ -154,6 +206,23 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
       </div>
       <div style={{ padding: '0 16px' }}>
         <Notice error={error} notice={notice} onDismiss={() => { setError(null); setNotice(null) }} />
+        {voice && phoneState && phoneState.status !== 'unpublished' && (
+          <div role="status" aria-label="Phone system" className="flex flex-wrap items-center gap-8"
+            style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
+            <span>{phoneState.detail}</span>
+            {phoneState.pushed_at && phoneState.live && <span>· {stamp(phoneState.pushed_at)}</span>}
+            {admin && offerTakeOff(phoneState) ? (
+              <button type="button" onClick={() => setConfirmAnswering(false)} style={textButton}>
+                Take it off the phone
+              </button>
+            ) : admin && phoneState.can_retry && (
+              <button type="button" onClick={() => retryPush.mutate()} disabled={retryPush.isPending}
+                style={{ ...textButton, opacity: retryPush.isPending ? 0.5 : 1 }}>
+                Retry
+              </button>
+            )}
+          </div>
+        )}
         {admin && agent.publish_problems.length > 0 && !dirty && (
           <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
             Before publishing: {agent.publish_problems.join(' ')}
@@ -164,7 +233,7 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
       <div className="flex min-h-0 flex-1" style={{ padding: 16, gap: 16 }}>
         <nav aria-label="Agent sections" className="shrink-0 overflow-y-auto bg-white"
           style={{ width: 210, border: `1px solid ${LINE}`, borderRadius: 8, padding: 8 }}>
-          {BUILDER_SECTIONS.map((s) => (
+          {sectionsFor(agent.channel).map((s) => (
             <button key={s.key} type="button" onClick={() => setSection(s.key)}
               aria-current={section === s.key ? 'page' : undefined}
               className="block w-full text-left"
@@ -184,9 +253,15 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
             folderId={folderId} setFolderId={setFolderId} />
         </div>
 
-        {admin && <TryItPanel agent={agent} draft={draft} />}
+        {/* A voice agent is tried by calling it: Try-it chats with the CRM's text engine. */}
+        {admin && !voice && <TryItPanel agent={agent} draft={draft} />}
       </div>
 
+      {answeringCopy && confirmAnswering != null && (
+        <Confirm title={answeringCopy.title} confirmLabel={answeringCopy.confirmLabel}
+          danger={answeringCopy.danger} busy={answering.isPending} body={answeringCopy.body}
+          onCancel={() => setConfirmAnswering(null)} onConfirm={() => answering.mutate(confirmAnswering)} />
+      )}
       {confirmAuto && (
         <Confirm title="Switch to Auto-pilot?" confirmLabel="Switch to Auto-pilot" busy={mode.isPending}
           body={<>“{agent.name}” will carry out its allowed actions without asking — texting customers,
@@ -219,9 +294,10 @@ function Help({ children }: { children: React.ReactNode }) {
 function SectionBody(p: SectionProps) {
   switch (p.section) {
     case 'basics': return <Basics {...p} />
+    case 'call': return <CallSettings {...p} />
     case 'persona': return <Persona {...p} />
     case 'rules': return <Rules {...p} />
-    case 'knowledge': return <Knowledge {...p} />
+    case 'knowledge': return p.draft.channel === 'voice' ? <VoiceKnowledge {...p} /> : <Knowledge {...p} />
     case 'actions': return <Actions {...p} />
     case 'triggers': return <Triggers {...p} />
     case 'schedule': return <Schedule {...p} />
@@ -233,7 +309,7 @@ function SectionBody(p: SectionProps) {
   }
 }
 
-function Basics({ admin, name, setName, description, setDescription, folderId, setFolderId }: SectionProps) {
+function Basics({ agent, admin, name, setName, description, setDescription, folderId, setFolderId }: SectionProps) {
   const folders = useQuery({ queryKey: ['ai-folders'], queryFn: aiFolders })
   const folderName = (folders.data ?? []).find((f) => f.id === folderId)?.name
   return (
@@ -258,7 +334,7 @@ function Basics({ admin, name, setName, description, setDescription, folderId, s
       </Field>
       <div style={{ marginTop: 14 }}>
         <div style={LABEL}>Channel</div>
-        <ReadText>Text / Chat</ReadText>
+        <ReadText>{channelLabel(agent.channel)}</ReadText>
       </div>
     </>
   )
@@ -378,14 +454,20 @@ function Knowledge({ admin, draft, set }: SectionProps) {
 
 function Actions({ admin, draft, set }: SectionProps) {
   const cat = useQuery({ queryKey: ['ai-catalogue'], queryFn: aiCatalogue })
-  // Voice-only actions (transfer call, end call) are phase 3 and never offered to a Text agent.
-  const offered = (cat.data?.actions ?? []).filter((a) => a.channels.includes('text'))
+  // Only the agent's own channel's actions: a voice agent is never offered send_text (the phone
+  // system cannot text), a text agent never a call action. The server refuses both anyway.
+  const offered = actionsFor(cat.data?.actions ?? [], draft.channel)
   const order = offered.map((a) => a.name)
   return (
     <>
       <SectionTitle>Actions</SectionTitle>
-      <Help>Each action is a tool the agent may use. Every change is checked by the CRM: it can only touch this
-        run's own customer and opportunity. In Suggest mode every change waits for staff approval.</Help>
+      {draft.channel === 'voice' ? (
+        <Help>What the agent may do during a call. The phone system carries these out; a voice agent cannot
+          text, book or change a record — a lead it captures reaches the CRM, which decides.</Help>
+      ) : (
+        <Help>Each action is a tool the agent may use. Every change is checked by the CRM: it can only touch this
+          run's own customer and opportunity. In Suggest mode every change waits for staff approval.</Help>
+      )}
       <div style={{ marginTop: 10 }}>
         {offered.map((a) => (
           <CheckRow key={a.name} admin={admin} checked={draft.actions.includes(a.name)}
@@ -611,6 +693,112 @@ function Escalation({ admin, draft, set }: SectionProps) {
   )
 }
 
+// ------------------------------------------------------------------ voice (2026-09-25)
+
+function TextSetting({ label, value, admin, onChange, placeholder, hint, required }: {
+  label: string; value: string | undefined; admin: boolean; onChange: (v: string) => void
+  placeholder?: string; hint?: string; required?: boolean
+}) {
+  return (
+    <Field label={label} hint={hint} required={required}>
+      {admin ? <input value={value ?? ''} onChange={(e) => onChange(e.target.value)} style={INPUT}
+        aria-label={label} placeholder={placeholder} /> : <ReadText>{value}</ReadText>}
+    </Field>
+  )
+}
+
+function Seconds({ label, value, admin, onChange }: {
+  label: string; value: number | null | undefined; admin: boolean; onChange: (v: number | null) => void
+}) {
+  return (
+    <Field label={label} hint="Blank = the phone system's default.">
+      {admin ? (
+        <input type="number" min={1} value={value ?? ''} aria-label={label} style={{ ...INPUT, width: 160 }}
+          onChange={(e) => onChange(e.target.value ? Math.max(1, Math.round(Number(e.target.value)) || 1) : null)} />
+      ) : <ReadText>{value != null ? `${value} s` : 'Default'}</ReadText>}
+    </Field>
+  )
+}
+
+function Carried({ label, value }: { label: string; value: unknown }) {
+  const empty = value == null || (typeof value === 'object' && Object.keys(value as object).length === 0)
+  return (
+    <Field label={label}>
+      {empty ? <ReadText>None</ReadText> : (
+        <pre style={{ marginTop: 6, padding: 10, backgroundColor: PAGE_BG, border: `1px solid ${LINE}`, borderRadius: 6,
+          fontSize: 12, color: TEXT, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+          {JSON.stringify(value, null, 2)}
+        </pre>
+      )}
+    </Field>
+  )
+}
+
+function CallSettings({ admin, draft, set }: SectionProps) {
+  const g = draft.guardrails ?? {}
+  return (
+    <>
+      <SectionTitle>Call settings</SectionTitle>
+      <Help>What the phone system (owen-main) needs to answer a call as this agent. Publishing sends the version there;
+        which numbers it answers, and when, is decided by the phone system's flow — never by a CRM schedule.</Help>
+      <TextSetting label="Phone system agent" required admin={admin} value={draft.owen_agent}
+        onChange={(owen_agent) => set({ owen_agent })} placeholder="The agent's name in owen-main"
+        hint="Publishing updates this existing agent there. It is never created." />
+      <TextSetting label="Greeting" admin={admin} value={draft.greeting} onChange={(greeting) => set({ greeting })}
+        placeholder="Thanks for calling Dream Team Roofing, how can I help?" />
+      <TextSetting label="Model" required admin={admin} value={draft.model} onChange={(model) => set({ model })}
+        placeholder="gpt-4o-mini" hint="The phone system's own model; a caller is waiting, so a fast one." />
+      <div className="flex flex-wrap gap-12">
+        <div style={{ flex: '1 1 220px' }}>
+          <TextSetting label="Voice" admin={admin} value={draft.voice} onChange={(v) => set({ voice: v })}
+            placeholder="aura-2-andromeda-en" />
+        </div>
+        <div style={{ flex: '1 1 160px' }}>
+          <TextSetting label="Speech provider" admin={admin} value={draft.tts_provider}
+            onChange={(tts_provider) => set({ tts_provider })} placeholder="deepgram" />
+        </div>
+        <div style={{ flex: '1 1 160px' }}>
+          <TextSetting label="Listening provider" admin={admin} value={draft.stt_provider}
+            onChange={(stt_provider) => set({ stt_provider })} placeholder="deepgram" />
+        </div>
+      </div>
+      <TextSetting label="Model base URL" admin={admin} value={draft.llm_base_url}
+        onChange={(llm_base_url) => set({ llm_base_url })} hint="Blank = the phone system's default." />
+      <div className="flex flex-wrap gap-12">
+        <Seconds label="Longest call (seconds)" admin={admin} value={g.max_call_seconds}
+          onChange={(v) => set({ guardrails: { ...g, max_call_seconds: v } })} />
+        <Seconds label="Longest silence (seconds)" admin={admin} value={g.max_silence_seconds}
+          onChange={(v) => set({ guardrails: { ...g, max_silence_seconds: v } })} />
+      </div>
+      <div style={{ marginTop: 18, fontSize: 13, fontWeight: 600, color: INK }}>Carried unchanged</div>
+      <Help>Set on the phone system and kept exactly as they are on every publish. They are not edited here yet.</Help>
+      <Carried label="Transfer targets" value={draft.transfer_targets} />
+      <Carried label="Caller context" value={draft.context_provider} />
+      <Carried label="Custom tools" value={draft.custom_tools} />
+      <Carried label="Other settings" value={draft.owen_settings} />
+    </>
+  )
+}
+
+function VoiceKnowledge({ admin, draft, set }: SectionProps) {
+  const budget = knowledgeBudget(draft.knowledge_text)
+  return (
+    <>
+      <SectionTitle>In-call knowledge</SectionTitle>
+      <Help>What the agent knows during every call — services, service area, hours, what to say about prices. It is
+        re-sent to the model on every turn, so the phone system takes at most 6,000 characters.</Help>
+      <Field label="Knowledge">
+        {admin ? (
+          <textarea value={draft.knowledge_text ?? ''} onChange={(e) => set({ knowledge_text: e.target.value })}
+            style={{ ...textarea, minHeight: 240 }} aria-label="In-call knowledge" />
+        ) : <ReadText>{draft.knowledge_text}</ReadText>}
+      </Field>
+      <div aria-label="Knowledge length" style={{ marginTop: 6, fontSize: 12,
+        color: budget.over ? 'rgb(180,35,24)' : FAINT }}>{budget.label}</div>
+    </>
+  )
+}
+
 function Advanced({ admin, draft, set }: SectionProps) {
   return (
     <>
@@ -633,9 +821,14 @@ function CompiledPrompt({ agent, draft, name }: SectionProps) {
   })
   return (
     <>
-      <SectionTitle>Compiled prompt</SectionTitle>
-      <Help>Read-only. Assembled from the sections above in a fixed order, with no timestamps, so the provider can
-        cache it. Customer details are sent separately with each run.</Help>
+      <SectionTitle>{draft.channel === 'voice' ? 'What the phone system gets' : 'Compiled prompt'}</SectionTitle>
+      {draft.channel === 'voice' ? (
+        <Help>Read-only. The persona the phone system receives: the role, then goals and rules if any, then the extra
+          instructions. The greeting, in-call knowledge and caller details are sent to the model separately.</Help>
+      ) : (
+        <Help>Read-only. Assembled from the sections above in a fixed order, with no timestamps, so the provider can
+          cache it. Customer details are sent separately with each run.</Help>
+      )}
       {preview.isError && <div role="alert" style={{ marginTop: 10, fontSize: 13, color: 'rgb(180,35,24)' }}>
         {(preview.error as Error).message}</div>}
       {preview.data && (
