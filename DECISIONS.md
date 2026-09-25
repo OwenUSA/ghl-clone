@@ -5860,3 +5860,25 @@ no new revision). Then, in the api container, `python -m app.zuper.mirror --phas
 and read it: each regional board should say "(new CRM pipeline)" with Retail's 16 statuses, and
 AHS / Retail should show no unexpected renames or removals. Then `--commit --phase boards`. Then
 `--phase links` and `--phase backfill` as dry runs, read them, and commit each.
+
+## AMENDMENT (2026-09-25): the owner's new AHS board — `ALIASES` rename, `MERGES` for a deleted status
+
+The owner changed the AHS board **in Zuper**: "Inspecting" was renamed "Inspection" (the same
+status uid, so its jobs, the 12-question inspection checklist and every answer and photo stayed),
+"Inspection Completed" and "Notify Auth Dept" were added after it, and "On My Way" was deleted
+(it was empty; Zuper keeps a deleted status in each job's history — measured on a test job
+first). All 333 AHS jobs were compared against a backup afterwards: no history entry, checklist
+answer, photo or field was lost.
+
+The mirror has to follow, or the next `--phase boards` would delete the CRM's "Inspecting" stage
+and drop its cards on the first stage. `mirror.ALIASES` now renames "Inspecting" → "Inspection"
+(the same row: cards, colour and report switches stay). A deleted status is NOT an alias: two
+aliases pointing at one status would let the first-positioned stage ("On My Way") be renamed and
+steal the row. `mirror.MERGES` is the separate list for that — the stage is emptied into the
+named stage ("On My Way" → "Inspection") and then removed, never renamed. Pinned by
+`test_the_2026_09_25_ahs_board_keeps_every_card`.
+
+A job's own record keeps the status NAME it had when it was last moved: the 17 jobs in
+"Inspection" still read "Inspecting" on their page until they next move. Deliberately not
+re-moved — each move would add a history entry. The Workiz loader's mapping (dispatch
+`zsup/zmig/zdata.py`) now maps "In Progress (Inspections)" to "Inspection".
