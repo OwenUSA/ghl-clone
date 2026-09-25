@@ -1,9 +1,11 @@
 """An agent's configuration: its parts, their defaults, and what makes one valid.
 
 The SAME dict shape is an agent's editable draft, a published version's frozen `config`,
-and a template's `config`, so publishing and "Create agent from template" are copies, and
-phase 3 can push a voice agent's version to owen-main as-is. Every key is optional in a
-draft (a half-written agent saves); `validate_for_publish` is what a version must pass.
+and a template's `config`, so publishing and "Create agent from template" are copies. A VOICE
+agent's config carries owen-main's settings too, under the CRM's own names; `voice.py` is the
+one place they are validated and mapped to what owen-main stores (phase 2b, 2026-09-25).
+Every key is optional in a draft (a half-written agent saves); `publish_problems` is what a
+version must pass.
 """
 from __future__ import annotations
 
@@ -43,9 +45,8 @@ TRIGGERS = {
 
 CHANNELS = {
     "text": {"label": "Text / Chat", "available": True},
-    # The value exists so a phase 3 voice agent needs no migration. It cannot be created
-    # yet, and the browser does not draw it as an option (it is listed as phase 3).
-    "voice": {"label": "Voice", "available": False, "phase": 3},
+    # Creatable since 2026-09-25 (phase 2b): the CRM edits it, owen-main runs it.
+    "voice": {"label": "Voice", "available": True},
 }
 
 MAX_TEXT = 8000
@@ -54,7 +55,7 @@ MAX_ITEM = 500
 
 
 def default_config(channel: str = "text") -> dict:
-    return {
+    base = {
         "channel": channel,
         "persona": "",
         "goals": [],
@@ -73,6 +74,11 @@ def default_config(channel: str = "text") -> dict:
         "extra_instructions": "",
         "escalation_user_ids": [],
     }
+    if channel == "voice":
+        from . import voice
+        base["actions"] = list(voice.DEFAULT_ACTIONS)
+        base.update(voice.defaults())
+    return base
 
 
 def merged(draft: dict | None) -> dict:
@@ -124,6 +130,8 @@ def clean(draft: dict) -> dict:
     that sends `tempreature` should hear about it."""
     if not isinstance(draft, dict):
         raise ConfigError("the configuration must be an object")
+    if (draft.get("channel") or "text") not in CHANNELS:
+        raise ConfigError("unknown channel %r" % draft.get("channel"))
     base = default_config(draft.get("channel") or "text")
     unknown = sorted(set(draft) - set(base))
     if unknown:
@@ -143,8 +151,13 @@ def clean(draft: dict) -> dict:
     c["escalation_user_ids"] = _ints(c["escalation_user_ids"], "escalation_user_ids")
     if not isinstance(c["actions"], list) or not all(isinstance(a, str) for a in c["actions"]):
         raise ConfigError("actions must be a list of action names")
+    if c["channel"] == "voice" and "send_text" in c["actions"]:
+        from . import voice
+        raise ConfigError(voice.SEND_TEXT_REFUSAL)
     offered = actions_for_channel(c["channel"])
-    bad = [a for a in c["actions"] if a not in offered]
+    # A voice agent's refusal says WHY (`voice.clean`); only a name nobody knows stops here.
+    bad = [a for a in c["actions"] if a not in (CATALOGUE if c["channel"] == "voice"
+                                                 else offered)]
     if bad:
         raise ConfigError("not an action a %s agent can use: %s" % (
             CHANNELS[c["channel"]]["label"], ", ".join(bad)))
@@ -162,6 +175,9 @@ def clean(draft: dict) -> dict:
         raise ConfigError("connection_id must be an id")
     c["schedule"] = _schedule(c["schedule"])
     c["triggers"] = _triggers(c["triggers"])
+    if c["channel"] == "voice":
+        from . import voice
+        c = voice.clean(c)
     return c
 
 
@@ -219,10 +235,10 @@ def _triggers(ts) -> list[dict]:
 
 def publish_problems(c: dict) -> list[str]:
     """What stops this config becoming a version. Empty = publishable."""
+    if c["channel"] == "voice":
+        from . import voice
+        return voice.publish_problems(c)
     problems = []
-    if c["channel"] != "text":
-        problems.append("Voice agents arrive in phase 3; only Text / Chat agents can be "
-                        "published.")
     if c["connection_id"] is None:
         problems.append("Choose an AI connection.")
     if not c["model"]:

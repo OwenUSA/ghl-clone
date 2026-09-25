@@ -534,3 +534,49 @@ def upload_media(data: bytes, filename: str, content_type: str) -> LinkResult:
                           payload if isinstance(payload, dict) else None)
     return LinkResult(True, resp.status_code, "",
                       payload if isinstance(payload, dict) else None)
+
+
+# --- voice agents edited in the CRM (phase 2b, 2026-09-25) --------------------------------
+#
+# The CRM publishes a voice agent's version to owen-main, which runs the call. Only
+# `app/ai/push.py` (the queued push) and `app/ai/import_voice_agent.py` (the one-off import of
+# the live agent) call these. `config` is already in owen-main's shape — `app/ai/voice.py` is
+# the one place that maps it.
+
+AGENT_VERSIONS_PATH = "/api/crm-link/agent-versions"
+
+
+def publish_agent_version(agent_name: str, config: dict, crm_version: int,
+                          crm_agent_id: int | None = None,
+                          activate: bool = True) -> LinkResult:
+    """`POST /api/crm-link/agent-versions`. owen-main finds the agent by name (404 if it has
+    none — it never creates one), validates the config as activation does (422 with
+    `detail.message`), and is idempotent on `crm_version`. On success `data` carries
+    `version_id`, `version`, `created`, `active` and `warnings`."""
+    body = {"agent_name": agent_name, "config": config, "crm_version": crm_version,
+            "activate": activate}
+    if crm_agent_id is not None:
+        body["crm_agent_id"] = crm_agent_id
+    return _post(AGENT_VERSIONS_PATH, body)
+
+
+def agent_versions() -> LinkResult:
+    """`GET /api/crm-link/agent-versions`: `data["agents"]`, each with its ACTIVE config."""
+    cfg = current()
+    if not cfg.configured:
+        return LinkResult(False, 0, "the phone link is not configured")
+    try:
+        resp = httpx.get(cfg.base_url + AGENT_VERSIONS_PATH, timeout=cfg.timeout_seconds,
+                         headers={"X-OWEN-Key": cfg.api_key, "Accept": "application/json"})
+    except Exception as exc:  # noqa: BLE001 - any transport failure is one outcome
+        log.warning("crm-link: agent-versions GET failed: %r", exc)
+        return LinkResult(False, 0, "could not reach the phone system")
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {}
+    if resp.status_code >= 400:
+        return LinkResult(False, resp.status_code,
+                          _human(_detail_text(payload, resp.status_code)))
+    return LinkResult(True, resp.status_code, "",
+                      payload if isinstance(payload, dict) else None)

@@ -7,7 +7,7 @@ import {
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  MODE_TONE, isAiAdmin, modeLabel, OUTCOME_TONE, outcomeLabel, stamp, TRIGGER_LABEL,
+  channelLabel, MODE_TONE, isAiAdmin, modeLabel, OUTCOME_TONE, outcomeLabel, stamp, TRIGGER_LABEL,
 } from '../../lib/aiAgents'
 import {
   IconDuplicate, IconPencil, IconPlus, IconSearchSmall, IconTrashOutline,
@@ -155,7 +155,15 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
                     <div style={{ fontSize: 12, color: 'rgb(152,162,179)', marginTop: 2 }}>{a.folder_name}</div>
                   )}
                 </Td>
-                <Td>Text / Chat</Td>
+                <Td>
+                  {channelLabel(a.channel)}
+                  {a.channel === 'voice' && a.published_version != null && (
+                    <div style={{ fontSize: 12, marginTop: 2,
+                      color: a.live_on_phone_system ? 'rgb(2,122,72)' : 'rgb(181,71,8)' }}>
+                      {a.live_on_phone_system ? 'Live on the phone system' : 'Not yet live on the phone system'}
+                    </div>
+                  )}
+                </Td>
                 <Td><Chip text={modeLabel(a.mode)} {...(MODE_TONE[a.mode] ?? MODE_TONE.off)} /></Td>
                 <Td>
                   {a.published_version != null ? `v${a.published_version}` : 'Draft'}
@@ -282,14 +290,15 @@ function CreateAgentModal({ initialTemplate, folderId, onClose, onCreated }: {
   const [description, setDescription] = useState('')
   const [folder, setFolder] = useState<string>(folderId != null ? String(folderId) : '')
   const [template, setTemplate] = useState<string>(initialTemplate != null ? String(initialTemplate) : '')
+  const [channel, setChannel] = useState<'text' | 'voice'>('text')
   const [error, setError] = useState<string | null>(null)
   const create = useMutation({
     mutationFn: () => createAiAgent({ name: name.trim(), description: description.trim() || null,
-      folder_id: folder ? Number(folder) : null, template_id: template ? Number(template) : null }),
+      folder_id: folder ? Number(folder) : null, template_id: template ? Number(template) : null, channel }),
     onSuccess: (a) => onCreated(a.id), onError: (e: Error) => setError(e.message),
   })
   return (
-    <Modal title="Create agent" subtitle="A Text / Chat agent. It starts Off." onClose={onClose}
+    <Modal title="Create agent" subtitle="It starts Off." onClose={onClose}
       footer={<>
         <button type="button" onClick={onClose} style={smallButton}>Cancel</button>
         <button type="button" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}
@@ -303,6 +312,17 @@ function CreateAgentModal({ initialTemplate, folderId, onClose, onCreated }: {
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} style={textarea}
           aria-label="Description" />
       </Field>
+      {!template && (
+        <Field label="Channel" hint={channel === 'voice'
+          ? 'Answers phone calls. Edited here, published to the phone system (owen-main), which runs the call.'
+          : 'Texts customers when a trigger fires.'}>
+          <select value={channel} onChange={(e) => setChannel(e.target.value === 'voice' ? 'voice' : 'text')}
+            style={INPUT} aria-label="Channel">
+            <option value="text">{channelLabel('text')}</option>
+            <option value="voice">{channelLabel('voice')}</option>
+          </select>
+        </Field>
+      )}
       <Field label="Folder">
         <select value={folder} onChange={(e) => setFolder(e.target.value)} style={INPUT} aria-label="Folder">
           <option value="">No folder</option>

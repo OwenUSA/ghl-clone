@@ -556,6 +556,8 @@ def test_ai_actions_render_from_the_catalogue_generically():
     """suggest_send_to_zuper and set_lead_outcome need no special case: the builder lists
     every catalogue action, and a suggestion card draws the server's summary."""
     builder = _read("components", "ai", "AgentBuilder.tsx")
-    assert "(cat.data?.actions ?? []).filter((a) => a.channels.includes('text'))" in builder
+    # Since 2026-09-25 the list is the agent's own channel's (`actionsFor`, executed under node
+    # in test_ai_agents_ui.py) — still every catalogue action of that channel, generically.
+    assert "actionsFor(cat.data?.actions ?? [], draft.channel)" in builder
     assert "offered.map((a) => (" in builder
     assert "{s.summary}" in _read("components", "AiSuggestions.tsx")

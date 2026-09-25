@@ -25,6 +25,8 @@ ADMIN_ONLY = {
     ("POST", "/api/ai/agents/{agent_id}/publish"), ("DELETE", "/api/ai/agents/{agent_id}"),
     ("POST", "/api/ai/agents/{agent_id}/duplicate"), ("POST", "/api/ai/agents/{agent_id}/try"),
     ("POST", "/api/ai/agents/{agent_id}/wake"), ("POST", "/api/ai/templates"),
+    # Retry a voice agent's push to the phone system (2026-09-25).
+    ("POST", "/api/ai/agents/{agent_id}/push"),
     ("DELETE", "/api/ai/templates/{template_id}"), ("POST", "/api/ai/knowledge-bases"),
     ("PATCH", "/api/ai/knowledge-bases/{kb_id}"), ("DELETE", "/api/ai/knowledge-bases/{kb_id}"),
     ("POST", "/api/ai/knowledge-bases/{kb_id}/items"),
@@ -106,16 +108,17 @@ def test_an_unpublished_agent_cannot_be_switched_on(world):
     assert r.status_code == 400 and get(AiAgent, aid).mode == "off"
 
 
-def test_a_voice_agent_cannot_be_created_yet(world):
-    r = world.client("admin").post("/api/ai/agents", json={"name": "Receptionist",
-                                                          "channel": "voice"})
-    assert r.status_code == 400 and "phase 3" in r.json()["detail"]
-    assert count(AiAgent) == 0
+def test_a_text_agent_is_offered_no_voice_action(world):
+    """Voice agents became creatable on 2026-09-25 (phase 2b) — this used to assert the
+    400 naming phase 3. What still holds: a TEXT agent cannot take a voice action.
+    tests/test_ai_voice_agents.py pins the voice side."""
     aid = make_agent(world, mode="off", publish=False)
     draft = world.client("admin").get("/api/ai/agents/%s" % aid).json()["draft"]
-    r = world.client("admin").patch("/api/ai/agents/%s" % aid,
-                                    json={"draft": {**draft, "actions": ["transfer_call"]}})
-    assert r.status_code == 400
+    for action in ("transfer_call", "end_call", "capture_lead"):
+        r = world.client("admin").patch("/api/ai/agents/%s" % aid,
+                                        json={"draft": {**draft, "actions": [action]}})
+        assert r.status_code == 400, action
+    assert get(AiAgent, aid).draft["actions"] == draft["actions"]
 
 
 def test_escalation_users_must_be_active_unrestricted_staff(world):

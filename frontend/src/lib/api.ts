@@ -1645,10 +1645,12 @@ export const patchStaffUser = (id: number, body: StaffPatch) =>
 // server refuses the rest. No response here ever carries a provider API key: a
 // connection reads "•••• last4".
 
-import type { Draft as AiDraft } from './aiAgents'
+import type { Draft as AiDraft, PhoneSystemState } from './aiAgents'
 
 export type AiCatalogueAction = {
-  name: string; label: string; description: string; kind: string; channels: string[]; phase: number
+  name: string; label: string; description: string; kind: string; channels: string[]
+  /** "phone system" for a voice action (owen-main carries it out during a call), else "crm". */
+  runs_in: string
 }
 export type AiCatalogue = {
   actions: AiCatalogueAction[]
@@ -1710,8 +1712,12 @@ export type AiAgentRow = {
   last_outcome: string | null; updated_at: string | null; triggers: string[]
   /** The PUBLISHED version's triggers — what "Run AI agent" can actually use. */
   published_triggers?: string[]
+  /** Voice only: is the PUBLISHED version the one answering the phone? null for text. */
+  live_on_phone_system?: boolean | null
 }
 export type AiAgentDetail = AiAgentRow & {
+  /** Voice only (2026-09-25): where the published version stands on owen-main. */
+  phone_system: PhoneSystemState | null
   draft: AiDraft
   compiled_prompt: string
   publish_problems: string[]
@@ -1720,13 +1726,16 @@ export type AiAgentDetail = AiAgentRow & {
 }
 export const aiAgents = () => get<AiAgentRow[]>('/api/ai/agents')
 export const aiAgent = (id: number) => get<AiAgentDetail>(`/api/ai/agents/${id}`)
-export const createAiAgent = (body: { name: string; description?: string | null; folder_id?: number | null; template_id?: number | null }) =>
-  send<AiAgentDetail>('/api/ai/agents', 'POST', { ...body, channel: 'text' })
+export const createAiAgent = (body: { name: string; description?: string | null; folder_id?: number | null;
+  template_id?: number | null; channel?: 'text' | 'voice' }) =>
+  send<AiAgentDetail>('/api/ai/agents', 'POST', { ...body, channel: body.channel ?? 'text' })
 export const updateAiAgent = (id: number, body: { name?: string; description?: string | null; folder_id?: number | null; draft?: AiDraft }) =>
   send<AiAgentDetail>(`/api/ai/agents/${id}`, 'PATCH', body)
 export const previewAiPrompt = (id: number, draft: AiDraft, name?: string) =>
   send<{ compiled_prompt: string; publish_problems: string[] }>(`/api/ai/agents/${id}/compiled-prompt`, 'POST', { draft, name })
 export const publishAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/publish`, 'POST')
+/** Retry a voice agent's push to the phone system. Queued; answers the agent at once. */
+export const pushAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/push`, 'POST')
 export const setAiAgentMode = (id: number, mode: string, confirm = false) =>
   send<AiAgentDetail>(`/api/ai/agents/${id}/mode`, 'POST', { mode, confirm })
 export const deleteAiAgent = (id: number) => send<{ deleted: number }>(`/api/ai/agents/${id}`, 'DELETE')

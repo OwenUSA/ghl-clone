@@ -164,21 +164,64 @@ def test_the_page_uses_the_shared_tab_bar_and_draws_logs_only_through_ai_tabs():
     assert "if (!isAiAdmin(user)) return null" in logs, "Agent Logs renders for a non-admin"
 
 
-def test_voice_is_never_offered_as_a_channel_or_its_actions_as_options():
-    """Phase 3: a Voice agent cannot be created, so no control offers it — not even disabled."""
-    for parts in (("components", "ai", "AgentsTab.tsx"), ("components", "ai", "AgentBuilder.tsx")):
-        src = _read(*parts)
-        assert "<option value=\"voice\"" not in src and "'voice'" not in src
+@node
+def test_each_channel_is_offered_only_its_own_actions_and_sections():
+    """Voice agents became creatable on 2026-09-25 (phase 2b); this used to pin that no control
+    offered Voice. What must hold now: a voice agent is never offered send_text (or any text
+    action), a text agent never a call action, and a voice agent has no Triggers, Schedule,
+    AI connection or Escalation section — the phone system's flow owns all four."""
+    catalogue = [{"name": "send_text", "channels": ["text"]},
+                 {"name": "get_context", "channels": ["text"]},
+                 {"name": "transfer_call", "channels": ["voice"]},
+                 {"name": "capture_lead", "channels": ["voice"]}]
+    got = run_js("aiAgents.ts", """
+        const cat = %s
+        out({ voice: m.actionsFor(cat, 'voice').map((a) => a.name),
+              text: m.actionsFor(cat, 'text').map((a) => a.name),
+              voiceSections: m.sectionsFor('voice').map((s) => s.key),
+              textSections: m.sectionsFor('text').map((s) => s.key),
+              labels: [m.channelLabel('text'), m.channelLabel('voice')] })
+    """ % js(catalogue))
+    assert got["voice"] == ["transfer_call", "capture_lead"]
+    assert "send_text" not in got["voice"]
+    assert got["text"] == ["send_text", "get_context"]
+    for gone in ("triggers", "schedule", "connection", "escalation"):
+        assert gone not in got["voiceSections"], gone
+        assert gone in got["textSections"], gone
+    assert "call" in got["voiceSections"] and "call" not in got["textSections"]
+    assert got["labels"] == ["Text / Chat", "Voice"]
     builder = _read("components", "ai", "AgentBuilder.tsx")
-    assert "a.channels.includes('text')" in builder, "voice-only actions would be offered"
-    api = _read("lib", "api.ts")
-    assert "{ ...body, channel: 'text' }" in api
+    assert "actionsFor(cat.data?.actions ?? [], draft.channel)" in builder, (
+        "the Actions section would offer another channel's actions")
+    assert "{admin && !voice && <TryItPanel" in builder, "Try-it would be offered for a voice agent"
+
+
+@node
+def test_the_knowledge_counter_and_the_phone_system_line_never_flatter():
+    got = run_js("aiAgents.ts", """
+        out({ ok: m.knowledgeBudget('x'.repeat(6000)), over: m.knowledgeBudget('x'.repeat(6001)),
+              blank: m.knowledgeBudget(null),
+              tones: ['live', 'pending', 'retrying', 'refused', 'failed', 'not_pushed'].map(m.phoneSystemTone),
+              polls: ['pending', 'retrying', 'live', 'refused', undefined].map(m.phoneSystemPending) })
+    """)
+    assert got["ok"] == {"chars": 6000, "over": 0, "label": "6,000 / 6,000 characters"}
+    assert got["over"]["over"] == 1
+    assert got["over"]["label"] == "6,001 / 6,000 characters — 1 over; it cannot be published"
+    assert got["blank"]["chars"] == 0
+    green = {"fg": "rgb(2,122,72)", "bg": "rgb(236,253,243)"}
+    assert got["tones"][0] == green
+    assert all(t != green for t in got["tones"][1:]), "only a confirmed push may look live"
+    assert got["polls"] == [True, True, False, False, False]
+    builder = _read("components", "ai", "AgentBuilder.tsx")
+    assert "<Chip text={phoneState.label}" in builder, "the label shown must be the server's"
 
 
 def test_a_dispatcher_gets_text_not_disabled_controls_in_the_builder():
     src = _read("components", "ai", "AgentBuilder.tsx")
     assert "const admin = isAiAdmin(user) && agent.can_edit" in src
-    assert "<TryItPanel" in src and "{admin && <TryItPanel" in src, "Try-it is drawn for a dispatcher"
+    # `!voice` since 2026-09-25: a voice agent is tried by calling it.
+    assert "<TryItPanel" in src and "{admin && !voice && <TryItPanel" in src, (
+        "Try-it is drawn for a dispatcher")
     assert "disabled={!admin}" not in src, "a dispatcher is shown decorative disabled inputs"
     assert src.count("<ReadText>") >= 8
 

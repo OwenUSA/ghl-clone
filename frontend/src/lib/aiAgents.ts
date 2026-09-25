@@ -68,7 +68,65 @@ export const BUILDER_SECTIONS = [
   { key: 'versions', label: 'Versions' },
 ] as const
 
-export type BuilderSection = (typeof BUILDER_SECTIONS)[number]['key']
+export type BuilderSection = (typeof BUILDER_SECTIONS)[number]['key'] | 'call'
+
+/**
+ * A VOICE agent's sections (2026-09-25). No triggers, schedule, AI connection or escalation:
+ * a call starts it through the phone system's flow, which also holds the business hours, and
+ * owen-voice uses its own model key. "Call settings" holds what owen-main needs instead.
+ */
+export const VOICE_SECTIONS: { key: BuilderSection; label: string }[] = [
+  { key: 'basics', label: 'Basics' },
+  { key: 'call', label: 'Call settings' },
+  { key: 'persona', label: 'Persona & goals' },
+  { key: 'rules', label: 'Rules' },
+  { key: 'knowledge', label: 'In-call knowledge' },
+  { key: 'actions', label: 'Actions' },
+  { key: 'advanced', label: 'Advanced' },
+  { key: 'prompt', label: 'What the phone system gets' },
+  { key: 'versions', label: 'Versions' },
+]
+
+export function sectionsFor(channel: string): { key: BuilderSection; label: string }[] {
+  return channel === 'voice' ? VOICE_SECTIONS : [...BUILDER_SECTIONS]
+}
+
+export const CHANNEL_LABEL: Record<string, string> = { text: 'Text / Chat', voice: 'Voice' }
+export const channelLabel = (c: string) => CHANNEL_LABEL[c] ?? c
+
+/** The catalogue's actions a channel may be given — never another channel's. */
+export function actionsFor<T extends { channels: string[] }>(actions: T[], channel: string): T[] {
+  return actions.filter((a) => a.channels.includes(channel))
+}
+
+/** owen-main's KNOWLEDGE_MAX_CHARS. Over it, Publish is refused (the server says so too). */
+export const VOICE_KNOWLEDGE_MAX = 6000
+
+export function knowledgeBudget(text: string | null | undefined): { chars: number; over: number; label: string } {
+  const chars = (text ?? '').trim().length
+  const over = Math.max(0, chars - VOICE_KNOWLEDGE_MAX)
+  const n = (x: number) => x.toLocaleString('en-US')
+  return { chars, over,
+    label: `${n(chars)} / ${n(VOICE_KNOWLEDGE_MAX)} characters` + (over ? ` — ${n(over)} over; it cannot be published` : '') }
+}
+
+export type PhoneSystemState = {
+  status: string; live: boolean; label: string; detail: string; can_retry: boolean
+  version?: number; live_version?: number | null; pushed_at?: string | null
+  owen_version?: number | null; attempts?: number; last_error?: string | null; imported?: boolean
+}
+
+/** Green only when owen-main confirmed it; amber while it is on its way; red when it stopped. */
+export function phoneSystemTone(status: string): { fg: string; bg: string } {
+  if (status === 'live') return { fg: 'rgb(2,122,72)', bg: 'rgb(236,253,243)' }
+  if (status === 'refused' || status === 'failed') return { fg: 'rgb(180,35,24)', bg: 'rgb(254,243,242)' }
+  if (status === 'unpublished') return { fg: 'rgb(71,84,103)', bg: 'rgb(242,244,247)' }
+  return { fg: 'rgb(181,71,8)', bg: 'rgb(255,250,235)' }
+}
+
+/** Poll while the answer is still coming. */
+export const phoneSystemPending = (status: string | undefined) =>
+  status === 'pending' || status === 'retrying'
 
 // ---------------- the draft ----------------
 
@@ -93,6 +151,20 @@ export type Draft = {
   model: string
   extra_instructions: string
   escalation_user_ids: number[]
+  // Voice only (2026-09-25) — the CRM's names for owen-main's settings; app/ai/voice.py maps them.
+  owen_agent?: string
+  greeting?: string
+  voice?: string
+  llm_base_url?: string
+  stt_provider?: string
+  tts_provider?: string
+  engine?: string
+  knowledge_text?: string
+  guardrails?: { max_call_seconds?: number | null; max_silence_seconds?: number | null; [k: string]: unknown }
+  transfer_targets?: Record<string, { kind?: string; target?: string }>
+  context_provider?: Record<string, unknown> | null
+  custom_tools?: Record<string, unknown>[]
+  owen_settings?: Record<string, unknown>
 }
 
 export function setItem(list: string[], i: number, value: string): string[] {

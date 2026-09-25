@@ -566,6 +566,13 @@ def _h_fetch_message_media(db: Session, payload: dict) -> None:
     handle_fetch_job(db, payload)
 
 
+def _h_ai_voice_push(db: Session, payload: dict) -> None:
+    """Push a published voice agent version to owen-main (2026-09-25). Texts nobody and
+    places no call: it sends an agent's configuration, and `ai/push.py` retries it."""
+    from .ai import push
+    push.handle_job(db, payload)
+
+
 HANDLERS = {
     "missed_call_textback": _h_missed_call,
     "new_lead_notify": _h_new_lead,
@@ -573,6 +580,7 @@ HANDLERS = {
     "stage_change_notify": _h_stage_change,
     "ai_agent_run": _h_ai_agent_run,
     "fetch_message_media": _h_fetch_message_media,
+    "ai_voice_push": _h_ai_voice_push,
 }
 
 

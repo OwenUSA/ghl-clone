@@ -46,7 +46,7 @@ from ..models import (
     User,
 )
 from ..phones import format_phone, store_phone
-from . import actions, config, engine, knowledge, pricing, providers, triggers, vault
+from . import actions, config, engine, knowledge, pricing, providers, push, triggers, vault, voice
 from .prompt import compile_prompt
 
 router = APIRouter(prefix="/api/ai")
@@ -395,6 +395,12 @@ def ai_delete_folder(folder_id: int, db: Session = Depends(get_db),
 
 # ============================================================ agents
 
+def _compiled(c: dict, name: str) -> str:
+    """What the model is told: the CRM's system prompt for a text agent; for a voice agent,
+    the persona owen-main receives (`voice.persona_for`)."""
+    return voice.persona_for(c) if c.get("channel") == "voice" else compile_prompt(c, name)
+
+
 def _agent_row(db: Session, a: AiAgent) -> dict:
     version = db.get(AiAgentVersion, a.published_version_id) if a.published_version_id \
         else None
@@ -415,7 +421,10 @@ def _agent_row(db: Session, a: AiAgent) -> dict:
             # What actually runs: "Run AI agent" offers only agents whose PUBLISHED
             # version has the Manual trigger.
             "published_triggers": [t["type"] for t in config.merged(version.config)["triggers"]]
-            if version else []}
+            if version else [],
+            # Voice only: is the published version the one answering the phone?
+            "live_on_phone_system": (push.state(db, a) or {}).get("live")
+            if a.channel == AiAgent.VOICE else None}
 
 
 def _get_agent(db: Session, agent_id: int) -> AiAgent:
@@ -432,7 +441,8 @@ def _agent_detail(db: Session, a: AiAgent, principal: auth.Principal) -> dict:
     publishers = {u.id: u.name for u in db.scalars(select(User).where(
         User.id.in_({v.published_by_id for v in versions if v.published_by_id})))}
     return {**_agent_row(db, a), "draft": draft,
-            "compiled_prompt": compile_prompt(draft, a.name),
+            "compiled_prompt": _compiled(draft, a.name),
+            "phone_system": push.state(db, a),
             "publish_problems": config.publish_problems(draft),
             "versions": [{"id": v.id, "version": v.version, "published_at": _iso(v.published_at),
                           "published_by": publishers.get(v.published_by_id),
@@ -503,25 +513,24 @@ def ai_list_agents(db: Session = Depends(get_db), folder_id: int | None = None,
 @router.post("/agents", status_code=201)
 def ai_create_agent(body: AgentCreate, db: Session = Depends(get_db),
                     principal: auth.Principal = ADMIN):
-    """Every agent is created OFF. A Voice agent cannot be created yet (phase 3)."""
+    """Every agent is created OFF, a Voice agent included (2026-09-25)."""
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "an agent needs a name")
-    draft = config.default_config()
+    if body.channel not in config.CHANNELS:
+        raise HTTPException(400, "the channel is text or voice")
     channel = body.channel
+    draft = config.default_config(channel)
     if body.template_id is not None:
         t = db.get(AiTemplate, body.template_id)
         if t is None:
             raise HTTPException(404, "template not found")
         draft = config.merged(t.config)
         channel = t.channel
-    if channel != "text":
-        raise HTTPException(400, "Voice agents arrive in phase 3 — only Text / Chat agents "
-                                 "can be created now")
     _check_folder(db, body.folder_id)
-    draft = _clean_draft(db, {**draft, "channel": "text"})
+    draft = _clean_draft(db, {**draft, "channel": channel})
     a = AiAgent(name=name, description=(body.description or "").strip() or None,
-                channel="text", folder_id=body.folder_id, mode=AiAgent.OFF, draft=draft,
+                channel=channel, folder_id=body.folder_id, mode=AiAgent.OFF, draft=draft,
                 created_by_id=principal.user_id, draft_updated_at=_now())
     db.add(a)
     db.commit()
@@ -550,9 +559,9 @@ def ai_update_agent(agent_id: int, body: AgentPatch, db: Session = Depends(get_d
         _check_folder(db, data["folder_id"])
         a.folder_id = data["folder_id"]
     if data.get("draft") is not None:
-        if data["draft"].get("channel", "text") != "text":
+        if data["draft"].get("channel", a.channel) != a.channel:
             raise HTTPException(400, "an agent's channel cannot be changed")
-        a.draft = _clean_draft(db, data["draft"])
+        a.draft = _clean_draft(db, {**data["draft"], "channel": a.channel})
         a.draft_updated_at = _now()
     a.updated_at = _now()
     db.commit()
@@ -570,19 +579,21 @@ def ai_preview_prompt(agent_id: int, body: PromptPreview, db: Session = Depends(
     """The compiled prompt for an UNSAVED draft. Read-only; writes nothing."""
     a = _get_agent(db, agent_id)
     try:
-        c = config.clean(body.draft)
+        c = config.clean({**body.draft, "channel": a.channel})
     except config.ConfigError as e:
         raise HTTPException(400, str(e)) from None
-    return {"compiled_prompt": compile_prompt(c, (body.name or a.name).strip() or a.name),
+    return {"compiled_prompt": _compiled(c, (body.name or a.name).strip() or a.name),
             "publish_problems": config.publish_problems(c)}
 
 
 @router.post("/agents/{agent_id}/publish", status_code=201)
 def ai_publish_agent(agent_id: int, db: Session = Depends(get_db),
                      principal: auth.Principal = ADMIN):
-    """Freeze the draft as a new, IMMUTABLE version. Runs from now on use it."""
+    """Freeze the draft as a new, IMMUTABLE version. Runs from now on use it. A VOICE
+    version is then queued for owen-main (`push.py`) — the publish never waits on it, and
+    succeeds whether or not the phone system is reachable."""
     a = _get_agent(db, agent_id)
-    c = _clean_draft(db, a.draft or {})
+    c = _clean_draft(db, {**(a.draft or {}), "channel": a.channel})
     problems = config.publish_problems(c)
     if problems:
         raise HTTPException(400, "not ready to publish: " + " ".join(problems))
@@ -594,6 +605,22 @@ def ai_publish_agent(agent_id: int, db: Session = Depends(get_db),
     db.flush()
     a.published_version_id = v.id
     a.updated_at = _now()
+    if a.channel == AiAgent.VOICE:
+        push.request(db, a, v)
+    db.commit()
+    return _agent_detail(db, a, principal)
+
+
+@router.post("/agents/{agent_id}/push", status_code=202)
+def ai_push_agent(agent_id: int, db: Session = Depends(get_db),
+                  principal: auth.Principal = ADMIN):
+    """Retry: send a voice agent's published version to the phone system again. Queued,
+    like the push Publish makes; the answer is the agent, with its phone-system state."""
+    a = _get_agent(db, agent_id)
+    try:
+        push.retry(db, a)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     db.commit()
     return _agent_detail(db, a, principal)
 
@@ -608,7 +635,7 @@ def ai_get_version(agent_id: int, version: int, db: Session = Depends(get_db),
         raise HTTPException(404, "version not found")
     return {"id": v.id, "version": v.version, "config": v.config,
             "published_at": _iso(v.published_at),
-            "compiled_prompt": compile_prompt(config.merged(v.config), a.name)}
+            "compiled_prompt": _compiled(config.merged(v.config), a.name)}
 
 
 class ModeIn(BaseModel):
@@ -666,9 +693,14 @@ def ai_delete_agent(agent_id: int, db: Session = Depends(get_db),
 def ai_duplicate_agent(agent_id: int, db: Session = Depends(get_db),
                        principal: auth.Principal = ADMIN):
     a = _get_agent(db, agent_id)
+    draft = config.merged(a.draft)
+    if a.channel == AiAgent.VOICE:
+        # Two CRM agents publishing to one phone-system agent would overwrite each other's
+        # persona on every publish; the copy has to be pointed somewhere on purpose.
+        draft["owen_agent"] = ""
     copy = AiAgent(name=(a.name + " (copy)")[:120], description=a.description,
                    channel=a.channel, folder_id=a.folder_id, mode=AiAgent.OFF,
-                   draft=config.merged(a.draft), created_by_id=principal.user_id,
+                   draft=draft, created_by_id=principal.user_id,
                    draft_updated_at=_now())
     db.add(copy)
     db.commit()
@@ -706,6 +738,9 @@ def ai_try_agent(agent_id: int, body: TryIn, db: Session = Depends(get_db),
     and the read-only tools run for real; no write action ever runs — each comes back as a
     "Would: …" card. Logged as a test run."""
     a = _get_agent(db, agent_id)
+    if a.channel == AiAgent.VOICE:
+        raise HTTPException(400, "Try-it chats with a text agent. A voice agent runs on the "
+                                 "phone system — call a number its flow answers to try it.")
     c = _clean_draft(db, body.draft if body.draft is not None else (a.draft or {}))
     if c["connection_id"] is None or not c["model"]:
         raise HTTPException(400, "choose an AI connection and a model to try the agent")
