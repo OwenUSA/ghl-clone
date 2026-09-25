@@ -45,7 +45,8 @@ def board(fake, name: str, statuses: list[str]) -> str:
 
 
 def boards_of(fake):
-    return (board(fake, "AHS", AHS_STATUSES), board(fake, "Retail", RETAIL_STATUSES))
+    return (board(fake, mapping.CATEGORIES[AHS], AHS_STATUSES),
+            board(fake, "Retail", RETAIL_STATUSES))
 
 
 def run(**kw):
@@ -131,6 +132,39 @@ def test_the_2026_09_25_ahs_board_keeps_every_card(zworld, fake):
         assert mapping.stage_for_status(s, old["Inspecting"]) == inspecting_id
 
 
+REPAIR_BOARD = "AHS - Repair & Review"
+REPAIR_STATUSES = ["Repair Scheduled", "Repair In Process", "Repair Complete",
+                   "Invoice Submitted to AHS", "Awaiting AHS Payment", "Paid", "Review Requested",
+                   "Review Received", "Call Back", "Waiting for Customer", "Reschedule Required",
+                   "Cancelled"]
+
+
+def test_an_ahs_card_follows_its_job_onto_the_repair_and_review_pipeline(zworld, fake, monkeypatch):
+    """2026-09-25: the owner split the AHS board; a job reaching Approved moves (the same job) to
+    "AHS - Repair & Review". Its CRM card follows it into a CRM pipeline of that name."""
+    monkeypatch.setenv("ZUPER_PULL_ONLY", "true")
+    ahs_uid, _ = boards_of(fake)
+    repair = board(fake, REPAIR_BOARD, REPAIR_STATUSES)
+    cust = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
+    job = fake.new_job(ahs_uid, job_title="Jane Roof - leak", customer={"customer_uid": cust})
+    fake.set_custom(fake.jobs[job], "Workiz Job #", "WZ-SPLIT")
+    with SessionLocal() as s:
+        card = s.get(Opportunity, zworld.ids['jane_card'])
+        card.custom_fields = {**(card.custom_fields or {}), "workiz_id": "WZ-SPLIT"}
+        s.commit()
+    run(commit=True, phases={"boards", "links", "backfill"})
+    fake.jobs[job]["job_category"] = {"category_uid": repair}
+    fake.move_job(job, "st-%s-0" % REPAIR_BOARD.lower())   # "Repair Scheduled"
+    code, report = run(commit=True, phases={"boards", "backfill"})
+    assert code == 0, report["problems"]
+    assert stages(REPAIR_BOARD) == REPAIR_STATUSES
+    with SessionLocal() as s:
+        card = s.get(Opportunity, zworld.ids['jane_card'])
+        assert s.get(Pipeline, card.pipeline_id).name == REPAIR_BOARD
+        assert s.get(Stage, card.stage_id).name == "Repair Scheduled"
+    assert not fake.writes()
+
+
 def test_every_stage_is_paired_with_the_status_of_the_same_name(zworld, fake):
     ahs_uid, _ = boards_of(fake)
     run(commit=True, phases={"boards"})
@@ -167,7 +201,7 @@ def test_the_backfill_moves_a_paired_card_to_the_status_zuper_has(zworld, fake, 
     cust = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
     job = fake.new_job(ahs_uid, job_title="Jane Roof - leak", customer={"customer_uid": cust})
     fake.set_custom(fake.jobs[job], "Workiz Job #", "WZ-88")
-    fake.move_job(job, "st-ahs-9")                       # "Repair Scheduled"
+    fake.move_job(job, "st-%s-9" % mapping.CATEGORIES[AHS].lower())  # "Repair Scheduled"
     with SessionLocal() as s:
         card = s.get(Opportunity, zworld.ids['jane_card'])
         card.custom_fields = {**(card.custom_fields or {}), "workiz_id": "WZ-88"}
@@ -429,7 +463,7 @@ def test_a_job_still_syncs_when_a_child_module_is_not_available(zworld, fake, mo
     cust = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
     job = fake.new_job(ahs_uid, job_title="Jane Roof - leak", customer={"customer_uid": cust})
     fake.set_custom(fake.jobs[job], "Workiz Job #", "WZ-99")
-    fake.move_job(job, "st-ahs-9")                       # "Repair Scheduled"
+    fake.move_job(job, "st-%s-9" % mapping.CATEGORIES[AHS].lower())  # "Repair Scheduled"
     with SessionLocal() as s:
         card = s.get(Opportunity, zworld.ids["jane_card"])
         card.custom_fields = {**(card.custom_fields or {}), "workiz_id": "WZ-99"}
