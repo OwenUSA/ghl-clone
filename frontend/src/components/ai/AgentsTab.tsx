@@ -7,7 +7,7 @@ import {
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  channelLabel, MODE_TONE, isAiAdmin, modeLabel, OUTCOME_TONE, outcomeLabel, stamp, TRIGGER_LABEL,
+  answeringCell, channelLabel, MODE_TONE, isAiAdmin, modeLabel, OUTCOME_TONE, outcomeLabel, stamp, TRIGGER_LABEL,
 } from '../../lib/aiAgents'
 import {
   IconDuplicate, IconPencil, IconPlus, IconSearchSmall, IconTrashOutline,
@@ -128,11 +128,12 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
           </label>
         </>
       }>
-        <table className="w-full" style={{ borderCollapse: 'collapse', minWidth: 900 }}>
+        <table className="w-full" style={{ borderCollapse: 'collapse', minWidth: 1090 }}>
           <thead>
             <tr>
               <Th>Agent name</Th>
               <Th width={120}>Channel</Th>
+              <Th width={190}>Answering calls</Th>
               <Th width={120}>Mode</Th>
               <Th width={150}>Published</Th>
               <Th width={200}>Triggers</Th>
@@ -157,12 +158,13 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
                 </Td>
                 <Td>
                   {channelLabel(a.channel)}
-                  {a.channel === 'voice' && a.published_version != null && (
-                    <div style={{ fontSize: 12, marginTop: 2,
-                      color: a.live_on_phone_system ? 'rgb(2,122,72)' : 'rgb(181,71,8)' }}>
-                      {a.live_on_phone_system ? 'Live on the phone system' : 'Not yet live on the phone system'}
-                    </div>
-                  )}
+                </Td>
+                <Td>
+                  {(() => {
+                    const cell = answeringCell(a)
+                    return cell ? <Chip text={cell.text} fg={cell.fg} bg={cell.bg} />
+                      : <span style={{ fontSize: 12, color: MUTED }}>—</span>
+                  })()}
                 </Td>
                 <Td><Chip text={modeLabel(a.mode)} {...(MODE_TONE[a.mode] ?? MODE_TONE.off)} /></Td>
                 <Td>
@@ -207,7 +209,7 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
               </tr>
             ))}
             {agents.isSuccess && rows.length === 0 && (
-              <tr><td colSpan={7}>
+              <tr><td colSpan={8}>
                 <Empty>
                   {needle ? `No agents match “${q.trim()}”.`
                     : admin ? 'No agents yet. Create one — it starts Off, and nothing runs until you publish it and switch it on.'
@@ -216,7 +218,7 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
               </td></tr>
             )}
             {agents.isError && (
-              <tr><td colSpan={7} role="alert" style={{ padding: 24, fontSize: 13, color: 'rgb(180,35,24)' }}>
+              <tr><td colSpan={8} role="alert" style={{ padding: 24, fontSize: 13, color: 'rgb(180,35,24)' }}>
                 {(agents.error as Error).message}
               </td></tr>
             )}

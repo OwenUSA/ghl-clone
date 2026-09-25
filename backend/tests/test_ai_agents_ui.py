@@ -201,7 +201,8 @@ def test_the_knowledge_counter_and_the_phone_system_line_never_flatter():
     got = run_js("aiAgents.ts", """
         out({ ok: m.knowledgeBudget('x'.repeat(6000)), over: m.knowledgeBudget('x'.repeat(6001)),
               blank: m.knowledgeBudget(null),
-              tones: ['live', 'pending', 'retrying', 'refused', 'failed', 'not_pushed'].map(m.phoneSystemTone),
+              tones: ['live', 'pending', 'retrying', 'refused', 'failed', 'not_pushed', 'not_answering',
+                      'other_answering', 'unpublished'].map(m.phoneSystemTone),
               polls: ['pending', 'retrying', 'live', 'refused', undefined].map(m.phoneSystemPending) })
     """)
     assert got["ok"] == {"chars": 6000, "over": 0, "label": "6,000 / 6,000 characters"}
@@ -214,6 +215,48 @@ def test_the_knowledge_counter_and_the_phone_system_line_never_flatter():
     assert got["polls"] == [True, True, False, False, False]
     builder = _read("components", "ai", "AgentBuilder.tsx")
     assert "<Chip text={phoneState.label}" in builder, "the label shown must be the server's"
+
+
+@node
+def test_answering_calls_and_what_it_may_write_are_two_controls_never_one():
+    """Phase 2c (2026-09-25): the mode governs CRM writes only; answering is its own switch."""
+    got = run_js("aiAgents.ts", """
+        out({ on: m.answeringConfirm(true, 'Intake', 3), onUnpublished: m.answeringConfirm(true, 'Intake', null),
+              off: m.answeringConfirm(false, 'Intake', 3),
+              titles: [m.WRITE_MODE_TITLE, m.ANSWERING_TITLE],
+              cells: [m.answeringCell({ channel: 'text', phone_label: null, phone_status: null }),
+                      m.answeringCell({ channel: 'voice', phone_label: 'Answering calls', phone_status: 'live' }),
+                      m.answeringCell({ channel: 'voice', phone_label: 'Not answering calls', phone_status: 'not_answering' }),
+                      m.answeringCell({ channel: 'voice', phone_label: null, phone_status: null })],
+              takeOff: [m.offerTakeOff({ status: 'other_answering', answering: true, answering_calls: false }),
+                        m.offerTakeOff({ status: 'other_answering', answering: true, answering_calls: true }),
+                        m.offerTakeOff({ status: 'not_answering', answering: false, answering_calls: false }),
+                        m.offerTakeOff({ status: 'pending', answering: true, answering_calls: false }),
+                        m.offerTakeOff(null)] })
+    """)
+    assert got["titles"] == ["What it may write here", "Answering calls"]
+    assert got["on"]["title"] == "Answer calls with this agent?"
+    assert "published version 3" in got["on"]["body"]
+    assert "does not let it write anything here" in got["on"]["body"], (
+        "switching answering on must say it does not change what the agent may write")
+    assert "once it is published" in got["onUnpublished"]["body"]
+    assert got["off"]["title"] == "Stop answering calls?" and got["off"]["danger"] is True
+    assert "voicemail" in got["off"]["body"] and "Nothing is deleted" in got["off"]["body"]
+    assert got["cells"][0] is None, "a text agent has no answering cell"
+    assert got["cells"][1]["text"] == "Answering calls" and got["cells"][1]["fg"] == "rgb(2,122,72)"
+    assert got["cells"][2]["text"] == "Not answering calls" and got["cells"][2]["fg"] != "rgb(2,122,72)"
+    assert got["cells"][3]["text"] == "Not published"
+    assert got["takeOff"] == [True, False, False, False, False]
+    builder = _read("components", "ai", "AgentBuilder.tsx")
+    assert "<Switch checked={!!agent.answering_calls} label={ANSWERING_TITLE}" in builder
+    assert "onChange={(on) => setConfirmAnswering(on)}" in builder, (
+        "the Answering calls switch would act without its confirmation")
+    assert "{voice ? WRITE_MODE_TITLE : 'Mode'}" in builder, (
+        "a voice agent's mode would still read as if it decided answering")
+    assert "setAiAgentAnswering(agent.id, on, true)" in builder
+    tab = _read("components", "ai", "AgentsTab.tsx")
+    assert "<Th width={190}>Answering calls</Th>" in tab and "answeringCell(a)" in tab
+    assert "Live on the phone system" not in tab, "the list would claim live from the old flag"
 
 
 def test_a_dispatcher_gets_text_not_disabled_controls_in_the_builder():

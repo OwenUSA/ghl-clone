@@ -10,6 +10,10 @@ WHO MAY DO WHAT (owner's decisions, 2026-09-15):
 * TECH, and any user with "Only assigned data" on — nothing: 403 on every route.
 
 Only an ADMIN switches an agent to Auto-pilot, and the request must carry `confirm: true`.
+Only an ADMIN switches a VOICE agent's "Answering calls" on or off, and — because either way
+changes what a customer who rings hears — that request must carry `confirm: true` too
+(phase 2c, 2026-09-25). The mode governs what an agent may WRITE here; it never decides
+whether a voice agent answers the phone.
 Nothing here returns a provider API key: a connection reads "•••• last4".
 """
 from __future__ import annotations
@@ -402,6 +406,7 @@ def _compiled(c: dict, name: str) -> str:
 
 
 def _agent_row(db: Session, a: AiAgent) -> dict:
+    phone = push.state(db, a)
     version = db.get(AiAgentVersion, a.published_version_id) if a.published_version_id \
         else None
     last = db.scalar(select(AiRun).where(AiRun.agent_id == a.id, AiRun.is_test.is_(False))
@@ -422,9 +427,13 @@ def _agent_row(db: Session, a: AiAgent) -> dict:
             # version has the Manual trigger.
             "published_triggers": [t["type"] for t in config.merged(version.config)["triggers"]]
             if version else [],
-            # Voice only: is the published version the one answering the phone?
-            "live_on_phone_system": (push.state(db, a) or {}).get("live")
-            if a.channel == AiAgent.VOICE else None}
+            # Voice only: the "Answering calls" switch, and what owen-main says is true.
+            # Two facts, two keys — never folded into `mode`.
+            "answering_calls": a.answering_calls if a.channel == AiAgent.VOICE else None,
+            "phone_status": phone["status"] if phone else None,
+            "phone_label": phone["label"] if phone else None,
+            # Is the PUBLISHED version the one answering the phone?
+            "live_on_phone_system": phone["live"] if phone else None}
 
 
 def _get_agent(db: Session, agent_id: int) -> AiAgent:
@@ -621,6 +630,43 @@ def ai_push_agent(agent_id: int, db: Session = Depends(get_db),
         push.retry(db, a)
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
+    db.commit()
+    return _agent_detail(db, a, principal)
+
+
+class AnsweringIn(BaseModel):
+    on: bool
+    confirm: bool = False
+
+
+@router.post("/agents/{agent_id}/answering")
+def ai_set_answering(agent_id: int, body: AnsweringIn, db: Session = Depends(get_db),
+                     principal: auth.Principal = ADMIN):
+    """A voice agent's "Answering calls" switch (phase 2c, 2026-09-25). ADMIN only and
+    confirmed, like Auto-pilot. Separate from the mode: an agent can answer calls and write
+    nothing here (the imported receptionist on day one), or the other way round.
+
+    On with a published version queues an activation of THAT version on owen-main (no new
+    version there); Off queues a deactivation — callers then reach the flow's fallback
+    (voicemail). Both go through the publish's own queued push (`push.py`), so they retry and
+    report the same way. With nothing published only the switch is recorded; Publish then
+    carries it. A text agent has no such switch: 400, nothing changed."""
+    a = _get_agent(db, agent_id)
+    if a.channel != AiAgent.VOICE:
+        raise HTTPException(400, "only a voice agent answers calls — a text agent has no "
+                                 "Answering calls switch")
+    if not body.confirm:
+        v = db.get(AiAgentVersion, a.published_version_id) if a.published_version_id \
+            else None
+        if body.on:
+            raise HTTPException(409, "“%s” will answer customers' calls that the phone "
+                                     "system's flow sends to it%s. Confirm to switch it on."
+                                % (a.name, ", using published version %d" % v.version
+                                   if v else ", once it is published"))
+        raise HTTPException(409, "Calls that reach “%s” will go to the flow's fallback "
+                                 "(voicemail) instead. Confirm to switch it off." % a.name)
+    push.set_answering(db, a, body.on)
+    a.updated_at = _now()
     db.commit()
     return _agent_detail(db, a, principal)
 

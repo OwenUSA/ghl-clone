@@ -1714,6 +1714,11 @@ export type AiAgentRow = {
   published_triggers?: string[]
   /** Voice only: is the PUBLISHED version the one answering the phone? null for text. */
   live_on_phone_system?: boolean | null
+  /** Voice only (phase 2c): the "Answering calls" switch. null for a text agent. */
+  answering_calls?: boolean | null
+  /** Voice only: the phone-system state's status and label, for the list's column. */
+  phone_status?: string | null
+  phone_label?: string | null
 }
 export type AiAgentDetail = AiAgentRow & {
   /** Voice only (2026-09-25): where the published version stands on owen-main. */
@@ -1736,6 +1741,9 @@ export const previewAiPrompt = (id: number, draft: AiDraft, name?: string) =>
 export const publishAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/publish`, 'POST')
 /** Retry a voice agent's push to the phone system. Queued; answers the agent at once. */
 export const pushAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/push`, 'POST')
+/** A voice agent's "Answering calls" switch (ADMIN, confirmed). Queued; answers the agent at once. */
+export const setAiAgentAnswering = (id: number, on: boolean, confirm = false) =>
+  send<AiAgentDetail>(`/api/ai/agents/${id}/answering`, 'POST', { on, confirm })
 export const setAiAgentMode = (id: number, mode: string, confirm = false) =>
   send<AiAgentDetail>(`/api/ai/agents/${id}/mode`, 'POST', { mode, confirm })
 export const deleteAiAgent = (id: number) => send<{ deleted: number }>(`/api/ai/agents/${id}`, 'DELETE')

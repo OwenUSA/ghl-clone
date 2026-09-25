@@ -16,8 +16,17 @@ What is pinned, by behaviour:
     carries the same `crm_version`, and a fake owen-main that keys on it (as the real one does,
     pinned in owen-main's tests/test_crm_agent_versions.py) stores one.
   * **A newer publish supersedes an older push in flight.** Version 1 is never pushed over 2.
-  * **The import** is a dry run by default, creates the agent Off with version 1 when asked,
-    never overwrites, and is idempotent.
+  * **The import** is a dry run by default, creates the agent with version 1 when asked —
+    answering calls, writes Off (phase 2c) — never overwrites, and is idempotent.
+
+Phase 2c (2026-09-25) — "Answering calls" is its own switch, separate from the mode:
+
+  * publish while NOT answering → owen-main stores the version and does not activate it;
+  * switch on → owen-main activates the version it already holds; no second version;
+  * switch off → owen-main deactivates; the screen says not answering, callers → fallback;
+  * publish while answering → stored AND active;
+  * a text agent refuses the switch; a dispatcher cannot touch it; it must be confirmed;
+  * the mode never moves the switch and the switch never moves the mode.
 
 owen-main is mocked at the `crmlink.httpx` boundary, like `test_number_threads.py`; the
 owen guard fails any test here that reached a real host.
@@ -88,6 +97,16 @@ class Owen:
             return FakeResponse(404, {"detail": {
                 "message": "the phone system has no agent named '%s'" % name}})
         rows = self.versions[name]
+        if json.get("deactivate"):
+            assert set(json) == {"agent_name", "deactivate"}, json   # owen-main's form
+            previous = self.live[name]
+            self.live[name] = None
+            if self.lose_reply:
+                raise TimeoutError("read timed out")
+            return FakeResponse(200, {"ok": True, "agent_id": "a-" + name,
+                                      "deactivated": previous is not None,
+                                      "previous_version": self._number(name, previous),
+                                      "answering": False, "active_version": None})
         found = [r for r in rows if r["config"]["crm_version"] == json["crm_version"]]
         if found:
             row, created = found[0], False
@@ -102,7 +121,17 @@ class Owen:
             raise TimeoutError("read timed out")
         return FakeResponse(200, {"ok": True, "agent_id": "a-" + name, "version_id": row["id"],
                                   "version": row["version"], "created": created,
-                                  "active": self.live[name] == row["id"], "warnings": []})
+                                  "active": self.live[name] == row["id"],
+                                  "answering": self.live[name] is not None,
+                                  "active_version": self._number(name, self.live[name]),
+                                  "warnings": []})
+
+    def _number(self, name, vid):
+        return next((r["version"] for r in self.versions[name] if r["id"] == vid), None)
+
+    def active(self, name="Intake"):
+        """The number of owen-main's ACTIVE version of this agent, or None."""
+        return self._number(name, self.live[name])
 
     def get(self, url, headers=None, timeout=None, **kw):
         self.requests.append(("GET", url, None))
@@ -136,14 +165,21 @@ def voice_draft(**over) -> dict:
     return d
 
 
-def make_voice(world, **over) -> int:
+def make_voice(world, answering=False, **over) -> int:
     admin = world.client("admin")
     r = admin.post("/api/ai/agents", json={"name": "Receptionist", "channel": "voice"})
     assert r.status_code == 201, r.text
     aid = r.json()["id"]
     r = admin.patch("/api/ai/agents/%s" % aid, json={"draft": voice_draft(**over)})
     assert r.status_code == 200, r.text
+    if answering:
+        switch(world, aid, True)
     return aid
+
+
+def switch(world, aid, on, who="admin", confirm=True):
+    return world.client(who).post("/api/ai/agents/%s/answering" % aid,
+                                  json={"on": on, "confirm": confirm})
 
 
 def jobs(status=None):
@@ -285,14 +321,15 @@ def test_publish_needs_the_phone_system_agent_and_a_model(world):
     assert count(AiAgentVersion) == 0
 
 
-def test_publish_answers_without_asking_owen_main_and_says_not_yet_live(world, owen):
+def test_publish_answers_without_asking_owen_main_and_stores_it_not_answering(world, owen):
     aid = make_voice(world)
     r = world.client("admin").post("/api/ai/agents/%s/publish" % aid)
     assert r.status_code == 201
     assert owen.requests == []                       # the request never waits on owen-main
     state = r.json()["phone_system"]
-    assert state["label"] == "Published · not yet live on the phone system"
+    assert state["label"] == "Published · not yet on the phone system"
     assert state["live"] is False and state["status"] == "pending"
+    assert state["answering_calls"] is False
     assert r.json()["live_on_phone_system"] is False
     assert len(jobs("pending")) == 1
 
@@ -301,23 +338,26 @@ def test_publish_answers_without_asking_owen_main_and_says_not_yet_live(world, o
     method, url, body = owen.requests[0]
     assert (method, url) == ("POST", BASE + "/api/crm-link/agent-versions")
     assert body["agent_name"] == "Intake" and body["crm_version"] == 1
-    assert body["crm_agent_id"] == aid and body["activate"] is True
+    # Answering calls is Off (every new agent), so it is STORED, not activated.
+    assert body["crm_agent_id"] == aid and body["activate"] is False
     cfg = body["config"]
     assert cfg["persona"] == "You answer the phone for Dream Team Roofing."
     assert cfg["tools"] == {"transfer": True, "end_call": True, "capture_lead": True}
     assert cfg["knowledge"] == "We fix roofs." and "knowledge_text" not in cfg
     assert "send_sms" not in cfg["tools"] and "owen_agent" not in cfg
 
+    assert len(owen.versions["Intake"]) == 1 and owen.active() is None
     state = phone(world, aid)
-    assert state["live"] is True and state["label"] == "Live on the phone system"
+    assert state["live"] is False and state["status"] == "not_answering"
+    assert state["label"] == "Not answering calls" and state["answering"] is False
     assert state["owen_version"] == 1 and state["owen_version_id"] == "v-1"
-    assert state["pushed_at"] and "version 1" in state["detail"]
+    assert "voicemail" in state["detail"] and "Version 1" in state["detail"]
     assert jobs("done") and not jobs("pending")
 
 
 def test_a_failed_push_leaves_the_agent_not_yet_live_and_retries(world, owen):
     owen.down = True
-    aid = make_voice(world)
+    aid = make_voice(world, answering=True)
     assert world.client("admin").post("/api/ai/agents/%s/publish" % aid).status_code == 201
     drain()
     assert len(owen.requests) == 1
@@ -340,6 +380,7 @@ def test_a_failed_push_leaves_the_agent_not_yet_live_and_retries(world, owen):
     drain()
     state = phone(world, aid)
     assert state["live"] is True and state["attempts"] == 2
+    assert state["label"] == "Answering calls"
     assert len(owen.versions["Intake"]) == 1
 
 
@@ -368,7 +409,7 @@ def test_an_unknown_phone_system_agent_is_refused_not_created(world, owen):
 
 def test_a_second_push_of_the_same_crm_version_makes_no_second_owen_version(world, owen):
     owen.lose_reply = True               # owen-main stores it, and the answer is lost
-    aid = make_voice(world)
+    aid = make_voice(world, answering=True)
     world.client("admin").post("/api/ai/agents/%s/publish" % aid)
     drain()
     assert len(owen.versions["Intake"]) == 1
@@ -389,7 +430,7 @@ def test_a_second_push_of_the_same_crm_version_makes_no_second_owen_version(worl
 
 def test_a_newer_publish_supersedes_a_push_in_flight(world, owen):
     owen.down = True
-    aid = make_voice(world)
+    aid = make_voice(world, answering=True)
     admin = world.client("admin")
     admin.post("/api/ai/agents/%s/publish" % aid)
     drain()
@@ -413,7 +454,7 @@ def test_a_newer_publish_supersedes_a_push_in_flight(world, owen):
 
 
 def test_the_screen_says_which_version_is_still_running(world, owen):
-    aid = make_voice(world)
+    aid = make_voice(world, answering=True)
     admin = world.client("admin")
     admin.post("/api/ai/agents/%s/publish" % aid)
     drain()
@@ -450,7 +491,7 @@ def test_retry_after_giving_up_pushes_again(world, owen, monkeypatch):
     from app.ai import push
     monkeypatch.setattr(push, "MAX_ATTEMPTS", 2)
     owen.down = True
-    aid = make_voice(world)
+    aid = make_voice(world, answering=True)
     world.client("admin").post("/api/ai/agents/%s/publish" % aid)
     drain()
     make_due()
@@ -520,13 +561,20 @@ def test_the_import_creates_the_agent_off_with_version_1_recorded_as_live(world,
     db.close()
     assert code == 0 and report["wrote"] is True
     a = get(AiAgent, report["crm_agent_id"])
-    assert a.name == "Intake" and a.channel == "voice" and a.mode == "off"
+    assert a.name == "Intake" and a.channel == "voice"
+    # Phase 2c: it IS answering calls (owen-main reported it active) and writes nothing here.
+    assert a.answering_calls is True and a.mode == "off"
+    assert report["answering_calls"] is True and report["mode"] == "off"
     assert a.draft["owen_agent"] == "Intake"
     v = get(AiAgentVersion, a.published_version_id)
     assert v.version == 1 and voice.to_owen(v.config)["greeting"] == LIVE_CONFIG["greeting"]
     state = phone(world, a.id)
     assert state["live"] is True and state["imported"] is True
+    assert state["label"] == "Answering calls" and state["answering_calls"] is True
     assert "Imported from the phone system's version 4" in state["detail"]
+    row = world.client("admin").get("/api/ai/agents").json()[0]
+    assert row["answering_calls"] is True and row["mode"] == "off"
+    assert row["phone_label"] == "Answering calls"
     assert [r[0] for r in owen.requests] == ["GET"]     # nothing pushed: it is already there
     assert jobs() == []
 
@@ -566,8 +614,13 @@ def test_the_import_drops_send_sms_and_does_not_claim_live(world, owen, monkeypa
     assert report["matches_live"] is False
     a = get(AiAgent, report["crm_agent_id"])
     assert "send_text" not in a.draft["actions"]
+    # Still answering (with owen-main's OWN version 4) — never "live", never "not answering".
+    assert a.answering_calls is True and a.mode == "off"
     state = phone(world, a.id)
-    assert state["live"] is False and state["label"].startswith("Published · not yet live")
+    assert state["live"] is False and state["status"] == "other_answering"
+    assert state["label"] == "Answering calls — not with this version"
+    assert state["answering"] is True and "version 4 is" in state["detail"]
+    assert state["can_retry"] is True
 
 
 @pytest.mark.parametrize("wanted, code", [(None, 0), ("Old", 4), ("Nope", 4)])
@@ -586,3 +639,183 @@ def test_the_import_without_the_link_asks_nothing(world, monkeypatch):
     code, report = import_voice_agent.run(db, commit=True)
     db.close()
     assert code == 2 and "CRM_LINK_BASE_URL" in report["error"] and count(AiAgent) == 0
+
+
+# ------------------------------------------------------------------ phase 2c: answering calls
+
+def last_post(owen):
+    return [r[2] for r in owen.requests if r[0] == "POST"][-1]
+
+
+def push_jobs():
+    return len(jobs())
+
+
+def test_switching_on_activates_the_stored_version_and_makes_no_new_one(world, owen):
+    aid = make_voice(world)
+    world.client("admin").post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    assert len(owen.versions["Intake"]) == 1 and owen.active() is None   # stored, not active
+
+    # Unconfirmed: refused with a sentence, and nothing changes or is queued.
+    before = push_jobs()
+    r = switch(world, aid, True, confirm=False)
+    assert r.status_code == 409 and "Confirm to switch it on" in r.json()["detail"]
+    assert "version 1" in r.json()["detail"]
+    assert get(AiAgent, aid).answering_calls is False and push_jobs() == before
+
+    r = switch(world, aid, True)
+    assert r.status_code == 200
+    assert r.json()["answering_calls"] is True and r.json()["mode"] == "off"
+    assert r.json()["phone_system"]["label"] == "Published · not yet live on the phone system"
+    drain()
+    body = last_post(owen)
+    assert body["crm_version"] == 1 and body["activate"] is True
+    assert len(owen.versions["Intake"]) == 1                 # NO new version on owen-main
+    assert owen.active() == 1                                # ...the stored one is active
+    state = phone(world, aid)
+    assert state["status"] == "live" and state["label"] == "Answering calls"
+    assert state["answering"] is True and state["owen_version"] == 1
+    assert get(AiAgent, aid).mode == "off"                  # the switch never moves the mode
+
+
+def test_switching_off_deactivates_and_callers_go_to_the_fallback(world, owen):
+    aid = make_voice(world, answering=True)
+    world.client("admin").post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    assert owen.active() == 1 and phone(world, aid)["label"] == "Answering calls"
+
+    r = switch(world, aid, False, confirm=False)
+    assert r.status_code == 409 and "voicemail" in r.json()["detail"]
+    assert get(AiAgent, aid).answering_calls is True
+
+    r = switch(world, aid, False)
+    assert r.status_code == 200
+    state = r.json()["phone_system"]
+    # Not confirmed yet: it must not claim either state.
+    assert state["label"] == "Switching off · not confirmed by the phone system"
+    assert state["live"] is False and state["answering"] is True
+    drain()
+    assert last_post(owen) == {"agent_name": "Intake", "deactivate": True}
+    assert owen.active() is None
+    assert len(owen.versions["Intake"]) == 1                 # nothing deleted
+    state = phone(world, aid)
+    assert state["status"] == "not_answering" and state["label"] == "Not answering calls"
+    assert state["answering"] is False and "voicemail" in state["detail"]
+    row = world.client("admin").get("/api/ai/agents").json()[0]
+    assert row["answering_calls"] is False and row["phone_label"] == "Not answering calls"
+    assert row["live_on_phone_system"] is False
+
+    # ...and back on: the SAME stored version, still one on owen-main.
+    switch(world, aid, True)
+    drain()
+    assert owen.active() == 1 and len(owen.versions["Intake"]) == 1
+    assert phone(world, aid)["label"] == "Answering calls"
+
+
+def test_publish_while_answering_is_stored_and_active(world, owen):
+    aid = make_voice(world, answering=True)
+    admin = world.client("admin")
+    admin.post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    assert last_post(owen)["activate"] is True and owen.active() == 1
+    admin.patch("/api/ai/agents/%s" % aid, json={"draft": voice_draft(greeting="Hi there")})
+    admin.post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    assert last_post(owen)["activate"] is True and last_post(owen)["crm_version"] == 2
+    assert owen.active() == 2 and len(owen.versions["Intake"]) == 2
+    state = phone(world, aid)
+    assert state["live"] is True and state["version"] == 2 and state["live_version"] == 2
+    db = SessionLocal()
+    statuses = sorted(p.status for p in db.scalars(select(AiVoicePush)).all())
+    db.close()
+    assert statuses == ["live", "not_answering"]     # version 1 no longer claims live
+
+
+def test_publish_while_not_answering_leaves_what_is_answering_alone(world, owen):
+    """A new CRM agent pointed at a phone-system agent that is already answering must not
+    take it off the phone just by publishing. It is stored, and the screen says who answers."""
+    owen.versions["Intake"].append({"id": "hand-1", "version": 1,
+                                    "config": {"persona": "hand-written", "crm_version": None}})
+    owen.live["Intake"] = "hand-1"
+    aid = make_voice(world)
+    world.client("admin").post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    assert last_post(owen)["activate"] is False and owen.active() == 1   # untouched
+    state = phone(world, aid)
+    assert state["status"] == "other_answering" and state["answering"] is True
+    assert state["label"] == "Answering calls — not with this version"
+    assert "version 1 is" in state["detail"] and "Take it off the phone" in state["detail"]
+    # Switching it off (it already reads Off) is how it comes off the phone.
+    switch(world, aid, False)
+    drain()
+    assert owen.active() is None and phone(world, aid)["label"] == "Not answering calls"
+
+
+def test_a_switch_off_on_its_way_survives_a_publish(world, owen):
+    aid = make_voice(world, answering=True)
+    admin = world.client("admin")
+    admin.post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    owen.down = True
+    switch(world, aid, False)
+    drain()
+    assert phone(world, aid)["status"] == "retrying"
+    assert phone(world, aid)["label"] == "Switching off · not confirmed by the phone system"
+    admin.patch("/api/ai/agents/%s" % aid, json={"draft": voice_draft(greeting="Later")})
+    admin.post("/api/ai/agents/%s/publish" % aid)
+    owen.down = False
+    make_due()
+    drain()
+    assert last_post(owen) == {"agent_name": "Intake", "deactivate": True}
+    assert owen.active() is None
+    assert phone(world, aid)["label"] == "Not answering calls"
+
+
+def test_switching_on_before_publishing_is_carried_by_the_publish(world, owen):
+    aid = make_voice(world)
+    r = switch(world, aid, True)
+    assert r.status_code == 200 and owen.requests == [] and jobs() == []
+    state = r.json()["phone_system"]
+    assert state["status"] == "unpublished" and "once it is there" in state["detail"]
+    r = switch(world, aid, True, confirm=False)
+    assert "once it is published" in r.json()["detail"]
+    world.client("admin").post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    assert last_post(owen)["activate"] is True and owen.active() == 1
+
+
+def test_a_text_agent_refuses_the_switch(world, owen):
+    r = world.client("admin").post("/api/ai/agents", json={"name": "Texter"})
+    aid = r.json()["id"]
+    assert r.json()["answering_calls"] is None and r.json()["phone_label"] is None
+    for on in (True, False):
+        r = switch(world, aid, on)
+        assert r.status_code == 400 and "only a voice agent" in r.json()["detail"]
+    assert get(AiAgent, aid).answering_calls is False
+    assert owen.requests == [] and jobs() == []
+
+
+def test_only_an_admin_switches_answering(world, owen):
+    aid = make_voice(world, answering=True)
+    world.client("admin").post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    sent = len(owen.requests)
+    for on in (True, False):
+        assert switch(world, aid, on, who="dispatcher").status_code == 403
+    assert get(AiAgent, aid).answering_calls is True and len(owen.requests) == sent
+    assert jobs("pending") == []
+
+
+def test_the_mode_never_moves_the_switch(world, owen):
+    aid = make_voice(world)
+    admin = world.client("admin")
+    admin.post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    sent = len(owen.requests)
+    for mode in ("suggest", "off"):
+        r = admin.post("/api/ai/agents/%s/mode" % aid, json={"mode": mode})
+        assert r.status_code == 200 and r.json()["mode"] == mode
+        assert r.json()["answering_calls"] is False
+    assert len(owen.requests) == sent and jobs("pending") == []
+    assert owen.active() is None

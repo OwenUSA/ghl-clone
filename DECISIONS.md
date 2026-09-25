@@ -5984,3 +5984,137 @@ false, the kernel's order, scope and kill switch, the refusal's shape, a read-on
   CRM with `./deploy.sh --with-migrations` (revision `a9d2f4c6e813`, one CREATE TABLE); run
   `uv run python -m app.ai.import_voice_agent` in the api container and read it; then
   `--commit`. The agent is created Off; its version 1 is already what owen-main runs.
+
+## AMENDMENT (2026-09-25): phase 2c — "Answering calls" is its own switch, separate from what the agent may WRITE
+
+Branches `feature/voice-answering-switch` here (off `feature/voice-agents-in-crm`) and
+`feature/agent-version-activation` in owen-main (off `feature/agent-version-push`). Built on
+phase 2b, which is not merged either; not merged, not deployed. Migration `c5e8a1b3d702` on
+`a9d2f4c6e813` (four ADD COLUMNs, each defaulted or nullable).
+
+### The problem
+
+A voice agent's screen put two different facts under one control:
+
+1. **Does it answer the phone?** owen-main decides: a flow points at the agent and the agent
+   has an ACTIVE version. Phase 2b's Publish always activated.
+2. **What may it write in the CRM afterwards?** Off / Suggest / Auto-pilot.
+
+So Publish made an agent answer customers while the CRM said "Off" — phase 2b wrote this down
+as "The CRM mode does not gate calls … Judgement call — overrulable." It is overruled here.
+
+### The rejected option: Off blocks activation — and why the import killed it
+
+Making mode Off mean "never activate on owen-main" looks like the small fix. It is wrong. The
+import (`app.ai.import_voice_agent`) pulls in the agent that is ALREADY answering — the live
+receptionist — and creates it Off (every agent is created Off). With Off meaning "not on the
+phone", the screen would say "switched off" about an agent live on the phone: the same lie the
+other way round. And the first Publish of that imported agent would take the receptionist off
+the phone. One control cannot say both "answers calls" and "writes nothing here", and on day
+one that combination is exactly what the owner wants.
+
+### Built
+
+* **`ai_agents.answering_calls`**, boolean, default **false** (server default too): a new agent
+  never answers a customer until a person says so — the "created Off" stance, applied to the
+  phone. Only meaningful for `channel = voice`: a text agent's rows carry `null`, and the API
+  refuses the switch with 400 (nothing changes, nothing is queued).
+* **`POST /api/ai/agents/{id}/answering`** `{"on": bool, "confirm": bool}` — **ADMIN only, BOTH
+  ways, and confirmed BOTH ways** (409 with a sentence without `confirm: true`). The mode
+  switch's precedent is "an ADMIN-only switch must be confirmed" (Auto-pilot). Unlike the mode,
+  a dispatcher may not switch answering off: that sends every caller to voicemail, a phone
+  decision, not the CRM-writes emergency stop. Judgement call — overrulable.
+* **Everything goes through the ONE queued push (`app/ai/push.py`)**, so a switch retries,
+  backs off, is refused and reports exactly like a publish. No second delivery mechanism.
+  * Publish → PUSH with `activate = agent.answering_calls`, read when the job RUNS.
+  * Switch on → PUSH of the published version with `activate: true`; owen-main activates the
+    row it already holds (idempotent on `crm_version`: **no new version**), or stores and
+    activates it if it never arrived.
+  * Switch off → DEACTIVATE (`{"agent_name", "deactivate": true}`).
+  * Each switch cancels the agent's queued pushes and releases their keys, so the last one wins.
+  * With nothing published, only the switch is recorded; Publish carries it.
+* **Publishing while answering is Off never deactivates by itself.** A new CRM agent pointed at
+  a phone-system agent that is already answering must not take it off the phone just by being
+  published; it is stored, and the screen says what IS answering ("Answering calls — not with
+  this version", with "Take it off the phone"). The one exception: a switch-off still on its way
+  is carried forward by a publish instead of being dropped.
+* **`ai_voice_pushes` learns what owen-main said**: `op` (push / deactivate), `owen_answering`
+  and `owen_active_version` from every answer, and the status `not_answering`. `live` now means
+  exactly "owen-main confirmed THIS version is the active one"; an older row that said live
+  stops saying it as soon as an answer shows otherwise.
+* **The import is honest**: it creates the agent with `answering_calls = true` (owen-main
+  reported that version active) and mode **Off**. When version 1 maps back to the live config it
+  reads "Answering calls"; when it does not (e.g. `send_sms` dropped), "Answering calls — not
+  with this version", because owen-main's own version is the one answering until someone
+  presses Retry.
+
+### owen-main: the same route learns activate-a-stored-version and deactivate
+
+`POST /api/crm-link/agent-versions` (no new route — the four fence files keep sixteen routes on
+fifteen paths, each with a comment saying the POST learned a body form):
+
+* `activate: true` for a CRM version it ALREADY holds activates that row and appends nothing
+  (the existing idempotency, extended to the pointer; `created: false`).
+* `{"agent_name", "deactivate": true}` — and nothing else; mixing it with a config, a version or
+  `activate` is 422 — clears `agents.active_version_id`. Found by name exactly as a publish is
+  (404 / 409), idempotent, deletes and edits no version.
+* Every 200 carries `answering` and `active_version`: what is answering NOW.
+* **Deactivating does not make calls fail.** The flow's `ai_agent` node resolves the active
+  version at entry (`flows/runtime.py`); with none it takes its `failed` port, and an unwired
+  `failed` port falls through to the flow's `default_fallback` — voicemail here. That is the
+  intended meaning of "not answering calls", written in the route's docstring and pinned by a
+  test that also checks the runtime still reads it that way.
+
+### The screen tells the truth, both facts separately
+
+The builder's top bar for a voice agent: **"Answering calls"** with a switch (its own
+confirmation — "Answer calls with this agent?" / "Stop answering calls?") and, beside it, the
+mode titled **"What it may write here"** (Off / Suggest / Auto-pilot). The confirm for "on"
+says it does not change what the agent may write. The phone-system chip is the server's
+`label`, never inferred in the browser:
+
+| state | chip label |
+|---|---|
+| not published | Not published |
+| this version is owen-main's active one | Answering calls |
+| owen-main confirmed nothing of this agent answers | Not answering calls |
+| owen-main confirmed ANOTHER version answers | Answering calls — not with this version |
+| queued / retrying / refused / failed, switch on | Published · not yet live on the phone system |
+| the same, switch off | Published · not yet on the phone system |
+| a switch-off not yet confirmed | Switching off · not confirmed by the phone system |
+
+The detail line carries the last error in words, the attempt count, and which version is still
+running. The agents list has an **"Answering calls"** column (that label, coloured; "—" for a
+text agent) in place of phase 2b's "Live / Not yet live" line under Channel.
+
+### Tests
+
+CRM `tests/test_ai_voice_agents.py` (mocked at `crmlink.httpx`, a fake owen-main that keeps
+versions, the active pointer and the deactivate form): publish while not answering → stored,
+not active, "Not answering calls"; switch on (confirmed) → activates the stored version, still
+ONE owen-main version, mode unchanged; unconfirmed → 409, nothing queued; switch off → the
+deactivate body exactly, owen-main has no active version, nothing deleted, "voicemail" in the
+detail, back on → the same row; publish while answering → active, older row no longer live;
+publish while off leaves another answering version alone and says so; a switch-off in flight
+survives a publish; switching on before publishing is carried by the publish; a text agent
+refuses (400, nothing queued); a dispatcher cannot (403, nothing sent); the mode never moves the
+switch; the import lands answering=true + mode=off, and "not with this version" when it does not
+match. `test_ai_agents_ui.py` runs the confirm copy, the list cell and the tones under node.
+`test_ai_permissions.py` has the route on its ADMIN-only list. owen-main
+`tests/test_crm_agent_versions.py`: activate-stored appends nothing, what is still answering is
+reported, deactivate clears and deletes nothing, 404/409 by name, the two forms cannot mix, the
+route's docstring says fallback/voicemail and the runtime still means that.
+
+### Not built / not verified
+
+* **Nothing has been sent to the real owen-main.** Deploy owen-main's branch FIRST: the phase-2b
+  owen-main forbids unknown body keys, so a CRM on this branch talking to it gets a switch-off
+  REFUSED (shown in words, not retried) and pushes without `answering` in the answer (the CRM
+  then only knows what `active` says).
+* No real call has reached a deactivated agent; the voicemail claim is read from the flow
+  runtime and interpreter code, not observed.
+* Archiving (deleting) a voice agent that is answering does not deactivate it on owen-main.
+* An imported agent whose config cannot be version 1 (publish problems) is answering=true with
+  nothing published; its chip reads "Not published" and does not name owen-main's version.
+* Operator steps: deploy owen-main (`scripts/check.sh`); `./deploy.sh --with-migrations` here
+  (revisions `a9d2f4c6e813` and `c5e8a1b3d702`); run the import dry run, then `--commit`.

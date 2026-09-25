@@ -551,13 +551,23 @@ def publish_agent_version(agent_name: str, config: dict, crm_version: int,
                           activate: bool = True) -> LinkResult:
     """`POST /api/crm-link/agent-versions`. owen-main finds the agent by name (404 if it has
     none — it never creates one), validates the config as activation does (422 with
-    `detail.message`), and is idempotent on `crm_version`. On success `data` carries
-    `version_id`, `version`, `created`, `active` and `warnings`."""
+    `detail.message`), and is idempotent on `crm_version` — `activate` of a version it
+    already holds activates that row and appends none. On success `data` carries
+    `version_id`, `version`, `created`, `active`, `answering`, `active_version` (what is
+    answering NOW, whatever was asked) and `warnings`."""
     body = {"agent_name": agent_name, "config": config, "crm_version": crm_version,
             "activate": activate}
     if crm_agent_id is not None:
         body["crm_agent_id"] = crm_agent_id
     return _post(AGENT_VERSIONS_PATH, body)
+
+
+def deactivate_agent(agent_name: str) -> LinkResult:
+    """The same `POST /api/crm-link/agent-versions`, in its deactivate form (phase 2c): the
+    CRM's "Answering calls" switched off. owen-main clears the agent's active version; a call
+    reaching it then takes the flow's fallback (voicemail). `data` carries `deactivated`,
+    `previous_version`, `answering` (false) and `active_version` (null)."""
+    return _post(AGENT_VERSIONS_PATH, {"agent_name": agent_name, "deactivate": True})
 
 
 def agent_versions() -> LinkResult:

@@ -27,6 +27,10 @@ ADMIN_ONLY = {
     ("POST", "/api/ai/agents/{agent_id}/wake"), ("POST", "/api/ai/templates"),
     # Retry a voice agent's push to the phone system (2026-09-25).
     ("POST", "/api/ai/agents/{agent_id}/push"),
+    # A voice agent's "Answering calls" switch (phase 2c, 2026-09-25): ADMIN only, BOTH ways —
+    # unlike the mode, where a dispatcher may switch off, because turning answering off sends
+    # every caller to voicemail. It is a phone decision, not the CRM-writes emergency stop.
+    ("POST", "/api/ai/agents/{agent_id}/answering"),
     ("DELETE", "/api/ai/templates/{template_id}"), ("POST", "/api/ai/knowledge-bases"),
     ("PATCH", "/api/ai/knowledge-bases/{kb_id}"), ("DELETE", "/api/ai/knowledge-bases/{kb_id}"),
     ("POST", "/api/ai/knowledge-bases/{kb_id}/items"),

@@ -550,9 +550,26 @@ the UI. **Knowledge over 6,000 characters refuses to publish**, with the number.
   creates one (404), validates as activation does (422), and is idempotent on `crm_version` —
   pushing CRM version 7 twice makes one owen-main version.
 - **Import the live agent once** (from `backend/`): `uv run python -m app.ai.import_voice_agent`
-  (DRY RUN; `--commit` writes; `--agent NAME`). Creates the agent Off + version 1, recorded live
-  only when it maps back to exactly the live config; never overwrites an existing CRM agent;
-  never writes to owen-main; prints no persona or knowledge. See DECISIONS.md.
+  (DRY RUN; `--commit` writes; `--agent NAME`). Creates the agent ANSWERING calls with mode
+  Off (phase 2c) + version 1, recorded live only when it maps back to exactly the live config;
+  never overwrites an existing CRM agent; never writes to owen-main; prints no persona or
+  knowledge. See DECISIONS.md.
+
+### Answering calls is its own switch (phase 2c, 2026-09-25)
+
+A voice agent has TWO controls and they never stand for each other: **"Answering calls"**
+(`ai_agents.answering_calls`, default false; does owen-main have this agent's version ACTIVE?)
+and the mode, shown as **"What it may write here"** (Off / Suggest / Auto-pilot — CRM writes
+only). `POST /api/ai/agents/{id}/answering` `{"on", "confirm"}` is ADMIN only and confirmed both
+ways; a text agent refuses it (400). On → the published version is activated on owen-main (no
+new version there); Off → owen-main's `{"agent_name", "deactivate": true}`, and a caller then
+reaches the flow's fallback (voicemail) — not a failed call. Publish sends `activate =
+answering_calls` and never deactivates by itself. All of it rides the ONE queued push in
+`app/ai/push.py`. The chip is the server's label ("Answering calls", "Not answering calls",
+"Answering calls — not with this version", "Published · not yet live on the phone system", …);
+never "Answering" unless owen-main said THIS version is active. The import creates the live
+agent **answering, mode Off**. Making Off block activation was tried and rejected — the import
+would have read "off" about the live receptionist. See DECISIONS.md.
 
 ## A live AI call: Listen / Take over (2026-09-23)
 

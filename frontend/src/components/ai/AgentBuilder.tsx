@@ -2,16 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import {
   aiAgent, aiCatalogue, aiConnectionNames, aiFolders, aiKbs, getContact, listContacts, listPipelines,
-  listUsers, previewAiPrompt, publishAiAgent, pushAiAgent, setAiAgentMode, tryAiAgent, updateAiAgent,
+  listUsers, previewAiPrompt, publishAiAgent, pushAiAgent, setAiAgentAnswering, setAiAgentMode, tryAiAgent,
+  updateAiAgent,
   type AiAgentDetail, type AiWould,
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  actionsFor, addItem, channelLabel, DAYS, dayLabel, draftForSave, formatCost, formatLatency, formatTokens,
+  actionsFor, addItem, ANSWERING_TITLE, answeringConfirm, channelLabel, DAYS, dayLabel, draftForSave, formatCost, formatLatency, formatTokens,
   isAiAdmin, knowledgeBudget, MODE_LABEL, MODE_TONE, modeLabel, modesFor, moveItem, needsConfirm, newTrigger,
-  outcomeLabel, phoneSystemPending, phoneSystemTone, removeItem, sameDraft, scheduleSummary, sectionsFor,
-  setItem, stamp, toggle,
-  TRIGGER_LABEL, triggerSummary, wouldText,
+  offerTakeOff, outcomeLabel, phoneSystemPending, phoneSystemTone, removeItem, sameDraft, scheduleSummary,
+  sectionsFor, setItem, stamp, toggle,
+  TRIGGER_LABEL, triggerSummary, wouldText, WRITE_MODE_TITLE,
   type BuilderSection, type Draft, type Mode, type Trigger,
 } from '../../lib/aiAgents'
 import { IconChevronLeft, IconSparkle } from '../Icon'
@@ -34,6 +35,10 @@ type Props = { user: Me; agentId: number; onBack: () => void }
  * A VOICE agent (2026-09-25) has its own sections (`sectionsFor`), no Try it (it is tried by
  * calling it), and a line under the top bar saying whether the published version is live on
  * the phone system — only what owen-main confirmed, never what the CRM hopes.
+ *
+ * Phase 2c: a voice agent shows TWO controls, side by side and never merged — the
+ * "Answering calls" switch (does it answer the phone? its own confirmation) and the mode,
+ * titled "What it may write here" (Off / Suggest / Auto-pilot governs CRM writes only).
  */
 export function AgentBuilder({ user, agentId, onBack }: Props) {
   const detail = useQuery({
@@ -68,6 +73,7 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmAuto, setConfirmAuto] = useState(false)
+  const [confirmAnswering, setConfirmAnswering] = useState<boolean | null>(null)
 
   const dirty = !sameDraft(draftForSave(draft), draftForSave(agent.draft)) || name !== agent.name
     || description !== (agent.description ?? '') || folderId !== agent.folder_id
@@ -107,6 +113,16 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
     onSuccess: (a) => { setConfirmAuto(false); refreshAll(a); setError(null); setNotice(`“${a.name}” is ${modeLabel(a.mode)}.`) },
     onError: (e: Error) => { setConfirmAuto(false); setNotice(null); setError(e.message) },
   })
+  const answering = useMutation({
+    mutationFn: (on: boolean) => setAiAgentAnswering(agent.id, on, true),
+    onSuccess: (a) => {
+      setConfirmAnswering(null); refreshAll(a); setError(null)
+      setNotice(a.phone_system?.detail ?? null)
+    },
+    onError: (e: Error) => { setConfirmAnswering(null); setNotice(null); setError(e.message) },
+  })
+  const answeringCopy = confirmAnswering == null ? null
+    : answeringConfirm(confirmAnswering, agent.name, agent.published_version)
   const chooseMode = (to: Mode) => {
     if (to === agent.mode) return
     if (needsConfirm(agent.mode, to)) setConfirmAuto(true)
@@ -136,9 +152,22 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
           </span>
         )}
         <div className="ml-auto flex items-center gap-8">
-          <span style={{ fontSize: 13, color: MUTED }}>Mode</span>
+          {voice && (
+            <>
+              <span style={{ fontSize: 13, color: MUTED }}>{ANSWERING_TITLE}</span>
+              {admin ? (
+                <Switch checked={!!agent.answering_calls} label={ANSWERING_TITLE}
+                  onChange={(on) => setConfirmAnswering(on)} />
+              ) : (
+                <Chip text={agent.answering_calls ? 'On' : 'Off'}
+                  {...phoneSystemTone(agent.answering_calls ? 'live' : 'not_answering')} />
+              )}
+              <div style={{ width: 1, height: 20, backgroundColor: LINE }} />
+            </>
+          )}
+          <span style={{ fontSize: 13, color: MUTED }}>{voice ? WRITE_MODE_TITLE : 'Mode'}</span>
           {admin ? (
-            <div role="radiogroup" aria-label="Mode" className="flex"
+            <div role="radiogroup" aria-label={voice ? WRITE_MODE_TITLE : 'Mode'} className="flex"
               style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
               {modesFor(user).map((m) => (
                 <button key={m} type="button" role="radio" aria-checked={agent.mode === m}
@@ -182,7 +211,11 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
             style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
             <span>{phoneState.detail}</span>
             {phoneState.pushed_at && phoneState.live && <span>· {stamp(phoneState.pushed_at)}</span>}
-            {admin && phoneState.can_retry && (
+            {admin && offerTakeOff(phoneState) ? (
+              <button type="button" onClick={() => setConfirmAnswering(false)} style={textButton}>
+                Take it off the phone
+              </button>
+            ) : admin && phoneState.can_retry && (
               <button type="button" onClick={() => retryPush.mutate()} disabled={retryPush.isPending}
                 style={{ ...textButton, opacity: retryPush.isPending ? 0.5 : 1 }}>
                 Retry
@@ -224,6 +257,11 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
         {admin && !voice && <TryItPanel agent={agent} draft={draft} />}
       </div>
 
+      {answeringCopy && confirmAnswering != null && (
+        <Confirm title={answeringCopy.title} confirmLabel={answeringCopy.confirmLabel}
+          danger={answeringCopy.danger} busy={answering.isPending} body={answeringCopy.body}
+          onCancel={() => setConfirmAnswering(null)} onConfirm={() => answering.mutate(confirmAnswering)} />
+      )}
       {confirmAuto && (
         <Confirm title="Switch to Auto-pilot?" confirmLabel="Switch to Auto-pilot" busy={mode.isPending}
           body={<>“{agent.name}” will carry out its allowed actions without asking — texting customers,

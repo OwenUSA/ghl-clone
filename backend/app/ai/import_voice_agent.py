@@ -7,12 +7,20 @@
 It reads `GET /api/crm-link/agent-versions` (read-only on owen-main) through `crmlink`, takes
 the agent's ACTIVE config, maps it with `voice.from_owen`, and creates:
 
-  * a CRM Voice agent of the same name, switched OFF, with that config as its draft, and
+  * a CRM Voice agent of the same name with that config as its draft, ANSWERING CALLS (it
+    is — owen-main reported that version active) and with the write mode OFF (phase 2c,
+    2026-09-25). "Answers the phone, writes nothing here" is the supervised state the owner
+    wants on day one, and it is only sayable because the two are separate switches. Before
+    phase 2c this created the agent "Off", which read as "not answering" about an agent that
+    was live on the phone — and making Off block activation would have made that lie true
+    by taking the receptionist off the phone. That is why answering is its own switch.
+  * and
   * version 1 of it — when the config passes the CRM's publish rules. If it does not (no
     model set, knowledge over 6000), the draft is created and the report says what to fix.
   * When version 1 maps back to EXACTLY the live config, it is recorded as live, "imported
     from the phone system's version N" — nothing is pushed, because it is already there.
-    Otherwise it reads "not yet live" until somebody publishes, which is the truth.
+    Otherwise it reads "Answering calls — not with this version": the phone system's own
+    version keeps answering until somebody presses Retry or publishes, which is the truth.
 
 It NEVER overwrites: a CRM agent with that name, or a voice agent already pointed at that
 owen-main agent, makes it stop with "already imported" and write nothing. Running it again is
@@ -124,11 +132,16 @@ def run(db, *, wanted: str | None = None, commit: bool = False) -> tuple[int, di
         else "not created (fix the problems, then Publish)",
         "matches_live": same,
     })
+    report["answering_calls"] = True     # owen-main reported this version ACTIVE
+    report["mode"] = AiAgent.OFF
     report["outcome"] = "would import" if not commit else "imported"
     if not commit:
         return 0, report
 
+    # Answering: owen-main reported this version active, so it IS answering calls. Writes
+    # nothing in the CRM (mode Off) until an admin says otherwise.
     a = AiAgent(name=name[:120], channel=AiAgent.VOICE, mode=AiAgent.OFF, draft=c,
+                answering_calls=True,
                 description="Imported from the phone system's version %s."
                 % live.get("version"), draft_updated_at=_now())
     db.add(a)
@@ -138,12 +151,21 @@ def run(db, *, wanted: str | None = None, commit: bool = False) -> tuple[int, di
         db.add(v)
         db.flush()
         a.published_version_id = v.id
+        live_number = live.get("version") if isinstance(live.get("version"), int) else None
         if same:
             db.add(AiVoicePush(version_id=v.id, agent_id=a.id, status=AiVoicePush.LIVE,
-                               imported=True, pushed_at=_now(),
+                               imported=True, pushed_at=_now(), owen_answering=True,
+                               owen_active_version=live_number,
                                owen_agent_id=str(chosen.get("agent_id") or "") or None,
                                owen_version_id=str(live.get("id") or "") or None,
-                               owen_version=live.get("version")))
+                               owen_version=live_number))
+        else:
+            # Version 1 is not what owen-main runs; owen-main's own version still answers.
+            # Recorded as exactly that — never as "live", never as "not answering".
+            db.add(AiVoicePush(version_id=v.id, agent_id=a.id,
+                               status=AiVoicePush.NOT_ANSWERING, owen_answering=True,
+                               owen_active_version=live_number,
+                               owen_agent_id=str(chosen.get("agent_id") or "") or None))
     db.commit()
     report["wrote"] = True
     report["crm_agent_id"] = a.id
@@ -170,14 +192,16 @@ def _print(code: int, report: dict) -> None:
         return
     for key in ("persona_chars", "greeting_chars", "knowledge_chars", "model", "voice",
                 "tools", "transfer_targets", "custom_tools", "context_provider",
-                "other_settings_carried", "version_1", "matches_live"):
+                "other_settings_carried", "version_1", "matches_live",
+                "answering_calls", "mode"):
         print("  %-24s %s" % (key, report.get(key)))
     for n in report.get("notes") or []:
         print("  note: " + n)
     for p in report.get("publish_problems") or []:
         print("  to publish: " + p)
-    print("\n" + ("created CRM agent #%s (Off)" % report["crm_agent_id"] if report["wrote"]
-                  else "run again with --commit to create it (Off)"))
+    how = "answering calls, writes Off"
+    print("\n" + ("created CRM agent #%s (%s)" % (report["crm_agent_id"], how)
+                  if report["wrote"] else "run again with --commit to create it (%s)" % how))
 
 
 def main(argv=None) -> int:

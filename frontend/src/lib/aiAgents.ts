@@ -114,15 +114,65 @@ export type PhoneSystemState = {
   status: string; live: boolean; label: string; detail: string; can_retry: boolean
   version?: number; live_version?: number | null; pushed_at?: string | null
   owen_version?: number | null; attempts?: number; last_error?: string | null; imported?: boolean
+  /** The "Answering calls" switch (phase 2c). */
+  answering_calls?: boolean
+  /** Reality as owen-main last reported it: true / false, or null when it has not said. */
+  answering?: boolean | null
+  owen_active_version?: number | null
+  op?: string
 }
 
-/** Green only when owen-main confirmed it; amber while it is on its way; red when it stopped. */
+/**
+ * Green only when owen-main confirmed THIS version is answering; grey when it confirmed
+ * nothing is; amber while on its way, or when something else is answering; red when it
+ * stopped. `status` is the server's (app/ai/push.py `state`).
+ */
 export function phoneSystemTone(status: string): { fg: string; bg: string } {
   if (status === 'live') return { fg: 'rgb(2,122,72)', bg: 'rgb(236,253,243)' }
   if (status === 'refused' || status === 'failed') return { fg: 'rgb(180,35,24)', bg: 'rgb(254,243,242)' }
-  if (status === 'unpublished') return { fg: 'rgb(71,84,103)', bg: 'rgb(242,244,247)' }
+  if (status === 'unpublished' || status === 'not_answering') return { fg: 'rgb(71,84,103)', bg: 'rgb(242,244,247)' }
   return { fg: 'rgb(181,71,8)', bg: 'rgb(255,250,235)' }
 }
+
+/**
+ * Phase 2c (2026-09-25): a voice agent has TWO controls, and they must never read as one.
+ * The mode governs only what the agent may write in the CRM; "Answering calls" decides
+ * whether it answers the phone. These are the words for each.
+ */
+export const WRITE_MODE_TITLE = 'What it may write here'
+export const ANSWERING_TITLE = 'Answering calls'
+
+/** The confirmation for the Answering calls switch — both directions change what a caller hears. */
+export function answeringConfirm(on: boolean, name: string, publishedVersion: number | null | undefined):
+  { title: string; body: string; confirmLabel: string; danger: boolean } {
+  if (on) {
+    return {
+      title: 'Answer calls with this agent?',
+      body: `Calls the phone system's flow sends to “${name}” will be answered by it`
+        + (publishedVersion != null ? `, using published version ${publishedVersion}.` : ' once it is published.')
+        + ' This does not let it write anything here — that is “' + WRITE_MODE_TITLE + '”, which stays as it is.',
+      confirmLabel: 'Answer calls', danger: false,
+    }
+  }
+  return {
+    title: 'Stop answering calls?',
+    body: `Calls that reach “${name}” will go to the flow's fallback (voicemail) instead. `
+      + 'Nothing is deleted; switching it back on answers with the same published version.',
+    confirmLabel: 'Stop answering', danger: true,
+  }
+}
+
+/** The agents list's "Answering calls" cell. Null for a text agent (it has no such switch). */
+export function answeringCell(row: { channel: string; phone_label?: string | null; phone_status?: string | null }):
+  { text: string; fg: string; bg: string } | null {
+  if (row.channel !== 'voice') return null
+  const status = row.phone_status ?? 'unpublished'
+  return { text: row.phone_label ?? 'Not published', ...phoneSystemTone(status) }
+}
+
+/** "Take it off the phone": owen-main says something of this agent answers while the switch is Off. */
+export const offerTakeOff = (state: PhoneSystemState | null | undefined) =>
+  !!state && state.answering === true && state.answering_calls === false && state.status !== 'pending'
 
 /** Poll while the answer is still coming. */
 export const phoneSystemPending = (status: string | undefined) =>
