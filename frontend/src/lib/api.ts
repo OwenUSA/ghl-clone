@@ -1719,6 +1719,10 @@ export type AiAgentRow = {
   /** Voice only: the phone-system state's status and label, for the list's column. */
   phone_status?: string | null
   phone_label?: string | null
+  /** Phase 3: an ARCHIVED voice agent is listed only until the phone system confirms it is off. */
+  archived?: boolean
+  phone_detail?: string | null
+  phone_can_retry?: boolean
 }
 export type AiAgentDetail = AiAgentRow & {
   /** Voice only (2026-09-25): where the published version stands on owen-main. */
@@ -1746,7 +1750,13 @@ export const setAiAgentAnswering = (id: number, on: boolean, confirm = false) =>
   send<AiAgentDetail>(`/api/ai/agents/${id}/answering`, 'POST', { on, confirm })
 export const setAiAgentMode = (id: number, mode: string, confirm = false) =>
   send<AiAgentDetail>(`/api/ai/agents/${id}/mode`, 'POST', { mode, confirm })
-export const deleteAiAgent = (id: number) => send<{ deleted: number }>(`/api/ai/agents/${id}`, 'DELETE')
+export type AiAgentDeleted = {
+  deleted: number; archived: true; queued_runs_cancelled: number
+  /** Voice only: the switch after the archive, and where the phone system stands. */
+  answering_calls: boolean | null
+  phone_system: PhoneSystemState | null
+}
+export const deleteAiAgent = (id: number) => send<AiAgentDeleted>(`/api/ai/agents/${id}`, 'DELETE')
 export const duplicateAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/duplicate`, 'POST')
 
 export type AiStep = {

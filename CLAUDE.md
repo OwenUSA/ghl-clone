@@ -571,6 +571,18 @@ never "Answering" unless owen-main said THIS version is active. The import creat
 agent **answering, mode Off**. Making Off block activation was tried and rejected — the import
 would have read "off" about the live receptionist. See DECISIONS.md.
 
+### Archiving a voice agent takes it off the phone (phase 3, 2026-09-25)
+
+Deleting (archiving) a voice agent with "Answering calls" on switches it off and sends the SAME
+queued DEACTIVATE as the switch (`push.archive`; `handle_job` still sends a deactivation for an
+archived agent and nothing else). The archive always succeeds; until owen-main confirms, the
+agent stays in the agents list marked **Archived** with an "Archived · …" chip, the reason and a
+Retry (`POST /api/ai/agents/{id}/push`) — never a screen saying it stopped when it did not.
+Nothing published → nothing can be sent, the switch is left on, and the row says so. owen-main
+(same phase): an agent per CAMPAIGN (`campaigns.agent_id`, filling in after a node's id and
+slot), and the CRM line's no-answer agent behind `CRM_LINK_AGENT_ANSWERS` (default false). See
+DECISIONS.md.
+
 ## A live AI call: Listen / Take over (2026-09-23)
 
 While an AI agent is on a call, `components/LiveAgentCall.tsx` (mounted once in `App.tsx`, left of

@@ -819,3 +819,135 @@ def test_the_mode_never_moves_the_switch(world, owen):
         assert r.json()["answering_calls"] is False
     assert len(owen.requests) == sent and jobs("pending") == []
     assert owen.active() is None
+
+
+# ------------------------------------------------------------------ phase 3: archive stops it
+
+def archive(world, aid):
+    r = world.client("admin").delete("/api/ai/agents/%s" % aid)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def listed(world, aid):
+    return next((a for a in world.client("admin").get("/api/ai/agents").json()
+                 if a["id"] == aid), None)
+
+
+def answering_agent(world, owen):
+    aid = make_voice(world, answering=True)
+    world.client("admin").post("/api/ai/agents/%s/publish" % aid)
+    drain()
+    assert owen.active() == 1 and phone(world, aid)["label"] == "Answering calls"
+    return aid
+
+
+def test_archiving_an_answering_agent_takes_it_off_the_phone(world, owen):
+    aid = answering_agent(world, owen)
+    before = len(owen.requests)
+
+    body = archive(world, aid)
+    # The archive answered without asking owen-main anything...
+    assert len(owen.requests) == before
+    # ...and says honestly that it is not confirmed yet.
+    assert body["archived"] is True and body["answering_calls"] is False
+    assert body["phone_system"]["label"] == \
+        "Archived · switching off, not confirmed by the phone system"
+    assert body["phone_system"]["live"] is False
+    assert get(AiAgent, aid).answering_calls is False and get(AiAgent, aid).mode == "off"
+    row = listed(world, aid)
+    assert row is not None and row["archived"] is True        # still listed until confirmed
+    assert row["phone_label"].startswith("Archived · switching off")
+
+    drain()
+    # The SAME deactivation the switch sends, through the same queued push.
+    assert last_post(owen) == {"agent_name": "Intake", "deactivate": True}
+    assert owen.active() is None
+    assert len(owen.versions["Intake"]) == 1                  # nothing deleted on owen-main
+    db = SessionLocal()
+    p = db.scalar(select(AiVoicePush).where(AiVoicePush.agent_id == aid))
+    assert (p.op, p.status, p.owen_answering) == ("deactivate", "not_answering", False)
+    db.close()
+    # Confirmed: it leaves the list, and it is archived everywhere else as before.
+    assert listed(world, aid) is None
+    assert world.client("admin").get("/api/ai/agents/%s" % aid).status_code == 404
+
+
+def test_a_deactivation_that_cannot_be_delivered_is_visible(world, owen, monkeypatch):
+    from app.ai import push
+    monkeypatch.setattr(push, "MAX_ATTEMPTS", 2)
+    aid = answering_agent(world, owen)
+    owen.down = True
+
+    archive(world, aid)                                       # the archive still succeeds
+    assert get(AiAgent, aid).archived_at is not None
+    drain()
+    row = listed(world, aid)
+    assert row["phone_label"] == "Archived · switching off, not confirmed by the phone system"
+    assert "Trying again automatically" in row["phone_detail"]
+    make_due()
+    drain()
+    row = listed(world, aid)
+    # Never a screen claiming it stopped when it did not.
+    assert row["archived"] is True
+    assert row["phone_label"] == "Archived · NOT taken off the phone system"
+    assert "Gave up after 2 tries" in row["phone_detail"] and row["phone_can_retry"] is True
+    assert row["live_on_phone_system"] is False
+    assert owen.active() == 1                                 # it IS still answering there
+
+    # Retry is the one thing an archived agent can still be asked to do.
+    owen.down = False
+    r = world.client("admin").post("/api/ai/agents/%s/push" % aid)
+    assert r.status_code == 202
+    drain()
+    assert owen.active() is None
+    assert last_post(owen) == {"agent_name": "Intake", "deactivate": True}
+    assert listed(world, aid) is None
+    # ...and once confirmed, it is an ordinary archived agent again: 404.
+    assert world.client("admin").post("/api/ai/agents/%s/push" % aid).status_code == 404
+
+
+def test_archiving_without_the_link_says_nothing_was_sent(world, owen, monkeypatch):
+    aid = answering_agent(world, owen)
+    monkeypatch.delenv("CRM_LINK_BASE_URL", raising=False)
+    before = len(owen.requests)
+    archive(world, aid)
+    drain()
+    assert len(owen.requests) == before
+    row = listed(world, aid)
+    assert row["phone_label"] == "Archived · NOT taken off the phone system"
+    assert "CRM_LINK_BASE_URL" in row["phone_detail"]
+
+
+def test_archiving_an_agent_that_is_not_answering_sends_nothing(world, owen):
+    aid = make_voice(world)                                   # answering calls: Off
+    world.client("admin").post("/api/ai/agents/%s/publish" % aid)   # a push still queued
+    before, queued = len(owen.requests), push_jobs()
+    body = archive(world, aid)
+    assert body["answering_calls"] is False and push_jobs() == queued
+    drain()
+    # The publish's push for an archived agent is dropped, as before; no deactivation either.
+    assert len(owen.requests) == before and owen.versions["Intake"] == []
+    assert listed(world, aid) is None
+
+
+def test_archiving_an_unpublished_answering_agent_says_it_may_still_answer(world, owen):
+    aid = make_voice(world, answering=True)                   # switch on, nothing published
+    before = len(owen.requests)
+    body = archive(world, aid)
+    drain()
+    assert len(owen.requests) == before                       # no version to deactivate by
+    assert get(AiAgent, aid).answering_calls is True          # the truth, left standing
+    assert body["phone_system"]["label"] == "Archived · still answering calls"
+    row = listed(world, aid)
+    assert row["archived"] is True and "never asked to stop" in row["phone_detail"]
+    assert world.client("admin").post("/api/ai/agents/%s/push" % aid).status_code == 400
+
+
+def test_an_archived_text_agent_is_still_simply_gone(world):
+    admin = world.client("admin")
+    aid = admin.post("/api/ai/agents", json={"name": "Follow-up"}).json()["id"]
+    body = archive(world, aid)
+    assert body["answering_calls"] is None and body["phone_system"] is None
+    assert listed(world, aid) is None
+    assert admin.post("/api/ai/agents/%s/push" % aid).status_code == 404

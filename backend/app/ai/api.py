@@ -414,6 +414,9 @@ def _agent_row(db: Session, a: AiAgent) -> dict:
     folder = db.get(AiFolder, a.folder_id) if a.folder_id else None
     return {"id": a.id, "name": a.name, "description": a.description, "channel": a.channel,
             "mode": a.mode, "folder_id": a.folder_id,
+            # Phase 3: an archived voice agent is listed only while the phone system has not
+            # confirmed it stopped answering (`push.archived_awaiting_phone`).
+            "archived": a.archived_at is not None,
             "folder_name": folder.name if folder else None,
             "published_version": version.version if version else None,
             "published_at": _iso(version.published_at) if version else None,
@@ -432,6 +435,8 @@ def _agent_row(db: Session, a: AiAgent) -> dict:
             "answering_calls": a.answering_calls if a.channel == AiAgent.VOICE else None,
             "phone_status": phone["status"] if phone else None,
             "phone_label": phone["label"] if phone else None,
+            "phone_detail": phone["detail"] if phone else None,
+            "phone_can_retry": bool(phone and phone.get("can_retry")),
             # Is the PUBLISHED version the one answering the phone?
             "live_on_phone_system": phone["live"] if phone else None}
 
@@ -512,6 +517,14 @@ def ai_list_agents(db: Session = Depends(get_db), folder_id: int | None = None,
     if folder_id is not None:
         stmt = stmt.where(AiAgent.folder_id == folder_id)
     rows = db.scalars(stmt.order_by(AiAgent.name, AiAgent.id)).all()
+    # ...and every ARCHIVED voice agent the phone system has not confirmed is off it (phase
+    # 3): an archive must never read as "it stopped" while it may still be answering calls.
+    archived = select(AiAgent).where(AiAgent.archived_at.is_not(None),
+                                     AiAgent.channel == AiAgent.VOICE)
+    if folder_id is not None:
+        archived = archived.where(AiAgent.folder_id == folder_id)
+    rows = list(rows) + [a for a in db.scalars(archived.order_by(AiAgent.name, AiAgent.id))
+                         .all() if push.archived_awaiting_phone(db, a)]
     if q and q.strip():
         needle = q.strip().lower()
         rows = [a for a in rows if needle in a.name.lower()
@@ -624,8 +637,14 @@ def ai_publish_agent(agent_id: int, db: Session = Depends(get_db),
 def ai_push_agent(agent_id: int, db: Session = Depends(get_db),
                   principal: auth.Principal = ADMIN):
     """Retry: send a voice agent's published version to the phone system again. Queued,
-    like the push Publish makes; the answer is the agent, with its phone-system state."""
-    a = _get_agent(db, agent_id)
+    like the push Publish makes; the answer is the agent, with its phone-system state.
+
+    Also the Retry for an ARCHIVED voice agent whose deactivation has not been confirmed
+    (phase 3) — the one thing an archived agent can still be asked to do. Any other archived
+    agent is 404, as everywhere."""
+    a = db.get(AiAgent, agent_id)
+    if a is None or (a.archived_at is not None and not push.archived_awaiting_phone(db, a)):
+        raise HTTPException(404, "agent not found")
     try:
         push.retry(db, a)
     except ValueError as e:
@@ -715,8 +734,15 @@ def ai_set_mode(agent_id: int, body: ModeIn, db: Session = Depends(get_db),
 def ai_delete_agent(agent_id: int, db: Session = Depends(get_db),
                     _: auth.Principal = ADMIN):
     """ARCHIVES the agent: it is switched off and hidden; its runs, versions and
-    suggestions still read in the logs. Its queued runs are cancelled."""
+    suggestions still read in the logs. Its queued runs are cancelled.
+
+    A VOICE agent that is answering calls is also taken OFF THE PHONE (phase 3): "Answering
+    calls" goes off and the same queued deactivation as the switch is sent to owen-main
+    (`push.archive`). The archive never waits for it and never fails because of it; the
+    answer's `phone_system` says where it stands, and the agent stays in the list, marked
+    archived, until owen-main confirms."""
     a = _get_agent(db, agent_id)
+    push.archive(db, a)
     a.mode = AiAgent.OFF
     a.archived_at = _now()
     from ..models import Job
@@ -732,7 +758,9 @@ def ai_delete_agent(agent_id: int, db: Session = Depends(get_db),
             engine.skip(db, run, "the agent was deleted")
             cancelled += 1
     db.commit()
-    return {"deleted": agent_id, "archived": True, "queued_runs_cancelled": cancelled}
+    return {"deleted": agent_id, "archived": True, "queued_runs_cancelled": cancelled,
+            "answering_calls": a.answering_calls if a.channel == AiAgent.VOICE else None,
+            "phone_system": push.state(db, a)}
 
 
 @router.post("/agents/{agent_id}/duplicate", status_code=201)

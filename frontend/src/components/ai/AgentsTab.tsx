@@ -2,12 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import {
   aiAgents, aiFolders, aiTemplates, createAiAgent, createAiFolder, deleteAiAgent, deleteAiFolder,
-  duplicateAiAgent, renameAiFolder, saveAiTemplate, setAiAgentMode, updateAiAgent,
+  duplicateAiAgent, pushAiAgent, renameAiFolder, saveAiTemplate, setAiAgentMode, updateAiAgent,
   type AiAgentRow,
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  answeringCell, channelLabel, MODE_TONE, isAiAdmin, modeLabel, OUTCOME_TONE, outcomeLabel, stamp, TRIGGER_LABEL,
+  answeringCell, channelLabel, deleteConfirmBody, deleteNotice, MODE_TONE, isAiAdmin, modeLabel, OUTCOME_TONE, outcomeLabel, stamp, TRIGGER_LABEL,
 } from '../../lib/aiAgents'
 import {
   IconDuplicate, IconPencil, IconPlus, IconSearchSmall, IconTrashOutline,
@@ -65,8 +65,13 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
   })
   const remove = useMutation({
     mutationFn: deleteAiAgent,
-    onSuccess: () => { setDeleting(null); refresh(); setNotice('Agent deleted. Its logs are kept.') },
+    onSuccess: (r) => { setDeleting(null); refresh(); setNotice(deleteNotice(r)) },
     onError: (e: Error) => { setDeleting(null); failed(e) },
+  })
+  const retryOff = useMutation({
+    mutationFn: pushAiAgent,
+    onSuccess: () => { refresh(); setNotice('Asked the phone system again to stop answering with it.') },
+    onError: failed,
   })
   const removeFolder = useMutation({
     mutationFn: deleteAiFolder,
@@ -145,10 +150,18 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
             {rows.map((a) => (
               <tr key={a.id} className="hover:bg-[rgb(249,250,251)]">
                 <Td>
-                  <button type="button" onClick={() => onOpen(a.id)} className="text-left"
-                    style={{ fontSize: 13, color: 'rgb(0,78,235)', fontWeight: 500 }}>
-                    {a.name}
-                  </button>
+                  {a.archived ? (
+                    // Archived, but not confirmed off the phone system (phase 3): listed so
+                    // nobody is told it stopped, and not openable — it is archived.
+                    <span style={{ fontSize: 13, color: INK, fontWeight: 500 }}>
+                      {a.name} <Chip text="Archived" fg="rgb(71,84,103)" bg="rgb(242,244,247)" />
+                    </span>
+                  ) : (
+                    <button type="button" onClick={() => onOpen(a.id)} className="text-left"
+                      style={{ fontSize: 13, color: 'rgb(0,78,235)', fontWeight: 500 }}>
+                      {a.name}
+                    </button>
+                  )}
                   {a.description && (
                     <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{a.description}</div>
                   )}
@@ -162,8 +175,14 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
                 <Td>
                   {(() => {
                     const cell = answeringCell(a)
-                    return cell ? <Chip text={cell.text} fg={cell.fg} bg={cell.bg} />
-                      : <span style={{ fontSize: 12, color: MUTED }}>—</span>
+                    return cell ? (
+                      <>
+                        <Chip text={cell.text} fg={cell.fg} bg={cell.bg} />
+                        {a.archived && a.phone_detail && (
+                          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{a.phone_detail}</div>
+                        )}
+                      </>
+                    ) : <span style={{ fontSize: 12, color: MUTED }}>—</span>
                   })()}
                 </Td>
                 <Td><Chip text={modeLabel(a.mode)} {...(MODE_TONE[a.mode] ?? MODE_TONE.off)} /></Td>
@@ -191,9 +210,13 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
                   ) : '—'}
                 </Td>
                 <Td align="center">
-                  <RowMenu label={`Actions for ${a.name}`} open={menu === a.id}
+                  {a.archived && !(admin && a.phone_can_retry) ? (
+                    <span style={{ fontSize: 12, color: MUTED }}>—</span>
+                  ) : <RowMenu label={`Actions for ${a.name}`} open={menu === a.id}
                     onToggle={() => setMenu((m) => (m === a.id ? null : a.id))} onClose={() => setMenu(null)}
-                    items={admin ? [
+                    items={a.archived ? (admin && a.phone_can_retry ? [
+                      { label: 'Retry taking it off the phone', icon: <PowerIcon />, run: () => retryOff.mutate(a.id) },
+                    ] : []) : admin ? [
                       { label: 'Edit', icon: <IconPencil size={16} color={INK} />, run: () => onOpen(a.id) },
                       { label: 'Duplicate', icon: <IconDuplicate size={16} color={INK} />, run: () => duplicate.mutate(a.id) },
                       { label: 'Move to folder', icon: <FolderIcon />, run: () => setMoving(a) },
@@ -204,7 +227,7 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
                       ...(a.mode !== 'off'
                         ? [{ label: 'Switch off', icon: <PowerIcon />, run: () => switchOff.mutate(a.id) }]
                         : []),
-                    ]} />
+                    ]} />}
                 </Td>
               </tr>
             ))}
@@ -241,7 +264,7 @@ export function AgentsTab({ user, onOpen, templateToUse, onTemplateUsed }: {
       )}
       {deleting && (
         <Confirm title={`Delete “${deleting.name}”?`} danger confirmLabel="Delete" busy={remove.isPending}
-          body="The agent is switched off and removed from this list, and anything it had queued is cancelled. Its run logs, versions and suggestions are kept."
+          body={deleteConfirmBody(deleting)}
           onCancel={() => setDeleting(null)} onConfirm={() => remove.mutate(deleting.id)} />
       )}
       {folderDialog && (

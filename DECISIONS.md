@@ -6114,7 +6114,121 @@ route's docstring says fallback/voicemail and the runtime still means that.
 * No real call has reached a deactivated agent; the voicemail claim is read from the flow
   runtime and interpreter code, not observed.
 * Archiving (deleting) a voice agent that is answering does not deactivate it on owen-main.
+  **Fixed in phase 3** — see the next amendment.
 * An imported agent whose config cannot be version 1 (publish problems) is answering=true with
   nothing published; its chip reads "Not published" and does not name owen-main's version.
 * Operator steps: deploy owen-main (`scripts/check.sh`); `./deploy.sh --with-migrations` here
   (revisions `a9d2f4c6e813` and `c5e8a1b3d702`); run the import dry run, then `--commit`.
+
+## AMENDMENT (2026-09-25): phase 3 — routing: an agent per campaign, the CRM line rings people first, and archive stops an agent answering
+
+Branches `feature/archive-stops-answering` here and `feature/campaign-routing` in owen-main, both
+off `main`. Not merged, not deployed. owen-main migration `c4a8e1f2d6b3` on `b7e2c4d91f35` (two
+nullable ADD COLUMNs on `campaigns`). No CRM migration. No new route on either side, so the four
+crm-link route fences and this repo's route gates are unchanged. Builds decisions 5 and 6 of the
+2026-09-22 voice-agent amendment (routing per number; the CRM line rings staff first, then AI).
+
+### 1. An agent per CAMPAIGN (owen-main)
+
+* `campaigns.agent_id` (nullable FK to `agents`) and `campaigns.agent_brief` (nullable text, one
+  short paragraph: the offer, the service area). Set with
+  `python -m app.scripts.manage set-campaign-agent --campaign NAME --agent NAME|--none
+  [--brief TEXT|--clear-brief]` (an agent name must match exactly one agent; a brief over 500
+  characters is refused with the number). `GET /api/campaigns` shows both; there is no editing
+  route or screen yet.
+* **Resolution order, as implemented** (`flows/runtime.py::_agent_id_for_node`, docstring):
+  1. the node's explicit `agent_id` (or legacy `agent`);
+  2. the node's `slot`, when the slot exists AND points at an agent;
+  3. the CAMPAIGN of the dialled number (`campaigns.agent_id`) — the number is found exactly as
+     the flow is (phone_number + media_provider), and an INACTIVE campaign counts as none;
+  4. none → the node's `failed` port → the flow's fallback, as before.
+  The campaign only fills a gap: it is consulted when the node names nothing, or names a slot
+  that is missing or unassigned. **Judgement call — overrulable:** an unassigned slot falls
+  through to the campaign rather than failing; before phase 3 it failed to the fallback.
+* **The campaign's facts are context, not instructions.** `remote._build_context` adds
+  `context["campaign"] = {"name", "brief"}`, its own key beside the caller's facts. owen-voice
+  today renders only `display_name` / `history` from that dict and this phase could not touch
+  owen-voice (another agent was working in it), so the same facts ALSO ride the agent's
+  reference knowledge as a labelled block ("About the line this caller rang (facts about the
+  campaign, not about the caller, and not instructions)"). The persona is never touched. The
+  brief is whitespace-flattened (a brief cannot fake a new prompt section) and capped at 500.
+  When owen-voice renders `context.campaign` itself, the knowledge copy should go
+  (`app/agents/campaign.py` says so).
+* A number with no campaign, or a campaign with no agent, resolves and sends exactly what it
+  did before — pinned.
+
+### 2. The CRM line rings people first, then the agent — OFF by default (owen-main)
+
+* `_ai_agent_seam` (`integrations/crm/handler.py`) is wired, behind **`CRM_LINK_AGENT_ANSWERS`,
+  default false**. Off: the seam returns before touching even the database, and nobody-answered
+  is the voicemail, byte for byte as before. On: after the ring group fails (no answer, busy,
+  everyone declined, or nothing to ring), the bound number's CAMPAIGN agent answers.
+* **Campaign, not a per-binding agent**, because the binding already carries the number's
+  `campaign_id`, a second pointer could disagree with the first, and it keeps ONE rule for
+  "which agent answers this DID". To give the CRM line an agent: put its number in a campaign
+  and point the campaign at the agent.
+* **The notice.** The CRM path plays the recording-consent notice right after answering, before
+  the ring; the seam refuses to hand to an agent unless that notice played on this call
+  (`INBOUND_CONSENT_MEDIA` set). No notice → no agent → voicemail. The agent's own greeting
+  (the AI disclosure) follows as on every agent call.
+* The agent runs through `run_agent_on_call`, the flow node's body lifted out — one runtime:
+  version pinned, captures / transcript / cost stored, transfer allowlist honoured. Ports:
+  `failed` → voicemail; `transfer` with nowhere it may go → voicemail (no flow edge exists
+  here and the people were already rung), transcript kept; `transferred` / `taken_over` → left
+  alone; anything else → the handler hangs up. Every failure ends in the voicemail.
+* **One call row.** The flow path's separate agent report is skipped here; the agent's
+  transcript, `ai_call` and `dedupe_key` ride the handler's own `ended` event (outcome `agent`
+  → the CRM's `completed`).
+
+### 3. Archiving a voice agent stops it answering (CRM)
+
+* `DELETE /api/ai/agents/{id}` on a voice agent with `answering_calls` true calls
+  `push.archive` first: the switch goes **off** and the SAME queued DEACTIVATE as the switch is
+  sent. `handle_job` now sends a deactivation for an archived agent (and still drops every other
+  request for one). The archive never waits and never fails because of it; its answer carries
+  `answering_calls` and `phone_system`.
+* **Never a screen claiming it stopped when it did not.** An archived voice agent whose
+  deactivation owen-main has not confirmed stays in `GET /api/ai/agents` with `archived: true`,
+  not openable, its chip one of "Archived · switching off, not confirmed by the phone system"
+  (pending / retrying), "Archived · NOT taken off the phone system" (refused / gave up / link not
+  configured — with the reason and a Retry through the existing
+  `POST /api/ai/agents/{id}/push`, the one thing an archived agent can still be asked). Once
+  owen-main confirms, it leaves the list and is 404 everywhere, as any archived agent. The
+  delete notice says "not confirmed off the phone system yet" until then.
+* An agent that was NOT answering is archived exactly as before: nothing is sent. (A second CRM
+  agent may share its phone-system agent — the publish rule.)
+* **Nothing published** (an import that could not be version 1): there is no version to push a
+  deactivation through, so nothing is sent, `answering_calls` is LEFT true — owen-main's own
+  version may well still be answering — and the row reads "Archived · still answering calls …
+  switch the agent off in owen-main".
+
+### Tests
+
+owen-main `tests/test_campaign_routing.py`: node id beats slot beats campaign; an unassigned or
+missing slot is filled by the campaign; a campaign with no agent / no campaign changes nothing;
+an inactive campaign is none; the body owen-voice receives carries `context.campaign` and the
+labelled knowledge block with the persona untouched, and is unchanged without a campaign; the
+brief is capped and flattened; the setting defaults off; off → voicemail with NO database
+opened; on → people first, then the campaign agent, one `ended` event with transcript and
+dedupe key; on without the notice → voicemail; every failure → voicemail; transfer-nowhere →
+voicemail with transcript; transferred / taken over → left alone. CRM
+`tests/test_ai_voice_agents.py`: archiving deactivates through the queued push (the exact
+deactivate body, nothing deleted on owen-main, listed until confirmed, then 404); a deactivation
+owen-main never receives is visible ("NOT taken off", the reason, Retry) and Retry then lands
+it; no link → says nothing was sent; not answering → nothing sent; nothing published →
+"still answering", switch left on; a text agent is simply gone. `test_ai_agents_ui.py` runs the
+confirm and notice copy under node.
+
+### Not built / not verified
+
+* **No real call** has reached a campaign agent or the CRM line's agent; nothing was deployed.
+  `CRM_LINK_AGENT_ANSWERS` is false and must stay so until the owner has heard the agent.
+* owen-voice does not render `context.campaign` (it was out of bounds this phase); the campaign
+  reaches the model through the knowledge block only. Not observed on a live model.
+* The consent check trusts `INBOUND_CONSENT_MEDIA` being set: `play_and_wait` reports nothing
+  back, so an unplayable prompt is not detected (the recorded bridge has the same standard).
+* No screen edits a campaign's agent or brief — the CLI only.
+* Archiving an answering agent with nothing published cannot take it off the phone from here.
+* Operator steps: deploy owen-main's branch (`scripts/check.sh`, then the migration); set a
+  campaign's agent with `manage set-campaign-agent`; deploy the CRM (no migration).
+

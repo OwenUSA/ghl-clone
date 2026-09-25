@@ -129,7 +129,7 @@ export type PhoneSystemState = {
  */
 export function phoneSystemTone(status: string): { fg: string; bg: string } {
   if (status === 'live') return { fg: 'rgb(2,122,72)', bg: 'rgb(236,253,243)' }
-  if (status === 'refused' || status === 'failed') return { fg: 'rgb(180,35,24)', bg: 'rgb(254,243,242)' }
+  if (status === 'refused' || status === 'failed' || status === 'archived_answering') return { fg: 'rgb(180,35,24)', bg: 'rgb(254,243,242)' }
   if (status === 'unpublished' || status === 'not_answering') return { fg: 'rgb(71,84,103)', bg: 'rgb(242,244,247)' }
   return { fg: 'rgb(181,71,8)', bg: 'rgb(255,250,235)' }
 }
@@ -168,6 +168,23 @@ export function answeringCell(row: { channel: string; phone_label?: string | nul
   if (row.channel !== 'voice') return null
   const status = row.phone_status ?? 'unpublished'
   return { text: row.phone_label ?? 'Not published', ...phoneSystemTone(status) }
+}
+
+/**
+ * Phase 3 (2026-09-25): archiving (Delete) a voice agent that answers calls takes it OFF THE
+ * PHONE through the same queued switch-off. The confirmation says so, and the notice after it
+ * never claims the agent stopped until the phone system confirmed it.
+ */
+export function deleteConfirmBody(row: { channel: string; answering_calls?: boolean | null }): string {
+  const base = 'The agent is switched off and removed from this list, and anything it had queued is cancelled. Its run logs, versions and suggestions are kept.'
+  if (row.channel !== 'voice' || !row.answering_calls) return base
+  return base + ' It also stops answering calls: the phone system is asked to switch it off, and callers then reach the flow\'s fallback (voicemail). Until the phone system confirms, it stays in this list marked Archived.'
+}
+
+export function deleteNotice(result: { phone_system?: { label: string } | null } | null | undefined): string {
+  const label = result?.phone_system?.label
+  if (!label || label === 'Archived · not answering calls') return 'Agent deleted. Its logs are kept.'
+  return `Agent deleted, but it is not confirmed off the phone system yet (${label}). It stays in this list, marked Archived, until it is. Its logs are kept.`
 }
 
 /** "Take it off the phone": owen-main says something of this agent answers while the switch is Off. */

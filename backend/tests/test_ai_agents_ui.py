@@ -306,3 +306,34 @@ def test_no_emoji_in_the_new_screens():
     for f in files:
         hits = _EMOJI.findall(f.read_text(encoding="utf-8"))
         assert not hits, "%s uses emoji %r — icons come from the outline set" % (f.name, hits)
+
+
+@node
+def test_deleting_a_voice_agent_says_it_stops_answering_and_never_claims_it_did_early():
+    """Phase 3 (2026-09-25): archive takes an answering voice agent off the phone, queued."""
+    got = run_js("aiAgents.ts", """
+        out({ bodies: [m.deleteConfirmBody({ channel: 'voice', answering_calls: true }),
+                       m.deleteConfirmBody({ channel: 'voice', answering_calls: false }),
+                       m.deleteConfirmBody({ channel: 'text', answering_calls: null })],
+              notices: [m.deleteNotice({ phone_system: null }),
+                        m.deleteNotice({ phone_system: { label: 'Archived · switching off, not confirmed by the phone system' } }),
+                        m.deleteNotice({ phone_system: { label: 'Archived · not answering calls' } }),
+                        m.deleteNotice({ phone_system: { label: 'Archived · still answering calls' } })],
+              tones: [m.phoneSystemTone('archived_answering'), m.phoneSystemTone('failed')] })
+    """)
+    assert "stops answering calls" in got["bodies"][0] and "voicemail" in got["bodies"][0]
+    assert "marked Archived" in got["bodies"][0]
+    assert "answering" not in got["bodies"][1] and got["bodies"][1] == got["bodies"][2], (
+        "an agent that was not answering must not be described as being taken off the phone")
+    assert got["notices"][0] == "Agent deleted. Its logs are kept."
+    assert "not confirmed off the phone system yet" in got["notices"][1], (
+        "the notice would claim it stopped before the phone system said so")
+    assert "switching off, not confirmed" in got["notices"][1]
+    assert got["notices"][2] == "Agent deleted. Its logs are kept."
+    assert "still answering calls" in got["notices"][3]
+    assert got["tones"][0] == got["tones"][1], "still answering after archive reads as an error"
+    tab = _read("components", "ai", "AgentsTab.tsx")
+    assert "setNotice(deleteNotice(r))" in tab, "the notice would ignore the phone system"
+    assert "body={deleteConfirmBody(deleting)}" in tab
+    assert "a.archived ?" in tab and "retryOff.mutate(a.id)" in tab, (
+        "an archived agent not confirmed off would not be marked, or could not be retried")

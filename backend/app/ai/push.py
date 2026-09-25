@@ -37,6 +37,17 @@ exactly like a publish:
 Each switch cancels the agent's queued pushes first (keys released), so the LAST switch wins.
 owen-main answers every request with what is answering NOW (`answering`, `active_version`);
 that, not the request, is what `state` reports.
+
+ARCHIVING stops it answering (phase 3, 2026-09-25). Archive is the obvious "make it stop"
+gesture, and it used to leave a voice agent ANSWERING on owen-main. Now `archive` — called by
+the archive route before it commits — switches "Answering calls" off and queues the SAME
+DEACTIVATE as the switch, and `handle_job` sends a deactivation for an archived agent (every
+other request for an archived agent is still dropped). The archive always succeeds; until
+owen-main confirms, the agent stays in the agents list marked archived, with a label that says
+it is not confirmed off the phone system and a Retry (`archived_awaiting_phone`). Nothing
+published (an import that could not be version 1): there is no version to deactivate through,
+so nothing is sent, `answering_calls` is LEFT true — owen-main's own version may still be
+answering — and the listed row says so.
 """
 from __future__ import annotations
 
@@ -60,6 +71,11 @@ NOT_LIVE = "Published · not yet live on the phone system"
 NOT_SENT = "Published · not yet on the phone system"
 SWITCHING_OFF = "Switching off · not confirmed by the phone system"
 UNPUBLISHED = "Not published"
+# An archived voice agent (phase 3). Listed until the phone system confirms it stopped.
+ARCHIVED_OFF = "Archived · not answering calls"
+ARCHIVED_SWITCHING_OFF = "Archived · switching off, not confirmed by the phone system"
+ARCHIVED_NOT_OFF = "Archived · NOT taken off the phone system"
+ARCHIVED_STILL_ANSWERING = "Archived · still answering calls"
 LIVE_LABEL = ANSWERING   # the phase-2b name, kept for callers
 FALLBACK = ("A call that reaches this agent goes to the flow's fallback (voicemail).")
 NOT_CONFIGURED = ("This server is not linked to the phone system (CRM_LINK_BASE_URL and "
@@ -166,6 +182,38 @@ def set_answering(db: Session, agent: AiAgent, on: bool) -> AiVoicePush | None:
     return _queue(db, agent, version, AiVoicePush.PUSH if on else AiVoicePush.DEACTIVATE)
 
 
+def archive(db: Session, agent: AiAgent) -> AiVoicePush | None:
+    """Archiving a voice agent takes it off the phone. Called BEFORE `archived_at` is set and
+    the archive committed; never refuses, so the archive always succeeds.
+
+    Answering calls on and a version published → the switch goes off and the one queued
+    DEACTIVATE is sent, exactly as switching it off would. Answering calls off → nothing: an
+    agent that was not answering is not taken off the phone by being archived (another CRM
+    agent may share its phone-system agent — the publish rule). Nothing published → nothing
+    can be sent; the switch is left on, which is the truth about owen-main, and `state` says so.
+    """
+    if agent.channel != AiAgent.VOICE or not agent.answering_calls:
+        return None
+    if agent.published_version_id is None:
+        return None
+    return set_answering(db, agent, False)
+
+
+def archived_awaiting_phone(db: Session, agent: AiAgent) -> bool:
+    """An archived voice agent the phone system has not confirmed is off it. Such an agent
+    stays in the agents list — marked archived — so nobody is told it stopped when it did not.
+    """
+    if agent.archived_at is None or agent.channel != AiAgent.VOICE:
+        return False
+    if agent.published_version_id is None:
+        return bool(agent.answering_calls)
+    p = db.scalar(select(AiVoicePush).where(
+        AiVoicePush.version_id == agent.published_version_id))
+    if p is None or p.op != AiVoicePush.DEACTIVATE:
+        return False
+    return not (p.status == AiVoicePush.NOT_ANSWERING and p.owen_answering is not True)
+
+
 def _someone_answering(db: Session, agent: AiAgent, push: AiVoicePush | None) -> bool:
     """As far as owen-main last told us, is any version of this agent answering?"""
     if push is not None and push.owen_answering:
@@ -228,7 +276,9 @@ def handle_job(db: Session, payload: dict) -> None:
             AiVoicePush.LIVE, AiVoicePush.NOT_ANSWERING, AiVoicePush.SUPERSEDED):
         return
     agent = db.get(AiAgent, version.agent_id)
-    if agent is None or agent.archived_at is not None \
+    # An archived agent is sent nothing — EXCEPT its deactivation (phase 3): archiving is
+    # what queued it, and dropping it here is how an archived agent kept answering calls.
+    if agent is None or (agent.archived_at is not None and op != AiVoicePush.DEACTIVATE) \
             or agent.published_version_id != version.id:
         push.status = AiVoicePush.SUPERSEDED
         return
@@ -294,6 +344,30 @@ def _iso(dt: datetime | None) -> str | None:
 
 
 def state(db: Session, agent: AiAgent) -> dict | None:
+    """`_state`, and for an ARCHIVED agent the same facts under an "Archived · …" label."""
+    out = _state(db, agent)
+    if out is None or agent.archived_at is None:
+        return out
+    out = {**out, "archived": True}
+    if agent.published_version_id is None:
+        if agent.answering_calls:
+            return {**out, "status": "archived_answering", "answering": None,
+                    "label": ARCHIVED_STILL_ANSWERING, "can_retry": False,
+                    "detail": "Archived, but nothing was ever published here, so the phone "
+                              "system was never asked to stop. Its own version may still be "
+                              "answering — switch the agent off in owen-main."}
+        return {**out, "label": ARCHIVED_OFF}
+    if out["status"] == "not_answering" and out.get("answering") is not True:
+        return {**out, "label": ARCHIVED_OFF,
+                "detail": "Archived. The phone system confirmed it is not answering calls. "
+                          + FALLBACK}
+    confirmed_error = out["status"] in (AiVoicePush.REFUSED, AiVoicePush.FAILED)
+    return {**out, "label": ARCHIVED_NOT_OFF if confirmed_error else ARCHIVED_SWITCHING_OFF,
+            "detail": "Archived, but not yet confirmed off the phone system: " + out["detail"],
+            "can_retry": out["can_retry"] or confirmed_error}
+
+
+def _state(db: Session, agent: AiAgent) -> dict | None:
     """What the agent's screen says about the phone system. None for a text agent.
 
     `status` is one of: unpublished · live (THIS version answers) · not_answering (owen-main
