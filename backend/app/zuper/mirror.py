@@ -42,7 +42,8 @@ from . import client, config, engine, mapping, zapi
 ALIASES = {
     "Dream Team Roofing AHS": {
         "New Lead": "Work Order Received",
-        "Inspection": "Inspecting",
+        # 2026-09-25: the owner renamed Zuper's "Inspecting" to "Inspection" (same status uid).
+        "Inspecting": "Inspection",
         "Request the Approval (AHS)": "Approval Requested",
         "Repair in Process": "Repair In Process",
         "Submit The Invoice": "Invoice Submitted to AHS",
@@ -51,6 +52,15 @@ ALIASES = {
     },
     "Retail": {
         "Repair in Process": "Repair In Process",
+    },
+}
+
+# A CRM stage whose Zuper status was DELETED: never renamed (that would steal the row an alias
+# above renames), only emptied into the named stage before it goes. 2026-09-25: the owner took
+# "On My Way" off the AHS board; a card still on it belongs in "Inspection".
+MERGES = {
+    "Dream Team Roofing AHS": {
+        "On My Way": "Inspection",
     },
 }
 
@@ -118,6 +128,7 @@ def boards(db: Session, commit: bool, report: Report) -> None:
         have = _stages(db, p.id) if p is not None else []
         by_stage_name = {s.name.strip().lower(): s for s in have}
         aliases = {k.strip().lower(): v for k, v in ALIASES.get(pipeline_name, {}).items()}
+        merges = {k.strip().lower(): v for k, v in MERGES.get(pipeline_name, {}).items()}
         taken: set[int] = set()
         plan: list[tuple[str, Stage | None, str]] = []   # (status name, stage, what)
         for name in want:
@@ -149,7 +160,8 @@ def boards(db: Session, commit: bool, report: Report) -> None:
             if i == 0 and s is not None:
                 first_id = s.id
         for s in extra:
-            target_name = aliases.get(s.name.strip().lower())
+            key = s.name.strip().lower()
+            target_name = aliases.get(key) or merges.get(key)
             target = next((x for (n, x, _w) in plan if n == target_name and x is not None),
                           None)
             n_deals = db.scalar(select(func.count(Opportunity.id))

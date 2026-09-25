@@ -12,9 +12,17 @@ from app.zuper import config, mapping, mirror
 from sqlalchemy import select
 from tests.zuper_support import AHS, mapping_row
 
-# The live AHS board (2026-09-22), in its own order.
-AHS_STATUSES = ["Work Order Received", "Contact Attempted", "Scheduled", "On My Way",
-                "Inspecting", "Proposal Made", "Approval Requested", "Approved",
+# The live AHS board, in its own order: 2026-09-22, then as the owner changed it on 2026-09-25
+# ("Inspecting" renamed "Inspection", two stages added after it, "On My Way" deleted).
+AHS_STATUSES_0922 = ["Work Order Received", "Contact Attempted", "Scheduled", "On My Way",
+                     "Inspecting", "Proposal Made", "Approval Requested", "Approved",
+                     "Repair Scheduled", "Repair In Process", "Repair Complete",
+                     "Invoice Submitted to AHS", "Awaiting AHS Payment", "Paid", "Call Back",
+                     "Waiting for Customer", "Reschedule Required", "Estimate Declined",
+                     "Cancelled"]
+AHS_STATUSES = ["Work Order Received", "Contact Attempted", "Scheduled", "Inspection",
+                "Inspection Completed", "Notify Auth Dept", "Proposal Made",
+                "Approval Requested", "Approved",
                 "Repair Scheduled", "Repair In Process", "Repair Complete",
                 "Invoice Submitted to AHS", "Awaiting AHS Payment", "Paid", "Call Back",
                 "Waiting for Customer", "Reschedule Required", "Estimate Declined",
@@ -63,8 +71,10 @@ def test_the_crm_board_becomes_zuper_s_board_in_zuper_s_order(zworld, fake):
 def test_a_renamed_stage_keeps_its_deals_and_a_removed_one_hands_them_over(zworld, fake):
     boards_of(fake)
     with SessionLocal() as s:
-        inspection = s.scalar(select(Stage).where(Stage.name == "Inspection"))
-        stage_id, moved_deal = inspection.id, zworld.ids['jane_card']
+        approval = s.scalar(select(Stage).where(Stage.name == "Request the Approval (AHS)"))
+        card = s.get(Opportunity, zworld.ids['jane_card'])
+        card.stage_id, card.pipeline_id = approval.id, approval.pipeline_id
+        stage_id, moved_deal = approval.id, card.id
         leftover = s.scalar(select(Stage).where(Stage.name == "Submit Invoices"))
         s.add(Opportunity(title="stranded", contact_id=zworld.ids['jane'],
                           pipeline_id=leftover.pipeline_id, stage_id=leftover.id,
@@ -72,15 +82,53 @@ def test_a_renamed_stage_keeps_its_deals_and_a_removed_one_hands_them_over(zworl
         s.commit()
     run(commit=True, phases={"boards"})
     with SessionLocal() as s:
-        # "Inspection" is Zuper's "Inspecting": the same row, renamed, with its deal still on it.
+        # "Request the Approval (AHS)" is Zuper's "Approval Requested": the same row, renamed,
+        # with its deal still on it.
         renamed = s.get(Stage, stage_id)
-        assert renamed is not None and renamed.name == "Inspecting"
+        assert renamed is not None and renamed.name == "Approval Requested"
         assert s.get(Opportunity, moved_deal).stage_id == stage_id
         # "Submit Invoices" is not on Zuper's board: it goes, and its deal lands on the stage
         # the alias names ("Awaiting AHS Payment"), never on no stage at all.
         assert s.scalar(select(Stage).where(Stage.name == "Submit Invoices")) is None
         stranded = s.scalar(select(Opportunity).where(Opportunity.title == "stranded"))
         assert s.get(Stage, stranded.stage_id).name == "Awaiting AHS Payment"
+
+
+def test_the_2026_09_25_ahs_board_keeps_every_card(zworld, fake):
+    """Production after 2026-09-23 has "Inspecting" and "On My Way" stages. The owner renamed
+    "Inspecting" to "Inspection" in Zuper (same status), added two stages and deleted "On My
+    Way": the CRM row is renamed, not replaced, and a card on "On My Way" lands on Inspection."""
+    ahs_uid, _ = boards_of(fake)
+    fake.statuses[ahs_uid] = [{"status_uid": "st-ahs-old-%d" % i, "status_name": n,
+                               "status_type": "OTHER"} for i, n in enumerate(AHS_STATUSES_0922)]
+    run(commit=True, phases={"boards"})
+    assert stages(AHS) == AHS_STATUSES_0922
+    with SessionLocal() as s:
+        inspecting = s.scalar(select(Stage).where(Stage.name == "Inspecting"))
+        on_my_way = s.scalar(select(Stage).where(Stage.name == "On My Way"))
+        card = s.get(Opportunity, zworld.ids['jane_card'])
+        card.stage_id, card.pipeline_id = inspecting.id, inspecting.pipeline_id
+        s.add(Opportunity(title="on the way", contact_id=zworld.ids['jane'],
+                          pipeline_id=on_my_way.pipeline_id, stage_id=on_my_way.id,
+                          value_cents=0))
+        s.commit()
+        inspecting_id, card_id = inspecting.id, card.id
+    # The owner's change in Zuper: same uid for the renamed status, two new ones, one deleted.
+    old = {r["status_name"]: r["status_uid"] for r in fake.statuses[ahs_uid]}
+    fake.statuses[ahs_uid] = [{"status_uid": old.get("Inspecting" if n == "Inspection" else n)
+                               or "st-ahs-new-%d" % i, "status_name": n, "status_type": "OTHER"}
+                              for i, n in enumerate(AHS_STATUSES)]
+    code, report = run(commit=True, phases={"boards"})
+    assert code == 0, report["problems"]
+    assert stages(AHS) == AHS_STATUSES
+    with SessionLocal() as s:
+        row = s.get(Stage, inspecting_id)
+        assert row is not None and row.name == "Inspection"          # the same row, renamed
+        assert s.get(Opportunity, card_id).stage_id == inspecting_id
+        moved = s.scalar(select(Opportunity).where(Opportunity.title == "on the way"))
+        assert moved.stage_id == inspecting_id                       # never the first stage
+        assert s.scalar(select(Stage).where(Stage.name == "On My Way")) is None
+        assert mapping.stage_for_status(s, old["Inspecting"]) == inspecting_id
 
 
 def test_every_stage_is_paired_with_the_status_of_the_same_name(zworld, fake):
@@ -119,7 +167,7 @@ def test_the_backfill_moves_a_paired_card_to_the_status_zuper_has(zworld, fake, 
     cust = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
     job = fake.new_job(ahs_uid, job_title="Jane Roof - leak", customer={"customer_uid": cust})
     fake.set_custom(fake.jobs[job], "Workiz Job #", "WZ-88")
-    fake.move_job(job, "st-ahs-8")                       # "Repair Scheduled"
+    fake.move_job(job, "st-ahs-9")                       # "Repair Scheduled"
     with SessionLocal() as s:
         card = s.get(Opportunity, zworld.ids['jane_card'])
         card.custom_fields = {**(card.custom_fields or {}), "workiz_id": "WZ-88"}
@@ -381,7 +429,7 @@ def test_a_job_still_syncs_when_a_child_module_is_not_available(zworld, fake, mo
     cust = fake.new_customer(customer_first_name="Jane", customer_last_name="Roof")
     job = fake.new_job(ahs_uid, job_title="Jane Roof - leak", customer={"customer_uid": cust})
     fake.set_custom(fake.jobs[job], "Workiz Job #", "WZ-99")
-    fake.move_job(job, "st-ahs-8")                       # "Repair Scheduled"
+    fake.move_job(job, "st-ahs-9")                       # "Repair Scheduled"
     with SessionLocal() as s:
         card = s.get(Opportunity, zworld.ids["jane_card"])
         card.custom_fields = {**(card.custom_fields or {}), "workiz_id": "WZ-99"}
