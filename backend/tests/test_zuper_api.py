@@ -82,7 +82,11 @@ def test_every_path_the_package_names_is_allowed_and_none_is_denylisted():
         for m in methods:
             assert client.denied(m, concrete) is None, (name, m)
     for source in APP_DIR.glob("*.py"):
-        for literal in re.findall(r'"(/[a-z_]+(?:/[a-z_{}]+)*)"', source.read_text()):
+        # encoding="utf-8" explicitly: the package's prose uses em dashes and curly
+        # quotes, and `read_text()` with no encoding is cp1252 on Windows, so this test
+        # died with a UnicodeDecodeError there while passing in CI.
+        text = source.read_text(encoding="utf-8")
+        for literal in re.findall(r'"(/[a-z_]+(?:/[a-z_{}]+)*)"', text):
             if literal.startswith("/api/"):
                 continue            # the CRM's own routes
             concrete = re.sub(r"\{[a-z_]+\}", "x1", literal)

@@ -274,3 +274,18 @@ def test_the_job_create_names_the_customer_with_customer_uid(armed, fake, monkey
     assert body.get("customer_uid"), body
     assert "customer" not in body, body
     assert zuper_job(fake)["customer"]["customer_uid"] == body["customer_uid"]
+
+
+def test_the_job_create_carries_a_due_date_and_books_no_visit(armed, fake, monkeypatch):
+    """Zuper refuses a create with no end/due date, and a work order has no visit yet.
+
+    `due_date` satisfies it and leaves the job UNSCHEDULED (measured on the AHS - TEST board,
+    2026-09-28: `is_scheduled` false, `scheduled_start_time` null). A placeholder
+    `scheduled_end_time` would instead have invented a visit on the dispatch board — so this
+    test pins both halves: a date is sent, and it is not a schedule.
+    """
+    one_way(monkeypatch)
+    deliver(armed, fake)
+    body = next(w for w in fake.writes() if w.path == "/jobs").body["job"]
+    assert body.get("due_date"), body
+    assert "scheduled_start_time" not in body and "scheduled_end_time" not in body, body

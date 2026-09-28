@@ -424,6 +424,12 @@ def opportunity_view(db: Session, o: Opportunity, job_uid: str | None) -> dict:
         "title": text(o.title), "stage": o.stage_id,
         "street": text(o.address_street), "city": text(o.address_city),
         "state": text(o.address_state), "zip": text(o.address_postal_code),
+        # Zuper refuses a job create without one ("End / Due Date is Mandatory"), and a card
+        # need not have a visit — an emailed AHS work order has none until somebody rings the
+        # customer. The day the card was made is the honest answer, and `due_date` keeps the
+        # job OFF the calendar (`is_scheduled` stays false; measured on the AHS - TEST board,
+        # 2026-09-28) where a placeholder `scheduled_end_time` would have invented a visit.
+        "due_date": iso_minute(o.created_at),
     }
     with db.no_autoflush:
         owner = db.get(User, o.owner_id) if o.owner_id else None
@@ -525,6 +531,8 @@ def job_payload(view: dict, *, category_uid: str | None, customer_uid: str | Non
         "custom_fields": custom_list(values),
         "assigned_to": [{"user_uid": assigned_user_uid}] if assigned_user_uid else [],
     }
+    if view.get("due_date"):
+        body["due_date"] = view["due_date"]
     if category_uid:
         body["job_category"] = category_uid
     if customer_uid:

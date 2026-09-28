@@ -398,6 +398,13 @@ class FakeZuper:
         if "customer" in data:
             return self.error("Either customer or organization data is required")
         customer = data.pop("customer_uid", None)
+        if not customer:
+            return self.error("Either customer or organization data is required")
+        # The live API also refuses a create with no end/due date at all ("End / Due Date is
+        # Mandatory", measured 2026-09-28). `job_payload` sent neither, so NO send from the CRM
+        # had ever succeeded against Zuper; the fake did not ask, so no test noticed.
+        if not (data.get("due_date") or data.get("scheduled_end_time")):
+            return self.error("End / Due Date is Mandatory")
         data.update(job_uid=uid, job_category={"category_uid": cat},
                     customer={"customer_uid": customer} if customer else None,
                     created_at=self.tick(), updated_at=iso(self.clock), is_deleted=False,

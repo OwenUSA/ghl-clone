@@ -6318,3 +6318,26 @@ update, so the tests fail if the key is changed back.
 
 **The lesson:** a fake written from the same assumption as the code proves nothing. Where a body
 is unverified, the fake must be built from what the live API ANSWERED — a refusal included.
+
+### …and then Zuper refused it for having no date
+
+With the customer key right, the live API answered **"End / Due Date is Mandatory"**.
+`job_payload` sent no date of any kind, so — together with the `customer` key — **no Send to
+Zuper had ever succeeded against the live API at all**. The account was filled by the dispatch
+load scripts, whose `job_body` always sent both.
+
+An emailed AHS work order has no visit: nobody has rung the customer yet. So which field? Tested
+on the **AHS - TEST** board with the owner's own test customer, then deleted again (probe #702):
+`due_date` alone is accepted, and the job comes back **`is_scheduled: false`,
+`scheduled_start_time: null`** — it does not appear on the calendar or the dispatch board. A
+placeholder `scheduled_end_time` would have invented a visit for dispatch to look at.
+
+So `opportunity_view` carries `due_date` = the day the card was made, and `job_payload` sends it.
+`test_the_job_create_carries_a_due_date_and_books_no_visit` pins both halves: a date is sent, and
+it is not a schedule. The fake refuses a dateless create the way Zuper does.
+
+Two probes are worth remembering. A body missing the customer is refused for THAT before the date
+is ever checked, so the customer check cannot be used to probe the date one — the ordering makes
+"deliberately invalid elsewhere" useless here, which is why the test board was needed. And the
+create's 200 does not put `job_uid` where `POST /customers_new` does, so the first probe reported
+failure while having created a job; #702 was found by title and category and deleted.
