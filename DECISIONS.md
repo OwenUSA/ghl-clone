@@ -6143,3 +6143,66 @@ route's docstring says fallback/voicemail and the runtime still means that.
   nothing published; its chip reads "Not published" and does not name owen-main's version.
 * Operator steps: deploy owen-main (`scripts/check.sh`); `./deploy.sh --with-migrations` here
   (revisions `a9d2f4c6e813` and `c5e8a1b3d702`); run the import dry run, then `--commit`.
+---
+
+## AMENDMENT (2026-09-24): the six regional boards
+
+The owner made six more job categories in Zuper, each with Retail's 16 statuses and Retail's
+checklist: "Miami Retail Repair", "Miami Retail Roof Replacement", "Miami Gutters", "Sarasota
+Repairs", "Sarasota Roof Replacement", "Sarasota Gutters". Zuper is the truth for jobs and the CRM
+copies it (2026-09-23), so the CRM gets six pipelines of the same names. Branch
+`feature/zuper-new-pipelines`; not merged, not deployed.
+
+* **One list, `mapping.MIRROR_ONLY_CATEGORIES`** (pipeline name -> category name, the same name
+  on both sides), and `mapping.mirrored_categories()`, which is `CATEGORIES` plus that list.
+  `CATEGORIES` itself is unchanged: it still means "the boards setup makes and the CRM may send
+  to", and that is still AHS and Retail only.
+* **`python -m app.zuper.mirror --phase boards` makes the pipeline** when the Zuper account has
+  the category and the CRM has no pipeline of that name: stages are Zuper's statuses in Zuper's
+  order, each mapped by uid, and the pipeline is mapped to the category. It is open to everyone
+  (no permission rows); restrict it afterwards from Opportunities → Pipelines → ⋮ → Manage
+  permissions if needed. A second run finds it and makes nothing twice. The dry run names it
+  "(new CRM pipeline)". A regional category the account does not have is skipped, not a problem.
+* **`--phase links` and `--phase backfill`** now include jobs in those categories. After that the
+  webhook and the 15-minute sweep keep them current, because the engine decides what is in scope
+  by the pipeline <-> category mapping rows, not by name. A job the office moves from Retail to a
+  regional board in Zuper moves its card to that pipeline on the next pull.
+* **A regional card is never sent to Zuper.** `engine.send_problems` refuses a card whose
+  pipeline is in `MIRROR_ONLY_CATEGORIES` ("... is copied from Zuper, so its jobs are made in
+  Zuper, not sent from here."), so Send to Zuper is refused on it even with `ZUPER_PULL_ONLY`
+  off and the sync switched on. In production `ZUPER_PULL_ONLY=true` already refuses every send.
+* **What it does NOT change:** setup (`app.zuper.setup`), its check, the Settings → Zuper switch,
+  the day-one load, AHS auto-send and Send to Zuper for AHS / Retail. They all still loop over
+  `CATEGORIES` only, so a regional pipeline is neither checked nor reported there, and setup
+  never tries to create a regional category in Zuper. No schema change, no migration.
+* **Not changed either, noted:** with `ZUPER_PULL_ONLY` OFF, an edit to a card that is already
+  linked to a Zuper job would be pushed like any linked Retail card; production is pull-only,
+  and turning that off is a decision for the whole mirror, not for these six boards.
+**Operator steps.** Merge `feature/zuper-new-pipelines` to main (fast-forward) and push. On
+owen-main: `cd /opt/santiagoproperties/ghl-clone && ./deploy.sh` (no `--with-migrations`, there is
+no new revision). Then, in the api container, `python -m app.zuper.mirror --phase boards` (dry run)
+and read it: each regional board should say "(new CRM pipeline)" with Retail's 16 statuses, and
+AHS / Retail should show no unexpected renames or removals. Then `--commit --phase boards`. Then
+`--phase links` and `--phase backfill` as dry runs, read them, and commit each.
+
+## AMENDMENT (2026-09-25): the owner's new AHS board — `ALIASES` rename, `MERGES` for a deleted status
+
+The owner changed the AHS board **in Zuper**: "Inspecting" was renamed "Inspection" (the same
+status uid, so its jobs, the 12-question inspection checklist and every answer and photo stayed),
+"Inspection Completed" and "Notify Auth Dept" were added after it, and "On My Way" was deleted
+(it was empty; Zuper keeps a deleted status in each job's history — measured on a test job
+first). All 333 AHS jobs were compared against a backup afterwards: no history entry, checklist
+answer, photo or field was lost.
+
+The mirror has to follow, or the next `--phase boards` would delete the CRM's "Inspecting" stage
+and drop its cards on the first stage. `mirror.ALIASES` now renames "Inspecting" → "Inspection"
+(the same row: cards, colour and report switches stay). A deleted status is NOT an alias: two
+aliases pointing at one status would let the first-positioned stage ("On My Way") be renamed and
+steal the row. `mirror.MERGES` is the separate list for that — the stage is emptied into the
+named stage ("On My Way" → "Inspection") and then removed, never renamed. Pinned by
+`test_the_2026_09_25_ahs_board_keeps_every_card`.
+
+A job's own record keeps the status NAME it had when it was last moved: the 17 jobs in
+"Inspection" still read "Inspecting" on their page until they next move. Deliberately not
+re-moved — each move would add a history entry. The Workiz loader's mapping (dispatch
+`zsup/zmig/zdata.py`) now maps "In Progress (Inspections)" to "Inspection".
