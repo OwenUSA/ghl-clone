@@ -736,6 +736,43 @@ def create_in_zuper(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping | None) -> st
 
 ADDRESS_PARTS = (("address_street", "street"), ("address_city", "city"),
                  ("address_state", "state"), ("address_postal_code", "ZIP code"))
+# An AHS work order writes the whole address on one line ("14436 SW 95TH LN MIAMI, FL 33186"),
+# so `ahs_jobs.split_address` often has no city to split off — and Zuper is content with that:
+# 32 of the AHS jobs in the live account hold the address exactly so, city and ZIP empty, and
+# every one of them geocoded (measured 2026-09-28). Requiring a city would have meant the most
+# common AHS address never reached Zuper at all, so an emailed work order needs the street only.
+AHS_EMAIL_ADDRESS_PARTS = (("address_street", "street"),)
+
+# `ahs_jobs.CREATED_BY`, kept out of the sync's imports (that is a route module);
+# `test_ahs_email_creates_job.py` pins the two equal.
+AHS_EMAIL_CREATED_BY = "AHS email"
+
+
+def is_ahs_email_card(db: Session, o: Opportunity) -> bool:
+    """A card the AHS mailbox made, still on the pipeline that mirrors Zuper's AHS board.
+
+    All three facts are read off the CARD rather than trusted from whoever asked, so a card
+    moved to another pipeline since, or one without the work order's id, is an ordinary card.
+    """
+    if (o.created_by or "") != AHS_EMAIL_CREATED_BY:
+        return False
+    if not str((o.custom_fields or {}).get(mapping.AHS_JOB_ID) or "").strip():
+        return False
+    p = db.get(Pipeline, o.pipeline_id) if o.pipeline_id else None
+    return p is not None and p.name == mapping.AHS_PIPELINE
+
+
+def may_create_in_zuper(db: Session, o: Opportunity) -> bool:
+    """Is this the one card a one-way mirror may still create in Zuper? (2026-09-28)
+
+    An emailed AHS work order, because Zuper cannot read a mailbox: it has no email ingest and
+    a workflow is only ever started by a record event, so the CRM creating the job is the only
+    path there is. That card, and the switch on (`ZUPER_AHS_EMAIL_CREATES_JOBS`) — nothing else.
+
+    True here creates nothing by itself: it opens the send, and `client.ahs_create()` still
+    limits that send to three POSTs.
+    """
+    return config.ahs_email_creates_jobs() and is_ahs_email_card(db, o)
 
 
 def send_problems(db: Session, o: Opportunity) -> list[str]:
@@ -743,6 +780,7 @@ def send_problems(db: Session, o: Opportunity) -> list[str]:
     phone, and the JOB's address (the card's own — the contact's can be copied onto it with
     "Use contact address"). Not the switches or the role: those are the route's."""
     problems = []
+    address_parts = AHS_EMAIL_ADDRESS_PARTS if is_ahs_email_card(db, o) else ADDRESS_PARTS
     p = db.get(Pipeline, o.pipeline_id) if o.pipeline_id else None
     if p is not None and p.name in mapping.MIRROR_ONLY_CATEGORIES:
         # A regional board (2026-09-24) is only COPIED from Zuper: its jobs are made there.
@@ -760,7 +798,7 @@ def send_problems(db: Session, o: Opportunity) -> list[str]:
             problems.append("The customer needs a name.")
         if not (c.phone or "").strip():
             problems.append("The customer needs a phone number.")
-    missing = [label for col, label in ADDRESS_PARTS if not (getattr(o, col) or "").strip()]
+    missing = [label for col, label in address_parts if not (getattr(o, col) or "").strip()]
     if missing:
         problems.append("The job needs its address — missing: %s. The contact's address can "
                         "be copied with “Use contact address”." % ", ".join(missing))
@@ -793,8 +831,15 @@ def send(ctx: Ctx, opportunity_id: int) -> str:
     try:
         outcome = create_in_zuper(ctx, "opportunity", o, m)
         if outcome in ("created", "linked_existing"):
-            for kind, model in (("appointment", Appointment), ("note", OpportunityNote),
-                                ("task", OpportunityTask)):
+            children = (("appointment", Appointment), ("note", OpportunityNote),
+                        ("task", OpportunityTask))
+            if config.pull_only():
+                # The AHS email's send, the only one a one-way mirror makes (2026-09-28). Its
+                # work order is a note and goes; visits and tasks do not, because under the
+                # mirror Zuper owns the schedule and its own task list — the CRM would only be
+                # writing something Zuper is the truth for.
+                children = (("note", OpportunityNote),)
+            for kind, model in children:
                 stmt = select(model.id).where(model.opportunity_id == o.id).order_by(model.id)
                 if kind == "appointment":
                     stmt = stmt.where(Appointment.status != "cancelled")

@@ -473,6 +473,86 @@ def test_two_new_lead_columns_on_the_board_is_refused_not_guessed(world):
     assert counts() == before
 
 
+def test_the_mirrored_board_has_no_new_lead_and_the_order_still_lands_in_its_first_column():
+    """The bug that ate five days of AHS emails (2026-09-28).
+
+    The AHS board is mirrored from Zuper, so `app.zuper.mirror --phase boards` renamed its
+    stages to Zuper's status names and "New Lead" stopped existing. The ingest required that
+    name and answered 422 to every work order — owen-main parsed them, relayed them and got a
+    refusal back. What a work order wants is the board's FIRST column, whatever it is called.
+    """
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    feed = User(email="owen@x.test", name="OWEN feed", role=Role.DISPATCHER)
+    db.add(feed)
+    db.flush()
+    ahs = Pipeline(name="Dream Team Roofing AHS", position=0)
+    db.add(ahs)
+    db.flush()
+    # Zuper's AHS - Inspection board, in its order. No "New Lead" anywhere.
+    for i, name in enumerate(["Work Order Received", "Welcome Call!", "Scheduled",
+                              "Inspection In Progress", "Cancelled"]):
+        db.add(Stage(pipeline_id=ahs.id, name=name, position=i))
+    plain, tok = mint_api_token(feed, name="feed", scopes="events:write")
+    db.add(tok)
+    db.commit()
+    db.close()
+    with TestClient(app) as c:
+        r = c.post("/api/ahs-jobs", json=order(),
+                   headers={"Authorization": "Bearer " + plain})
+    assert r.status_code == 201, r.text
+    db = SessionLocal()
+    try:
+        o = db.get(Opportunity, r.json()["opportunity"]["id"])
+        assert db.get(Stage, o.stage_id).name == "Work Order Received"
+    finally:
+        db.close()
+
+
+def test_a_board_whose_first_column_has_no_name_we_know_is_still_used():
+    """A name is the wrong thing to require: the owner renames Zuper's columns freely."""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    feed = User(email="owen@x.test", name="OWEN feed", role=Role.DISPATCHER)
+    db.add(feed)
+    db.flush()
+    ahs = Pipeline(name="Dream Team Roofing AHS", position=0)
+    db.add(ahs)
+    db.flush()
+    db.add(Stage(pipeline_id=ahs.id, name="Brand new AHS order", position=0))
+    db.add(Stage(pipeline_id=ahs.id, name="Anything else", position=1))
+    plain, tok = mint_api_token(feed, name="feed", scopes="events:write")
+    db.add(tok)
+    db.commit()
+    db.close()
+    with TestClient(app) as c:
+        r = c.post("/api/ahs-jobs", json=order(),
+                   headers={"Authorization": "Bearer " + plain})
+    assert r.status_code == 201, r.text
+    db = SessionLocal()
+    try:
+        o = db.get(Opportunity, r.json()["opportunity"]["id"])
+        assert db.get(Stage, o.stage_id).name == "Brand new AHS order"
+    finally:
+        db.close()
+
+
+def test_an_ahs_pipeline_with_no_stages_at_all_is_still_refused(world):
+    def empty(db):
+        for s in db.scalars(select(Stage).where(
+                Stage.pipeline_id == world.ids["ahs"])).all():
+            db.delete(s)
+        db.commit()
+    read(empty)
+    before = counts()
+    r = post(world, "/api/ahs-jobs", order())
+    assert r.status_code == 422, r.text
+    assert "no stages" in r.text
+    assert counts() == before
+
+
 # ------------------------------------------------------------------ pieces
 
 @pytest.mark.parametrize("raw,expected", [

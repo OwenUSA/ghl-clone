@@ -56,6 +56,26 @@ def pull_only() -> bool:
     return _flag("ZUPER_PULL_ONLY", False)
 
 
+AHS_CREATE_SENTENCE = ("An AHS work-order email is the one thing that creates a job in Zuper "
+                       "from here (ZUPER_AHS_EMAIL_CREATES_JOBS). Nothing else the CRM holds is "
+                       "written to Zuper, and this card is not an AHS email.")
+
+
+def ahs_email_creates_jobs() -> bool:
+    """The ONE exception to the one-way mirror (2026-09-28, the owner's scoped decision).
+
+    Zuper cannot read a mailbox — it has no email ingest, and a workflow can only be started
+    by a record event — so an AHS work order that arrives as an email can reach Zuper no other
+    way than the CRM creating it. This flag permits exactly that and nothing more: the
+    `create` half of one AHS-email card (its customer, the job, the work order as a note), on
+    the board `mapping.CATEGORIES` names for the AHS pipeline, in whatever status Zuper makes
+    a new job in. No update, no status move, no delete, no other card — `pull_only()` still
+    answers for all of those, and `client.ahs_create()` is the only scope in which the
+    exception applies.
+    """
+    return _flag("ZUPER_AHS_EMAIL_CREATES_JOBS", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

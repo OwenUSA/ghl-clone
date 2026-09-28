@@ -639,6 +639,18 @@ lines the two sides up: `boards` (stages become the category's statuses; a renam
 its deals — `mirror.ALIASES`), `links` (job ↔ card by Workiz job number, customer ↔ contact),
 `backfill` (pull every job). See the 2026-09-23 amendment in `DECISIONS.md`.
 
+**An AHS work-order email is the ONE thing that still creates a job in Zuper (2026-09-28).**
+Zuper has no email ingest at all — no endpoint, and a workflow is only ever started by a record
+event — so the CRM creating the job is the only path that exists, and the owner lifted the
+read-only rule for this path only. `ZUPER_AHS_EMAIL_CREATES_JOBS=true` (with `ZUPER_PULL_ONLY`)
+turns it on. `engine.may_create_in_zuper` decides, from the CARD: the switch, `created_by = "AHS
+email"` + its `ahs_job_id`, and still on the pipeline `CATEGORIES` maps to **AHS - Inspection**.
+`client.ahs_create()` is the only scope a write gets through, and only three POSTs are on
+`AHS_CREATE_WRITES` — customer, job, note. **No PUT and no DELETE anywhere on that list**, no
+status is ever named (so the job lands in the board's first column, "Work Order Received"), and
+the visit and tasks are not sent. Any other card still answers with the pull-only sentence.
+See the 2026-09-28 amendment in `DECISIONS.md`; `tests/test_ahs_email_creates_job.py` pins it.
+
 **Six regional boards (2026-09-24)** — Miami / Sarasota repair, roof replacement and gutters —
 are in `mapping.MIRROR_ONLY_CATEGORIES`: `mirror --phase boards` makes a CRM pipeline for each
 one the account has, and links / backfill / webhook / sweep pull their jobs. Setup, its check, the
