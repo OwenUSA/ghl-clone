@@ -48,7 +48,17 @@ from .models import Contact, Job, Opportunity, OpportunityNote, Pipeline, Stage
 from .phones import store_phone
 
 PIPELINE_NAME = "Dream Team Roofing AHS"
-STAGE_NAME = "New Lead"
+# The work order's first column. Named stages are tried in order, and the board's OWN
+# first stage is the answer when none of them is there.
+#
+# It used to be the single name "New Lead", and that broke the whole feed (2026-09-28):
+# the AHS board is mirrored from Zuper now, so its stages are Zuper's status names and
+# "New Lead" stopped existing the moment `app.zuper.mirror --phase boards` ran. Every
+# work order from 2026-09-23 on was refused 422 ("stage 'New Lead' not found") — 5 days
+# of AHS emails that owen-main parsed, relayed and got nothing back for. A board is
+# renamed in Zuper whenever the owner likes, so a name is the wrong thing to require:
+# what the work order actually wants is the first column, whatever it is called.
+STAGE_NAMES = ("Work Order Received", "New Lead")
 SOURCE = "AHS"
 CREATED_BY = "AHS email"
 AHS_JOB_ID = custom_fields.AHS_JOB_ID
@@ -206,11 +216,15 @@ def card_for(db: Session, job_id: str) -> Opportunity | None:
 
 
 def _board(db: Session, principal: auth.Principal) -> tuple[Pipeline, Stage]:
-    """The AHS pipeline and its New Lead stage, refused out loud when either is
-    missing, doubled, or hidden from the token's user.
+    """The AHS pipeline and its first column, refused out loud when the pipeline is
+    missing, doubled, hidden from the token's user, or has no stages at all.
 
     A 4xx, deliberately: owen-main does not retry a 4xx, and no retry fixes a board
     that is not there. The reason is recorded on the email over there.
+
+    The stage is looked up by `STAGE_NAMES` and then, failing all of them, taken as the
+    board's own first stage — see the note on that constant. Only an EMPTY pipeline is
+    refused now, because a pipeline with stages always has a first one.
     """
     pipelines = [p for p in db.scalars(select(Pipeline).where(
         Pipeline.name == PIPELINE_NAME).order_by(Pipeline.id)).all()
@@ -221,14 +235,18 @@ def _board(db: Session, principal: auth.Principal) -> tuple[Pipeline, Stage]:
         raise HTTPException(409, "%d pipelines are named %r — refusing to guess" % (
             len(pipelines), PIPELINE_NAME))
     pipeline = pipelines[0]
-    stages = db.scalars(select(Stage).where(
-        Stage.pipeline_id == pipeline.id, Stage.name == STAGE_NAME)).all()
-    if not stages:
-        raise HTTPException(422, "stage %r not found in %r" % (STAGE_NAME, PIPELINE_NAME))
-    if len(stages) > 1:
-        raise HTTPException(409, "%d stages in %r are named %r — refusing to guess" % (
-            len(stages), PIPELINE_NAME, STAGE_NAME))
-    return pipeline, stages[0]
+    ordered = db.scalars(select(Stage).where(Stage.pipeline_id == pipeline.id)
+                         .order_by(Stage.position, Stage.id)).all()
+    if not ordered:
+        raise HTTPException(422, "pipeline %r has no stages" % PIPELINE_NAME)
+    for name in STAGE_NAMES:
+        named = [s for s in ordered if s.name == name]
+        if len(named) > 1:
+            raise HTTPException(409, "%d stages in %r are named %r — refusing to guess" % (
+                len(named), PIPELINE_NAME, name))
+        if named:
+            return pipeline, named[0]
+    return pipeline, ordered[0]
 
 
 def _match_contact(db: Session, body: AhsJobIn) -> tuple[Contact | None, str | None]:

@@ -6206,3 +6206,96 @@ A job's own record keeps the status NAME it had when it was last moved: the 17 j
 "Inspection" still read "Inspecting" on their page until they next move. Deliberately not
 re-moved — each move would add a history entry. The Workiz loader's mapping (dispatch
 `zsup/zmig/zdata.py`) now maps "In Progress (Inspections)" to "Inspection".
+
+---
+
+## AMENDMENT (2026-09-28): an AHS work-order email creates its job in Zuper — the one write a one-way mirror makes
+
+The owner asked for AHS jobs that arrive by email to appear in Zuper automatically, on the
+**AHS - Inspection** board, in its default column. That is a write to Zuper, which the boss's rule
+of 2026-09-27 forbids ("Zuper must work on its own, the only thing we can do is read from Zuper to
+feed our custom GHL"). The conflict was put to the owner with both options — lift the rule for this
+one path, or keep it and copy each work order into Zuper by hand — and he chose to lift it: "A".
+
+### Zuper cannot do it itself. Measured, not assumed (2026-09-28)
+
+There is no way to make this Zuper's own feature, so there was no rule-respecting design to prefer:
+
+* No inbound-email endpoint: `/inbound_email`, `/email/inbound`, `/email_settings` and
+  `/company/email` all answer **404**.
+* Nothing in `GET /company/config` parses mail. The `messaging` section is one setting,
+  "notify users on job created".
+* **A workflow cannot be started by an email.** Every trigger is a record event on a module
+  (`job.create`, `job.schedule`, `customer.create`) — read off the account's own ten workflows.
+  A workflow can call OUT over HTTP; nothing wakes one up from an inbox.
+* The **Requests** module, the nearest thing, is a customer-portal booking-slot feature and is not
+  on the plan at all (with Assets, Service Contracts and Organization).
+
+### What the exception is, exactly
+
+`ZUPER_AHS_EMAIL_CREATES_JOBS` (default false) on top of `ZUPER_PULL_ONLY`. It permits the
+**create** half of ONE card and nothing else:
+
+* **`engine.may_create_in_zuper`** is the only thing that opens it, and it reads all three facts
+  off the CARD rather than trusting the caller: the switch is on, the AHS mailbox made the card
+  (`created_by = "AHS email"`) and it carries its `ahs_job_id`, and it is still on the pipeline
+  `mapping.CATEGORIES` points at AHS - Inspection. A card moved to another pipeline since, or one
+  without the work order's id, is an ordinary card and the pull-only sentence answers for it.
+* **`client.ahs_create()`** is the only scope in which the client lets a write past, and inside it
+  only three POSTs pass — `/customers_new`, `/jobs`, `/jobs/{uid}/note`. There is deliberately no
+  PUT and no DELETE on `AHS_CREATE_WRITES`, so nothing in the scope can change or remove a record
+  that already exists in Zuper. The worker opens it only for a send whose queued payload carries
+  `ahs_email`, which only the ingest sets.
+* **No status is ever named.** `move_job_status` stays suppressed by `pull_only`, so the job lands
+  in whatever column Zuper opens a new job in — the board's first, "Work Order Received". That is
+  what "in the AHS - Inspection item by default" means, and it is one fewer write.
+* **The visit and the tasks stay in the CRM.** `engine.send` pushes only the note children under
+  `pull_only`: the work order is the note and belongs there, while the schedule and the task list
+  are Zuper's truth under the mirror.
+* Idempotent twice over: `ahs_job_id` at the ingest, and the mapping's `creating` checkpoint plus
+  the search-before-create in Zuper.
+* A **manual** Send to Zuper on that same card is allowed too (it is the same card, and it is the
+  only way to retry after a permanent failure); on every other card the modal still refuses with
+  the pull-only sentence.
+
+### An AHS address has no city, and the send used to refuse it for that
+
+`send_problems` required all four address parts. An AHS work order writes the address on one line
+("14436 SW 95TH LN MIAMI, FL 33186"), so `ahs_jobs.split_address` usually has no city to split off
+— the most common AHS address would never have reached Zuper. Zuper is content with it: **32 of the
+AHS jobs in the live account hold the address exactly so**, city and ZIP empty, and every one of
+them geocoded (measured 2026-09-28). So `engine.AHS_EMAIL_ADDRESS_PARTS` asks an AHS email card for
+the **street only**. That is tied to the card (`is_ahs_email_card`), not to the switch: the
+requirement was wrong for those cards either way. Every other card still needs all four.
+
+### Not done, deliberately
+
+Zuper's webhooks can only be made in its UI, so the CRM still learns about Zuper's own changes
+from the 15-minute sweep. Nothing here registers one.
+
+`tests/test_ahs_email_creates_job.py` (16 tests) pins all of it, including what must NOT leave:
+no status move, no appointment, no service task, no write at all with the switch off, and refusal
+of a PUT, a status move and a DELETE from inside the scope itself.
+
+### Found while building it: the AHS feed had been dead for five days
+
+`ahs_jobs._board` required a stage literally named **"New Lead"**. The AHS pipeline is mirrored
+from Zuper now, so `app.zuper.mirror --phase boards` renamed its stages to Zuper's status names
+and that name stopped existing. Every work order from **2026-09-24** on was answered
+`422 stage 'New Lead' not found in 'Dream Team Roofing AHS'` — owen-main parsed them, relayed them
+to GoHighLevel and got a refusal from the CRM. **Seven work orders**, none of them in the CRM and
+therefore none in Zuper either.
+
+Nothing was lost: owen-main stores the parsed email and stamps `inbound_emails.crm_status`, so the
+seven sat as `refused` and were re-queued after the fix (owen-main `/tmp/replay_ahs.py`, dry run by
+default — the same path a fresh email takes, which is why `refused` rather than NULL mattered).
+
+The fix is not a second name. A board's columns are renamed in Zuper whenever the owner likes, so
+requiring any name is the bug: `ahs_jobs.STAGE_NAMES` prefers "Work Order Received" then "New Lead"
+and otherwise takes **the board's own first stage**, which is what a work order actually wants.
+Only an EMPTY pipeline is refused now. Pinned by three tests in `test_ahs_jobs.py`, one of them
+building the live AHS - Inspection board with no "New Lead" in it at all.
+
+**The lesson, for the next feature that names a stage:** anything the mirror owns has Zuper's
+names, and Zuper's names move. Look a stage up by position, or by a list ending in a fallback —
+never by one literal.

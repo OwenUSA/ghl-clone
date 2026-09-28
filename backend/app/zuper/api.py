@@ -460,6 +460,12 @@ def send_state(m: ZuperMapping | None) -> str:
     return "queued"
 
 
+# `engine` owns the predicate, because `engine.send_problems` needs it too; named here so the
+# route module and its tests read the same way.
+AHS_EMAIL_CREATED_BY = engine.AHS_EMAIL_CREATED_BY
+may_create_in_zuper = engine.may_create_in_zuper
+
+
 def send_block(db: Session, o: Opportunity, principal: auth.Principal | None) -> dict:
     """The card's Zuper state for the modal: sent or not, the locks, and whether this reader
     may press Send to Zuper now — with the reasons when not."""
@@ -468,7 +474,7 @@ def send_block(db: Session, o: Opportunity, principal: auth.Principal | None) ->
     state = send_state(m)
     problems: list[str] = []
     if state in ("not_sent", "failed"):
-        if config.pull_only():
+        if config.pull_only() and not may_create_in_zuper(db, o):
             problems.append(config.PULL_ONLY_SENTENCE)
         if not config.armed(db):
             problems.append("The Zuper sync is not switched on (Settings → Zuper), so nothing "
@@ -491,7 +497,11 @@ def queue_send(db: Session, o: Opportunity, *, by: str) -> tuple[bool, str]:
     """Mark the card sent (it is a locked mirror from this moment) and queue the worker's
     send. (queued now?, state). A card already queued or sent queues nothing — a second press,
     or a second approval, does nothing. The caller has checked who may send; this checks the
-    sync and the card, and raises 409 with the sentences."""
+    sync and the card, and raises 409 with the sentences.
+
+    An AHS email's card is the one send a one-way mirror still makes (2026-09-28); the flag
+    travels on the queued job so the worker knows to open `client.ahs_create()`.
+    """
     from .. import queue
     from ..models import Job
     m = mapping.mapping_for(db, "opportunity", o.id)
@@ -499,7 +509,8 @@ def queue_send(db: Session, o: Opportunity, *, by: str) -> tuple[bool, str]:
     if state in ("queued", "sent"):
         return False, state
     why = []
-    if config.pull_only():
+    ahs_email = may_create_in_zuper(db, o)
+    if config.pull_only() and not ahs_email:
         why.append(config.PULL_ONLY_SENTENCE)
     if not config.armed(db):
         why.append("The Zuper sync is not switched on (Settings → Zuper), so nothing can be "
@@ -517,8 +528,10 @@ def queue_send(db: Session, o: Opportunity, *, by: str) -> tuple[bool, str]:
     if old is not None and old.status != "pending":
         old.dedupe_key = None
     db.flush()
-    queue.enqueue(db, SEND_JOB, {"opportunity_id": o.id, "by": by[:120]},
-                  dedupe_key="zuper:send:%d" % o.id)
+    payload: dict = {"opportunity_id": o.id, "by": by[:120]}
+    if ahs_email:
+        payload["ahs_email"] = True
+    queue.enqueue(db, SEND_JOB, payload, dedupe_key="zuper:send:%d" % o.id)
     return True, "queued"
 
 
@@ -540,7 +553,11 @@ def zuper_send_opportunity(opp_id: int, response: Response, db: Session = Depend
 def auto_send(db: Session, o: Opportunity, *, by: str) -> str:
     """An AHS email card (and a new Workiz AHS job, through the sweep): sent automatically
     when the sync is armed and the card has what a send needs. With the sync off nothing is
-    queued — the card can be sent by hand later. Never raises into the caller."""
+    queued — the card can be sent by hand later. Never raises into the caller.
+
+    Under the one-way mirror only the AHS email's own card still goes (2026-09-28); a Workiz
+    AHS job the sweep offers gets the pull-only sentence like anything else.
+    """
     if not config.armed(db):
         return "sync off: not sent"
     try:

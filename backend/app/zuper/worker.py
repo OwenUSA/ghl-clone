@@ -30,7 +30,14 @@ def handle(db: Session, job: Job) -> str:
         else:
             outcome = engine.push(ctx, payload["kind"], int(payload["id"]))
     elif job.type == listener.SEND_JOB:
-        outcome = engine.send(ctx, int(payload["opportunity_id"]))
+        # `ahs_email` was put on the payload by the AHS ingest, and only by it: under the
+        # one-way mirror that send is the one allowed to create in Zuper, so it — and nothing
+        # else the worker runs — gets the narrow scope (2026-09-28).
+        if payload.get("ahs_email"):
+            with client.ahs_create():
+                outcome = engine.send(ctx, int(payload["opportunity_id"]))
+        else:
+            outcome = engine.send(ctx, int(payload["opportunity_id"]))
     elif job.type == listener.DELETE_JOB:
         outcome = str(engine.mirror_crm_deletes(ctx, payload["batch"]))
     else:

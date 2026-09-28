@@ -56,6 +56,7 @@ TRANSPORT: httpx.BaseTransport | None = None
 
 _OPERATOR: ContextVar[bool] = ContextVar("zuper_operator", default=False)
 _READ_ONLY: ContextVar[bool] = ContextVar("zuper_read_only", default=False)
+_AHS_CREATE: ContextVar[bool] = ContextVar("zuper_ahs_create", default=False)
 
 
 @contextlib.contextmanager
@@ -76,6 +77,23 @@ def read_only():
         yield
     finally:
         _READ_ONLY.reset(token)
+
+
+@contextlib.contextmanager
+def ahs_create():
+    """One AHS work-order email creating its job in Zuper (2026-09-28).
+
+    The only scope in which a one-way mirror writes something of its own, and the narrowest
+    one that can work: Zuper has no email ingest at all, so an emailed work order reaches it
+    only if the CRM creates it. Inside this scope the three POSTs in `AHS_CREATE_WRITES` are
+    allowed and every other non-GET is still refused — an update, a status move, a delete, a
+    second card. Opened by the worker for a send the AHS ingest queued, and by nothing else.
+    """
+    token = _AHS_CREATE.set(True)
+    try:
+        yield
+    finally:
+        _AHS_CREATE.reset(token)
 
 
 def is_read_only() -> bool:
@@ -292,14 +310,32 @@ def _check_host(url: str) -> None:
         raise ZuperError("refused", "the Zuper base URL must be https under zuperpro.com")
 
 
-# Registering the webhook is the one write a one-way mirror still makes: it is how Zuper is
-# asked to TELL the CRM about a change, and only the operator's command sends it.
+# Registering the webhook is a write a one-way mirror still makes: it is how Zuper is asked to
+# TELL the CRM about a change, and only the operator's command sends it. (The other is
+# `AHS_CREATE_WRITES` below — an emailed AHS work order creating its job.)
 MIRROR_WRITES = (PATHS["webhook_create"], PATHS["webhooks"])
 
 
 def _mirror_write_allowed(path: str) -> bool:
     return bool(_OPERATOR.get()) and any(path == p or path.startswith(p + "/")
                                          for p in MIRROR_WRITES)
+
+
+# An AHS work-order email creating its job (2026-09-28): CREATES only, and only these three —
+# the customer the job belongs to, the job itself, and the work order as a note. Deliberately
+# no PUT and no DELETE anywhere on the list, so nothing inside this scope can change or remove
+# a record that already exists in Zuper.
+AHS_CREATE_WRITES: tuple[tuple[str, str], ...] = (
+    ("POST", _rx(PATHS["customer_create"])),
+    ("POST", _rx(PATHS["jobs"])),
+    ("POST", _rx(PATHS["job_notes"])),
+)
+
+
+def _ahs_create_allowed(method: str, path: str) -> bool:
+    if not (_AHS_CREATE.get() and config.ahs_email_creates_jobs()):
+        return False
+    return any(m == method and re.match(rx, path) for m, rx in AHS_CREATE_WRITES)
 
 
 def request(method: str, path: str, *, params: dict | None = None,
@@ -317,7 +353,8 @@ def request(method: str, path: str, *, params: dict | None = None,
         raise ZuperError("no_key")
     if method != "GET" and _READ_ONLY.get():
         raise ZuperError("refused", "a dry run makes no %s request" % method)
-    if method != "GET" and config.pull_only() and not _mirror_write_allowed(path):
+    if method != "GET" and config.pull_only() and not _mirror_write_allowed(path) \
+            and not _ahs_create_allowed(method, path):
         # Backstop for the one-way mirror: every caller checks config.pull_only() first, so
         # reaching here is a bug — refuse before a connection exists rather than write.
         raise ZuperError("refused", config.PULL_ONLY_SENTENCE)
