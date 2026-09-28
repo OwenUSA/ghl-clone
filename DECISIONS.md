@@ -704,6 +704,31 @@ Workflows (the account has **zero**, so nothing to conflict with), any pipeline 
 and the CompanyCam↔GHL integration — the checklist *content* moved, the systems still do
 not talk. Owen wants the integration done together, last.
 
+## Safety contract — AMENDED 2026-09-27 (second narrow lift: the AHS - TEST pipeline)
+
+The owner lifted the read-only contract a second time, for one scope, after the conflict
+was raised explicitly ("Yes, lift the contract for this scope"). Purpose: rebuild in the
+ORIGINAL GHL account the AHS workflow tried in Zuper on 2026-09-26/27 (checklist per stage,
+filled before moving, required to move on), to compare the two.
+
+Permitted, and nothing else:
+1. Create ONE pipeline, **"AHS - TEST"**: Intake, Inspection, Report & Auth Dept, Schedule &
+   Make Proposal, Repair, Closing & Review, Awaiting AHS Payment, Paid, Cancelled.
+2. Create opportunity custom-field folders (one per stage) and ~50 opportunity custom fields
+   in them (the same questions and options as the Zuper AHS - TEST board).
+3. Switch on Settings → Labs → "Show & Require Opportunity Fields Conditionally" (account-wide,
+   inert until rules exist) and create conditional rules scoped to the AHS - TEST pipeline:
+   required fields per stage, and "Tenant name & phone" shown only for "Tenants".
+4. Three opportunity smart lists (saved views) on that pipeline.
+5. Workflows filtered to the AHS - TEST pipeline with INTERNAL actions only (Add Task,
+   Internal Notification to staff). No action that messages a contact.
+6. One test contact + one opportunity for the owner's TEST customer (his own phone/email).
+
+Still forbidden: delete / archive / merge / import / export, any send or call, any change to
+existing pipelines, calendars, users or permissions, anything billable (AI, numbers, A2P,
+marketplace, wallet). Enforcement stays in `capture/build/guard.py` (verbs added for this
+scope only, in a diff) with the append-only audit trail.
+
 ## Workflow builder — measured, and DELIBERATELY NOT AUTOMATED (2026-08-14)
 
 Owen authorised building the workflows. They were attempted and **stopped on evidence**,
