@@ -391,7 +391,13 @@ class FakeZuper:
         data = dict(body["job"])
         uid = self.uid("job")
         cat = data.pop("job_category", None)
-        customer = data.pop("customer", None)
+        # The live API takes `customer_uid` on a write and answers "Either customer or
+        # organization data is required" to anything else — including `customer`, which is how
+        # a GET nests it back. The fake used to accept `customer` too, so it agreed with the
+        # bug and the tests passed while production's sends failed (2026-09-28). It refuses now.
+        if "customer" in data:
+            return self.error("Either customer or organization data is required")
+        customer = data.pop("customer_uid", None)
         data.update(job_uid=uid, job_category={"category_uid": cat},
                     customer={"customer_uid": customer} if customer else None,
                     created_at=self.tick(), updated_at=iso(self.clock), is_deleted=False,
@@ -410,8 +416,10 @@ class FakeZuper:
             return self.not_found()
         if "job_category" in data:
             job["job_category"] = {"category_uid": data.pop("job_category")}
-        if "customer" in data:
-            customer = data.pop("customer")
+        if "customer" in data:            # the write key is customer_uid; see create_job
+            return self.error("Either customer or organization data is required")
+        if "customer_uid" in data:
+            customer = data.pop("customer_uid")
             job["customer"] = {"customer_uid": customer} if customer else None
         job.update(data)
         job["updated_at"] = self.tick()

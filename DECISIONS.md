@@ -6299,3 +6299,22 @@ building the live AHS - Inspection board with no "New Lead" in it at all.
 **The lesson, for the next feature that names a stage:** anything the mirror owns has Zuper's
 names, and Zuper's names move. Look a stage up by position, or by a list ending in a fallback —
 never by one literal.
+
+### And the job create named the customer with the wrong key
+
+The seven replayed work orders made their cards, reached Zuper, and Zuper refused every one:
+**"Either customer or organization data is required"**. `mapping.job_payload` sent
+`customer: <uid>`; the live API takes **`customer_uid`** on a write. A GET nests it back as
+`customer: {customer_uid: ...}`, which is exactly what makes the write key easy to get wrong.
+
+The load that filled the account did not go through this code — it was the dispatch scripts
+(`zsup/zmig/p3_load.py:job_body`, which has always sent `customer_uid`) — so **the CRM's own job
+create had never once succeeded against the live API**, and nothing said so: `tests/zuper_fake.py`
+accepted `customer` as well, so the fake agreed with the bug and every send test passed.
+
+Both are fixed, and the fake now **refuses `customer` the way Zuper does**, on create and on
+update, so the tests fail if the key is changed back.
+`test_the_job_create_names_the_customer_with_customer_uid` asserts the posted body directly.
+
+**The lesson:** a fake written from the same assumption as the code proves nothing. Where a body
+is unverified, the fake must be built from what the live API ANSWERED — a refusal included.

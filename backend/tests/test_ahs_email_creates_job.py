@@ -256,3 +256,21 @@ def test_the_relaxed_address_rule_belongs_to_the_ahs_email_not_to_the_switch(arm
         other = s.get(Opportunity, armed.ids["noaddr_card"])
         assert any("missing: street, city" in p for p in engine.send_problems(s, other))
     assert board_of(fake, zuper_job(fake)) == mapping.CATEGORIES[AHS]
+
+
+def test_the_job_create_names_the_customer_with_customer_uid(armed, fake, monkeypatch):
+    """The key the LIVE API takes on a write (measured 2026-09-28).
+
+    `customer` — which is how a GET nests it back — makes the live API answer "Either customer
+    or organization data is required" and create nothing; the first seven AHS email sends failed
+    exactly so, while these tests passed, because the fake accepted both spellings. The fake now
+    refuses `customer` the way Zuper does, so this test fails if the key is ever changed back.
+    """
+    one_way(monkeypatch)
+    deliver(armed, fake)
+    posted = [w for w in fake.writes() if w.path == "/jobs"]
+    assert len(posted) == 1, [(w.method, w.path) for w in fake.writes()]
+    body = posted[0].body["job"]
+    assert body.get("customer_uid"), body
+    assert "customer" not in body, body
+    assert zuper_job(fake)["customer"]["customer_uid"] == body["customer_uid"]

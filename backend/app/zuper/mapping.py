@@ -528,7 +528,12 @@ def job_payload(view: dict, *, category_uid: str | None, customer_uid: str | Non
     if category_uid:
         body["job_category"] = category_uid
     if customer_uid:
-        body["customer"] = customer_uid
+        # `customer_uid`, NOT `customer` (measured live, 2026-09-28). With `customer` the live
+        # API answers "Either customer or organization data is required" and creates nothing —
+        # the first seven AHS email sends failed exactly so. The key is the one the day-one
+        # load proved (dispatch `zsup/zmig/p3_load.py:job_body`); a GET still NESTS it as
+        # `customer: {customer_uid}`, which is what makes the write key easy to get wrong.
+        body["customer_uid"] = customer_uid
     return body
 
 
