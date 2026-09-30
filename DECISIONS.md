@@ -6394,3 +6394,23 @@ the team rebuilt the board and the column is now "AHS Approved".
 The nightly Excel files on owen-main and the Workiz / AHS history import. The questions the
 team adds in Zuper (`docs/ZUPER-KPI-SETUP.md`) are what make upsell tier, AHS authorized,
 customer paid and cancel reasons exist from now on.
+
+### The nightly KPI Excel (added the same day)
+
+`app/kpi_report.py` builds one workbook per night on owen-main, right after the history pass
+(worker Zuper thread), into `/opt/santiagoproperties/ghl-clone-kpi/reports` — `KPI-YYYY-MM-DD.xlsx`,
+never overwritten. The owner chose the server over any cloud sheet. Sheets: Read me, Summary,
+AHS upsells (per job), Upsells by month / by tech, Workiz by month, Jobs now, Time in column,
+Moves. **Job numbers only — no customer names, phones, emails or addresses**
+(`test_the_workbook_answers_the_owner_s_questions_without_customer_details`).
+
+The months before Zuper come from the owner's Workiz and AHS exports, copied (owner's OK,
+2026-09-30) to `/opt/santiagoproperties/ghl-clone-kpi/input` — root-only, mounted read-only.
+AHS dispatches are matched to Workiz jobs by address (house number + street + ZIP, then looser),
+the nearest job created no later than 3 days after the submit, one dispatch per job. Checked
+against the first hand analysis: the same 137 matches, 31 upsells, $29,159.28. A ZIP is read
+from the END of an address only — reading "the first five digits" took house numbers for ZIPs
+and matched 8 dispatches wrongly before it was caught.
+
+Adding a newer AHS or Workiz export is copying the file into `input`; the next night uses it.
+Later Workiz exports win over earlier ones by their export number, not by file time.

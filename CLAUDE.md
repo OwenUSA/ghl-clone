@@ -330,6 +330,12 @@ app.zuper.history` is a dry run, `--commit` writes. **Owner's rule for this work
 only ADD** — never move a job between columns, never touch gallery pictures, ask before any
 change to a job. The team's new Zuper questions: `docs/ZUPER-KPI-SETUP.md`. See DECISIONS.md.
 
+**The nightly KPI Excel** (`app/kpi_report.py`, right after the history pass): one
+`KPI-YYYY-MM-DD.xlsx` a night in `/opt/santiagoproperties/ghl-clone-kpi/reports` on owen-main,
+never overwritten, job numbers only. The Workiz / AHS exports it reads for the months before
+Zuper are REAL customer data in `.../ghl-clone-kpi/input` (root-only, mounted read-only) —
+never copy them anywhere else. By hand: `docker exec ghl_clone_worker python -m app.kpi_report`.
+
 ## It is deployed
 
 Live at **https://crm.dreamteamroofingfl.com** on the `owen-main` VPS, behind the shared

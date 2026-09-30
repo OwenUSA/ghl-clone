@@ -110,7 +110,10 @@ def tick(session_factory, now: datetime | None = None) -> None:
             digest.run(db, day)
         # Once a day: a copy of every job, quote, invoice, payment and commission that changed,
         # for the KPI reports (2026-09-30). Reads only.
-        history.run_daily(db, now)
+        if history.run_daily(db, now) is not None:
+            # ...and then that night's KPI Excel, from the copy just made (never raises).
+            from .. import kpi_report
+            kpi_report.nightly(db, now)
     except Exception as exc:
         db.rollback()
         try:

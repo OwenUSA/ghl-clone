@@ -39,6 +39,12 @@ x-api-base: &api-base
   # match the container path below.
   volumes:
     - media:/var/lib/ghl-clone/media
+    # THE KPI EXCEL (2026-09-30). `input` holds the owner's Workiz and AHS exports — REAL
+    # customer data, host folder root-only (0700), mounted read-only. `reports` receives one
+    # dated file a night (`app/kpi_report.py`), never overwritten. Both live on the host, not
+    # in a volume, so a person can copy files in and out with scp.
+    - /opt/santiagoproperties/ghl-clone-kpi/input:/var/lib/ghl-clone/kpi/input:ro
+    - /opt/santiagoproperties/ghl-clone-kpi/reports:/var/lib/ghl-clone/kpi/reports
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }

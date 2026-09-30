@@ -34,6 +34,7 @@ dependencies = [
     # build the route without it. Pure Python, no build step — which matters on this host
     # (see "The SSL interception" in DECISIONS.md).
     "python-multipart>=0.0.20",
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]
