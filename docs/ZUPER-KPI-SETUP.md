@@ -6,6 +6,12 @@
 > labels, options and "required" exactly as below. The `zuper_tasks` job was changed first to
 > ignore these columns (`NO_TASK_STAGES`), so they never become tasks on jobs. The steps below
 > stay as the record, and as the way to re-create them by hand.
+>
+> **Also linked (same day, owner's OK):** a job-field section **KPI** on the three boards holds a
+> field for each question (same label), and every question copies its answer there and shows
+> the field's value pre-filled. A wrong answer is corrected in the field on the job page; the
+> report reads the field first, else the checklist answer. Backup:
+> dispatch `/root/backups/zuper_kpi_link_before_20260930.json`.
 
 These steps only **add** questions to Zuper. They change no job, move no job and touch no photo.
 A question pops up when someone moves a job **into** that column from now on; jobs already past

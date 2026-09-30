@@ -181,6 +181,16 @@ def test_the_workbook_answers_the_owner_s_questions_without_customer_details(tmp
         assert secret not in text
 
 
+def test_a_corrected_job_field_wins_over_the_checklist_answer():
+    job = {"job_status": [{"checklist": [{"question": "Customer paid ($)", "answer": "85"},
+                                         {"question": "Customer chose", "answer": "Better"}]}],
+           "custom_fields": [{"label": "Customer paid ($)", "value": "850"},
+                             {"label": "Customer chose", "value": ""}]}
+    got = kpi_report.answers(job)
+    assert got["Customer paid ($)"] == "850"          # corrected on the job page
+    assert got["Customer chose"] == "Better"          # empty field: the checklist answer stands
+
+
 def test_a_day_s_file_is_never_overwritten(tmp_path, db):
     now = datetime(2026, 10, 1, 7, 0, tzinfo=UTC)
     with SessionLocal() as s:

@@ -327,13 +327,19 @@ def board_of(job: dict) -> str | None:
 
 
 def answers(job: dict) -> dict[str, Any]:
-    """The latest answer to each KPI question anywhere in the job's stage checklists."""
+    """Each KPI answer: the job field of the same name first — every question copies into one
+    (section "KPI", 2026-09-30), and a correction is made there — else the latest answer in the
+    job's stage checklists. The status history keeps what was entered at the move either way."""
     out: dict[str, Any] = {}
     for entry in job.get("job_status") or []:
         for item in (entry or {}).get("checklist") or []:
             q = (item or {}).get("question")
             if q in QUESTIONS and item.get("answer") not in (None, "", []):
                 out[q] = item.get("answer")
+    for q in QUESTIONS:
+        value = custom_field(job, q)
+        if value not in (None, "", []):
+            out[q] = value
     return out
 
 

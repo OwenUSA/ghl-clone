@@ -6414,3 +6414,14 @@ and matched 8 dispatches wrongly before it was caught.
 
 Adding a newer AHS or Workiz export is copying the file into `input`; the next night uses it.
 Later Workiz exports win over earlier ones by their export number, not by file time.
+
+### The KPI questions are live, and each copies into a job field (2026-09-30)
+
+The owner lifted the read-only rule twice, narrowly: add the 7 questions and "Original job #"
+(docs/ZUPER-KPI-SETUP.md), then add a "KPI" job-field section with one field per question and
+link each question to it (copy to field + prefill). Checklist: the answer is forced at the move,
+with who and when. Field: it is visible and correctable on the job page. `kpi_report.answers`
+reads the field first, then the checklist. Before any of it the `zuper_tasks` job was given
+`NO_TASK_STAGES` — it turns every checklisted column into a task, and would have put ~300
+tasks on AHS jobs.
+
