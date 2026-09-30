@@ -6341,3 +6341,56 @@ is ever checked, so the customer check cannot be used to probe the date one — 
 "deliberately invalid elsewhere" useless here, which is why the test board was needed. And the
 create's 200 does not put `job_uid` where `POST /customers_new` does, so the first probe reported
 failure while having created a job; #702 was found by title and category and deleted.
+
+## AMENDMENT (2026-09-30): the CRM keeps Zuper's history for the KPI reports — append-only, reads only
+
+The owner wants KPIs on AHS - Inspection, AHS - Repair & Review and Retail: upsells, Good /
+Better / Best, cancels, callbacks, money won, time in each column, where jobs stall. The whole
+design was settled in one interview (Claude memory `kpi-reporting-decisions`); this entry is the
+part built in this repository.
+
+### Why the CRM must keep its own copy
+
+Measured 2026-09-30 over all 435 jobs on the three boards (GET only):
+
+- Zuper keeps every move on the job (`job_status[]`: `status_history_uid`, `created_at`,
+  `done_by`, the checklist answered). But it is **not fixed**: renaming a column rewrote how old
+  moves read ("Inspecting" → "Inspection"), the 2026-09-25 AHS split moved 290 jobs in one
+  burst, and nothing before the 2026-09-17 load survived. Real time-in-column data starts about
+  2026-09-25.
+- The CRM kept **no** stage history at all — only where a card sits now.
+- Zuper had 0 invoices, 0 payments, 0 accepted proposals; money was only Workiz's `job_total`.
+
+So from now on the CRM stores what it sees and never changes it.
+
+### What was built
+
+- `zuper_status_history` — one row per move, keyed on Zuper's `status_history_uid`, written the
+  first time it is seen and **never updated or deleted**. `engine.pull` captures the moves on
+  every whole job it reads (webhook, sweep), inside a SAVEPOINT that can never break the pull.
+- `zuper_record_versions` — a full copy of each job, quote/proposal, invoice, payment and
+  commission, added only when it differs from its latest copy. The WHOLE record is kept (the
+  list rows lack line items, profitability, signatures and the chosen option).
+- A daily pass (`history.run_daily`, worker Zuper thread, after 02:00 New York): the lists, then
+  the whole record of each one whose `updated_at` moved. The day is marked before reading, so an
+  outage costs one day's copy, never a retry storm. `python -m app.zuper.history` (dry run;
+  `--commit`) runs it by hand — the first run reads every record once.
+- `client.PATHS` gains `payments` (`/payments/transactions`) and `commissions` — GET only;
+  payment writes stay on the denylist.
+
+**Nothing here writes to Zuper**; `test_the_pass_only_reads_zuper` pins it.
+
+### The owner's rules for this work (2026-09-30)
+
+"You can only add." No job may be moved between columns, no gallery picture changed or deleted,
+and any change to a job in Zuper needs the owner's permission first, described beforehand.
+Reports stay local or on our server — no cloud sheets. Following that, the `zuper_tasks`
+container's Approved → Repair & Review hand-off (the only code we ran that moved jobs between
+boards) was **removed** the same day at the owner's request. It had already stopped matching —
+the team rebuilt the board and the column is now "AHS Approved".
+
+### Not built yet
+
+The nightly Excel files on owen-main and the Workiz / AHS history import. The questions the
+team adds in Zuper (`docs/ZUPER-KPI-SETUP.md`) are what make upsell tier, AHS authorized,
+customer paid and cancel reasons exist from now on.

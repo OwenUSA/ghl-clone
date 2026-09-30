@@ -58,6 +58,8 @@ class FakeZuper:
     # A job's pictures, keyed by job uid. Served as a note of note_type IMAGE, which is how
     # Zuper actually holds them (2026-09-24).
     attachments: dict[str, list[dict]] = field(default_factory=dict)
+    payments: list[dict] = field(default_factory=list)
+    commissions: list[dict] = field(default_factory=list)
     files: dict[str, tuple[bytes, str]] = field(default_factory=dict)
     webhooks: list[dict] = field(default_factory=list)
     # POST /webhook: the (module, event) pairs Zuper accepts (None = any), and whether it
@@ -251,6 +253,8 @@ class FakeZuper:
             (r"/invoice", ("GET", lambda p, b: self.page(
                 self.filtered(list(self.invoices.values()), p), p))),
             (r"/invoice/([^/]+)", ("GET", lambda p, b, u: self.get(self.invoices, u))),
+            (r"/payments/transactions", ("GET", lambda p, b: self.page(self.payments, p))),
+            (r"/commissions", ("GET", lambda p, b: self.page(self.commissions, p))),
             (r"/settings/custom_fields", ("GET", lambda p, b: self.not_found()
                                           if self.custom_field_defs is None else self.ok(
                 self.custom_field_defs.get(p.get("module", ""), [])))),
@@ -381,11 +385,18 @@ class FakeZuper:
                 return self.ok(message="updated")
         return self.not_found()
 
-    def _job_status(self, job: dict, status_uid: str) -> None:
+    def _job_status(self, job: dict, status_uid: str, by: dict | None = None) -> None:
         cat = job["job_category"]["category_uid"]
         name = next((s["status_name"] for s in self.statuses.get(cat, [])
                      if s["status_uid"] == status_uid), None)
         job["current_job_status"] = {"status_uid": status_uid, "status_name": name}
+        # Every move is also kept on the job, as live (`job_status[]`, 2026-09-30).
+        job.setdefault("job_status", []).append({
+            "status_history_uid": self.uid("hist"), "status_uid": status_uid,
+            "status_name": name, "status_type": "OTHER", "created_at": self.tick(),
+            "category": {"category_uid": cat,
+                         "category_name": (self.categories.get(cat) or {}).get("category_name")},
+            "done_by": dict(by or SYNC_USER), "checklist": [], "time_on_status": None})
 
     def create_job(self, params, body) -> httpx.Response:
         data = dict(body["job"])
@@ -555,7 +566,7 @@ class FakeZuper:
 
     def move_job(self, uid: str, status_uid: str) -> None:
         job = self.jobs[uid]
-        self._job_status(job, status_uid)
+        self._job_status(job, status_uid, OFFICE_USER)
         job["updated_at"] = self.tick()
         job["updated_by"] = {"user_uid": "u-owner"}
 

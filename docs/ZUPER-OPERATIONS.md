@@ -110,12 +110,13 @@ models jobs, categories, statuses, projects; API facts) live on dispatch in
 Job counts on 2026-09-25: AHS - Inspection 43 (plus the test job), AHS - Repair & Review 290
 (221 of them Paid), 427 jobs in the account.
 
-### 3.2 Hand-off Inspection → Repair (automatic)
+### 3.2 Hand-off Inspection → Repair — SWITCHED OFF (2026-09-30)
 
-Zuper has no native pipeline link. The **`zuper_tasks` container** (section 4) checks every
-2 minutes: an AHS - Inspection job at **Approved** is moved — the same job, with its history,
-answers, fields, photos and tasks — to **AHS - Repair & Review → Repair Scheduled**, and verified.
-By hand: edit the job's Category in Zuper and pick the stage.
+The `zuper_tasks` container used to move an AHS - Inspection job at "Approved" to AHS - Repair &
+Review. **Removed 2026-09-30 at the owner's request** — nothing we run may move a job between
+columns or boards (backup `app/tasks_sync.py.bak-20260930` on owen-main). It had already stopped
+matching: the team rebuilt the board and the column is now "AHS Approved", followed by "Proposal
+Made". Moving a job to the Repair board is done by a person in Zuper.
 
 ### 3.3 Stage checklists (the forms that pop up on a stage move)
 
@@ -205,7 +206,7 @@ owen-main).
 | # | Job | Server | Every | Writes to Zuper? |
 |---|---|---|---|---|
 | 4.1 | `zuper_proposals` container — proposal PDFs | owen-main | 60 s | yes (attachments on DRAFT proposals) |
-| 4.2 | `zuper_tasks` container — checklist tasks + Approved hand-off | owen-main | 120 s | yes (tasks, board move) |
+| 4.2 | `zuper_tasks` container — checklist tasks (hand-off OFF since 2026-09-30) | owen-main | 120 s | yes (tasks only) |
 | 4.3 | `zuper-routes` cron — technician routes | **dispatch** | 5 min | yes (routes; toggles a staff setting) |
 | 4.4 | CRM mirror (`ghl_clone_api` / `ghl_clone_worker`) | owen-main | webhook + 15 min | only the AHS-email create |
 
@@ -226,8 +227,7 @@ says `SAFETY GATE FAILED`). None of them sends a customer anything.
 - Host folder `/opt/santiagoproperties/zuper-tasks/` (`app/tasks_sync.py`,
   `data/tasks_sync.log`, `data/tasks_state.json`). Env `TASKS_EXTRA_JOBS` keeps test job #694 in
   scope.
-- What it does: the 4 tasks on every live AHS job (3.5) and the Approved → Repair Scheduled
-  hand-off (3.2). A run that changed something logs `APPLIED | {jobs, created, described, status,
+- What it does: the 4 tasks on every live AHS job (3.5). The hand-off (3.2) is switched off. A run that changed something logs `APPLIED | {jobs, created, described, status,
   manual, skipped}`.
 
 ### 4.3 `zuper-routes` (dispatch)

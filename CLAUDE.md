@@ -319,6 +319,17 @@ provisioned gets a 403 saying so — we never invent an operator.
   `uv run python -m tests.browser_dialer` (from `backend/`) drives it in headless Chromium with
   the SIP user faked (`frontend/e2e/`) and owen-main replaced; it is not collected by pytest.
 
+## Zuper's history, kept for the KPI reports (2026-09-30)
+
+`app/zuper/history.py` — two **append-only** tables: `zuper_status_history` (every column move,
+Zuper's own time, who, the checklist answered; captured by `engine.pull` and the daily pass) and
+`zuper_record_versions` (a full copy of each job, quote/proposal, invoice, payment, commission,
+added only when it changed). **Reads Zuper only; never update or delete a row in either.** The
+daily pass runs on the worker's Zuper thread after 02:00 New York; `uv run python -m
+app.zuper.history` is a dry run, `--commit` writes. **Owner's rule for this work: in Zuper we
+only ADD** — never move a job between columns, never touch gallery pictures, ask before any
+change to a job. The team's new Zuper questions: `docs/ZUPER-KPI-SETUP.md`. See DECISIONS.md.
+
 ## It is deployed
 
 Live at **https://crm.dreamteamroofingfl.com** on the `owen-main` VPS, behind the shared

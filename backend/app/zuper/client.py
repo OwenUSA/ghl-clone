@@ -175,6 +175,10 @@ PATHS = {
     "estimate": "/estimate/{uid}",
     "invoices": "/invoice",
     "invoice": "/invoice/{uid}",
+    # Read by the history pass only (2026-09-30, the KPI reports). GET only — writes to
+    # payments stay on the denylist below.
+    "payments": "/payments/transactions",
+    "commissions": "/commissions",
     "custom_fields": "/settings/custom_fields",     # definitions: REST path unverified
     "lead_sources": "/settings/lead_sources",       # MCP-only per research: unverified
     "webhooks": "/service/notifications/webhook",
@@ -213,6 +217,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("DELETE", _rx(PATHS["appointment"])),
     ("GET", _rx(PATHS["estimates"])), ("GET", _rx(PATHS["estimate"])),
     ("GET", _rx(PATHS["invoices"])), ("GET", _rx(PATHS["invoice"])),
+    ("GET", _rx(PATHS["payments"])), ("GET", _rx(PATHS["commissions"])),
     ("GET", _rx(PATHS["custom_fields"])), ("GET", _rx(PATHS["lead_sources"])),
     ("GET", _rx(PATHS["webhooks"])), ("POST", _rx(PATHS["webhook_create"])),
     ("GET", _rx(PATHS["webhook_list"])),

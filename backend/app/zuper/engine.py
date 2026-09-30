@@ -884,6 +884,11 @@ def pull(ctx: Ctx, zuper_type: str, uid: str, record: dict | None = None, *,
     db = ctx.db
     if record is None:
         record = fetch_uid(kind, uid)
+        if kind == "opportunity" and record is not None:
+            # A whole job record carries every column move: keep them (2026-09-30, the KPI
+            # reports). Append-only, and it never breaks the pull.
+            from . import history
+            ctx.count("history_moves_added", history.capture_statuses(db, record))
     m = mapping.mapping_by_uid(db, zuper_type, uid)
     if record is None or zapi.is_deleted(record):
         if m is not None and m.state == "linked":

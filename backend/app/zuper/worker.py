@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import queue
 from ..models import Job
-from . import client, config, digest, engine, listener, setup, sweep, webhooks
+from . import client, config, digest, engine, history, listener, setup, sweep, webhooks
 
 log = logging.getLogger("zuper.worker")
 
@@ -108,6 +108,9 @@ def tick(session_factory, now: datetime | None = None) -> None:
         day = digest.due_day(db, now)
         if day is not None:
             digest.run(db, day)
+        # Once a day: a copy of every job, quote, invoice, payment and commission that changed,
+        # for the KPI reports (2026-09-30). Reads only.
+        history.run_daily(db, now)
     except Exception as exc:
         db.rollback()
         try:

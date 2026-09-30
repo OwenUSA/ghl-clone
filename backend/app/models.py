@@ -1631,6 +1631,8 @@ class ZuperSyncState(Base):
     load_report: Mapped[dict | None] = mapped_column(JSONType)
     # "YYYY-MM-DD": the last day whose digest notes were written.
     last_digest_day: Mapped[str | None] = mapped_column(String(10))
+    # "YYYY-MM-DD": the last America/New_York day the history pass ran (2026-09-30).
+    last_history_day: Mapped[str | None] = mapped_column(String(10))
 
 
 class ZuperWebhookDelivery(Base):
@@ -1734,6 +1736,47 @@ class ZuperDocument(Base):
     # Zuper reported it deleted (its soft delete): kept, but no longer shown or counted.
     removed_in_zuper: Mapped[bool] = mapped_column(Boolean, default=False,
                                                    server_default=false())
+
+
+class ZuperStatusHistory(Base):
+    """One column move of a Zuper job, exactly as Zuper recorded it (2026-09-30, the KPI
+    reports). APPEND-ONLY: written the first time the sync sees the move, never updated, never
+    deleted — so a later rename, board split or bulk script in Zuper cannot rewrite what
+    happened here. Time in a column = the next move's `changed_at` minus this one's."""
+    __tablename__ = "zuper_status_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    history_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    category_uid: Mapped[str | None] = mapped_column(String(64))
+    category_name: Mapped[str | None] = mapped_column(String(120))
+    status_uid: Mapped[str | None] = mapped_column(String(64))
+    status_name: Mapped[str | None] = mapped_column(String(120))
+    status_type: Mapped[str | None] = mapped_column(String(40))
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    done_by_uid: Mapped[str | None] = mapped_column(String(64))
+    done_by_name: Mapped[str | None] = mapped_column(String(120))
+    # The stage checklist answered on this move, as first seen: [{question, answer, type}].
+    checklist: Mapped[list | None] = mapped_column(NullableJSONType)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class ZuperRecordVersion(Base):
+    """A full copy of one Zuper record — a job, a quote/proposal, an invoice, a payment or a
+    commission — kept each time its content changes (2026-09-30, the KPI reports). A new row is
+    added only when the record differs from its latest copy; nothing is ever updated or
+    deleted, so every earlier state stays readable."""
+    __tablename__ = "zuper_record_versions"
+    __table_args__ = (Index("ix_zuper_record_versions_module_uid", "module", "zuper_uid"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    module: Mapped[str] = mapped_column(String(20))
+    zuper_uid: Mapped[str] = mapped_column(String(64))
+    zuper_updated_at: Mapped[str | None] = mapped_column(String(40))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    record: Mapped[dict] = mapped_column(JSONType)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
 
 
 class ZuperDigest(Base):
