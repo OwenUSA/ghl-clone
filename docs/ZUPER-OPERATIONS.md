@@ -227,7 +227,10 @@ says `SAFETY GATE FAILED`). None of them sends a customer anything.
 - Host folder `/opt/santiagoproperties/zuper-tasks/` (`app/tasks_sync.py`,
   `data/tasks_sync.log`, `data/tasks_state.json`). Env `TASKS_EXTRA_JOBS` keeps test job #694 in
   scope.
-- What it does: the 4 tasks on every live AHS job (3.5). The hand-off (3.2) is switched off. A run that changed something logs `APPLIED | {jobs, created, described, status,
+- What it does: the 4 tasks on every live AHS job (3.5). The hand-off (3.2) is switched off.
+  It turns EVERY column that has a checklist into a task, except the KPI-question columns in
+  `NO_TASK_STAGES` (AHS Approved, Invoice Submitted to AHS, Cancelled — 2026-09-30). **Add a
+  column there before giving it a checklist that is not a to-do**, or ~100 AHS jobs get a new task. A run that changed something logs `APPLIED | {jobs, created, described, status,
   manual, skipped}`.
 
 ### 4.3 `zuper-routes` (dispatch)

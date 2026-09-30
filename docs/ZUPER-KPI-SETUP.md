@@ -1,5 +1,12 @@
 # Zuper setup for the KPI reports — steps for a person to click (2026-09-30)
 
+> **DONE 2026-09-30.** The owner lifted the read-only rule for these additions only, and Claude
+> added all of A–E through Zuper's append-only settings endpoints (backup first:
+> dispatch `/root/backups/zuper_kpi_questions_before_20260930.json`), then read every item back:
+> labels, options and "required" exactly as below. The `zuper_tasks` job was changed first to
+> ignore these columns (`NO_TASK_STAGES`), so they never become tasks on jobs. The steps below
+> stay as the record, and as the way to re-create them by hand.
+
 These steps only **add** questions to Zuper. They change no job, move no job and touch no photo.
 A question pops up when someone moves a job **into** that column from now on; jobs already past
 it are not affected. A required question blocks the move until it is answered — that is the point.
