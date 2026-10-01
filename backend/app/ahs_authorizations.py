@@ -24,9 +24,14 @@ What it does here — NO new table, NO migration, NOTHING sent to Zuper, nothing
 * **Idempotent.** The same key twice answers 200 `outcome: existing` and writes nothing, so a
   repeat email or a retry is one bell and one item.
 * **The job is looked up, never required.** By the CRM card with `custom_fields.ahs_job_id`
-  (an AHS email card), then the Zuper job that card mirrors, else a Dispatch job carrying the
-  number. Not found still rings and keeps the item with the AHS number in it. A card or board
-  hidden from the token's owner is treated as not found (`pipeline_access`), as `ahs_jobs` does.
+  (an AHS email card), then the Zuper job that card mirrors, else a Dispatch job on an AHS
+  board whose AHS field holds the number (never by Zuper's own job number, which is a
+  different series and can collide). Not found still rings and keeps the item with the AHS
+  number in it. A card or board hidden from the token's owner is treated as not found
+  (`pipeline_access`), as `ahs_jobs` does.
+* **The item and the bell always carry a board.** Not found (or hidden) means AHS - Inspection,
+  the board every AHS job starts on, so a dispatcher the AHS pipeline is hidden from never
+  sees the AHS number or the amount (`api._visible`, `alerts.hidden_boards`).
 * **A Dispatch pass never resolves these items** (`dispatch.rules.FED_KINDS`): the rules did
   not make them, so the rules not finding them means nothing. Done / Wrong close them.
 """
@@ -40,7 +45,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import Text, cast, func, select
 from sqlalchemy.orm import Session
 
 from . import ahs_jobs, auth, pipeline_access
@@ -70,6 +75,9 @@ TODO_APPROVED = ("Move the job to AHS Approved, answer its questions (AHS author
 TODO_UPDATED = ("Open the job in the AHS portal and see what changed. If AHS approved the "
                 "repair, move the job to AHS Approved and book it")
 KEY_MAX = 200
+# The boards an AHS job lives on; a job not found is put on the first one.
+AHS_BOARDS = (dc.INSPECTION_BOARD, dc.REPAIR_BOARD)
+DEFAULT_BOARD = dc.INSPECTION_BOARD
 
 _AUTHO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,39}$")
 _CODE = re.compile(r"^[A-Za-z]{1,12}$")
@@ -126,6 +134,8 @@ class AhsAuthorizationIn(BaseModel):
             raise ValueError("autho_code must be letters")
         if self.kind == "authorization" and not self.autho_number:
             raise ValueError("an authorization needs its autho_number")
+        if self.kind == "authorization" and not (self.net_total or self.ncc):
+            raise ValueError("an authorization needs its net_total or ncc")
         return self
 
 
@@ -150,7 +160,8 @@ def dollars(amount: str | None) -> str | None:
 
 def _dispatch_job_for(db: Session, job_id: str, card: Opportunity | None) -> DispatchJob | None:
     """The Zuper job (as the Dispatch page last read it) for this AHS number: the one the card
-    mirrors, else one whose number or an AHS field holds the number."""
+    mirrors, else one on an AHS board whose AHS field holds the number. Never matched by
+    `job_number`: that is Zuper's own numbering, and an AHS number can collide with it."""
     if card is not None:
         uid = db.scalar(select(ZuperMapping.zuper_uid).where(
             ZuperMapping.crm_type == "opportunity", ZuperMapping.crm_id == card.id,
@@ -159,30 +170,41 @@ def _dispatch_job_for(db: Session, job_id: str, card: Opportunity | None) -> Dis
             j = db.scalar(select(DispatchJob).where(DispatchJob.job_uid == uid))
             if j is not None:
                 return j
-    j = db.scalars(select(DispatchJob).where(DispatchJob.job_number == job_id)
-                   .order_by(DispatchJob.id)).first()
-    if j is not None:
-        return j
-    for j in db.scalars(select(DispatchJob).where(DispatchJob.fields.is_not(None))
-                        .order_by(DispatchJob.id)):
+    # Only rows on an AHS board whose fields mention the number are read back and checked.
+    candidates = select(DispatchJob).where(
+        DispatchJob.board.in_(AHS_BOARDS), DispatchJob.fields.is_not(None),
+        cast(DispatchJob.fields, Text).contains(job_id, autoescape=True)
+    ).order_by(DispatchJob.id)
+    for j in db.scalars(candidates):
         for label, value in (j.fields or {}).items():
             if "ahs" in str(label).lower() and str(value or "").strip() == job_id:
                 return j
     return None
 
 
+def _board_of(db: Session, card: Opportunity) -> str | None:
+    """The Zuper board a CRM card's pipeline mirrors (its own name when it mirrors none)."""
+    name = db.scalar(select(Pipeline.name).where(Pipeline.id == card.pipeline_id))
+    return mapping.mirrored_categories().get(name, name) if name else None
+
+
 def locate(db: Session, job_id: str, principal: auth.Principal) -> dict:
-    """{card, job, board} for this AHS number — each None when not found or hidden from the
-    token's owner. Never raises: a lookup that fails is a job not found, and the bell still
-    rings."""
-    found: dict = {"card": None, "job": None, "board": None}
+    """{card, job, board} for this AHS number — card and job None when not found or hidden
+    from the token's owner. `board` is never None: a job not found (or hidden) is filed on
+    the board it is hidden on, else AHS - Inspection, so the Dispatch page's and the bell's
+    board filters still keep it from anyone the AHS pipeline is hidden from. Never raises: a
+    lookup that fails is a job not found, and the bell still rings."""
+    found: dict = {"card": None, "job": None, "board": DEFAULT_BOARD}
     try:
         card = ahs_jobs.card_for(db, job_id)
+        hidden_board = None
         if card is not None and not pipeline_access.can_see(db, principal, card.pipeline_id):
+            hidden_board = _board_of(db, card)
             card = None
         job = _dispatch_job_for(db, job_id, card)
         hidden = alerts.hidden_boards(db, principal.user_id, principal.role)
         if job is not None and job.board and job.board in hidden:
+            hidden_board = job.board
             job = None
         if job is not None and card is None:
             opp_id, _ = alerts.card_for(db, job.job_uid)
@@ -191,9 +213,8 @@ def locate(db: Session, job_id: str, principal: auth.Principal) -> dict:
                 card = o
         board = job.board if job is not None else None
         if board is None and card is not None:
-            name = db.scalar(select(Pipeline.name).where(Pipeline.id == card.pipeline_id))
-            board = mapping.mirrored_categories().get(name, name) if name else None
-        found.update(card=card, job=job, board=board)
+            board = _board_of(db, card)
+        found.update(card=card, job=job, board=board or hidden_board or DEFAULT_BOARD)
     except Exception:
         log.exception("AHS authorization: looking up job %s failed", job_id)
     return found
@@ -224,9 +245,7 @@ def _texts(body: AhsAuthorizationIn, found: dict) -> tuple[str, str, str]:
         if ncc:
             facts.append("NCC %s" % ncc)
         why = "AHS sent an authorization note on %s: %s.%s" % (day, ", ".join(facts), where)
-        todo = TODO_APPROVED
-        if net or ncc:
-            todo = todo.replace("AHS authorized $", "AHS authorized " + (net or ncc))
+        todo = TODO_APPROVED.replace("AHS authorized $", "AHS authorized " + (net or ncc))
         return title[:300], why, todo + "."
     title = "AHS may have updated #%s — check the portal" % body.ahs_job_id
     if who:
@@ -285,7 +304,7 @@ def deliver(db: Session, body: AhsAuthorizationIn,
             job_uid=job.job_uid if job is not None else None,
             opportunity_id=card.id if card is not None else None,
             contact_id=card.contact_id if card is not None else None)
-        boards = {(event.job_uid or ""): found["board"]} if found["board"] else {}
+        boards = {(event.job_uid or ""): found["board"]}
         written = alerts.fire(db, [event], ring=True, boards=boards)
         db.flush()
 
