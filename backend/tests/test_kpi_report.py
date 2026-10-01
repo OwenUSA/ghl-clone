@@ -191,6 +191,70 @@ def test_a_corrected_job_field_wins_over_the_checklist_answer():
     assert got["Customer chose"] == "Better"          # empty field: the checklist answer stands
 
 
+def job_with_items(tech="Antonio Brown", day="2026-08-10T14:00:00Z", items=()):
+    return {"scheduled_start_time": day, "custom_fields": [{"label": "Technician", "value": tech}],
+            "products": [{"product_id": c, "price": p, "quantity": q, "total": p * q}
+                         for c, p, q in items]}
+
+
+def test_expected_commission_follows_the_rule_per_line():
+    job = job_with_items(items=[("AHS-LEAK-REPAIR", 1100, 1), ("UPG-UNKNOWN", 900, 1)])
+    assert kpi_report.expected_commission(job, kpi_report.DEFAULT_RULES) == 350 + 450
+    trip = job_with_items(items=[("AHS-TRIP", 100, 1)])
+    assert kpi_report.expected_commission(trip, kpi_report.DEFAULT_RULES) == 50
+    two_leaks = job_with_items(items=[("AHS-LEAK-REPAIR", 1100, 2)])
+    assert kpi_report.expected_commission(two_leaks, kpi_report.DEFAULT_RULES) == 700
+    # No rule for this technician: no expectation, rather than a wrong one.
+    nico = job_with_items(tech="Nico")
+    assert kpi_report.expected_commission(nico, kpi_report.DEFAULT_RULES) is None
+
+
+def test_a_new_rule_on_the_server_changes_only_jobs_from_its_date(tmp_path):
+    (tmp_path / "commission-rules.csv").write_text(
+        "technician,item,kind,value,from\n"
+        "Antonio Brown,AHS-LEAK-REPAIR,flat,350,2026-01-01\n"
+        "Antonio Brown,AHS-LEAK-REPAIR,flat,400,2026-11-01\n", encoding="utf-8")
+    rules, source = kpi_report.load_rules(tmp_path)
+    assert source == "commission-rules.csv"
+    old = job_with_items(day="2026-10-15T12:00:00Z", items=[("AHS-LEAK-REPAIR", 1100, 1)])
+    new = job_with_items(day="2026-11-03T12:00:00Z", items=[("AHS-LEAK-REPAIR", 1100, 1)])
+    assert kpi_report.expected_commission(old, rules) == 350
+    assert kpi_report.expected_commission(new, rules) == 400
+
+
+def test_income_per_job_and_commissions_by_week(tmp_path, db):
+    now = datetime(2026, 10, 2, 7, 0, tzinfo=UTC)
+    job = {"job_uid": "j5", "work_order_number": 805, "is_deleted": False, "job_total": 2000,
+           "job_category": {"category_uid": "c", "category_name": "AHS - Repair & Review"},
+           "current_job_status": {"status_name": "Paid", "status_type": "PAID"},
+           "custom_fields": [{"label": "Technician", "value": "Antonio Brown"}],
+           "scheduled_start_time": "2026-09-28T13:00:00Z", "created_at": "2026-09-17T12:00:00Z",
+           "products": [
+               {"product_id": "AHS-LEAK-REPAIR", "price": 1100, "quantity": 1, "total": 1100},
+               {"product_id": "UPG-BETTER", "price": 900, "quantity": 1, "total": 900}]}
+    comm = {"commission_uid": "c1", "job_uid": "j5", "job": {"work_order_number": 805},
+            "commission_amount": 350, "commission_date": "2026-09-29", "payout_status": "UNPAID",
+            "assigned_to": {"first_name": "Antonio", "last_name": "Brown"}, "is_deleted": False}
+    with SessionLocal() as s:
+        s.add(ZuperRecordVersion(module="job", zuper_uid="j5", content_hash="h", record=job))
+        s.add(ZuperRecordVersion(module="commission", zuper_uid="c1", content_hash="h",
+                                 record=comm))
+        s.commit()
+        path, _ = kpi_report.write(s, tmp_path / "none", tmp_path / "out", now)
+    wb = load_workbook(path)
+    head, *rows = cells(wb["Income per job"])
+    row = dict(zip(head, rows[0], strict=True))
+    assert row["AHS paid"] == 1100 and row["Customer paid (upgrade)"] == 900
+    assert row["Upgrade tier"] == "Better"
+    assert row["Commission in Zuper"] == 350 and row["Expected commission (rule)"] == 800
+    assert row["Difference (Zuper - rule)"] == -450          # the upgrade commission is missing
+    weekly = cells(wb["Commissions by week"])[1]
+    assert weekly == ["Antonio Brown", "2026-09-28", 1, 350, 0, 350]
+    summary = {(r[0], r[1]): r[2] for r in cells(wb["Summary"])}
+    assert summary[("AHS", "customers paid on upgrades ($)")] == 900
+    assert summary[("All", "still owed ($)")] == 350
+
+
 def test_a_day_s_file_is_never_overwritten(tmp_path, db):
     now = datetime(2026, 10, 1, 7, 0, tzinfo=UTC)
     with SessionLocal() as s:

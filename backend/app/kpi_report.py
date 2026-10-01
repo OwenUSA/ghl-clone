@@ -29,7 +29,7 @@ import re
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -360,6 +360,127 @@ def _aware(dt: datetime | None) -> datetime | None:
     return dt.replace(tzinfo=UTC) if dt is not None and dt.tzinfo is None else dt
 
 
+# ---------------------------------------------------------------------------- money and commissions
+
+# Line items on a job (2026-10-01): what AHS paid vs what the customer paid on top.
+AHS_ITEMS = ("AHS-LEAK-REPAIR", "AHS-TRIP", "AHS-ADDL-LEAK")
+UPGRADE_TIERS = {"UPG-GOOD": "Good", "UPG-BETTER": "Better", "UPG-BEST": "Best",
+                 "UPG-UNKNOWN": "not recorded"}
+
+# The commission rule, kept OUT of the code so it can change without a deploy: a CSV named
+# `commission-rules.csv` in the input folder (technician,item,kind,value,from) replaces these.
+# `item` may end in * ("UPG-*"); `kind` is flat (per unit) or percent (of the line); a rule
+# applies to jobs dated on or after `from`, the latest one winning — an old period keeps its rule.
+RULES_FILE = "commission-rules.csv"
+DEFAULT_RULES = [
+    {"technician": "Antonio Brown", "item": item, "kind": kind, "value": value,
+     "from": "2026-01-01"}
+    for item, kind, value in (("AHS-LEAK-REPAIR", "flat", 350), ("AHS-TRIP", "flat", 50),
+                              ("AHS-ADDL-LEAK", "flat", 350), ("UPG-*", "percent", 50))
+]
+
+
+def load_rules(input_dir: Path) -> tuple[list[dict], str]:
+    path = input_dir / RULES_FILE
+    if not path.exists():
+        return DEFAULT_RULES, "built-in (no %s on the server)" % RULES_FILE
+    rules = []
+    for r in read_csv(path):
+        try:
+            rules.append({"technician": (r.get("technician") or "").strip(),
+                          "item": (r.get("item") or "").strip(),
+                          "kind": (r.get("kind") or "").strip().lower(),
+                          "value": float(r.get("value") or 0),
+                          "from": (r.get("from") or "2000-01-01").strip()})
+        except ValueError:
+            continue
+    return rules, RULES_FILE
+
+
+def _rule_for(rules: list[dict], tech: str, code: str, day: str) -> dict | None:
+    from fnmatch import fnmatch
+    fits = [r for r in rules if r["technician"] in (tech, "*") and fnmatch(code, r["item"])
+            and r["from"] <= day]
+    return max(fits, key=lambda r: r["from"]) if fits else None
+
+
+def line_items(job: dict) -> list[dict]:
+    return [p for p in job.get("products") or [] if isinstance(p, dict)]
+
+
+def expected_commission(job: dict, rules: list[dict]) -> float | None:
+    tech = str(custom_field(job, "Technician") or "").strip()
+    day = str(job.get("scheduled_start_time") or job.get("created_at") or "")[:10]
+    total, any_rule = 0.0, False
+    for p in line_items(job):
+        rule = _rule_for(rules, tech, str(p.get("product_id") or ""), day)
+        if rule is None:
+            continue
+        any_rule = True
+        qty = float(p.get("quantity") or 1)
+        line_total = money(p.get("total")) or (money(p.get("price")) or 0) * qty
+        total += rule["value"] * qty if rule["kind"] == "flat" else line_total * rule["value"] / 100
+    return round(total, 2) if any_rule else None
+
+
+def week_of(day: datetime | None) -> str:
+    if day is None:
+        return "(no date)"
+    monday = day.date() - timedelta(days=day.weekday())
+    return monday.isoformat()
+
+
+def latest_records(db: Session, module: str) -> list[dict]:
+    newest = (select(func.max(ZuperRecordVersion.id)).where(ZuperRecordVersion.module == module)
+              .group_by(ZuperRecordVersion.zuper_uid))
+    return [r for r in db.scalars(select(ZuperRecordVersion.record)
+                                  .where(ZuperRecordVersion.id.in_(newest))).all()
+            if isinstance(r, dict) and not r.get("is_deleted")]
+
+
+def _person_name(value: Any) -> str:
+    if isinstance(value, dict):
+        return " ".join(p for p in (value.get("first_name"), value.get("last_name")) if p) or "?"
+    return str(value or "?")
+
+
+def pay_sheet_periods(input_dir: Path) -> list[list]:
+    """Antonio's pay sheet (antonio-commissions.xlsx), one row per pay period: AHS jobs, extras and
+    his pay. A tab identical to another is reported as a copy and not counted twice."""
+    path = input_dir / "antonio-commissions.xlsx"
+    if not path.exists():
+        return []
+    from openpyxl import load_workbook
+    wb = load_workbook(path, data_only=True, read_only=True)
+    seen: dict[tuple, str] = {}
+    out = []
+    for ws in wb.worksheets:
+        title = ws.title.strip()
+        jobs_rows, extras, in_extras = [], [], False
+        for r in ws.iter_rows(values_only=True):
+            if not r:
+                continue
+            if isinstance(r[0], datetime):
+                jobs_rows.append(r)
+            elif str(r[0]).strip().lower() == "type":
+                in_extras = True
+            elif in_extras and isinstance(r[0], str) and r[0].strip() and len(r) > 5 \
+                    and isinstance(r[4], int | float):
+                extras.append(r)
+        sig = tuple(sorted((str(r[0])[:10], str(r[4]), str(r[5])) for r in jobs_rows))
+        if sig and sig in seen:
+            note = "copy of tab %s - not counted" % seen[sig]
+            out.append([title, None, None, None, None, None, note])
+            continue
+        seen[sig] = title
+        jt = sum(money(r[4]) or 0 for r in jobs_rows)
+        jc = sum(money(r[5]) or 0 for r in jobs_rows)
+        es = sum(money(r[4]) or 0 for r in extras)
+        ec = sum(money(r[5]) or 0 for r in extras if len(r) > 5)
+        out.append([title, len(jobs_rows), jt, len(extras), es, jc + ec, ""])
+    return out
+
+
 # ---------------------------------------------------------------------------- the workbook
 
 MONEY_FMT = '"$"#,##0.00'
@@ -503,6 +624,103 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
                             Q_CANCEL_NOTE], rows,
            {"Board": 24, "Column": 28, "Created in Zuper": 18}, money_cols=(8,))
 
+    # ---- Income per job (line items) and commissions
+    rules, rules_from = load_rules(input_dir) if input_dir.exists() else (DEFAULT_RULES, "built-in")
+    commissions = latest_records(db, "commission")
+    comm_by_job: dict[str, float] = defaultdict(float)
+    for c in commissions:
+        job_uid = str(c.get("job_uid") or (c.get("job") or {}).get("job_uid"))
+        comm_by_job[job_uid] += money(c.get("commission_amount")) or 0
+    income_rows = []
+    for j in sorted(jobs, key=lambda x: (board_of(x) or "", str(x.get("work_order_number")))):
+        items = line_items(j)
+        if not items and not money(j.get("job_total")):
+            continue
+        ahs_paid = sum(money(p.get("total")) or 0 for p in items
+                       if p.get("product_id") in AHS_ITEMS)
+        upg = [p for p in items if p.get("product_id") in UPGRADE_TIERS]
+        cust = sum(money(p.get("total")) or 0 for p in upg)
+        tiers = ", ".join(sorted({UPGRADE_TIERS[p["product_id"]] for p in upg}))
+        a = answers(j)
+        actual = comm_by_job.get(j.get("job_uid"))
+        expected = expected_commission(j, rules)
+        income_rows.append([
+            j.get("work_order_number"), board_of(j),
+            (j.get("current_job_status") or {}).get("status_name"),
+            custom_field(j, "Technician"), money(j.get("job_total")), ahs_paid or None,
+            cust or None,
+            tiers or ("AHS only" if items and ahs_paid else ""), len(items),
+            a.get(Q_CUSTOMER_CHOSE), money(a.get(Q_CUSTOMER_PAID)), money(a.get(Q_SOLD_PRICE)),
+            actual, expected,
+            round(actual - expected, 2) if expected is not None and actual is not None
+            else None])
+    _sheet(wb, "Income per job", ["Job #", "Board", "Column", "Technician", "Job total", "AHS paid",
+                                  "Customer paid (upgrade)", "Upgrade tier", "Line items",
+                                  Q_CUSTOMER_CHOSE, Q_CUSTOMER_PAID, Q_SOLD_PRICE,
+                                  "Commission in Zuper", "Expected commission (rule)",
+                                  "Difference (Zuper - rule)"], income_rows,
+           {"Board": 24, "Column": 26, "Technician": 16}, money_cols=(5, 6, 7, 11, 12, 13, 14, 15))
+
+    comm_rows = []
+    weekly: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0, 0.0, 0.0])
+    for c in sorted(commissions, key=lambda x: str(x.get("commission_date") or "")):
+        day = parse_dt(str(c.get("commission_date") or "")[:10])
+        tech = _person_name(c.get("assigned_to"))
+        amount = money(c.get("commission_amount")) or 0
+        paid = c.get("payout_status") == "PAID"
+        payouts = c.get("payout_details") or []
+        paid_on = (payouts[-1] or {}).get("payout_date") if payouts else None
+        comm_rows.append([(c.get("job") or {}).get("work_order_number"), tech, amount, day,
+                          week_of(day),
+                          c.get("payout_status"), str(paid_on or "")[:10], c.get("description")])
+        w = weekly[(tech, week_of(day))]
+        w[0] += 1
+        w[1] += amount
+        w[2] += amount if paid else 0
+    _sheet(wb, "Commissions", ["Job #", "Technician", "Amount", "Commission date",
+                               "Week of (Monday)", "Payout status", "Paid on", "Description"],
+           comm_rows,
+           {"Description": 46, "Commission date": 18}, money_cols=(3,))
+    _sheet(wb, "Commissions by week", ["Technician", "Week of (Monday)", "Commissions", "Total",
+                                       "Paid", "Still owed"],
+           [[t, wk, int(v[0]), round(v[1], 2), round(v[2], 2), round(v[1] - v[2], 2)]
+            for (t, wk), v in sorted(weekly.items())], money_cols=(4, 5, 6))
+    periods = pay_sheet_periods(input_dir) if input_dir.exists() else []
+    if periods:
+        _sheet(wb, "Antonio pay sheets", ["Pay period (tab)", "AHS jobs", "AHS $", "Extras",
+                                          "Extras sold $", "Antonio pay", "Note"], periods,
+               {"Pay period (tab)": 24, "Note": 40}, money_cols=(3, 5, 6))
+
+    # ---- New jobs per month from Zuper (loaded Workiz jobs kept apart)
+    new_jobs: dict[tuple[str, str, str], int] = defaultdict(int)
+    for j in jobs:
+        origin = "loaded from Workiz" if custom_field(j, "Workiz Job #") else "made in Zuper"
+        new_jobs[(month(parse_dt(str(j.get("created_at") or ""))), board_of(j) or "?", origin)] += 1
+    _sheet(wb, "New jobs by month", ["Month (created in Zuper)", "Board", "Origin", "Jobs"],
+           [[k[0], k[1], k[2], v] for k, v in sorted(new_jobs.items())],
+           {"Board": 24, "Origin": 20})
+
+    upg_jobs = [r for r in income_rows if r[6]]
+    comm_total = sum(money(c.get("commission_amount")) or 0 for c in commissions)
+    comm_owed = sum(money(c.get("commission_amount")) or 0 for c in commissions
+                    if c.get("payout_status") != "PAID")
+    summary_tail = [["", "", ""], ["MONEY ON JOBS (Zuper line items)", "", ""],
+                    ["AHS", "jobs with line items", sum(1 for r in income_rows if r[8])],
+                    ["AHS", "AHS paid on those jobs ($)",
+                     round(sum(r[5] or 0 for r in income_rows), 2)],
+                    ["AHS", "jobs with a customer upgrade", len(upg_jobs)],
+                    ["AHS", "customers paid on upgrades ($)",
+                     round(sum(r[6] or 0 for r in upg_jobs), 2)],
+                    ["", "", ""], ["COMMISSIONS (Zuper)", "", ""],
+                    ["All", "commissions recorded", len(commissions)],
+                    ["All", "total ($)", round(comm_total, 2)],
+                    ["All", "still owed ($)", round(comm_owed, 2)],
+                    ["All", "commission rule from", rules_from]]
+    for row in summary_tail:
+        wb["Summary"].append(row)
+        if isinstance(row[2], float):
+            wb["Summary"].cell(row=wb["Summary"].max_row, column=3).number_format = MONEY_FMT
+
     # ---- Time in column (moves since TIMING_FROM) + the moves themselves
     board_uids = {}
     for j in jobs:
@@ -561,6 +779,13 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
         ["Matching", ("AHS dispatches are matched to Workiz jobs by address (house number, "
                       "street, ZIP) and the nearest date; 'How matched' says which rule found "
                       "each one.")],
+        ["Income per job", ("From the job's line items in Zuper: AHS paid = AHS - Leak Repair "
+                            "/ Trip / Additional Leak; customer paid = Customer Upgrade "
+                            "(Good/Better/Best/not recorded).")],
+        ["Commissions", ("Every commission recorded in Zuper, by week and technician, paid or "
+                         "owed. 'Expected commission' applies the rule in commission-rules.csv "
+                         "on the server (dated, so a new rule never rewrites an old period); a "
+                         "difference flags a missing or wrong commission.")],
         ["Privacy", "Job numbers only: no customer names, phones, emails or addresses."],
         ["Sources", (f"Zuper jobs: {len(jobs)} · moves stored: {moves_stored} · Workiz jobs: "
                      f"{len(wjobs)} · Workiz invoices: {len(winv)} · AHS dispatches: {len(ahs)}")],

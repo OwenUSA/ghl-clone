@@ -6634,3 +6634,17 @@ customer); rows Zuper does not have listed; boards hidden from the reader never 
 model only reads (`read_file`, 100 rows a call) and explains (`compare_file`), and every
 comparison is also a downloadable workbook built fresh from Zuper's current copy. Files belong to
 the person who uploaded them (an ADMIN may read them); only the parsed rows are kept.
+
+### Line items and commissions in Zuper, and the report reads them (2026-10-01)
+
+Owner's OK (Q41-Q48). Six AHS catalog items (Trip / Diagnostic, Additional Leak Repair, Customer
+Upgrade Good / Better / Best / tier not recorded). 121 old AHS jobs got line items — AHS paid +
+customer upgrade — only where they add up to the Job Total already shown, so no total changed.
+56 of Antonio's commissions from his pay sheet were created in Zuper and recorded paid at the end of
+their pay period. The nightly Excel adds Income per job, Commissions, Commissions by week, Antonio
+pay sheets and New jobs by month. The commission rule is a CSV on the server
+(`commission-rules.csv`: technician,item,kind,value,from) — dated, so a changed rule never
+rewrites an old period; the report shows the rule's expected commission beside what Zuper holds.
+Zuper's own "Commission Structures" were considered and not used: per user, revenue/profit tiers
+only, and they never create a commission by themselves.
+
