@@ -2047,3 +2047,46 @@ export const getLeadOutcomeReport = (p: { since: string; until: string; pipeline
   if (p.pipeline_id) sp.set('pipeline_id', String(p.pipeline_id))
   return get<import('./zuper').LeadOutcomeReport>(`/api/reports/lead-outcomes?${sp}`)
 }
+
+// ---------------- Dispatch (2026-09-30) ----------------
+
+/** One thing the office has to do, as app/dispatch/rules.py found it. */
+export type DispatchItem = {
+  id: number
+  kind: string
+  queue: string
+  title: string
+  why: string | null
+  todo: string | null
+  evidence: { summary?: string; text?: string; call_at?: string; source?: string;
+    seconds?: number; at?: string; count?: number; [k: string]: unknown }
+  due_at: string | null
+  urgent: boolean
+  state: string
+  job_uid: string | null
+  job_number: string | null
+  board: string | null
+  phone: string | null
+  zuper_url: string | null
+  created_at: string | null
+  closed_at: string | null
+  close_note: string | null
+}
+
+export type DispatchQueue = { key: string; label: string; open: number; urgent: number }
+
+export type DispatchSummary = {
+  enabled: boolean
+  queues: DispatchQueue[]
+  urgent: number
+  accuracy_30d: { done: number; wrong: number }
+  heartbeat: { last_success_at: string | null; last_error: string | null;
+    last_error_at: string | null; unknown_stages: string[]; poll_seconds: number }
+}
+
+export const dispatchSummary = () => get<DispatchSummary>('/api/dispatch/summary')
+export const dispatchItems = (queue: string | null, state: 'open' | 'closed' = 'open') =>
+  get<{ items: DispatchItem[] }>(`/api/dispatch/items?state=${state}` +
+    (queue ? `&queue=${encodeURIComponent(queue)}` : ''))
+export const closeDispatchItem = (id: number, how: 'done' | 'wrong', note?: string) =>
+  send<DispatchItem>(`/api/dispatch/items/${id}/${how}`, 'POST', { note: note || null })

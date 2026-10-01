@@ -4,6 +4,7 @@ import { aiAlerts, readAiAlert, readAllAiAlerts, type AiAlert } from '../lib/api
 import type { Me } from '../lib/auth'
 import { canOpenAiAgents, stamp } from '../lib/aiAgents'
 import { canOpenRecords, openRecord } from '../lib/openRecord'
+import { askPermission, fresh, permission, show, type Seen } from '../lib/desktopAlerts'
 
 const TEXT = 'rgb(16,24,40)'
 const MUTED = 'rgb(102,112,133)'
@@ -24,6 +25,17 @@ export function AiAlertBell({ user }: { user: Me }) {
     refetchInterval: 60000, refetchOnWindowFocus: true })
   const read = useMutation({ mutationFn: readAiAlert, onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-alerts'] }) })
   const readAll = useMutation({ mutationFn: readAllAiAlerts, onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-alerts'] }) })
+  // Desktop notifications (2026-09-30): a NEW alert also shows as the system's notification.
+  const seen = useRef<Seen>({ primed: false, ids: new Set() })
+  const [desktop, setDesktop] = useState(permission())
+  useEffect(() => {
+    const list = alerts.data?.items
+    if (!list) return
+    for (const a of fresh(seen.current, list)) show(a, () => go(a))
+    // `go` only opens the record the notification names; re-running on its identity would
+    // replay nothing (`fresh` remembers), so the list is the one dependency that matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alerts.data])
 
   useEffect(() => {
     if (!open) return
@@ -71,6 +83,18 @@ export function AiAlertBell({ user }: { user: Me }) {
           boxShadow: '0 12px 16px -4px rgba(16,24,40,0.08), 0 4px 6px -2px rgba(16,24,40,0.03)' }}>
           <div className="flex items-center" style={{ padding: '10px 14px', borderBottom: `1px solid ${LINE}` }}>
             <span style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>Alerts</span>
+            {desktop === 'default' && (
+              <button type="button" className="ml-3" style={{ fontSize: 12, color: 'rgb(21,94,239)' }}
+                onClick={() => { void askPermission().then(setDesktop) }}>
+                Turn on desktop alerts
+              </button>
+            )}
+            {desktop === 'denied' && (
+              <span className="ml-3" style={{ fontSize: 11, color: MUTED }}
+                title="Allow notifications for this site in the browser's settings">
+                Desktop alerts blocked
+              </span>
+            )}
             {unread > 0 && (
               <button type="button" className="ml-auto" onClick={() => readAll.mutate()}
                 style={{ fontSize: 12, color: 'rgb(21,94,239)' }}>

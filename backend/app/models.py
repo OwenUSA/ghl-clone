@@ -16,6 +16,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -1793,3 +1794,125 @@ class ZuperDigest(Base):
     # pending | posted | failed
     state: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---- Dispatch (2026-09-30): what the office has to do next, read from Zuper + the calls ----
+#
+# app/dispatch/ reads Zuper's three pipelines every few minutes (READS ONLY) and keeps a
+# snapshot per job here; the rules turn snapshot + calls into the Dispatch page's items, and a
+# few of those ring the bell. Nothing here is a record of the business — every table can be
+# rebuilt from Zuper by the next read, except an item's Done / Wrong, which is staff's answer.
+
+class DispatchJob(Base):
+    """The latest read of one Zuper job on a pipeline the Dispatch page watches."""
+    __tablename__ = "dispatch_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    title: Mapped[str | None] = mapped_column(String(300))
+    board: Mapped[str | None] = mapped_column(String(120), index=True)
+    status: Mapped[str | None] = mapped_column(String(120))
+    status_type: Mapped[str | None] = mapped_column(String(40))
+    status_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status_by: Mapped[str | None] = mapped_column(String(120))
+    customer_uid: Mapped[str | None] = mapped_column(String(64))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    # Last ten digits of every number on the Zuper customer: the join to calls and texts.
+    phones: Mapped[list | None] = mapped_column(NullableJSONType)
+    address: Mapped[str | None] = mapped_column(String(300))
+    city: Mapped[str | None] = mapped_column(String(120))
+    lat: Mapped[float | None] = mapped_column(Float)
+    lng: Mapped[float | None] = mapped_column(Float)
+    scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned: Mapped[list | None] = mapped_column(NullableJSONType)
+    technician: Mapped[str | None] = mapped_column(String(120))
+    zuper_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    zuper_updated_at: Mapped[str | None] = mapped_column(String(40))
+    is_open: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # Notes (read when the job changes, and every pass while it has a visit today).
+    notes_read_for: Mapped[str | None] = mapped_column(String(40))
+    notes_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_note_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Pictures posted on the visit DAY (America/New_York date in `photo_day`).
+    photo_day: Mapped[str | None] = mapped_column(String(10))
+    photos_today: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    first_photo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_photo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_photo_by: Mapped[str | None] = mapped_column(String(120))
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DispatchCall(Base):
+    """A call made or taken inside Zuper (Zuper Connect), as its call history lists it. The
+    Quo calls are already in the CRM (conversation_events); these are the other half."""
+    __tablename__ = "dispatch_calls"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    call_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    direction: Mapped[str | None] = mapped_column(String(20))
+    status: Mapped[str | None] = mapped_column(String(30))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    number: Mapped[str | None] = mapped_column(String(20), index=True)
+    staff_name: Mapped[str | None] = mapped_column(String(120))
+    job_uids: Mapped[list | None] = mapped_column(NullableJSONType)
+    # Zuper's own summary of the recording; it arrives some time after the call ends.
+    summary: Mapped[str | None] = mapped_column(Text)
+
+
+class DispatchItem(Base):
+    """One thing the office has to do, as the rules found it. `key` names the evidence (the
+    job and the event that caused it), so the same evidence is one item however often it is
+    seen, and new evidence is a new item. open -> done | wrong (staff) | resolved (the
+    rules stopped finding it, e.g. Zuper was updated)."""
+    __tablename__ = "dispatch_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    queue: Mapped[str] = mapped_column(String(30), index=True)
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(300))
+    why: Mapped[str | None] = mapped_column(Text)
+    todo: Mapped[str | None] = mapped_column(Text)
+    evidence: Mapped[dict | None] = mapped_column(NullableJSONType)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    urgent: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    state: Mapped[str] = mapped_column(String(20), default="open", server_default="open",
+                                       index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by_id: Mapped[int | None] = mapped_column(Integer)
+    close_note: Mapped[str | None] = mapped_column(Text)
+
+
+class DispatchEvent(Base):
+    """An alert the Dispatch page has already rung, by key — so a bell rings once."""
+    __tablename__ = "dispatch_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    job_uid: Mapped[str | None] = mapped_column(String(64))
+    # False when it was recorded without ringing (the first pass after a deploy).
+    rang: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class DispatchState(Base):
+    """The reader's heartbeat (one row)."""
+    __tablename__ = "dispatch_state"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    seeded: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    calls_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_counts: Mapped[dict | None] = mapped_column(NullableJSONType)

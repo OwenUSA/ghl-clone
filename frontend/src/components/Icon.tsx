@@ -158,6 +158,14 @@ export const IconChart = make(<path d="M3 3v18h18M7 15l3-4 3 3 5-7" />)
 export const IconSparkle = make(
   <path d="M12 3v6M12 15v6M3 12h6M15 12h6M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3" />,
 )
+// Dispatch (2026-09-30): a clipboard with a check — "what to do next".
+export const IconDispatch = make(
+  <>
+    <path d="M9 4h6v3H9z" />
+    <path d="M15 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
+    <path d="M9 14l2 2 4-4" />
+  </>,
+)
 export const IconFilter = make(<path d="M4 5h16M7 12h10M10 19h4" />)
 
 export const IconDownload = make(

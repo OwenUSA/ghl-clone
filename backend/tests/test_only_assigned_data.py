@@ -1191,6 +1191,12 @@ AUDITED = {
     "list_live_calls": "AI_VIEW: restricted refused 403; caller names via assigned_access",
     "listen_to_live_call": "AI_VIEW: restricted refused 403; own email only, no record",
     "take_over_live_call": "AI_VIEW: restricted refused 403; own email only, no record",
+    # The Dispatch page (app/dispatch/api.py, 2026-09-30): its own gate (`_viewer`, the AI
+    # Agents audience) refuses a TECH or any restricted user 403 before anything is read —
+    # pinned by tests/test_dispatch_api.py. It reads Zuper's copy, never a CRM customer record.
+    **dict.fromkeys(("dispatch_summary", "dispatch_items", "dispatch_item_done",
+                     "dispatch_item_wrong", "dispatch_job"),
+                    "DISPATCH_VIEW: restricted refused 403"),
     # AI Agents (app/ai/api.py, 2026-09-15): the whole module refuses a restricted user
     # 403 before anything is read (`_viewer`), whatever their role — pinned by
     # tests/test_ai_permissions.py route by route.

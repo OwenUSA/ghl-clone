@@ -46,6 +46,7 @@ from .ai import api as ai_api
 from .ai import engine as ai_engine
 from .ai import triggers as ai_triggers
 from .db import DATABASE_URL, Base, engine, get_db
+from .dispatch import api as dispatch_api
 from .models import (
     ACTIVITY_TYPES,
     CONVERSATION_TYPES,
@@ -133,6 +134,8 @@ app.include_router(media_api.router)
 # Zuper two-way sync (2026-09-16): Settings → Zuper, the money panels, Zuper's job photos and
 # the webhook (the one route here on auth.EXEMPT — it has its own token). See app/zuper/.
 app.include_router(zuper_api.router)
+# The Dispatch page (2026-09-30): queues from Zuper + every call; ADMIN + DISPATCHER.
+app.include_router(dispatch_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

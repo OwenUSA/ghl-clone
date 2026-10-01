@@ -6425,3 +6425,67 @@ reads the field first, then the checklist. Before any of it the `zuper_tasks` jo
 `NO_TASK_STAGES` — it turns every checklisted column into a task, and would have put ~300
 tasks on AHS jobs.
 
+
+
+## 2026-09-30 amendment — the Dispatch page, phase 1 (reads Zuper, writes nothing)
+
+The owner's ask: one place that says what the office must do next — a new job nobody called, a
+customer after an inspection or a repair, a missed call, a visit to book, Zuper not updated after
+a conversation — from Zuper AND every call (Quo, the CRM line, Zuper Connect). Designed in a
+grilling session the same day; every answer is recorded here.
+
+**Decided**
+
+- **Fixed rules find the work; a person (phase 2: the AI) explains it.** `app/dispatch/rules.py`
+  is pure — same input, same items — and pinned by `tests/test_dispatch_rules.py`.
+- **Phase 1 writes nothing to Zuper.** The page says what to change and how; "Done" (I did it),
+  "Wrong" (should not have been flagged — the accuracy count the owner watches). An item also
+  clears itself when the rules stop finding it (Zuper was updated). The later "agent does it
+  itself" switch (fill fields, the job address, a note, book a visit; stage moves on their own
+  switch; NEVER delete, photos, cancel, a customer send or money documents) is phase 3, built
+  OFF, ADMIN-only with a typed confirmation — and turning it on needs the boss's agreement,
+  because it breaks the 2026-09-27 read-only rule.
+- **Who:** ADMIN and unrestricted DISPATCHER (the AI Agents audience). A technician and a
+  restricted user are refused 403. A board whose CRM pipeline is hidden from a user
+  (pipeline permissions) is hidden on the page and on the bell; its job answers 404.
+- **Boards:** AHS - Inspection, AHS - Repair & Review, Retail. A job on any other board (the
+  regional copies excepted) is itself an item: "move it to a pipeline". The six stray jobs on
+  Leak repair / Repair Service / Roof Inspection were moved the same day on the owner's OK.
+- **Freshness:** every 2.5 minutes (`DISPATCH_POLL_SECONDS`), reading Zuper — no webhooks,
+  which would be a write to Zuper's settings (and the CRM's webhook code is wrong anyway:
+  the list lives at `/service/notifications/webhook` WITHOUT `/api`, and the real event names
+  are `job.schedule`-style, not `JOB_NEW`).
+- **Bell + the browser's desktop notification** (`lib/desktopAlerts.ts`), nothing sent off the
+  building. Rings for: a new job (AHS - Inspection, Retail), an inspection / repair finished,
+  no pictures an hour after a visit ended, a missed call or unanswered text from a customer
+  (last 2 days), and a limit passed (business hours only). Each rings ONCE (`dispatch_events`);
+  the first pass after a deploy records everything without ringing.
+- **"The technician left" = pictures.** Antonio posts pictures on every visit (7 of 7 since
+  9/29), as IMAGE / VIDEO notes with time and author, and the checklist photo answers. Pictures
+  on a job scheduled today, then none for 20 minutes = done. Status changes could not be used:
+  of 1,812 moves since 9/16, the technician made 1. Zuper's gallery count sometimes exceeds what
+  the API returns (#677: 89 vs 0) — those visits may be missed; "no pictures yet" catches them.
+- **The owner's limits (business time, Mon–Sat 8–6 New York):** new AHS order 2 h, Retail lead
+  1 h, call after an inspection 2 h, satisfaction call after a repair by the next business day,
+  missed call / text 30 min, a stage that needs booking 1 business day, quiet 7 days.
+- **Calls:** a call is a conversation when answered and 30 s or longer. Quo's own summary (in the
+  event body) is the evidence shown. Zuper Connect's history is read through ONE narrow reader
+  (`client.connect_read`: the history search and call details, nothing else on that host, which
+  stays denylisted). Zuper's `call_summary` is an object with no text on this account
+  (`{status: null, sentiment}`) — the owner chose not to transcribe recordings.
+- **Booking suggestions, the AI's explanations, the chat (phase 2):** Antonio first for repairs
+  (Mon–Sat 7:30–5, max 3, 2.5 h, from home in North Lauderdale), Owen first for inspections
+  (9–5, max 5, 1.5 h), straight-line distance from Zuper's coordinates × 1.3, 3 slots offered.
+  Model: OpenAI `gpt-6-luna` (the cheaper Luna), a key of the CRM's own, cap 300 runs a day.
+- **AHS approvals (phase 3):** owen-main's mail reader ignores Dispatch.me "note" emails; the
+  one authorization found arrived as one ("AUTHO # … Net Total $…"). Teach the reader that
+  pattern; one sample is not enough to rely on alone.
+
+**Built** — `app/dispatch/` (read `__init__.py` first), `/api/dispatch/*`, the left-menu
+Dispatch page, the bell's desktop notifications, five new tables (migration `116a28895c48`, no
+change to anything existing). Stage moves read from whole jobs go into the KPI history
+(`zuper_status_history`), never from list rows (which carry no `done_by`). Verified against the
+live account (reads only) in a scratch database: 444 jobs read, 145 open jobs opened, 46 Zuper
+calls, 129 items, 0 bells on the first pass — and it caught the call_summary object, now pinned.
+
+**Not built yet:** phase 2 and 3 above.

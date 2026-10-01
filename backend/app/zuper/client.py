@@ -519,6 +519,77 @@ def path(name: str, **ids: str) -> str:
     return PATHS[name].format(**ids)
 
 
+# ----------------------------------------------------------- Zuper Connect: call history
+
+# The Dispatch page reads Zuper's CALL HISTORY (2026-09-30, the owner's ask: the office must see
+# every call, Quo's and Zuper's). Zuper Connect lives on its own host and is denylisted above,
+# because almost everything under it rings or texts a customer. These two reads are the only
+# exception, and they are not on the allowlist either: they go through `connect_read` alone,
+# which knows exactly two requests and refuses everything else before a connection exists.
+#   POST {connect}/api/telephony/calls             — the history SEARCH (a body of filters; it
+#                                                   reads, the web app's own call list uses it)
+#   GET  {connect}/api/telephony/calls/{uid}/details
+# Verified read-only against the live account on 2026-09-30.
+CONNECT_READS: tuple[tuple[str, str], ...] = (
+    ("POST", r"^/calls$"),
+    ("GET", r"^/calls/[A-Za-z0-9-]+/details$"),
+)
+
+
+def connect_base(base: str | None = None) -> str:
+    """https://us-east-1.zuperpro.com/api -> https://us-east-1-connect.zuperpro.com/api/telephony"""
+    parts = urlsplit(base or config.base_url())
+    host = parts.hostname or ""
+    region = host.split(".", 1)[0]
+    return "https://%s-connect.%s/api/telephony" % (region, ALLOWED_HOST)
+
+
+def connect_read(method: str, path: str, *, body: dict | None = None) -> Any:
+    """One of the two Zuper Connect reads, or a refusal. Same switches as `request`: the sync
+    must be on (or an operator command), the key set; pacing and 429 back-off are shared."""
+    method = method.upper()
+    path = "/" + path.lstrip("/")
+    if not any(m == method and re.match(rx, path) for m, rx in CONNECT_READS):
+        raise ZuperError("refused", "%s %s is not one of the call-history reads" % (method, path))
+    if not (config.env_enabled() or _OPERATOR.get()):
+        raise ZuperError("off")
+    if not config.key_set():
+        raise ZuperError("no_key")
+    base = connect_base()
+    _check_host(base)
+    headers = {"x-api-key": config.api_key(), "Accept": "application/json"}
+    for attempt in range(RETRIES_ON_429 + 1):
+        _pace()
+        try:
+            with httpx.Client(transport=TRANSPORT, timeout=TIMEOUT_SECONDS) as http:
+                resp = http.request(method, base + path, json=body, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ZuperError("unavailable", type(exc).__name__) from None
+        if resp.status_code != 429:
+            break
+        _sleep(_retry_after(resp, attempt + 1))
+    else:
+        raise ZuperError("rate_limited", status=429)
+    if resp.status_code in (401, 403):
+        raise ZuperError("unauthorized", "HTTP %d" % resp.status_code, resp.status_code)
+    if resp.status_code == 404:
+        raise ZuperError("not_found", path, 404)
+    if resp.status_code >= 400:
+        raise ZuperError("unavailable" if resp.status_code >= 500 else "rejected",
+                         "HTTP %d" % resp.status_code, resp.status_code)
+    try:
+        return resp.json()
+    except ValueError:
+        raise ZuperError("bad_response", "not JSON") from None
+
+
+def connect_calls(page: int = 1, limit: int = 100) -> dict:
+    """A page of the account's call history, newest first (every user's calls)."""
+    return connect_read("POST", "/calls", body={
+        "page": page, "limit": limit, "sort": "DESC", "sortBy": "created_at",
+        "filters": {"current_user": False}})
+
+
 # ---------------------------------------------------------------------------- files
 
 FILE_MAX_BYTES = 25 * 1024 * 1024

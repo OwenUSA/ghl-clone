@@ -15,6 +15,7 @@ import { ReportingPage } from './pages/ReportingPage'
 import { LoginPage } from './pages/LoginPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AiAgentsPage } from './pages/AiAgentsPage'
+import { DispatchPage } from './pages/DispatchPage'
 import { AiAlertBell } from './components/AiAlertBell'
 import { LiveAgentCall } from './components/LiveAgentCall'
 import { canOpenAiAgents } from './lib/aiAgents'
@@ -192,6 +193,9 @@ export default function App() {
         <DashboardPage />
       ) : view === 'reporting' ? (
         <ReportingPage />
+      ) : view === 'dispatch' && canOpenAiAgents(user) ? (
+        // Dispatch (2026-09-30): the AI Agents audience; anyone else falls through.
+        <DispatchPage user={user} />
       ) : view === 'ai-agents' && canOpenAiAgents(user) ? (
         // AI Agents (2026-09-15) is ADMIN / DISPATCHER only, never a restricted user: anyone
         // else asking for it (a pasted /ai-agents link) falls through to the landing view.

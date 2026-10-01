@@ -689,3 +689,28 @@ unlisted, and the setup check's webhook item passes on those rows. Category / st
 are UNVERIFIED: `zapi.create_first_accepted` tries each candidate shape only while Zuper REFUSES
 (live: the wrapped category body got "Category Name Missing"), and the setup report names the one
 accepted.
+
+## The Dispatch page (2026-09-30, phase 1 — reads Zuper, writes nothing)
+
+`backend/app/dispatch/` (read `__init__.py` first) and Dispatch in the left menu. What the office
+must do next — new jobs nobody called, inspections / repairs just finished (pictures stopped for
+20 min), missed calls and texts, visits to book, Zuper not updated after a conversation, today's
+visits, jobs gone quiet — from Zuper's three pipelines and every call (Quo + CRM line, already
+here; Zuper Connect, read by the pass). Every rule and limit: the 2026-09-30 Dispatch amendment
+in `DECISIONS.md`.
+
+- **Off unless `DISPATCH_ENABLED=true`**, and only while the Zuper sync is armed. The pass runs
+  on the worker's Zuper thread every `DISPATCH_POLL_SECONDS` (150); a failure is the page's
+  heartbeat error, never a crash. By hand: `uv run python -m app.dispatch.service` (dry run;
+  `--commit` keeps what it found).
+- **Rules are pure** (`rules.py`, `tests/test_dispatch_rules.py`). An item's `key` names its
+  evidence; Done / Wrong stand until NEW evidence makes a new item; an open item the rules stop
+  finding is `resolved`.
+- **Zuper Connect is still denylisted.** `client.connect_read` allows exactly the call-history
+  search and call details; nothing else on that host.
+- **The bell rings once per event** (`dispatch_events`); the first pass after a deploy rings
+  nothing. Desktop notifications: `frontend/src/lib/desktopAlerts.ts` ("Turn on desktop alerts"
+  in the bell).
+- **Access:** ADMIN + unrestricted DISPATCHER; pipeline permissions hide boards here too.
+- A stage Zuper gains later produces no item until it is named in `dispatch/config.py`; the
+  page's header lists stages it does not know.

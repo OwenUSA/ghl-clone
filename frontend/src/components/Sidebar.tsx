@@ -12,7 +12,7 @@
  */
 import {
   IconCalendar, IconChart, IconChat, IconGrid, IconImage,
-  IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
+  IconDispatch, IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
 } from './Icon'
 import { logout } from '../lib/auth'
 import { navKeys } from '../lib/access'
@@ -157,6 +157,28 @@ export function Sidebar({
             where GoHighLevel has it (refs/round3/43). Drawn only for a user who can open
             it — ADMIN and DISPATCHER, never a TECH or "Only assigned data" — and not at
             all for anyone else, rather than dimmed. */}
+        {/* Dispatch (2026-09-30): the office's queue — what to do next, from Zuper and
+            every call. Same audience as AI Agents, and drawn only for it. */}
+        {canOpenAiAgents(user) && (
+          <button
+            onClick={() => onNavigate('dispatch')}
+            className="flex w-full items-center gap-3 text-left"
+            style={{
+              height: 36,
+              borderRadius: 6,
+              paddingLeft: 16,
+              paddingRight: 16,
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 500,
+              lineHeight: '20px',
+              backgroundColor: active === 'dispatch' ? 'rgb(26,32,44)' : 'transparent',
+            }}
+          >
+            <IconDispatch size={18} color="#fff" />
+            Dispatch
+          </button>
+        )}
         {canOpenAiAgents(user) && (
           <button
             onClick={() => onNavigate('ai-agents')}

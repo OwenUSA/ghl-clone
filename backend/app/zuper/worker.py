@@ -105,6 +105,11 @@ def tick(session_factory, now: datetime | None = None) -> None:
         webhooks.process_inbox(db)
         if sweep.due(db, now):
             sweep.run(db)
+        # The Dispatch page's read of Zuper (2026-09-30): reads only, its own switch
+        # (DISPATCH_ENABLED), and it never raises — a failure is its own heartbeat's error.
+        from ..dispatch import service as dispatch
+        if dispatch.due(db, now):
+            dispatch.run(db, now)
         day = digest.due_day(db, now)
         if day is not None:
             digest.run(db, day)
