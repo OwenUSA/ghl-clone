@@ -43,6 +43,7 @@ class Comm:
     source: str               # Quo | Zuper | CRM line
     name: str | None = None
     staff: str | None = None
+    transcript: str = ""
 
 
 def digits(value) -> str:
@@ -74,7 +75,7 @@ def _from_event(e, name: str | None) -> Comm:
         talked=is_call and status == "completed" and secs >= config.TALK_SECONDS,
         missed=is_call and not out and not answered,
         seconds=secs, summary=summary_of(e.body) if is_call else (e.body or "")[:500],
-        source=source, name=name)
+        source=source, name=name, transcript=(e.transcript or "")[:4000] if is_call else "")
 
 
 def load(db: Session, since: datetime) -> dict[str, list[Comm]]:

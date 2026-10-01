@@ -23,6 +23,7 @@ from ..models import (
     DispatchItem,
     DispatchJob,
     DispatchState,
+    DispatchSuggestion,
     Role,
     ZuperStatusHistory,
 )
@@ -69,7 +70,31 @@ def _item(r: DispatchItem) -> dict:
             "urgent": r.urgent, "state": r.state, "job_uid": r.job_uid,
             "job_number": r.job_number, "board": r.board, "phone": r.phone,
             "zuper_url": _zuper_url(r.job_uid), "created_at": _iso(r.created_at),
-            "closed_at": _iso(r.closed_at), "close_note": r.close_note}
+            "closed_at": _iso(r.closed_at), "close_note": r.close_note,
+            "ai": r.ai, "ai_error": r.ai_error, "suggestions": []}
+
+
+def _suggestion(s: DispatchSuggestion) -> dict:
+    return {"id": s.id, "item_id": s.item_id, "job_uid": s.job_uid, "job_number": s.job_number,
+            "board": s.board, "kind": s.kind, "field": s.field, "current": s.current,
+            "proposed": s.proposed, "evidence": s.evidence, "source": s.source,
+            "state": s.state, "created_at": _iso(s.created_at),
+            "zuper_url": _zuper_url(s.job_uid)}
+
+
+def _with_suggestions(db: Session, items: list[dict]) -> list[dict]:
+    """Each item carries the open / approved suggestions on its job."""
+    uids = {i["job_uid"] for i in items if i["job_uid"]}
+    if not uids:
+        return items
+    by_job: dict[str, list[dict]] = {}
+    for s in db.scalars(select(DispatchSuggestion).where(
+            DispatchSuggestion.job_uid.in_(uids),
+            DispatchSuggestion.state.in_(("open", "approved"))).order_by(DispatchSuggestion.id)):
+        by_job.setdefault(s.job_uid, []).append(_suggestion(s))
+    for i in items:
+        i["suggestions"] = by_job.get(i["job_uid"] or "", [])
+    return items
 
 
 def _visible(stmt, hidden: set[str]):
@@ -132,7 +157,7 @@ def dispatch_items(queue: str | None = None, state: str = "open",
     rows = list(db.scalars(_visible(stmt, _hidden(db, principal))))
     if state == "open":
         rows.sort(key=_priority)
-    return {"items": [_item(r) for r in rows]}
+    return {"items": _with_suggestions(db, [_item(r) for r in rows])}
 
 
 def _priority(r: DispatchItem):

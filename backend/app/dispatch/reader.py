@@ -89,9 +89,15 @@ def apply_detail(j: DispatchJob, record: dict, today: str) -> tuple[int, datetim
     moves = _moves(record)
     if moves:
         j.status_by = _name(moves[-1].get("done_by"))
+    fields: dict[str, str] = {}
     for f in record.get("custom_fields") or []:
-        if isinstance(f, dict) and f.get("label") == "Technician" and f.get("value"):
-            j.technician = str(f["value"])[:120]
+        if not isinstance(f, dict) or not isinstance(f.get("label"), str):
+            continue
+        value = f.get("value")
+        fields[f["label"][:200]] = "" if value is None else str(value)[:500]
+        if f.get("label") == "Technician" and value:
+            j.technician = str(value)[:120]
+    j.fields = fields or None
     count, last, by = 0, None, None
     for e in moves:
         at = _time(e.get("created_at"))

@@ -714,3 +714,8 @@ in `DECISIONS.md`.
 - **Access:** ADMIN + unrestricted DISPATCHER; pipeline permissions hide boards here too.
 - A stage Zuper gains later produces no item until it is named in `dispatch/config.py`; the
   page's header lists stages it does not know.
+- **Phase 2 — the AI** (`dispatch/ai.py`, routes in `dispatch/assist.py`): explanations, field
+  suggestions (Approve = "I'll do it in Zuper"; never applied), 3 booking slots
+  (`dispatch/booking.py`, pure), the Ask chat. OFF until an ADMIN picks a connection and switches
+  it on in Dispatch → Settings; "Pause all AI agents" and the daily cap stop it too — and then no
+  request leaves. Change `dispatch/playbook.py` when the team changes a board.

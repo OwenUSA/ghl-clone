@@ -6488,4 +6488,29 @@ change to anything existing). Stage moves read from whole jobs go into the KPI h
 live account (reads only) in a scratch database: 444 jobs read, 145 open jobs opened, 46 Zuper
 calls, 129 items, 0 bells on the first pass — and it caught the call_summary object, now pinned.
 
-**Not built yet:** phase 2 and 3 above.
+**Not built yet:** phase 3 above.
+
+### Phase 2 — the AI, suggestions, booking slots, the chat (built the same day)
+
+- **The AI explains, it does not decide.** `app/dispatch/ai.py`: after each pass it words up to 8
+  new items (urgent first) — the Zuper steps in order, what to say on the call, a note — from the
+  job, its stage history, the job's own fields, the last calls / texts (Quo summaries, the last two
+  transcripts) and `dispatch/playbook.py` (every board's stages, what each means, which open a
+  checklist, the house rules). One answer per item; "Ask the AI again" re-asks.
+- **Suggestions** (`dispatch_suggestions`): a change the calls support — an existing job field,
+  the job address, or a note. A field the job does not have is dropped, never stored. Approve =
+  "correct, I'll do it in Zuper"; Wrong counts against the AI; an open / approved one closes itself
+  (`done_in_zuper`) when Zuper shows the value. Nothing is written to Zuper.
+- **Off until an ADMIN switches it on** (Dispatch → Settings) with an AI connection; also stopped by
+  "Pause all AI agents" and by the daily cap (`daily_cap`, default 300, a New York day of
+  `dispatch_ai_runs`). While any of those holds, NO request leaves — pinned by
+  `tests/test_dispatch_ai.py`. Model `gpt-6-luna` (the cheaper Luna; `gpt-5.6-luna` exists too).
+- **Booking** (`dispatch/booking.py`, pure): three slots, the preferring technician first, the slot
+  that adds the least driving to his day, never over a visit or his daily maximum. Rules editable
+  in Dispatch → Settings (ADMIN). Zuper's appointments module is off (403), so the calendar is the
+  jobs' own scheduled times.
+- **The chat** (Ask tab, `POST /api/dispatch/chat`): read tools (`list_items`, `find_jobs`,
+  `get_job`, `find_slots`) that see only the user's boards, and `suggest_change`, which RECORDS a
+  suggestion. Up to 6 tool rounds per question; each round is a run against the cap.
+- Reading the settings never writes (`ai.settings` returns unsaved defaults): a read that inserted
+  held SQLite's write lock past its request.

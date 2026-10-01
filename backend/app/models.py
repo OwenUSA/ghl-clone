@@ -1840,6 +1840,9 @@ class DispatchJob(Base):
     first_photo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_photo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_photo_by: Mapped[str | None] = mapped_column(String(120))
+    # The job's own fields as Zuper shows them ({label: value}), from the whole job — what the
+    # AI compares a call against (phase 2).
+    fields: Mapped[dict | None] = mapped_column(NullableJSONType)
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1890,6 +1893,11 @@ class DispatchItem(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_by_id: Mapped[int | None] = mapped_column(Integer)
     close_note: Mapped[str | None] = mapped_column(Text)
+    # Phase 2: the AI's explanation — {zuper_steps: [...], say, note, confidence} — written once
+    # per item, or why it could not be (`ai_error`).
+    ai: Mapped[dict | None] = mapped_column(NullableJSONType)
+    ai_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ai_error: Mapped[str | None] = mapped_column(Text)
 
 
 class DispatchEvent(Base):
@@ -1916,3 +1924,62 @@ class DispatchState(Base):
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     calls_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_counts: Mapped[dict | None] = mapped_column(NullableJSONType)
+
+
+class DispatchSettings(Base):
+    """The Dispatch page's own settings (one row): the AI that explains items (phase 2) and the
+    booking rules. AI is OFF until an ADMIN picks a connection and switches it on."""
+    __tablename__ = "dispatch_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    connection_id: Mapped[int | None] = mapped_column(Integer)
+    model: Mapped[str] = mapped_column(String(120), default="gpt-6-luna",
+                                       server_default="gpt-6-luna")
+    daily_cap: Mapped[int] = mapped_column(Integer, default=300, server_default="300")
+    # [{name, does: [inspection, repair], prefers, days: [0..5], start "07:30", end "17:00",
+    #   max, home: [lat, lng] | null}] — None = the owner's defaults (dispatch/booking.py).
+    technicians: Mapped[list | None] = mapped_column(NullableJSONType)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class DispatchSuggestion(Base):
+    """A change the AI believes Zuper needs — a job field, the job address, a note — with the
+    evidence. Phase 2 never writes it: Approve means "correct, I'll do it in Zuper", Wrong
+    counts against the AI. It closes itself (`done_in_zuper`) when Zuper shows the value."""
+    __tablename__ = "dispatch_suggestions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120))
+    # field | address | note
+    kind: Mapped[str] = mapped_column(String(20))
+    field: Mapped[str] = mapped_column(String(200))
+    current: Mapped[str | None] = mapped_column(Text)
+    proposed: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(20), default="explain", server_default="explain")
+    # open | approved | wrong | done_in_zuper
+    state: Mapped[str] = mapped_column(String(20), default="open", server_default="open",
+                                       index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class DispatchAiRun(Base):
+    """One request to the AI provider from the Dispatch page — the daily cap counts these."""
+    __tablename__ = "dispatch_ai_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20))           # explain | chat
+    item_id: Mapped[int | None] = mapped_column(Integer)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    model: Mapped[str | None] = mapped_column(String(120))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    ok: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)

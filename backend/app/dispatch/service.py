@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import DispatchItem, DispatchJob, DispatchState
+from ..models import DispatchItem, DispatchJob, DispatchState, DispatchSuggestion
 from ..zuper import client
 from . import alerts, comms, reader, rules
 from . import config as c
@@ -75,6 +75,30 @@ def store_items(db: Session, items: list[rules.Item], now: datetime) -> dict:
     return counts
 
 
+def _same(a: str | None, b: str | None) -> bool:
+    return " ".join((a or "").lower().split()) == " ".join((b or "").lower().split())
+
+
+def close_suggestions(db: Session, jobs: list[DispatchJob], now: datetime) -> int:
+    """An open or approved suggestion whose value Zuper now shows is done (`done_in_zuper`)."""
+    by_uid = {j.job_uid: j for j in jobs}
+    done = 0
+    for sug in db.scalars(select(DispatchSuggestion).where(
+            DispatchSuggestion.state.in_(("open", "approved")))):
+        j = by_uid.get(sug.job_uid)
+        if j is None or sug.kind == "note":
+            continue
+        if sug.kind == "field":
+            hit = _same((j.fields or {}).get(sug.field), sug.proposed)
+        else:
+            hit = " ".join(sug.proposed.lower().split()) in " ".join(
+                ", ".join(x for x in (j.address, j.city) if x).lower().split())
+        if hit:
+            sug.state, sug.decided_at = "done_in_zuper", now
+            done += 1
+    return done
+
+
 def run(db: Session, now: datetime | None = None, *, commit: bool = True) -> dict:
     now = now or datetime.now(UTC)
     s = state(db)
@@ -112,12 +136,21 @@ def run(db: Session, now: datetime | None = None, *, commit: bool = True) -> dic
         counts["alerts"] = alerts.fire(db, events, ring=s.seeded,
                                        boards={j.job_uid: j.board for j in jobs})
         counts["open"] = len(found)
+        counts["suggestions_done_in_zuper"] = close_suggestions(db, jobs, now)
         if commit:
             s.seeded = True
             s.last_success_at = now
             s.last_error = None
             s.last_counts = counts
             db.commit()
+            # Phase 2: the AI words a few new items per pass. It never raises into the pass and
+            # writes only onto the items (and suggestions) — never to Zuper.
+            try:
+                from . import ai
+                counts["ai"] = ai.explain_pending(db, now)
+            except Exception:
+                db.rollback()
+                log.exception("dispatch AI explanations failed")
         else:
             db.rollback()
     except Exception as exc:

@@ -44,3 +44,15 @@ export function checkedLabel(at: string | null, now: Date = new Date()): string 
   return mins < 1 ? 'Checked just now' : mins < 60 ? `Checked ${mins} min ago`
     : `Checked ${Math.round(mins / 60)} h ago`
 }
+
+/** "Thu Oct 2, 1:00 PM - Antonio Brown (+8 min driving, next to #273 Weston)" */
+export function slotLabel(s: { tech: string; start: string; extra_drive_minutes: number;
+  next_to: string | null }): string {
+  const d = new Date(s.start)
+  const day = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric',
+    timeZone: 'America/New_York' })
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit',
+    timeZone: 'America/New_York' })
+  const extra = s.extra_drive_minutes ? `+${s.extra_drive_minutes} min driving` : 'no extra driving'
+  return `${day}, ${time} - ${s.tech} (${extra}${s.next_to ? `, next to ${s.next_to}` : ''})`
+}

@@ -2071,7 +2071,62 @@ export type DispatchItem = {
   created_at: string | null
   closed_at: string | null
   close_note: string | null
+  /** Phase 2: the AI's explanation, once it has run. */
+  ai: { zuper_steps: string[]; say: string; note: string; confidence: string | null;
+    model?: string } | null
+  ai_error: string | null
+  suggestions: DispatchSuggestion[]
 }
+
+/** A change the AI believes Zuper needs. Never applied by the CRM. */
+export type DispatchSuggestion = {
+  id: number
+  item_id: number | null
+  job_uid: string
+  job_number: string | null
+  board: string | null
+  kind: 'field' | 'address' | 'note'
+  field: string
+  current: string | null
+  proposed: string
+  evidence: string | null
+  source: string
+  state: 'open' | 'approved' | 'wrong' | 'done_in_zuper'
+  created_at: string | null
+  zuper_url: string | null
+}
+
+export type DispatchSlot = { tech: string; start: string; end: string;
+  extra_drive_minutes: number; next_to: string | null }
+
+export type DispatchTechnician = { name: string; does: string[]; prefers: string;
+  days: number[]; start: string; end: string; max: number; home: number[] | null }
+
+export type DispatchSettings = {
+  ai_enabled: boolean
+  connection_id: number | null
+  model: string
+  daily_cap: number
+  runs_today: number
+  technicians: DispatchTechnician[]
+  connections: { id: number; name: string; provider: string; last4: string }[]
+}
+
+export const dispatchSuggestions = (state = 'open') =>
+  get<{ suggestions: DispatchSuggestion[] }>(`/api/dispatch/suggestions?state=${state}`)
+export const decideSuggestion = (id: number, how: 'approve' | 'wrong') =>
+  send<DispatchSuggestion>(`/api/dispatch/suggestions/${id}/${how}`, 'POST')
+export const dispatchSlots = (jobUid: string) =>
+  get<{ slots: DispatchSlot[]; note: string | null }>(
+    `/api/dispatch/jobs/${encodeURIComponent(jobUid)}/slots`)
+export const explainDispatchItem = (id: number) =>
+  send<DispatchItem>(`/api/dispatch/items/${id}/explain`, 'POST')
+export const dispatchChat = (messages: { role: 'user' | 'assistant'; content: string }[]) =>
+  send<{ reply: string; suggestions: DispatchSuggestion[] }>('/api/dispatch/chat', 'POST',
+    { messages })
+export const dispatchSettings = () => get<DispatchSettings>('/api/dispatch/settings')
+export const saveDispatchSettings = (body: Partial<Omit<DispatchSettings,
+  'runs_today' | 'connections'>>) => send<DispatchSettings>('/api/dispatch/settings', 'PUT', body)
 
 export type DispatchQueue = { key: string; label: string; open: number; urgent: number }
 

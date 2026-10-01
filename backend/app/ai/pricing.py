@@ -42,6 +42,10 @@ KNOWN_PRICES: dict[str, tuple[int, int]] = {
     "gpt-5": (1_250_000, 10_000_000),
     "gpt-5-mini": (250_000, 2_000_000),
     "gpt-5-nano": (50_000, 400_000),
+    # The Luna models (2026-09-30, the Dispatch page uses gpt-6-luna): third-party listings
+    # (OpenRouter), NOT OpenAI's own page — check before relying on them.
+    "gpt-6-luna": (100_000, 500_000),
+    "gpt-5.6-luna": (200_000, 1_200_000),
     "gpt-4.1": (2_000_000, 8_000_000),
     "gpt-4.1-mini": (400_000, 1_600_000),
     "gpt-4.1-nano": (100_000, 400_000),

@@ -1195,7 +1195,12 @@ AUDITED = {
     # Agents audience) refuses a TECH or any restricted user 403 before anything is read —
     # pinned by tests/test_dispatch_api.py. It reads Zuper's copy, never a CRM customer record.
     **dict.fromkeys(("dispatch_summary", "dispatch_items", "dispatch_item_done",
-                     "dispatch_item_wrong", "dispatch_job"),
+                     "dispatch_item_wrong", "dispatch_job",
+                     # phase 2 (app/dispatch/assist.py): the same gate; PUT settings is ADMIN
+                     "dispatch_suggestions", "dispatch_suggestion_approve",
+                     "dispatch_suggestion_wrong", "dispatch_job_slots",
+                     "dispatch_item_explain", "dispatch_chat", "dispatch_get_settings",
+                     "dispatch_put_settings"),
                     "DISPATCH_VIEW: restricted refused 403"),
     # AI Agents (app/ai/api.py, 2026-09-15): the whole module refuses a restricted user
     # 403 before anything is read (`_viewer`), whatever their role — pinned by
