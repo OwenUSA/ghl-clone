@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, object_session, selectinload
 
 from . import (
     agent_context,
+    ahs_authorizations,
     ahs_jobs,
     assigned_access,
     attachments,
@@ -138,6 +139,9 @@ app.include_router(zuper_api.router)
 # The Dispatch page (2026-09-30): queues from Zuper + every call; ADMIN + DISPATCHER.
 app.include_router(dispatch_api.router)
 app.include_router(dispatch_assist.router)
+# AHS authorized a repair (2026-10-01): owen-main relays the note email; a Dispatch item
+# and the bell, nothing to Zuper. The feed's machine token. See app/ahs_authorizations.py.
+app.include_router(ahs_authorizations.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

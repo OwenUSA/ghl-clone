@@ -40,6 +40,10 @@ QUEUE_LABEL = {
     "visits": "Today & tomorrow",
     "stale": "Gone quiet",
 }
+# Items a FEED writes rather than these rules — an AHS authorization note from owen-main
+# (app/ahs_authorizations.py, 2026-10-01). A pass never resolves one for not finding it (the
+# rules never would); staff close it with Done / Wrong.
+FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated"})
 
 
 @dataclass
@@ -72,6 +76,10 @@ class Event:
     body: str
     job_uid: str | None = None
     urgent: bool = False
+    # The card the bell opens, when the caller already knows it (a fed event with no Zuper
+    # job); otherwise `alerts.card_for(job_uid)` finds it.
+    opportunity_id: int | None = None
+    contact_id: int | None = None
 
 
 def _iso(dt: datetime | None) -> str | None:

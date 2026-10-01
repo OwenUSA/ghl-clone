@@ -528,6 +528,9 @@ AUDITED = {
     "create_opportunity": "can_see -> same 400 as a wrong pair",
     "ingest_ahs_job": "ahs_jobs._board: can_see, a hidden AHS board is 'not found'",
     "ingest_ahs_cancellation": "ahs_jobs.deliver_cancellation: can_see -> no_card",
+    "ingest_ahs_authorization": "ahs_authorizations.locate: can_see on the card, "
+                                "hidden_boards on the Zuper job -> not found; the bell "
+                                "honours each reader's boards",
     "agent_context": "agent_context.brief: hidden_pipeline_ids(token owner) on card, "
                      "visit's deal and visit's calendar",
     "delete_opportunity": "ADMIN; pipeline_access.get_opportunity",

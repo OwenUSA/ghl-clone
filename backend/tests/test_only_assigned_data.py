@@ -1127,6 +1127,8 @@ AUDITED = {
     "ingest_delivery_receipt": "EVENTS_INGEST (machine, staff)",
     "ingest_ahs_job": "EVENTS_INGEST (machine, staff)",
     "ingest_ahs_cancellation": "EVENTS_INGEST (machine, staff)",
+    # AHS authorized a repair (2026-10-01): the same feed; a Dispatch item + the bell.
+    "ingest_ahs_authorization": "EVENTS_INGEST (machine, staff)",
     # The voice agent's customer brief (2026-09-24): the same feed, read-only. A token whose
     # owner has "Only assigned data" on is refused outright (403), never narrowed.
     "agent_context": "EVENTS_INGEST (machine, staff); restricted owner refused 403",

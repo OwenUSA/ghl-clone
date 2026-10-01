@@ -88,7 +88,8 @@ def fire(db: Session, events: list[Event], *, ring: bool, boards: dict[str, str]
         db.add(DispatchEvent(key=e.key[:200], kind=e.kind[:40], job_uid=e.job_uid, rang=ring))
         if not ring:
             continue
-        opp_id, contact_id = card_for(db, e.job_uid)
+        opp_id, contact_id = ((e.opportunity_id, e.contact_id) if e.opportunity_id
+                              else card_for(db, e.job_uid))
         board = boards.get(e.job_uid or "")
         for u in people:
             if board and board in hidden[u.id]:
