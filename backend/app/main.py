@@ -46,6 +46,7 @@ from .ai import api as ai_api
 from .ai import engine as ai_engine
 from .ai import triggers as ai_triggers
 from .db import DATABASE_URL, Base, engine, get_db
+from .dispatch import act as dispatch_act
 from .dispatch import api as dispatch_api
 from .dispatch import assist as dispatch_assist
 from .models import (
@@ -138,6 +139,7 @@ app.include_router(zuper_api.router)
 # The Dispatch page (2026-09-30): queues from Zuper + every call; ADMIN + DISPATCHER.
 app.include_router(dispatch_api.router)
 app.include_router(dispatch_assist.router)
+app.include_router(dispatch_act.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

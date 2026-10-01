@@ -2078,7 +2078,8 @@ export type DispatchItem = {
   suggestions: DispatchSuggestion[]
 }
 
-/** A change the AI believes Zuper needs. Never applied by the CRM. */
+/** A change the AI believes Zuper needs. Applied only when a person tells the agent to and
+ * every switch (server + Dispatch → Settings) allows it — phase 3, off by default. */
 export type DispatchSuggestion = {
   id: number
   item_id: number | null
@@ -2091,10 +2092,31 @@ export type DispatchSuggestion = {
   proposed: string
   evidence: string | null
   source: string
-  state: 'open' | 'approved' | 'wrong' | 'done_in_zuper'
+  state: 'open' | 'approved' | 'wrong' | 'done_in_zuper' | 'applied' | 'apply_failed'
   created_at: string | null
+  applied_at: string | null
+  /** The sentence from the last time the agent applied it (done, or why not). */
+  apply_result: string | null
   zuper_url: string | null
 }
+
+export type DispatchWriteKind = 'field' | 'address' | 'note' | 'booking' | 'stage'
+
+/** Phase 3: may the agent change Zuper? Server gate + master switch + one per action. */
+export type DispatchWrites = {
+  server_gate: boolean
+  server_gate_sentence: string | null
+  confirm_phrase: string
+  switches: { key: string; label: string; on: boolean }[]
+  can: Record<DispatchWriteKind, boolean>
+  why_not: Record<DispatchWriteKind, string | null>
+  recent: { id: number; at: string | null; user_id: number | null; action: string;
+    target: string | null; old: string | null; new: string | null; job_uid: string | null;
+    job_number: string | null; suggestion_id: number | null; result: string | null;
+    sentence: string | null }[]
+}
+
+export type DispatchWriteResult = { ok: boolean; sentence: string }
 
 export type DispatchSlot = { tech: string; start: string; end: string;
   extra_drive_minutes: number; next_to: string | null }
@@ -2110,6 +2132,7 @@ export type DispatchSettings = {
   runs_today: number
   technicians: DispatchTechnician[]
   connections: { id: number; name: string; provider: string; last4: string }[]
+  writes: DispatchWrites
 }
 
 export const dispatchSuggestions = (state = 'open') =>
@@ -2126,7 +2149,21 @@ export const dispatchChat = (messages: { role: 'user' | 'assistant'; content: st
     { messages })
 export const dispatchSettings = () => get<DispatchSettings>('/api/dispatch/settings')
 export const saveDispatchSettings = (body: Partial<Omit<DispatchSettings,
-  'runs_today' | 'connections'>>) => send<DispatchSettings>('/api/dispatch/settings', 'PUT', body)
+  'runs_today' | 'connections' | 'writes'>>) =>
+  send<DispatchSettings>('/api/dispatch/settings', 'PUT', body)
+export const dispatchWrites = () => get<DispatchWrites>('/api/dispatch/writes')
+/** ADMIN. Turning a switch ON needs `confirm` = the typed phrase; off never does. */
+export const saveDispatchWrites = (body: Record<string, boolean | string | null>) =>
+  send<DispatchWrites>('/api/dispatch/writes', 'PUT', body)
+export const applyDispatchSuggestion = (id: number, approve: boolean) =>
+  send<DispatchWriteResult & { suggestion: DispatchSuggestion }>(
+    `/api/dispatch/suggestions/${id}/apply`, 'POST', { approve })
+export const bookDispatchSlot = (jobUid: string, slot: { start: string; end: string;
+  technician: string }) =>
+  send<DispatchWriteResult>(`/api/dispatch/jobs/${encodeURIComponent(jobUid)}/book`, 'POST', slot)
+export const moveDispatchStage = (jobUid: string, statusName: string) =>
+  send<DispatchWriteResult>(`/api/dispatch/jobs/${encodeURIComponent(jobUid)}/stage`, 'POST',
+    { status_name: statusName })
 
 export type DispatchQueue = { key: string; label: string; open: number; urgent: number }
 

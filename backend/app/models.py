@@ -1941,12 +1941,22 @@ class DispatchSettings(Base):
     technicians: Mapped[list | None] = mapped_column(NullableJSONType)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_by_id: Mapped[int | None] = mapped_column(Integer)
+    # Phase 3 (2026-10-01): "let the agent make the change in Zuper". ALL OFF by default; an
+    # ADMIN turns one on with a typed confirmation, every flip is a dispatch_write_log row, and
+    # none of them writes anything unless the server's DISPATCH_ZUPER_WRITES is on as well.
+    writes_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    write_fields: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    write_address: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    write_note: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    write_booking: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    write_stage: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class DispatchSuggestion(Base):
     """A change the AI believes Zuper needs — a job field, the job address, a note — with the
-    evidence. Phase 2 never writes it: Approve means "correct, I'll do it in Zuper", Wrong
-    counts against the AI. It closes itself (`done_in_zuper`) when Zuper shows the value."""
+    evidence. Approve means "correct, I'll do it in Zuper", Wrong counts against the AI. It
+    closes itself (`done_in_zuper`) when Zuper shows the value. Phase 3: a person may tell the
+    agent to apply it (dispatch/writes.py) — only when the server and an ADMIN allow it."""
     __tablename__ = "dispatch_suggestions"
     id: Mapped[int] = mapped_column(primary_key=True)
     item_id: Mapped[int | None] = mapped_column(Integer, index=True)
@@ -1960,13 +1970,41 @@ class DispatchSuggestion(Base):
     proposed: Mapped[str] = mapped_column(Text)
     evidence: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(20), default="explain", server_default="explain")
-    # open | approved | wrong | done_in_zuper
+    # open | approved | wrong | done_in_zuper | applied | apply_failed (phase 3: the agent
+    # made the change / tried and could not confirm it — never retried by itself)
     state: Mapped[str] = mapped_column(String(20), default="open", server_default="open",
                                        index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decided_by_id: Mapped[int | None] = mapped_column(Integer)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    applied_by_id: Mapped[int | None] = mapped_column(Integer)
+    apply_result: Mapped[str | None] = mapped_column(Text)
+
+
+class DispatchWriteLog(Base):
+    """Everything about the Dispatch page changing Zuper (phase 3, 2026-10-01), one row each:
+    a switch flipped (who, old -> new) and every change the agent was told to make (what was
+    sent, whether Zuper then showed it, the sentence the office read). Never updated, never
+    deleted — it is the record of what the CRM did to the business's source of truth."""
+    __tablename__ = "dispatch_write_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    # switch | field | address | note | booking | stage
+    action: Mapped[str] = mapped_column(String(20))
+    # a switch's name, or the job field / stage / "visit" the change was about
+    target: Mapped[str | None] = mapped_column(String(200))
+    old_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    suggestion_id: Mapped[int | None] = mapped_column(Integer)
+    # ok | failed | refused (nothing sent) | None for a switch
+    result: Mapped[str | None] = mapped_column(String(20))
+    sentence: Mapped[str | None] = mapped_column(Text)
 
 
 class DispatchAiRun(Base):

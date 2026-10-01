@@ -2,7 +2,8 @@
 
 Same gate as the page (`api._viewer`: ADMIN + unrestricted DISPATCHER), same hidden boards. The
 settings are read by the office and changed by an ADMIN only. Nothing here writes to Zuper:
-"Approve" on a suggestion means "correct — I'll make this change in Zuper".
+"Approve" on a suggestion means "correct — I'll make this change in Zuper". (Phase 3's "let the
+agent do it" is act.py, off unless the server and an ADMIN both say so.)
 """
 from __future__ import annotations
 
@@ -16,8 +17,8 @@ from sqlalchemy.orm import Session
 from .. import auth
 from ..db import get_db
 from ..models import AiConnection, DispatchItem, DispatchJob, DispatchSuggestion, Role
-from . import ai, booking
-from .api import VIEW, _hidden, _item, _suggestion, _viewer, _with_suggestions
+from . import ai, booking, writes
+from .api import SHOWN, VIEW, _hidden, _item, _suggestion, _viewer, _with_suggestions
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
 
@@ -51,7 +52,7 @@ def _visible_job(db: Session, principal: auth.Principal, job_uid: str) -> Dispat
 def dispatch_suggestions(state: str = "open", principal: auth.Principal = VIEW,
                          db: Session = Depends(get_db)):
     """Changes the AI believes Zuper needs, newest first. Never applied here."""
-    states = ("open", "approved") if state == "open" else (state,)
+    states = SHOWN if state == "open" else (state,)
     hidden = _hidden(db, principal)
     rows = db.scalars(select(DispatchSuggestion).where(DispatchSuggestion.state.in_(states))
                       .order_by(DispatchSuggestion.id.desc()).limit(200))
@@ -63,7 +64,7 @@ def _decide(db: Session, principal: auth.Principal, sid: int, state: str) -> dic
     s = db.get(DispatchSuggestion, sid)
     if s is None or (s.board and s.board in _hidden(db, principal)):
         raise HTTPException(404, "no such suggestion")
-    if s.state not in ("open", "approved") or s.state == state:
+    if s.state not in SHOWN or s.state == state:
         raise HTTPException(409, "this suggestion is already %s" % s.state)
     s.state, s.decided_at, s.decided_by_id = state, datetime.now(UTC), principal.user_id
     db.commit()
@@ -151,6 +152,7 @@ def _settings_out(db: Session) -> dict:
     return {"ai_enabled": s.ai_enabled, "connection_id": s.connection_id, "model": s.model,
             "daily_cap": s.daily_cap, "runs_today": ai.runs_today(db, datetime.now(UTC)),
             "technicians": s.technicians or booking.DEFAULT_TECHNICIANS,
+            "writes": writes.status(db),
             "connections": [{"id": x.id, "name": x.name, "provider": x.provider,
                              "last4": x.api_key_last4} for x in conns]}
 
