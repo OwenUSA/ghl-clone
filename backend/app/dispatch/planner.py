@@ -118,7 +118,13 @@ def _schedule(day: Day, minutes: dict[str, int]) -> list[Stop] | None:
     for s in day.stops:
         drive = booking.drive_minutes(here, (s.lat, s.lng)) if here else 0
         if s.existing:
-            if clock + timedelta(minutes=drive) > s.start + timedelta(minutes=5):
+            # A booked visit is a fact, never "infeasible": a 7:30 first visit with a drive
+            # from home before it is how the office books (live 2026-10-01 — treating it as
+            # impossible dropped Antonio's whole Friday, booked visits and free time alike).
+            # Only NEW visits are fitted around it: one placed before it must end, drive
+            # included, before it starts.
+            if out and not out[-1].existing and \
+                    clock + timedelta(minutes=drive) > s.start + timedelta(minutes=5):
                 return None
             out.append(Stop(s.job, s.label, s.start, s.end, s.lat, s.lng, True, s.kind, s.uid,
                             drive))

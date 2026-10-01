@@ -87,3 +87,15 @@ def test_visit_lengths_are_learned_from_history():
     rows = [("Owen Buzaglo", "inspection", m) for m in (55, 60, 62, 120)] + [
         ("Owen Buzaglo", "repair", 120), ("Antonio Brown", "repair", 1000)]
     assert planner.learned_minutes(rows) == {"Owen Buzaglo": {"inspection": 60}}
+
+
+def test_a_day_that_starts_with_a_booked_visit_at_opening_still_takes_new_visits():
+    """Live 2026-10-01: a 7:30 booked visit (with a drive from home before it) made the whole
+    day "impossible", hiding the booked visits and wasting the free time after them."""
+    first = datetime(2026, 10, 1, 7, 30, tzinfo=c.TZ)
+    booked = [booking.Visit("Antonio Brown", first, first + timedelta(hours=2), *WESTON, "#271")]
+    out = planner.plan(jobs=[job(1, WESTON)], booked=booked, technicians=[ANTONIO],
+                       minutes=MINUTES, now=NOW, days=1)
+    visits = out["days"][0]["techs"][0]["visits"]
+    assert [v["existing"] for v in visits] == [True, False]
+    assert datetime.fromisoformat(visits[1]["start"]) >= first + timedelta(hours=2)
