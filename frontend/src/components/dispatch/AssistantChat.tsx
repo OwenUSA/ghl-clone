@@ -6,7 +6,6 @@ import { blocks, greeting, SUGGESTED_QUESTIONS, type Inline } from '../../lib/di
 const INK = 'rgb(16,24,40)'
 const MUTED = 'rgb(102,112,133)'
 const LINE = 'rgb(228,231,236)'
-const ACCENT = 'rgb(217,119,87)'
 const BLUE = 'rgb(21,94,239)'
 const SERIF = 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif'
 
@@ -63,11 +62,8 @@ export function AssistantChat({ name, messages, setMessages, onOpenSuggestions }
     return (
       <div className="flex flex-1 flex-col items-center justify-center" style={{ padding: '24px 16px' }}>
         <style>{KEYFRAMES}</style>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
-          <Spark size={30} />
-          <h1 style={{ fontFamily: SERIF, fontSize: 34, fontWeight: 400, color: INK, margin: 0 }}>
-            {greeting(name)}</h1>
-        </div>
+        <h1 style={{ fontFamily: SERIF, fontSize: 34, fontWeight: 400, color: INK,
+          margin: '0 0 22px' }}>{greeting(name)}</h1>
         <div style={{ width: '100%', maxWidth: 680 }}>
           {composer}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14, justifyContent: 'center' }}>
@@ -102,8 +98,7 @@ export function AssistantChat({ name, messages, setMessages, onOpenSuggestions }
                 whiteSpace: 'pre-wrap' }}>{m.content}</div>
             </div>
           ) : (
-            <div key={n} style={{ display: 'flex', gap: 12, margin: '18px 0' }}>
-              <div style={{ paddingTop: 2 }}><Spark size={20} /></div>
+            <div key={n} style={{ display: 'flex', margin: '18px 0' }}>
               <div style={{ flex: 1, minWidth: 0, fontSize: 15, lineHeight: '24px',
                 color: m.error ? 'rgb(180,35,24)' : INK }}>
                 <Answer text={m.content} />
@@ -118,9 +113,7 @@ export function AssistantChat({ name, messages, setMessages, onOpenSuggestions }
             </div>
           ))}
           {ask.isPending && (
-            <div style={{ display: 'flex', gap: 12, margin: '18px 0', alignItems: 'center' }}>
-              <span style={{ animation: 'dispatch-spin 2.4s linear infinite', display: 'inline-flex' }}>
-                <Spark size={20} /></span>
+            <div style={{ display: 'flex', margin: '18px 0', alignItems: 'center' }}>
               <span style={{ color: MUTED, fontSize: 14 }}>Looking through the jobs and calls
                 <span className="dispatch-dots" /></span>
             </div>
@@ -163,7 +156,7 @@ function Composer({ value, onChange, onSend, busy, placeholder }: {
         <span style={{ fontSize: 12, color: MUTED }}>Dispatch assistant · reads only</span>
         <button type="button" aria-label="Send" disabled={!ready} onClick={onSend}
           style={{ width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', background: ready ? ACCENT : 'rgb(234,236,240)',
+            justifyContent: 'center', background: ready ? BLUE : 'rgb(234,236,240)',
             color: ready ? '#fff' : 'rgb(152,162,179)', transition: 'background 120ms' }}>
           <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor"
             strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -200,19 +193,7 @@ function Answer({ text }: { text: string }) {
   )
 }
 
-function Spark({ size }: { size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-      {Array.from({ length: 8 }, (_, i) => (
-        <line key={i} x1="12" y1="12" x2="12" y2="2" stroke={ACCENT} strokeWidth="2.4"
-          strokeLinecap="round" transform={`rotate(${i * 45} 12 12)`} />
-      ))}
-    </svg>
-  )
-}
-
 const KEYFRAMES = `
-@keyframes dispatch-spin { to { transform: rotate(360deg) } }
 @keyframes dispatch-dots { 0% { content: '' } 25% { content: '.' } 50% { content: '..' } 75% { content: '...' } }
 .dispatch-dots::after { content: ''; animation: dispatch-dots 1.2s steps(1) infinite; }
 `

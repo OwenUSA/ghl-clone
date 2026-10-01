@@ -109,3 +109,35 @@ def test_stop_reasons_are_normalised(script):
 def test_a_compatible_connection_without_a_base_url_is_refused():
     with pytest.raises(providers.ProviderError, match="base URL"):
         providers.build("openai_compatible", "k", None)
+
+
+REASONING_REFUSAL = (400, {"error": {
+    "message": "Function tools with reasoning_effort are not supported for gpt-6-luna in "
+               "/v1/chat/completions. To use function tools, use /v1/responses or set "
+               "reasoning_effort to 'none'.",
+    "type": "invalid_request_error", "param": "reasoning_effort", "code": None}})
+
+
+def test_a_reasoning_model_that_refuses_tools_is_asked_again_with_reasoning_off(script):
+    """Live 2026-10-01: gpt-6-luna answered 400 to every chat with tools. Only THAT refusal,
+    only with tools, is retried once with reasoning_effort "none"."""
+    script.responses.extend([REASONING_REFUSAL, openai_completion(
+        content=None, tool_calls=[openai_call("move_stage", '{"stage_id": 7}')],
+        finish="tool_calls", model="gpt-6-luna")])
+    p = providers.build("openai", "sk-test", None)
+    turn = p.complete(system="SYS", messages=[{"role": "user", "content": "move it"}],
+                      tools=TOOLS, model="gpt-6-luna")
+    assert turn.tool_calls[0].arguments == {"stage_id": 7}
+    assert "reasoning_effort" not in script.requests[0]["body"]
+    assert script.requests[1]["body"]["reasoning_effort"] == "none"
+
+
+def test_without_tools_or_for_another_400_nothing_is_retried(script):
+    other = (400, {"error": {"message": "bad request", "type": "invalid_request_error"}})
+    script.responses.extend([REASONING_REFUSAL, other])
+    p = providers.build("openai", "sk-test", None)
+    for tools in ([], TOOLS):
+        with pytest.raises(providers.ProviderError):
+            p.complete(system="SYS", messages=[{"role": "user", "content": "x"}],
+                       tools=tools, model="gpt-6-luna")
+    assert script.calls == 2

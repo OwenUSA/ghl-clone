@@ -331,6 +331,18 @@ class OpenAIProvider(Provider):
                 for t in tools]
         try:
             resp = self._client().chat.completions.create(**kwargs)
+        except openai.BadRequestError as e:
+            # Some reasoning models (gpt-6-luna, live 2026-10-01) refuse function tools on
+            # chat.completions unless reasoning is off: "Function tools with reasoning_effort
+            # are not supported ... set reasoning_effort to 'none'". Only that refusal, only
+            # with tools, retried ONCE with reasoning off; every other request is unchanged.
+            if not (tools and "reasoning_effort" in str(e) and not self.compatible):
+                raise _sentence(e, self.who, model, self.api_key) from None
+            try:
+                resp = self._client().chat.completions.create(
+                    **kwargs, reasoning_effort="none")
+            except openai.OpenAIError as e2:
+                raise _sentence(e2, self.who, model, self.api_key) from None
         except openai.OpenAIError as e:
             raise _sentence(e, self.who, model, self.api_key) from None
         if not resp.choices:
