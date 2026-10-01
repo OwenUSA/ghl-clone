@@ -6558,9 +6558,14 @@ agrees first.
   from a "street, city, ST 12345" line (anything else is refused, not guessed). Keep
   `write_address` off until a live test on a test job confirms it.
 - **Stages:** never Paid, Cancelled, Estimate Declined, Review Received (`config.CLOSED`), and
-  never a target Zuper types COMPLETED / CANCELED / CLOSED (deliberately conservative: loosen per
-  board on the owner's word); never a job that is closed by name; never another board — only the
-  job's own category's statuses are candidates.
+  never a target Zuper types CANCELED / CLOSED / PAID; never a job that is closed by name; never
+  another board — only the job's own category's statuses are candidates. COMPLETED is NOT
+  refused (review 2026-10-01): Zuper types "Repair Complete" and "Inspection Completed" that way
+  and both are ordinary next steps.
+- **Never into a stage that has a checklist** (review 2026-10-01): Zuper asks a stage's
+  questions only when a person moves the job in Zuper; a move through the API skips them, which
+  would lose the intake / inspection answers and the KPI questions (AHS authorized $, customer
+  chose, customer pays $). Such a move answers "move #N in Zuper so they get answered".
 - **After every write the job is read back**; the change is believed only when Zuper shows it.
   Result `applied` / `apply_failed` on the suggestion with the sentence, and a log row (ok /
   failed / refused). **Never retried by itself**: a failed write might have landed. An

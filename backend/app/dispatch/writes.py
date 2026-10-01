@@ -63,10 +63,12 @@ KIND_SWITCH = {"field": "write_fields", "address": "write_address", "note": "wri
 TECHNICIAN_FIELD = "Technician"
 # A stage move never lands on one of these, by name or by Zuper's own status type: closing a
 # job (paid, cancelled, declined, reviewed) is a person's decision made in Zuper. COMPLETED is
-# included on purpose — it is how a board's last column is usually typed; loosen it only on
-# the owner's word, per board.
+# NOT a closing type here: Zuper types "Repair Complete" and "Inspection Completed" that way,
+# and both are ordinary next steps (review 2026-10-01).
 NEVER_STAGES = set(c.CLOSED) | {"Estimate Declined"}
-CLOSING_TYPES = {"COMPLETED", "CANCELED", "CANCELLED", "CLOSED"}
+CLOSING_TYPES = {"CANCELED", "CANCELLED", "CLOSED", "PAID"}
+# Where Zuper lists a status's checklist questions on GET /jobs/status/{category}.
+CHECKLIST_KEYS = ("checklist", "checklists", "status_checklist")
 # Copied from the field's current definition onto every custom-field write. Verified live
 # 2026-10-01: a PUT that names only label + value makes Zuper drop the field out of its group.
 FIELD_META = ("label", "group_name", "group_uid", "type")
@@ -355,6 +357,14 @@ def closing(name: str | None, status_type: str | None = None) -> bool:
         (status_type or "").strip().upper() in CLOSING_TYPES
 
 
+def checklist_count(status: dict) -> int:
+    for key in CHECKLIST_KEYS:
+        value = status.get(key)
+        if isinstance(value, list):
+            return len(value)
+    return 0
+
+
 def stage_target(j: DispatchJob, status_name: str) -> None:
     """The checks that need no Zuper read: never a closing stage, never a closed job."""
     if closing(status_name):
@@ -393,6 +403,14 @@ def write_stage(j: DispatchJob, status_name: str, remarks: str) -> tuple[bool, s
         if closing(target.get("status_name"), target.get("status_type")):
             raise _Unsent("“%s” closes the job; that is done by a person in Zuper." %
                           status_name)
+        # A stage with a checklist asks its questions only when a PERSON moves the job in
+        # Zuper; a move through the API would skip them, losing the intake / inspection answers
+        # and the KPI questions (AHS authorized $, customer chose, customer pays $).
+        asks = checklist_count(target)
+        if asks:
+            raise _Unsent("“%s” asks %d question%s when a job moves into it; move #%s in "
+                          "Zuper so they get answered." % (
+                              status_name, asks, "" if asks == 1 else "s", j.job_number))
         client.request("PUT", client.path("job_status", uid=j.job_uid), body={
             "status_uid": target["status_uid"], "remarks": remarks})
 

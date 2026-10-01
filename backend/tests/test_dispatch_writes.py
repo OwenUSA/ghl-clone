@@ -44,7 +44,11 @@ INSPECTION_STATUSES = [
     {"status_uid": "s-wor", "status_name": "Work Order Received", "status_type": "NEW"},
     {"status_uid": "s-welcome", "status_name": "Welcome Call!", "status_type": "NEW"},
     {"status_uid": "s-sched", "status_name": "Scheduled", "status_type": "NEW"},
-    {"status_uid": "s-done", "status_name": "Inspection Completed", "status_type": "COMPLETED"},
+    # Live: Inspection Completed asks the 12 inspection questions when a job moves into it.
+    {"status_uid": "s-done", "status_name": "Inspection Completed", "status_type": "COMPLETED",
+     "checklist": [{"question": "Roof type?"}, {"question": "Photos - roof"}]},
+    # A COMPLETED-typed stage with no checklist (like Repair Complete) is an ordinary next step.
+    {"status_uid": "s-rc", "status_name": "Repair Complete", "status_type": "COMPLETED"},
     {"status_uid": "s-cancel", "status_name": "Cancelled", "status_type": "CANCELED"},
 ]
 RETAIL_STATUSES = [
@@ -419,15 +423,27 @@ def test_a_closing_stage_is_refused_before_anything_is_sent(armed, db, zuper, st
         == "refused"
 
 
-def test_a_stage_zuper_types_as_closing_or_on_another_board_is_never_sent(armed, db, zuper):
+def test_a_stage_with_a_checklist_or_on_another_board_is_never_sent(armed, db, zuper):
+    """A checklist is only asked when a PERSON moves the job in Zuper — through the API its
+    answers (and the KPI questions) would be skipped. Another board is never reachable."""
     c, as_, _ = armed
-    for stage in ("Inspection Completed", "Estimate Sent"):
+    for stage, why in (("Inspection Completed", "asks 2 questions"),
+                       ("Estimate Sent", "not a stage on")):
         r = c.post("/api/dispatch/jobs/j1/stage", json={"status_name": stage},
                    headers=as_("admin"))
         assert r.status_code == 200 and r.json()["ok"] is False, r.text
-        assert "Nothing was sent" in r.json()["sentence"]
+        assert "Nothing was sent" in r.json()["sentence"] and why in r.json()["sentence"]
     assert zuper.writes() == []
     assert "/api/jobs/status/cat-retail" not in [p for _, p, _ in zuper.requests]
+
+
+def test_a_completed_typed_stage_without_a_checklist_is_an_ordinary_move(armed, db, zuper):
+    """Zuper types "Repair Complete" COMPLETED; that is a next step, not a closing one."""
+    c, as_, _ = armed
+    r = c.post("/api/dispatch/jobs/j1/stage", json={"status_name": "Repair Complete"},
+               headers=as_("admin"))
+    assert r.json()["ok"] is True, r.text
+    assert zuper.job["current_job_status"]["status_name"] == "Repair Complete"
 
 
 def test_a_stage_move_on_the_job_s_own_board(armed, db, zuper):
