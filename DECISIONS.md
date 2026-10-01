@@ -6471,8 +6471,13 @@ grilling session the same day; every answer is recorded here.
 - **Calls:** a call is a conversation when answered and 30 s or longer. Quo's own summary (in the
   event body) is the evidence shown. Zuper Connect's history is read through ONE narrow reader
   (`client.connect_read`: the history search and call details, nothing else on that host, which
-  stays denylisted). Zuper's `call_summary` is an object with no text on this account
-  (`{status: null, sentiment}`) — the owner chose not to transcribe recordings.
+  stays denylisted). The owner chose not to transcribe recordings.
+  **Corrected 2026-10-01:** "Zuper writes no summaries" was wrong. The history LIST returns
+  `call_summary` as `{status: null, sentiment}`, but `GET /calls/{uid}/details` carries
+  `{summary, next_action, confidence, ...}` (that is why Zuper's web app shows one only after
+  the call is opened). Each pass now opens up to 15 recorded calls (last 14 days) with no
+  summary and keeps `summary + "Next step: ..."`; the list no longer wipes it. Still no
+  transcript from Zuper. See docs/ZUPER-OPERATIONS.md section 8a.
 - **Booking suggestions, the AI's explanations, the chat (phase 2):** Antonio first for repairs
   (Mon–Sat 7:30–5, max 3, 2.5 h, from home in North Lauderdale), Owen first for inspections
   (9–5, max 5, 1.5 h), straight-line distance from Zuper's coordinates × 1.3, 3 slots offered.
