@@ -446,14 +446,15 @@ def _person_name(value: Any) -> str:
 
 def pay_sheet_periods(input_dir: Path) -> list[list]:
     """Antonio's pay sheet (antonio-commissions.xlsx), one row per pay period: AHS jobs, extras and
-    his pay. A tab identical to another is reported as a copy and not counted twice."""
+    his pay. Two identical tabs are counted once: the one whose job dates fall inside the period
+    its name gives is the real one, the other is reported as a copy (the 2026-10-01 file had the
+    Aug 1-15 jobs pasted into the Jul 15 - Aug 1 tab as well)."""
     path = input_dir / "antonio-commissions.xlsx"
     if not path.exists():
         return []
     from openpyxl import load_workbook
     wb = load_workbook(path, data_only=True, read_only=True)
-    seen: dict[tuple, str] = {}
-    out = []
+    tabs = []
     for ws in wb.worksheets:
         title = ws.title.strip()
         jobs_rows, extras, in_extras = [], [], False
@@ -467,12 +468,26 @@ def pay_sheet_periods(input_dir: Path) -> list[list]:
             elif in_extras and isinstance(r[0], str) and r[0].strip() and len(r) > 5 \
                     and isinstance(r[4], int | float):
                 extras.append(r)
+        bounds = re.findall(r"(\d{8})", title)
+        try:
+            start, end = (datetime.strptime(b, "%m%d%Y") for b in (bounds[0], bounds[-1]))
+            margin = timedelta(days=3)
+            fits = all(start - margin <= r[0] <= end + margin for r in jobs_rows)
+        except (IndexError, ValueError):
+            fits = True
         sig = tuple(sorted((str(r[0])[:10], str(r[4]), str(r[5])) for r in jobs_rows))
-        if sig and sig in seen:
-            note = "copy of tab %s - not counted" % seen[sig]
+        tabs.append((title, jobs_rows, extras, sig, fits))
+    real: dict[tuple, tuple[str, bool]] = {}          # contents -> (the real tab, its dates fit)
+    for title, _rows, _extras, sig, fits in tabs:
+        if sig and (sig not in real or (fits and not real[sig][1])):
+            real[sig] = (title, fits)
+    real = {sig: title for sig, (title, _fits) in real.items()}
+    out = []
+    for title, jobs_rows, extras, sig, _fits in tabs:
+        if sig and real.get(sig) != title:
+            note = "copy of tab %s - not counted" % real[sig]
             out.append([title, None, None, None, None, None, note])
             continue
-        seen[sig] = title
         jt = sum(money(r[4]) or 0 for r in jobs_rows)
         jc = sum(money(r[5]) or 0 for r in jobs_rows)
         es = sum(money(r[4]) or 0 for r in extras)

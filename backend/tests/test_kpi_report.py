@@ -255,6 +255,23 @@ def test_income_per_job_and_commissions_by_week(tmp_path, db):
     assert summary[("All", "still owed ($)")] == 350
 
 
+def test_a_copied_pay_sheet_tab_is_counted_once_under_its_real_period(tmp_path):
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.remove(wb.active)
+    rows = [(datetime(2026, 8, 3), "AHS", "x", "y", 1100.0, 350.0),
+            (datetime(2026, 8, 11), "AHS", "x", "y", 1125.0, 350.0)]
+    for title in ("07152026 to 08012026", "08012026 to 08152026"):     # the copy comes FIRST
+        ws = wb.create_sheet(title)
+        ws.append(["Date", "Company", "Name", "Address", "Price", "Antonio"])
+        for r in rows:
+            ws.append(list(r))
+    wb.save(tmp_path / "antonio-commissions.xlsx")
+    got = {r[0]: r for r in kpi_report.pay_sheet_periods(tmp_path)}
+    assert got["08012026 to 08152026"][5] == 700                 # the real period is counted
+    assert got["07152026 to 08012026"][6].startswith("copy of tab 08012026")
+
+
 def test_a_day_s_file_is_never_overwritten(tmp_path, db):
     now = datetime(2026, 10, 1, 7, 0, tzinfo=UTC)
     with SessionLocal() as s:
