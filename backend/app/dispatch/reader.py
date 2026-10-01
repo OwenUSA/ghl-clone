@@ -17,7 +17,7 @@ what changed, plus the day's visits.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -243,12 +243,35 @@ def apply_call(row: DispatchCall, call: dict) -> None:
                       if isinstance(staff_side, dict) else None)
     row.job_uids = [m.get("module_uid") for m in call.get("call_modules") or []
                     if isinstance(m, dict) and m.get("module") == "JOB"] or None
-    row.summary = None
+    # The list never carries the summary text (it is only in the call's details), so a
+    # summary already fetched is kept, never wiped by the next list (2026-10-01).
     for r in call.get("call_recordings") or []:
         text = summary_text(r.get("call_summary") if isinstance(r, dict) else None)
         if text:
             row.summary = text
             break
+
+
+def recorded(call: dict) -> bool:
+    return any(isinstance(r, dict) and (r.get("recording_url") or r.get("call_recording_uid"))
+               for r in call.get("call_recordings") or [])
+
+
+def details_summary(payload) -> str | None:
+    """Zuper Connect's summary of one call, from GET /calls/{uid}/details: the text and its
+    "next action", as one string. None while Zuper has not written it yet."""
+    data = client.data_of(payload) if isinstance(payload, dict) else None
+    data = data if isinstance(data, dict) else (payload if isinstance(payload, dict) else {})
+    found = [r.get("call_summary") for r in data.get("call_recordings") or []
+             if isinstance(r, dict)] + [data.get("call_summary")]
+    for cs in found:
+        text = summary_text(cs)
+        if text:
+            nxt = cs.get("next_action") if isinstance(cs, dict) else None
+            if isinstance(nxt, str) and nxt.strip():
+                text += "\nNext step: " + nxt.strip()
+            return text
+    return None
 
 
 def summary_text(value) -> str | None:
@@ -264,10 +287,19 @@ def summary_text(value) -> str | None:
     return None
 
 
+# Zuper Connect writes a summary for every recorded call, but its call LIST leaves the text
+# out — the web app only shows it once someone opens the call, which loads the details
+# (verified live 2026-10-01: list {status: null}, details {summary, next_action, ...}). So
+# each pass opens the recorded calls that still have no summary, newest first, a few at a time.
+DETAILS_PER_PASS = 15
+DETAILS_MAX_AGE = timedelta(days=14)
+
+
 def read_calls(db: Session) -> int:
     payload = client.connect_calls(page=1, limit=100)
     rows = payload.get("data") if isinstance(payload, dict) else None
     seen = 0
+    wanting: list[DispatchCall] = []
     uids = [c.get("call_uid") for c in rows or [] if isinstance(c, dict) and c.get("call_uid")]
     known = {r.call_uid: r for r in db.scalars(select(DispatchCall).where(
         DispatchCall.call_uid.in_(uids)))} if uids else {}
@@ -280,5 +312,30 @@ def read_calls(db: Session) -> int:
             row = DispatchCall(call_uid=uid)
             db.add(row)
         apply_call(row, call)
+        if recorded(call) and not row.summary:
+            wanting.append(row)
         seen += 1
+    fetch_summaries(wanting)
     return seen
+
+
+def fetch_summaries(rows: list[DispatchCall], now: datetime | None = None) -> int:
+    """Open the details of recorded calls with no summary yet. A call whose summary is not
+    written yet is simply asked again next pass; Zuper being down stops this pass."""
+    now = now or datetime.now(UTC)
+    rows = sorted((r for r in rows if r.occurred_at and
+                   now - c.aware(r.occurred_at) <= DETAILS_MAX_AGE),
+                  key=lambda r: c.aware(r.occurred_at), reverse=True)[:DETAILS_PER_PASS]
+    got = 0
+    for row in rows:
+        try:
+            text = details_summary(client.connect_read(
+                "GET", "/calls/%s/details" % row.call_uid))
+        except client.ZuperError as exc:
+            if exc.kind in ("unavailable", "rate_limited", "unauthorized", "off", "no_key"):
+                break
+            continue
+        if text:
+            row.summary = text
+            got += 1
+    return got

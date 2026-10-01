@@ -2,7 +2,9 @@
 
 What is pinned, by behaviour:
   * **Reads only.** A whole pass makes GET requests, plus the ONE call-history search on Zuper
-    Connect; nothing else reaches Zuper. The narrow Connect reader refuses every other path.
+    Connect; nothing else reaches Zuper. A recorded call with no summary has its details
+    opened (a GET), because Zuper's list leaves the summary text out; a summary once read is
+    kept and the call is not opened again. The narrow Connect reader refuses every other path.
   * **The first pass rings nothing** (it would bury the office under old jobs); a job that
     appears afterwards rings once — for an admin and an unrestricted dispatcher, never for a
     technician or a restricted user, and not for a dispatcher whose pipeline permissions hide
@@ -68,6 +70,7 @@ class Zuper:
         self.jobs: list[dict] = []
         self.notes: dict[str, list[dict]] = {}
         self.calls: list[dict] = []
+        self.details: dict[str, dict] = {}
         self.requests: list[tuple[str, str]] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -77,6 +80,9 @@ class Zuper:
         if request.url.host == "us-east-1-connect.zuperpro.com":
             if request.method == "POST" and path == "/api/telephony/calls":
                 return ok(self.calls, total_records=len(self.calls), total_pages=1)
+            for uid, detail in self.details.items():
+                if request.method == "GET" and path == "/api/telephony/calls/%s/details" % uid:
+                    return ok(detail)
             return httpx.Response(418)
         if request.method != "GET":
             return httpx.Response(418)
@@ -342,3 +348,41 @@ def test_one_unreadable_job_is_skipped_and_a_deleted_job_closes(db, zuper, peopl
     assert j2.is_open is False
     assert db.query(DispatchItem).filter(DispatchItem.job_uid == "j2",
                                          DispatchItem.state == "open").count() == 0
+
+
+def test_a_recorded_calls_summary_is_fetched_from_its_details_and_kept(db, zuper, people):
+    """Live 2026-10-01: the list's call_summary is {status: null}; only the details carry the
+    text — which is why it showed in Zuper only after someone opened the call."""
+    def call(uid, hours):
+        return {"call_uid": uid, "direction": "OUTGOING", "status": "COMPLETED", "duration": 90,
+                "created_at": iso(NOW - timedelta(hours=hours)),
+                "to": {"customer": {"number": "+19415550100"}},
+                "from": {"user": {"user_name": "Marianne"}},
+                "call_recordings": [{"call_recording_uid": "rec-" + uid,
+                                     "recording_url": "https://example.test/r.mp3",
+                                     "call_summary": {"status": None, "sentiment": "NEUTRAL"}}]}
+    zuper.calls = [call("c-1", 1), call("c-2", 2), call("c-old", 24 * 30)]
+    zuper.details = {"c-1": {"call_uid": "c-1", "call_recordings": [{"call_summary": {
+        "summary": "Customer agreed to Tuesday for the inspection.",
+        "next_action": "Book the inspection", "confidence": 96.7, "status": "COMPLETED"}}]},
+                     "c-2": {"call_uid": "c-2", "call_recordings": [{"call_summary": {
+                         "status": "IN_PROGRESS", "summary": None}}]}}
+    service.run(db, NOW)
+    got = {r.call_uid: r.summary for r in db.query(DispatchCall)}
+    assert got["c-1"] == ("Customer agreed to Tuesday for the inspection.\n"
+                          "Next step: Book the inspection")
+    assert got["c-2"] is None and got["c-old"] is None
+    opened = [p for m, p in zuper.requests if p.endswith("/details")]
+    assert sorted(opened) == ["us-east-1-connect.zuperpro.com/api/telephony/calls/c-1/details",
+                              "us-east-1-connect.zuperpro.com/api/telephony/calls/c-2/details"]
+    assert all(m in ("GET", "POST") for m, _ in zuper.requests)
+    # Next pass: the summary is kept (the list has none), c-1 is not opened again, c-2 is.
+    zuper.requests.clear()
+    zuper.details["c-2"]["call_recordings"][0]["call_summary"] = {
+        "summary": "Left a voicemail.", "status": "COMPLETED"}
+    service.run(db, NOW + timedelta(minutes=3))
+    db.expire_all()
+    got = {r.call_uid: r.summary for r in db.query(DispatchCall)}
+    assert got["c-1"].startswith("Customer agreed") and got["c-2"] == "Left a voicemail."
+    assert [p for m, p in zuper.requests if p.endswith("/details")] == [
+        "us-east-1-connect.zuperpro.com/api/telephony/calls/c-2/details"]
