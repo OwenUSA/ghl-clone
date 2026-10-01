@@ -2,12 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import {
   ApiError, deleteDispatchChat, dispatchChats, dispatchChatThread, rateDispatchChatMessage,
-  renameDispatchChat, sendDispatchChatMessage,
+  renameDispatchChat, sendDispatchChatMessage, uploadDispatchChatFile,
+  type DispatchChatDownload, type DispatchChatFile, type DispatchChatFileRef,
   type DispatchChatMessage, type DispatchChatScope, type DispatchChatStep, type DispatchChatSummary,
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  blocks, clip, greeting, groupChats, stepArgs, stepLabel, SUGGESTED_QUESTIONS, type Inline,
+  blocks, clip, DEFAULT_FILE_QUESTION, fileSummary, greeting, groupChats, isSpreadsheetName,
+  MAX_CHAT_FILES, stepArgs, stepLabel, SUGGESTED_QUESTIONS, type Inline,
 } from '../../lib/dispatch'
 
 const INK = 'rgb(16,24,40)'
@@ -20,6 +22,8 @@ const SERIF = 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif'
 const NARROW = 900
 
 type Thread = { chat: DispatchChatSummary; can_write: boolean; messages: DispatchChatMessage[] }
+/** A spreadsheet on the composer: still uploading, or read by the server and ready to send. */
+type Attached = { key: number; filename: string; file: DispatchChatFile | null }
 
 /**
  * The Dispatch assistant (2026-10-01): the page's first tab, laid out like a Claude / ChatGPT
@@ -43,9 +47,13 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
   const admin = user.role === 'ADMIN'
   const [scope, setScope] = useState<DispatchChatScope>('mine')
   const [draft, setDraft] = useState('')
-  const [pending, setPending] = useState<string | null>(null)
+  const [pending, setPending] = useState<{ content: string; files: DispatchChatFileRef[] } | null>(null)
   const [sendError, setSendError] = useState<{ chatId: number | null; asked: string;
-    message: string } | null>(null)
+    files: DispatchChatFileRef[]; message: string } | null>(null)
+  const [attached, setAttached] = useState<Attached[]>([])
+  const [fileError, setFileError] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const nextKey = useRef(1)
   const narrow = useNarrow()
   const [sidebarOpen, setSidebarOpen] = useState(() => !isNarrowNow())
   const bottom = useRef<HTMLDivElement>(null)
@@ -65,9 +73,9 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
   }, [thread.error, setActiveChatId])
 
   const ask = useMutation({
-    mutationFn: (v: { chatId: number | null; content: string }) =>
-      sendDispatchChatMessage(v.chatId, v.content),
-    onMutate: (v) => { setPending(v.content); setSendError(null) },
+    mutationFn: (v: { chatId: number | null; content: string; files: DispatchChatFileRef[] }) =>
+      sendDispatchChatMessage(v.chatId, v.content, v.files.map((f) => f.id)),
+    onMutate: (v) => { setPending({ content: v.content, files: v.files }); setSendError(null) },
     onSuccess: (r, v) => {
       qc.setQueryData<Thread>(['dispatch-chat', r.chat.id], (old) => ({
         chat: r.chat, can_write: old?.can_write ?? true,
@@ -81,7 +89,7 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
       // Only follow the answer if the person is still looking at the chat they asked in.
       if (activeRef.current === v.chatId) setActiveChatId(r.chat.id)
     },
-    onError: (e, v) => setSendError({ chatId: v.chatId, asked: v.content,
+    onError: (e, v) => setSendError({ chatId: v.chatId, asked: v.content, files: v.files,
       message: (e as Error).message || 'The assistant could not answer.' }),
     onSettled: () => setPending(null),
   })
@@ -93,12 +101,47 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) },
     [messages.length, ask.isPending, activeChatId, shownError])
 
+  const reading = attached.some((a) => a.file == null)
+  const ready = attached.flatMap((a) => a.file ? [a.file] : [])
+
   const send = (text: string) => {
     const t = text.trim()
-    if (!t || ask.isPending || !canWrite) return
+    if ((!t && ready.length === 0) || reading || ask.isPending || !canWrite) return
+    const files = ready.map((f) => ({ id: f.id, filename: f.filename, total_rows: f.total_rows }))
     setDraft('')
-    ask.mutate({ chatId: activeChatId, content: t })
+    setAttached([])
+    setFileError(null)
+    ask.mutate({ chatId: activeChatId, content: t || DEFAULT_FILE_QUESTION, files })
   }
+
+  // Each picked file is uploaded at once, so the chip can say how much the server could read.
+  const addFiles = (picked: File[]) => {
+    if (!picked.length || !canWrite) return
+    setFileError(null)
+    let room = MAX_CHAT_FILES - attached.length
+    const problems: string[] = []
+    for (const f of picked) {
+      if (room <= 0) {
+        problems.push(`Up to ${MAX_CHAT_FILES} files per message — ${f.name} was not added.`)
+        continue
+      }
+      if (!isSpreadsheetName(f.name)) {
+        problems.push(`${f.name} is not an Excel or CSV file (.xlsx, .xlsm or .csv).`)
+        continue
+      }
+      room -= 1
+      const key = nextKey.current++
+      setAttached((old) => [...old, { key, filename: f.name, file: null }])
+      uploadDispatchChatFile(f).then(
+        (file) => setAttached((old) => old.map((a) => a.key === key ? { ...a, file } : a)),
+        (e: unknown) => {
+          setAttached((old) => old.filter((a) => a.key !== key))
+          setFileError(`${f.name}: ${uploadProblem(e)}`)
+        })
+    }
+    if (problems.length) setFileError(problems.join(' '))
+  }
+  const pickFiles = () => { if (canWrite) fileInput.current?.click() }
 
   const open = (id: number | null) => {
     setActiveChatId(id)
@@ -108,7 +151,11 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
 
   const composer = (
     <Composer value={draft} onChange={setDraft} onSend={() => send(draft)} busy={ask.isPending}
-      placeholder={messages.length ? 'Reply to the assistant…' : 'How can I help today?'} />
+      placeholder={messages.length ? 'Reply to the assistant…' : 'How can I help today?'}
+      attached={attached} reading={reading} fileError={fileError} onAttach={pickFiles}
+      onDropFiles={addFiles} onRemove={(key) => {
+        setAttached((old) => old.filter((a) => a.key !== key)); setFileError(null)
+      }} />
   )
 
   const empty = activeChatId == null && pending == null && !shownError
@@ -131,6 +178,9 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
         <div style={{ width: '100%', maxWidth: 680 }}>
           {composer}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14, justifyContent: 'center' }}>
+            <button type="button" onClick={pickFiles} className="hover:bg-[rgb(243,244,246)]"
+              style={{ border: `1px solid ${LINE}`, borderRadius: 999, padding: '6px 12px',
+                fontSize: 13, color: INK, background: '#fff' }}>Compare my Excel with Zuper</button>
             {SUGGESTED_QUESTIONS.map((q) => (
               <button key={q} type="button" onClick={() => send(q)} className="hover:bg-[rgb(243,244,246)]"
                 style={{ border: `1px solid ${LINE}`, borderRadius: 999, padding: '6px 12px',
@@ -160,14 +210,14 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
               <div style={{ color: RED, fontSize: 13 }}>
                 Could not load this chat: {(thread.error as Error).message}</div>)}
             {messages.map((m) => m.role === 'user' ? (
-              <UserBubble key={m.id} text={m.content} />
+              <UserBubble key={m.id} text={m.content} files={m.files ?? []} />
             ) : (
               <AssistantMessage key={m.id} chatId={activeChatId as number} m={m}
                 canRate={canWrite} onOpenSuggestions={onOpenSuggestions} />
             ))}
             {pending != null && ask.variables?.chatId === activeChatId && (
               <>
-                <UserBubble text={pending} />
+                <UserBubble text={pending.content} files={pending.files} />
                 <div style={{ display: 'flex', margin: '18px 0', alignItems: 'center' }}>
                   <span style={{ color: MUTED, fontSize: 14 }}>Looking through the jobs and calls
                     <span className="dispatch-dots" /></span>
@@ -176,7 +226,7 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
             )}
             {shownError && (
               <>
-                <UserBubble text={shownError.asked} />
+                <UserBubble text={shownError.asked} files={shownError.files} />
                 <div style={{ margin: '18px 0', fontSize: 15, lineHeight: '24px', color: RED }}>
                   {shownError.message}</div>
               </>
@@ -200,6 +250,8 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
   return (
     <div className="flex min-h-0 flex-1" style={{ position: 'relative', overflow: 'hidden' }}>
       <style>{KEYFRAMES}</style>
+      <input ref={fileInput} type="file" accept=".xlsx,.xlsm,.csv" multiple hidden
+        onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} />
       {sidebarOpen && narrow && (
         <div onClick={() => setSidebarOpen(false)} style={{ position: 'absolute', inset: 0,
           background: 'rgba(16,24,40,0.2)', zIndex: 19 }} />
@@ -224,6 +276,16 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
 
 const chipBtn: React.CSSProperties = { fontSize: 12, color: MUTED, border: `1px solid ${LINE}`,
   borderRadius: 999, padding: '4px 10px', background: '#fff', flexShrink: 0 }
+
+/** The server's sentence for a refused upload, or a plain one by status. */
+function uploadProblem(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 413) return e.message || 'The file is larger than 10 MB.'
+    if (e.status === 415) return e.message || 'Only .xlsx, .xlsm and .csv files can be read.'
+    if (e.status === 422) return e.message || 'The file could not be read.'
+  }
+  return (e as Error)?.message || 'The file could not be uploaded.'
+}
 
 function isNarrowNow(): boolean {
   return typeof window !== 'undefined' && window.innerWidth < NARROW
@@ -409,12 +471,42 @@ const menuItem: React.CSSProperties = { display: 'block', width: '100%', textAli
 
 // ---------------- messages ----------------
 
-function UserBubble({ text }: { text: string }) {
+function UserBubble({ text, files = [] }: { text: string; files?: DispatchChatFileRef[] }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '14px 0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', margin: '14px 0' }}>
       <div style={{ maxWidth: '80%', background: 'rgb(240,238,232)', color: INK,
         borderRadius: 18, padding: '10px 16px', fontSize: 15, lineHeight: '22px',
         whiteSpace: 'pre-wrap' }}>{text}</div>
+      {files.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, justifyContent: 'flex-end',
+          maxWidth: '80%' }}>
+          {files.map((f) => (
+            <span key={f.id} title={f.filename} style={{ ...fileChip, maxWidth: 320 }}>
+              <span style={chipName}>{f.filename}</span>
+              <span style={{ color: MUTED, flexShrink: 0 }}>· {fileSummary(f.total_rows)}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const fileChip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4,
+  fontSize: 12, color: INK, border: `1px solid ${LINE}`, borderRadius: 8, padding: '3px 8px',
+  background: '#fff', minWidth: 0 }
+const chipName: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap', minWidth: 0 }
+
+function Downloads({ items }: { items: DispatchChatDownload[] }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+      {items.map((d, i) => (
+        <a key={`${d.url}-${i}`} href={d.url} download className="hover:bg-[rgb(243,244,246)]"
+          style={{ fontSize: 13, color: BLUE, border: `1px solid ${LINE}`, borderRadius: 8,
+            padding: '6px 10px', background: '#fff', textDecoration: 'none' }}>
+          Download: {d.label}</a>
+      ))}
     </div>
   )
 }
@@ -429,6 +521,7 @@ function AssistantMessage({ chatId, m, canRate, onOpenSuggestions }: {
       <div style={{ flex: 1, minWidth: 0, fontSize: 15, lineHeight: '24px',
         color: m.error ? RED : INK }}>
         <Answer text={m.content} />
+        {!!m.downloads?.length && <Downloads items={m.downloads} />}
         {!!m.suggestions?.length && (
           <button type="button" onClick={onOpenSuggestions} style={{ marginTop: 8, fontSize: 13,
             color: BLUE, border: `1px solid ${LINE}`, borderRadius: 8, padding: '6px 10px',
@@ -562,10 +655,13 @@ function Thumb({ up, filled, disabled, onClick }: {
   )
 }
 
-function Composer({ value, onChange, onSend, busy, placeholder }: {
+function Composer({ value, onChange, onSend, busy, placeholder, attached, reading, fileError,
+  onAttach, onDropFiles, onRemove }: {
   value: string; onChange: (v: string) => void; onSend: () => void; busy: boolean
-  placeholder: string
+  placeholder: string; attached: Attached[]; reading: boolean; fileError: string | null
+  onAttach: () => void; onDropFiles: (files: File[]) => void; onRemove: (key: number) => void
 }) {
+  const [dragging, setDragging] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -573,17 +669,64 @@ function Composer({ value, onChange, onSend, busy, placeholder }: {
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [value])
-  const ready = value.trim().length > 0 && !busy
+  const hasFile = attached.some((a) => a.file != null)
+  const ready = (value.trim().length > 0 || hasFile) && !reading && !busy
+  const full = attached.length >= MAX_CHAT_FILES
   return (
-    <div style={{ background: '#fff', border: `1px solid ${LINE}`, borderRadius: 20,
-      boxShadow: '0 4px 20px rgba(16,24,40,0.06)', padding: '14px 14px 10px 18px' }}>
+    <div>
+    <div onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return
+        e.preventDefault(); setDragging(true)
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return
+        e.preventDefault(); setDragging(false)
+        onDropFiles(Array.from(e.dataTransfer.files))
+      }}
+      style={{ background: '#fff', border: `1px ${dragging ? 'dashed' : 'solid'} ${dragging ? BLUE : LINE}`,
+        borderRadius: 20, boxShadow: '0 4px 20px rgba(16,24,40,0.06)', padding: '14px 14px 10px 18px' }}>
+      {attached.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          {attached.map((a) => (
+            <span key={a.key} title={a.filename} style={{ ...fileChip, maxWidth: '100%' }}>
+              {a.file == null ? (
+                <span style={{ ...chipName, color: MUTED }}>Reading {a.filename}…</span>
+              ) : (
+                <>
+                  <span style={chipName}>{a.file.filename}</span>
+                  <span style={{ color: MUTED, flexShrink: 0 }}>
+                    · {fileSummary(a.file.total_rows, a.file.sheets.length)}</span>
+                  <button type="button" onClick={() => onRemove(a.key)}
+                    aria-label={`Remove ${a.file.filename}`}
+                    style={{ fontSize: 12, color: BLUE, marginLeft: 4, flexShrink: 0 }}>Remove</button>
+                </>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+      {dragging && (
+        <div style={{ fontSize: 12, color: BLUE, marginBottom: 6 }}>
+          Drop an Excel or CSV file to attach it</div>)}
       <textarea ref={ref} value={value} rows={1} autoFocus placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend() } }}
         style={{ width: '100%', resize: 'none', border: 'none', outline: 'none', fontSize: 15,
           lineHeight: '22px', color: INK, background: 'transparent', maxHeight: 200 }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
-        <span style={{ fontSize: 12, color: MUTED }}>Dispatch assistant · reads only</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <button type="button" onClick={onAttach} disabled={full || busy}
+            title={full ? `Up to ${MAX_CHAT_FILES} files per message` : 'Attach an .xlsx, .xlsm or .csv file'}
+            className={full || busy ? '' : 'hover:bg-[rgb(243,244,246)]'}
+            style={{ fontSize: 12, color: full || busy ? 'rgb(152,162,179)' : INK,
+              border: `1px solid ${LINE}`, borderRadius: 8, padding: '3px 10px', background: '#fff',
+              flexShrink: 0 }}>Attach Excel</button>
+          <span style={{ fontSize: 12, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap' }}>Dispatch assistant · reads only</span>
+        </span>
         <button type="button" aria-label="Send" disabled={!ready} onClick={onSend}
           style={{ width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center',
             justifyContent: 'center', background: ready ? BLUE : 'rgb(234,236,240)',
@@ -593,6 +736,10 @@ function Composer({ value, onChange, onSend, busy, placeholder }: {
             <path d="M12 19V5M5 12l7-7 7 7" /></svg>
         </button>
       </div>
+    </div>
+    {fileError && (
+      <div role="alert" style={{ color: RED, fontSize: 12, marginTop: 6, padding: '0 6px' }}>
+        {fileError}</div>)}
     </div>
   )
 }

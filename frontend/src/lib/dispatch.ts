@@ -255,3 +255,23 @@ export function planText(plan: {
   }
   return lines.join('\n').trimEnd() + '\n'
 }
+
+/** Asked for the user when they attach a spreadsheet and type nothing. */
+export const DEFAULT_FILE_QUESTION = 'Read this file from top to bottom and compare every row with '
+  + 'Zuper. Tell me what is different, what is missing and what needs attention.'
+
+/** At most this many spreadsheets on one message. */
+export const MAX_CHAT_FILES = 3
+
+/** "N rows in M sheets" — the chip under an attached spreadsheet. */
+export function fileSummary(rows: number, sheets?: number): string {
+  const r = `${rows.toLocaleString('en-US')} row${rows === 1 ? '' : 's'}`
+  if (sheets == null) return r
+  return `${r} in ${sheets} sheet${sheets === 1 ? '' : 's'}`
+}
+
+/** True when the picked file's name says it is one the assistant can read. The server decides
+ * for certain; this only saves an upload that is bound to be refused. */
+export function isSpreadsheetName(name: string): boolean {
+  return /\.(xlsx|xlsm|csv)$/i.test(name)
+}

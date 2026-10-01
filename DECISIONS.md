@@ -6623,3 +6623,14 @@ down with a note. The server builds the history it sends to the model (the brows
 the new question, so a saved conversation cannot be rewritten). A person sees and writes only
 their own chats; an ADMIN reads everyone's, read-only, for review. Delete = archive: hidden from
 the owner, kept. The old unsaved `POST /api/dispatch/chat` is gone.
+
+### A spreadsheet can be attached to the chat and compared with Zuper (2026-10-01)
+
+The owner: "this chat should also allow me to upload an excel, read it from top to bottom and
+compare it with the information in Zuper". The MATCHING is code, not the model
+(`dispatch/compare.py`, pinned by tests/test_dispatch_compare.py): job number, then phone, then
+name, then street address; differences named (stage, address, phone, closed job, more than one
+customer); rows Zuper does not have listed; boards hidden from the reader never matched. The
+model only reads (`read_file`, 100 rows a call) and explains (`compare_file`), and every
+comparison is also a downloadable workbook built fresh from Zuper's current copy. Files belong to
+the person who uploaded them (an ADMIN may read them); only the parsed rows are kept.

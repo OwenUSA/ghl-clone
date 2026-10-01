@@ -2059,8 +2059,27 @@ class DispatchChatMessage(Base):
     model: Mapped[str | None] = mapped_column(String(120))
     input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Files the answer produced for download (a comparison workbook): [{label, url}].
+    downloads: Mapped[list | None] = mapped_column(NullableJSONType)
     rating: Mapped[int | None] = mapped_column(Integer)            # 1 | -1
     feedback_note: Mapped[str | None] = mapped_column(Text)
     feedback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class DispatchChatFile(Base):
+    """A spreadsheet uploaded into a Dispatch chat (2026-10-01): kept with the chat, read from
+    top to bottom (dispatch/sheets.py) and compared with Zuper (dispatch/compare.py). Only the
+    parsed rows are kept, not the file."""
+    __tablename__ = "dispatch_chat_files"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    size: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    total_rows: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    sheets: Mapped[list] = mapped_column(JSONType)          # [{name, columns, rows: [...]}]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())

@@ -724,6 +724,11 @@ in `DECISIONS.md`.
   model, tokens, error and the person's thumbs up / down + note — for reviewing and improving it.
   The server keeps the history (the browser sends only the new question). Own chats only; an
   ADMIN reads everyone's, read-only. "Delete" only archives.
+- **Spreadsheets in the chat** (2026-10-01): "Attach Excel" (`POST /api/dispatch/chats/files`,
+  .xlsx/.xlsm/.csv, 10 MB) — `dispatch/sheets.py` reads every sheet top to bottom (header = first
+  row with text), `dispatch/compare.py` matches each row to a Zuper job (job # → phone → name →
+  address) and names every difference; the chat's `read_file` / `compare_file` tools, and
+  `GET /api/dispatch/chats/files/{id}/comparison.xlsx`. Only the parsed rows are stored.
 - **Phase 3 — the agent applies a confirmed change in Zuper** (`dispatch/writes.py`, routes in
   `dispatch/act.py`): BUILT AND OFF. Needs `DISPATCH_ZUPER_WRITES=true` AND an ADMIN's master +
   per-action switch (typed "TURN ON", every flip in `dispatch_write_log`); writes only through

@@ -327,6 +327,18 @@ TOOLS = [
                        {"type": "object", "properties": {
                            "days": {"type": "integer"}, "kind": {"type": "string"}},
                         "additionalProperties": False}),
+    providers.ToolSpec("read_file", "Read rows of a spreadsheet attached to this chat, in order "
+                       "(top to bottom). Page with offset; up to 100 rows a call.",
+                       {"type": "object", "properties": {
+                           "file_id": {"type": "integer"}, "sheet": {"type": "string"},
+                           "offset": {"type": "integer"}, "limit": {"type": "integer"}},
+                        "required": ["file_id"], "additionalProperties": False}),
+    providers.ToolSpec("compare_file", "Compare EVERY row of an attached spreadsheet with "
+                       "Zuper: the matching job, its stage now, visit, technician and every "
+                       "difference; rows not in Zuper. Also makes a downloadable comparison "
+                       "workbook for the person. Use it for any 'compare with Zuper' request.",
+                       {"type": "object", "properties": {"file_id": {"type": "integer"}},
+                        "required": ["file_id"], "additionalProperties": False}),
     providers.ToolSpec("suggest_change", "Record a change Zuper needs on a job, for the office to "
                        "approve (it is NOT applied). field: an exact job field label, 'Job "
                        "address' or 'Note'.", {"type": "object", "properties": {
@@ -374,7 +386,36 @@ def slots_for(db: Session, j: DispatchJob, now: datetime, kind: str | None = Non
 
 
 def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str],
-             made: list[DispatchSuggestion]) -> str:
+             made: list[DispatchSuggestion], files: dict | None = None,
+             downloads: list | None = None) -> str:
+    if name in ("read_file", "compare_file"):
+        f = (files or {}).get(int(args.get("file_id") or 0))
+        if f is None:
+            return json.dumps({"error": "no such file in this chat"})
+        if name == "read_file":
+            sheet = next((s for s in f.sheets if s["name"] == args.get("sheet")),
+                         f.sheets[0] if f.sheets else None)
+            if sheet is None:
+                return json.dumps({"error": "the file has no rows"})
+            off = max(0, int(args.get("offset") or 0))
+            lim = max(1, min(int(args.get("limit") or 50), 100))
+            return json.dumps({"sheet": sheet["name"], "sheets": [s["name"] for s in f.sheets],
+                               "total_rows": len(sheet["rows"]), "offset": off,
+                               "rows": sheet["rows"][off:off + lim]}, default=str)
+        from . import compare
+        result = compare.compare(f.sheets, db.scalars(select(DispatchJob)).all(),
+                                 hidden=hidden, now=now)
+        if downloads is not None:
+            link = {"label": "Comparison of %s with Zuper (Excel)" % f.filename,
+                    "url": "/api/dispatch/chats/files/%d/comparison.xlsx" % f.id}
+            if link not in downloads:
+                downloads.append(link)
+        notable = [r for r in result["rows"] if r["result"] != "same"]
+        return json.dumps({"counts": result["counts"], "columns_used": result["columns_used"],
+                           "rows_needing_attention": notable[:80],
+                           "more": max(0, len(notable) - 80),
+                           "note": "The full row-by-row comparison is in the download."},
+                          default=str)
     if name == "list_items":
         q = select(DispatchItem).where(DispatchItem.state == "open")
         if args.get("queue"):
@@ -425,7 +466,7 @@ STEP_RESULT_MAX = 4000
 
 
 def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[str],
-         now: datetime | None = None) -> dict:
+         now: datetime | None = None, files: dict | None = None) -> dict:
     """Answer the last user message of `messages` (oldest first, user / assistant).
 
     Never raises for the AI being unavailable: the result says so (`error`), so a saved
@@ -434,12 +475,13 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
     now = now or datetime.now(UTC)
     made: list[DispatchSuggestion] = []
     steps: list[dict] = []
+    downloads: list[dict] = []
     usage = {"input_tokens": 0, "output_tokens": 0}
 
     def result(reply: str, *, error: bool = False, model: str | None = None) -> dict:
         db.commit()
         return {"reply": reply, "error": error, "suggestions": [x.id for x in made],
-                "steps": steps, "model": model, **usage}
+                "steps": steps, "model": model, "downloads": downloads, **usage}
 
     try:
         prov, model = provider_for(db, now)
@@ -473,7 +515,8 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
                       "raw": turn.raw})
         results = []
         for call in turn.tool_calls:
-            out = run_tool(db, call.name, call.arguments or {}, now, hidden, made) \
+            out = run_tool(db, call.name, call.arguments or {}, now, hidden, made,
+                           files, downloads) \
                 if call.arguments is not None else json.dumps({"error": "bad arguments"})
             steps.append({"tool": call.name, "args": call.arguments or {},
                           "result": out[:STEP_RESULT_MAX]})

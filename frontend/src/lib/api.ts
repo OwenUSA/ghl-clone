@@ -2156,7 +2156,22 @@ export type DispatchChatMessage = {
   id: number; role: 'user' | 'assistant'; content: string; steps: DispatchChatStep[]
   error: boolean; model: string | null; feedback: DispatchChatFeedback | null
   suggestions: DispatchSuggestion[]; created_at: string
+  /** On a user message: the spreadsheets attached to it. Missing on older servers — treat as []. */
+  files?: DispatchChatFileRef[]
+  /** On an assistant message: files it made for the user to save (same-origin links). */
+  downloads?: DispatchChatDownload[]
 }
+/** A spreadsheet uploaded to the assistant chat (2026-10-01): read on the server, never sent on. */
+export type DispatchChatFile = {
+  id: number; filename: string; total_rows: number
+  sheets: { name: string; rows: number; columns: string[] }[]
+}
+export type DispatchChatFileRef = { id: number; filename: string; total_rows: number }
+export type DispatchChatDownload = { label: string; url: string }
+/** Upload one .xlsx / .xlsm / .csv for the next message. 413 over 10 MB, 415 not a spreadsheet,
+ * 422 unreadable — each with a sentence. */
+export const uploadDispatchChatFile = (file: File) =>
+  upload<DispatchChatFile>('/api/dispatch/chats/files', file)
 export type DispatchChatScope = 'mine' | 'all'
 /** scope=all is ADMIN only (403 otherwise) and names each chat's user. */
 export const dispatchChats = (scope: DispatchChatScope = 'mine') =>
@@ -2166,10 +2181,11 @@ export const dispatchChatThread = (id: number) =>
     `/api/dispatch/chats/${id}`)
 /** chat_id null starts a new chat; the answer says which chat it landed on. An unavailable
  * AI still answers 200 with assistant_message.error = true and the reason as content. */
-export const sendDispatchChatMessage = (chatId: number | null, content: string) =>
+export const sendDispatchChatMessage = (chatId: number | null, content: string,
+  fileIds: number[] = []) =>
   send<{ chat: DispatchChatSummary; user_message: DispatchChatMessage;
     assistant_message: DispatchChatMessage }>('/api/dispatch/chats/messages', 'POST',
-    { chat_id: chatId, content })
+    fileIds.length ? { chat_id: chatId, content, file_ids: fileIds } : { chat_id: chatId, content })
 export const renameDispatchChat = (id: number, title: string) =>
   send<DispatchChatSummary>(`/api/dispatch/chats/${id}`, 'PATCH', { title })
 /** Hides the chat from every list; the server keeps it for review. */
