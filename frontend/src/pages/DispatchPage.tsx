@@ -3,9 +3,11 @@ import { useState } from 'react'
 import { PageTabs } from '../components/PageTabs'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
 import {
-  closeDispatchItem, decideSuggestion, dispatchChat, dispatchItems, dispatchSettings,
-  dispatchSlots, dispatchSuggestions, dispatchSummary, explainDispatchItem, saveDispatchSettings,
-  type DispatchItem, type DispatchSettings, type DispatchSuggestion, type DispatchTechnician,
+  applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion, dispatchChat,
+  dispatchItems, dispatchSettings, dispatchSlots, dispatchSuggestions, dispatchSummary,
+  dispatchWrites, explainDispatchItem, saveDispatchSettings, saveDispatchWrites,
+  type DispatchItem, type DispatchSettings, type DispatchSlot, type DispatchSuggestion,
+  type DispatchTechnician, type DispatchWrites,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
 import { canOpenAiAgents, isAiAdmin } from '../lib/aiAgents'
@@ -30,9 +32,13 @@ const link: React.CSSProperties = { color: BLUE, fontWeight: 500 }
  * call and text. Fixed rules find the work (app/dispatch/rules.py); phase 2 adds the AI's
  * explanation, suggested Zuper changes, three booking slots and a chat.
  *
- * NOTHING here changes Zuper. "Approve" on a suggestion means "correct — I'll do it in Zuper";
- * it closes itself when Zuper shows the value. "Wrong" is the accuracy count the owner watches
- * before anything is ever allowed to write. ADMIN + unrestricted DISPATCHER, like AI Agents.
+ * "Approve" on a suggestion means "correct — I'll do it in Zuper"; it closes itself when Zuper
+ * shows the value. "Wrong" is the accuracy count the owner watches. ADMIN + unrestricted
+ * DISPATCHER, like AI Agents.
+ *
+ * Phase 3 (2026-10-01): "Approve and let the agent do it" / "Book this" appear ONLY when the
+ * server gate (DISPATCH_ZUPER_WRITES) and the ADMIN's switches in Settings allow that action —
+ * all off by default. The server decides; the buttons only follow `GET /api/dispatch/writes`.
  */
 export function DispatchPage({ user }: { user: Me }) {
   const allowed = canOpenAiAgents(user)
@@ -99,10 +105,15 @@ export function DispatchPage({ user }: { user: Me }) {
   )
 }
 
+function useWrites() {
+  return useQuery({ queryKey: ['dispatch-writes'], queryFn: dispatchWrites, staleTime: 30000 })
+}
+
 function useRefresh() {
   const qc = useQueryClient()
   return () => {
-    for (const k of ['dispatch-items', 'dispatch-summary', 'dispatch-suggestions']) {
+    for (const k of ['dispatch-items', 'dispatch-summary', 'dispatch-suggestions',
+      'dispatch-writes']) {
       qc.invalidateQueries({ queryKey: [k] })
     }
   }
@@ -207,24 +218,41 @@ function AiBlock({ item }: { item: DispatchItem }) {
 
 function SuggestionLine({ s, showJob = false }: { s: DispatchSuggestion; showJob?: boolean }) {
   const refresh = useRefresh()
+  const w = useWrites()
+  const [result, setResult] = useState<{ ok: boolean; sentence: string } | null>(null)
   const decide = useMutation({ mutationFn: (how: 'approve' | 'wrong') => decideSuggestion(s.id, how),
     onSuccess: refresh })
+  const apply = useMutation({ mutationFn: (approve: boolean) => applyDispatchSuggestion(s.id, approve),
+    onSuccess: (r) => { setResult(r); refresh() } })
+  const agentMay = !!w.data?.can[s.kind]
+  const busy = decide.isPending || apply.isPending
   const what = s.kind === 'note' ? 'Add a note' : `${s.field}: ${s.current ? `“${s.current}” → ` : ''}“${s.proposed}”`
+  const failed = s.state === 'apply_failed'
   return (
     <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, fontSize: 13,
-      background: s.state === 'approved' ? 'rgb(236,253,243)' : 'rgb(245,248,255)' }}>
+      background: failed ? RED_BG : s.state === 'approved' ? 'rgb(236,253,243)' : 'rgb(245,248,255)' }}>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
         <span style={{ fontWeight: 600, color: INK }}>Suggested change</span>
         {showJob && <span style={{ color: MUTED }}>#{s.job_number} · {s.board}</span>}
         <span style={{ color: INK }}>{s.kind === 'note' ? `${what}: “${s.proposed}”` : what}</span>
         <span className="ml-auto" />
         {s.state === 'approved' ? (
-          <span style={{ color: GREEN, fontSize: 12 }}>Approved — waiting to see it in Zuper</span>
+          <>
+            <span style={{ color: GREEN, fontSize: 12 }}>Approved — waiting to see it in Zuper</span>
+            {agentMay && <button type="button" disabled={busy} onClick={() => apply.mutate(false)}
+              style={link} title="The agent makes this change in Zuper and checks it took">
+              {apply.isPending ? 'Making the change…' : 'Let the agent do it'}</button>}
+          </>
         ) : (
           <>
-            <button type="button" disabled={decide.isPending} onClick={() => decide.mutate('approve')}
-              style={link} title="Correct — I'll make this change in Zuper">Approve</button>
-            <button type="button" disabled={decide.isPending} onClick={() => decide.mutate('wrong')}
+            <button type="button" disabled={busy} onClick={() => decide.mutate('approve')}
+              style={link} title="Correct — I'll make this change in Zuper">
+              {failed ? 'Approve again' : 'Approve'}</button>
+            {agentMay && !failed && <button type="button" disabled={busy}
+              onClick={() => apply.mutate(true)} style={link}
+              title="Correct — the agent makes this change in Zuper and checks it took">
+              {apply.isPending ? 'Making the change…' : 'Approve and let the agent do it'}</button>}
+            <button type="button" disabled={busy} onClick={() => decide.mutate('wrong')}
               style={{ color: MUTED }}>Wrong</button>
           </>
         )}
@@ -232,12 +260,25 @@ function SuggestionLine({ s, showJob = false }: { s: DispatchSuggestion; showJob
           Open in Zuper ↗</a>}
       </div>
       {s.evidence && <div style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>Because: {s.evidence}</div>}
+      {(result || (failed && s.apply_result)) && (
+        <div style={{ fontSize: 12, marginTop: 4, color: result?.ok ? GREEN : RED }}>
+          {result ? result.sentence : s.apply_result}</div>
+      )}
+      {(apply.isError || decide.isError) && <div style={{ color: RED, fontSize: 12, marginTop: 4 }}>
+        {((apply.error || decide.error) as Error).message}</div>}
     </div>
   )
 }
 
 function Slots({ jobUid }: { jobUid: string }) {
   const q = useQuery({ queryKey: ['dispatch-slots', jobUid], queryFn: () => dispatchSlots(jobUid) })
+  const w = useWrites()
+  const refresh = useRefresh()
+  const [picked, setPicked] = useState<DispatchSlot | null>(null)
+  const book = useMutation({ mutationFn: (sl: DispatchSlot) => bookDispatchSlot(jobUid,
+    { start: sl.start, end: sl.end, technician: sl.tech }),
+  onSuccess: () => { setPicked(null); refresh() } })
+  const canBook = !!w.data?.can.booking
   return (
     <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'rgb(249,250,251)',
       fontSize: 13 }}>
@@ -246,11 +287,31 @@ function Slots({ jobUid }: { jobUid: string }) {
       {q.isError && <div style={{ color: RED }}>{(q.error as Error).message}</div>}
       {q.data?.slots.length === 0 && <div style={{ color: MUTED }}>No free slot in the next 10 business days.</div>}
       <ul style={{ margin: '4px 0 0 0' }}>
-        {q.data?.slots.map((sl, n) => <li key={n} style={{ color: INK }}>{slotLabel(sl)}</li>)}
+        {q.data?.slots.map((sl, n) => (
+          <li key={n} style={{ color: INK }}>{slotLabel(sl)}
+            {canBook && picked !== sl && <button type="button" disabled={book.isPending}
+              onClick={() => { setPicked(sl); book.reset() }} style={{ ...link, marginLeft: 8 }}>
+              Book this</button>}
+            {picked === sl && (
+              <span style={{ marginLeft: 8 }}>
+                <span style={{ color: MUTED }}>Book it in Zuper (time and Technician field)? </span>
+                <button type="button" disabled={book.isPending} onClick={() => book.mutate(sl)}
+                  style={{ color: '#fff', background: BLUE, borderRadius: 6, padding: '1px 8px',
+                    fontWeight: 500 }}>{book.isPending ? 'Booking…' : 'Yes, book it'}</button>
+                <button type="button" onClick={() => setPicked(null)}
+                  style={{ color: MUTED, marginLeft: 6 }}>No</button>
+              </span>
+            )}
+          </li>
+        ))}
       </ul>
+      {book.data && <div style={{ color: book.data.ok ? GREEN : RED, fontSize: 12 }}>
+        {book.data.sentence}</div>}
+      {book.isError && <div style={{ color: RED, fontSize: 12 }}>{(book.error as Error).message}</div>}
       {q.data?.note && <div style={{ color: MUTED, fontSize: 12 }}>{q.data.note}</div>}
       <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>
-        Book the one the customer picks in Zuper (date, time and the Technician field).</div>
+        {canBook ? 'Agree a slot with the customer, then book it here or in Zuper.'
+          : 'Book the one the customer picks in Zuper (date, time and the Technician field).'}</div>
     </div>
   )
 }
@@ -394,7 +455,95 @@ function SettingsTab({ admin }: { admin: boolean }) {
         )}
       </div>
       {save.isError && <div style={{ color: RED, fontSize: 13 }}>{(save.error as Error).message}</div>}
+      <WritesSection admin={admin} />
       {!admin && <div style={{ color: MUTED, fontSize: 12 }}>Only an admin can change these.</div>}
     </>
   )
 }
+
+/**
+ * "Let the agent make changes in Zuper" (phase 3). Turning a switch ON opens a confirmation
+ * built into the page — type the phrase the server asks for; turning one OFF is one click.
+ * The server gate is the deployment's (DISPATCH_ZUPER_WRITES) and is only reported here.
+ */
+function WritesSection({ admin }: { admin: boolean }) {
+  const qc = useQueryClient()
+  const w = useWrites()
+  const [asking, setAsking] = useState<{ key: string; label: string } | null>(null)
+  const [typed, setTyped] = useState('')
+  const save = useMutation({ mutationFn: saveDispatchWrites,
+    onSuccess: (d: DispatchWrites) => {
+      qc.setQueryData(['dispatch-writes'], d)
+      qc.invalidateQueries({ queryKey: ['dispatch-settings'] })
+      setAsking(null)
+      setTyped('')
+    } })
+  if (!w.data) return null
+  const d = w.data
+  const master = d.switches[0]?.key
+  return (
+    <div style={card}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>Let the agent make changes in Zuper</div>
+      <div style={{ fontSize: 13, color: MUTED, margin: '4px 0 8px' }}>
+        After a person confirms a suggested change, a slot or a stage, the agent can make it in
+        Zuper and check it took. It never deletes, never touches pictures, never cancels or
+        closes a job, never messages a customer and never touches quotes, invoices or payments.
+        Every change is recorded below. Run the Zuper safety check before turning any of this on.</div>
+      <div style={{ fontSize: 13, marginBottom: 8, color: d.server_gate ? GREEN : RED }}>
+        {d.server_gate ? 'This server allows it (DISPATCH_ZUPER_WRITES is on).'
+          : d.server_gate_sentence}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+        {d.switches.map((sw) => (
+          <div key={sw.key} style={{ display: 'flex', alignItems: 'center', gap: 10,
+            paddingLeft: sw.key === master ? 0 : 18 }}>
+            <span style={{ color: INK, fontWeight: sw.key === master ? 600 : 400, flex: 1 }}>
+              {sw.label}{sw.key === 'write_address' && ' (not yet tested against Zuper — leave off)'}</span>
+            <span style={{ color: sw.on ? GREEN : MUTED, width: 28 }}>{sw.on ? 'On' : 'Off'}</span>
+            <button type="button" disabled={!admin || save.isPending}
+              onClick={() => {
+                if (sw.on) save.mutate({ [sw.key]: false })
+                else { setAsking({ key: sw.key, label: sw.label }); setTyped('') }
+              }}
+              style={{ color: sw.on ? RED : BLUE, fontWeight: 500, width: 80, textAlign: 'right' }}>
+              {sw.on ? 'Turn off' : 'Turn on'}</button>
+          </div>
+        ))}
+      </div>
+      {asking && (
+        <div role="dialog" aria-label="Confirm turning on" style={{ marginTop: 10, padding: 12,
+          border: `1px solid ${RED}`, borderRadius: 8, background: RED_BG, fontSize: 13 }}>
+          <div style={{ fontWeight: 600, color: INK }}>Turn on “{asking.label}”?</div>
+          <div style={{ color: INK, margin: '4px 0 8px' }}>
+            This lets the agent change jobs in Zuper — the business's source of truth — when a
+            person tells it to. Type <b>{d.confirm_phrase}</b> to confirm.</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)}
+              aria-label="Confirmation phrase" style={{ border: `1px solid ${LINE}`,
+                borderRadius: 6, padding: '4px 8px', fontSize: 13, width: 140 }} />
+            <button type="button" disabled={typed !== d.confirm_phrase || save.isPending}
+              onClick={() => save.mutate({ [asking.key]: true, confirm: typed })}
+              style={{ color: '#fff', background: typed === d.confirm_phrase ? RED : 'rgb(208,213,221)',
+                borderRadius: 6, padding: '4px 12px', fontWeight: 500 }}>Turn on</button>
+            <button type="button" onClick={() => { setAsking(null); setTyped('') }}
+              style={{ color: MUTED }}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {save.isError && <div style={{ color: RED, fontSize: 12, marginTop: 6 }}>
+        {(save.error as Error).message}</div>}
+      {d.recent.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
+          <div style={{ fontWeight: 600, color: INK }}>Recent</div>
+          {d.recent.map((r) => (
+            <div key={r.id}>
+              {r.at ? new Date(r.at).toLocaleString('en-US', { timeZone: 'America/New_York' }) : ''}
+              {' · '}{r.action === 'switch' ? `${r.target}: ${r.old} → ${r.new}`
+                : `#${r.job_number ?? '?'} ${r.action} — ${r.result}: ${r.sentence ?? ''}`}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+

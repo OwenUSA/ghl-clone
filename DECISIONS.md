@@ -6488,7 +6488,7 @@ change to anything existing). Stage moves read from whole jobs go into the KPI h
 live account (reads only) in a scratch database: 444 jobs read, 145 open jobs opened, 46 Zuper
 calls, 129 items, 0 bells on the first pass — and it caught the call_summary object, now pinned.
 
-**Not built yet:** phase 3 above.
+**Phase 3** is built, wired and switched off — see "Phase 3" below.
 
 ### Phase 2 — the AI, suggestions, booking slots, the chat (built the same day)
 
@@ -6514,3 +6514,62 @@ calls, 129 items, 0 bells on the first pass — and it caught the call_summary o
   suggestion. Up to 6 tool rounds per question; each round is a run against the cap.
 - Reading the settings never writes (`ai.settings` returns unsaved defaults): a read that inserted
   held SQLite's write lock past its request.
+
+### Phase 3 — "the agent does it itself" (2026-10-01): BUILT, WIRED, OFF
+
+The owner's decision, settled: after a person CONFIRMS a change the page suggested, they may tell
+the agent to make it in Zuper. Built so that turning it on is a deliberate act by two people (the
+deployment and an ADMIN) — and turning it on breaks the 2026-09-27 read-only rule, so the boss
+agrees first.
+
+- **Five actions, five switches + a master** (`dispatch_settings`): `write_fields` (fill / correct
+  one of the job's custom fields), `write_address` (the JOB's service address only, never the
+  customer record), `write_note` (a private note, `notify_users: false`), `write_booking` (the
+  job's scheduled start / end + its Technician field), and, separately, `write_stage` (a stage on
+  the job's OWN board). All default false (migration `f4d9e84f772d`, booleans with
+  `server_default=false`). ADMIN only; turning one ON needs `"confirm": "TURN ON"` typed in the
+  page's own dialog; turning one OFF is one click. Every flip is a `dispatch_write_log` row
+  (who, when, which switch, old -> new).
+- **The server's gate:** `DISPATCH_ZUPER_WRITES` (default false). Unset, nothing is written
+  whatever the switches say; `GET /api/dispatch/writes` and Settings say so in a sentence.
+- **Routes** (`app/dispatch/act.py`, the page's gate: ADMIN + unrestricted DISPATCHER, hidden
+  boards 404): `POST /suggestions/{id}/apply` (`{"approve": true}` approves and applies in one
+  press; otherwise only an approved suggestion), `POST /jobs/{uid}/book {start, end,
+  technician}` (a technician from Dispatch → Settings, a future time, under 12 h), `POST
+  /jobs/{uid}/stage {status_name}`. A switch / gate refusal is 409 with the sentence and
+  sends NOTHING.
+- **The client scope** (`client.dispatch_write()`, modelled on `ahs_create()`): inside it only
+  `DISPATCH_WRITES` — `PUT /jobs`, `PUT /jobs/{uid}/update`, `PUT /jobs/{uid}/status`, `POST
+  /jobs/{uid}/note` — and only while `DISPATCH_ZUPER_WRITES` is on. Every other non-GET is
+  refused inside the scope even on a deployment that is not pull-only, so it never borrows the
+  sync's wider allowlist; the denylist is still checked first. No DELETE, no POST /jobs, nothing
+  on customers, attachments / photos, quotes, invoices, payments, no sends.
+- **Request shapes** (verified live 2026-10-01 unless marked): a custom field is `PUT /jobs
+  {"job": {job_uid, custom_fields: [{label, value, group_name, group_uid, type, + hide_* /
+  read_only when the definition has them}]}}` with the metadata copied from the job's CURRENT
+  field definition (read first) — without it Zuper strips the field's group. A read-only field
+  is never sent. Times: `PUT /jobs/{uid}/update {"job": [{scheduled_start_time,
+  scheduled_end_time ("YYYY-MM-DD HH:mm:ss", UTC), type: "SCHEDULE"}]}` — a plain `PUT /jobs`
+  ignores times. Stage: `PUT /jobs/{uid}/status {status_uid, remarks}`, the uid from `GET
+  /jobs/status/{the job's own category_uid}`. Note: `POST /jobs/{uid}/note {"note": {note,
+  is_private: true, notify_users: false}}` (the wrapped shape; the AHS path tries flat first).
+  **The job address is UNVERIFIED**: `PUT /jobs {"job": {job_uid, customer_address}}` with the
+  job's current address copied, map position dropped, and street / city / state / zip replaced
+  from a "street, city, ST 12345" line (anything else is refused, not guessed). Keep
+  `write_address` off until a live test on a test job confirms it.
+- **Stages:** never Paid, Cancelled, Estimate Declined, Review Received (`config.CLOSED`), and
+  never a target Zuper types COMPLETED / CANCELED / CLOSED (deliberately conservative: loosen per
+  board on the owner's word); never a job that is closed by name; never another board — only the
+  job's own category's statuses are candidates.
+- **After every write the job is read back**; the change is believed only when Zuper shows it.
+  Result `applied` / `apply_failed` on the suggestion with the sentence, and a log row (ok /
+  failed / refused). **Never retried by itself**: a failed write might have landed. An
+  `apply_failed` suggestion stays in sight; a person re-approves it (two presses) or marks it
+  Wrong, and it closes itself (`done_in_zuper`) if Zuper later shows the value.
+- **Before turning anything on**: the boss's agreement, then `python3 /home/qa/zsafety.py` on
+  dispatch must pass (no active workflow or customer notification a field / stage change could
+  set off — the 2026-09-17 lesson). The switches do NOT run that check themselves (kept simple
+  by decision); it is the operator's step.
+- **Not verified:** no write has been sent to the live account from this code; the shapes above
+  were measured by hand. The first live use should be one field on a test job, read back in
+  Zuper's own screen.

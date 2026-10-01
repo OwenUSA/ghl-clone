@@ -84,7 +84,7 @@ def close_suggestions(db: Session, jobs: list[DispatchJob], now: datetime) -> in
     by_uid = {j.job_uid: j for j in jobs}
     done = 0
     for sug in db.scalars(select(DispatchSuggestion).where(
-            DispatchSuggestion.state.in_(("open", "approved")))):
+            DispatchSuggestion.state.in_(("open", "approved", "apply_failed")))):
         j = by_uid.get(sug.job_uid)
         if j is None or sug.kind == "note":
             continue

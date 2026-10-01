@@ -76,6 +76,20 @@ def ahs_email_creates_jobs() -> bool:
     return _flag("ZUPER_AHS_EMAIL_CREATES_JOBS", False)
 
 
+DISPATCH_WRITES_OFF_SENTENCE = (
+    "This server does not let the Dispatch page change Zuper (DISPATCH_ZUPER_WRITES is not "
+    "true), so nothing is written whatever the switches on the page say.")
+
+
+def dispatch_writes_enabled() -> bool:
+    """The server's gate on the Dispatch page's "let the agent do it" (phase 3, 2026-10-01).
+
+    Off unless the deployment says so. With it off, `client.dispatch_write()` allows NOTHING,
+    whatever the page's own switches (dispatch_settings) say — so a switch flipped by mistake
+    on a server nobody armed still writes nothing. It is the second key of two."""
+    return _flag("DISPATCH_ZUPER_WRITES", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

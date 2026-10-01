@@ -1200,7 +1200,11 @@ AUDITED = {
                      "dispatch_suggestions", "dispatch_suggestion_approve",
                      "dispatch_suggestion_wrong", "dispatch_job_slots",
                      "dispatch_item_explain", "dispatch_chat", "dispatch_get_settings",
-                     "dispatch_put_settings"),
+                     "dispatch_put_settings",
+                     # phase 3 (app/dispatch/act.py): the same gate; PUT writes is ADMIN —
+                     # pinned by tests/test_dispatch_writes.py
+                     "dispatch_get_writes", "dispatch_put_writes", "dispatch_suggestion_apply",
+                     "dispatch_job_book", "dispatch_job_stage"),
                     "DISPATCH_VIEW: restricted refused 403"),
     # AI Agents (app/ai/api.py, 2026-09-15): the whole module refuses a restricted user
     # 403 before anything is read (`_viewer`), whatever their role — pinned by

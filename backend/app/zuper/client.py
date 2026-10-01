@@ -10,7 +10,9 @@ Every call goes through `request()`, which, in this order and before any connect
    uses. A new call has to be added there on purpose.
 3. **Refuses when the sync is off** — `ZUPER_SYNC_ENABLED` false and not inside an
    operator command (`operator_mode()`), or no key.
-4. **Refuses a write inside a dry run** (`read_only()`).
+4. **Refuses a write inside a dry run** (`read_only()`), and inside the Dispatch page's scope
+   (`dispatch_write()`) every write but its own four (`DISPATCH_WRITES`), all of them while
+   the server gate DISPATCH_ZUPER_WRITES is off.
 5. **Paces** to `ZUPER_REQUESTS_PER_MINUTE` (default 180, under the account's 200) and
    **backs off on 429**, honouring Retry-After.
 
@@ -96,6 +98,28 @@ def ahs_create():
         _AHS_CREATE.reset(token)
 
 
+_DISPATCH_WRITE: ContextVar[bool] = ContextVar("zuper_dispatch_write", default=False)
+
+
+@contextlib.contextmanager
+def dispatch_write():
+    """One change a person told the Dispatch page's agent to make in Zuper (phase 3,
+    2026-10-01) — a job field, the job's address, a note, a visit's time + Technician field,
+    or a stage move on the job's own board.
+
+    Modelled on `ahs_create()`: inside this scope the requests in `DISPATCH_WRITES` are
+    allowed (and only while the server gate `DISPATCH_ZUPER_WRITES` is on), and EVERY other
+    non-GET is refused — even on a deployment that is not pull-only, so this scope can never
+    borrow the sync's wider allowlist (a delete, a customer edit, a second card). The denylist
+    is still checked first. Opened by app/dispatch/writes.py and nothing else.
+    """
+    token = _DISPATCH_WRITE.set(True)
+    try:
+        yield
+    finally:
+        _DISPATCH_WRITE.reset(token)
+
+
 def is_read_only() -> bool:
     return _READ_ONLY.get()
 
@@ -160,6 +184,9 @@ PATHS = {
     "job_recover": "/jobs/{uid}/recover",
     "job_status": "/jobs/{uid}/status",
     "job_status_rollback": "/jobs/{uid}/status/rollback",
+    # A visit's times (Dispatch phase 3): verified live 2026-10-01 — a plain PUT /jobs ignores
+    # scheduled_start_time / scheduled_end_time; this one takes them.
+    "job_update": "/jobs/{uid}/update",
     "job_notes": "/jobs/{uid}/note",
     "job_note": "/jobs/{uid}/note/{note_uid}",
     # Live (2026-09-24): /jobs/{uid}/attachments answers 404 and the job record carries no
@@ -207,6 +234,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("GET", _rx(PATHS["job"])), ("DELETE", _rx(PATHS["job_delete"])),
     ("POST", _rx(PATHS["job_recover"])),
     ("PUT", _rx(PATHS["job_status"])), ("PUT", _rx(PATHS["job_status_rollback"])),
+    ("PUT", _rx(PATHS["job_update"])),
     ("GET", _rx(PATHS["job_notes"])), ("POST", _rx(PATHS["job_notes"])),
     ("PUT", _rx(PATHS["job_note"])), ("DELETE", _rx(PATHS["job_note"])),
     ("GET", _rx(PATHS["job_attachments"])),
@@ -343,6 +371,28 @@ def _ahs_create_allowed(method: str, path: str) -> bool:
     return any(m == method and re.match(rx, path) for m, rx in AHS_CREATE_WRITES)
 
 
+# The Dispatch page's agent applying ONE confirmed change (phase 3, 2026-10-01). Exactly the
+# requests the five actions need, and no more:
+#   PUT  /jobs                    a job custom field (with its group metadata) / the job address
+#   PUT  /jobs/{uid}/update       a visit's scheduled start and end
+#   PUT  /jobs/{uid}/status       a stage move (writes.py keeps it on the job's own board)
+#   POST /jobs/{uid}/note         a note
+# No DELETE, no POST /jobs (a new job), nothing on customers, attachments, invoices or
+# estimates. The reads the writes need (the job, its notes, the board's statuses) are GETs.
+DISPATCH_WRITES: tuple[tuple[str, str], ...] = (
+    ("PUT", _rx(PATHS["jobs"])),
+    ("PUT", _rx(PATHS["job_update"])),
+    ("PUT", _rx(PATHS["job_status"])),
+    ("POST", _rx(PATHS["job_notes"])),
+)
+
+
+def _dispatch_write_allowed(method: str, path: str) -> bool:
+    if not (_DISPATCH_WRITE.get() and config.dispatch_writes_enabled()):
+        return False
+    return any(m == method and re.match(rx, path) for m, rx in DISPATCH_WRITES)
+
+
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None) -> Any:
     method = method.upper()
@@ -358,8 +408,15 @@ def request(method: str, path: str, *, params: dict | None = None,
         raise ZuperError("no_key")
     if method != "GET" and _READ_ONLY.get():
         raise ZuperError("refused", "a dry run makes no %s request" % method)
+    if method != "GET" and _DISPATCH_WRITE.get() and not _dispatch_write_allowed(method, path):
+        # Inside the Dispatch scope only its own four writes exist, whatever else the sync's
+        # allowlist permits — and none of them while the server gate is off.
+        raise ZuperError("refused", "%s %s is not a change the Dispatch page may make%s" % (
+            method, path, "" if config.dispatch_writes_enabled()
+            else " (" + config.DISPATCH_WRITES_OFF_SENTENCE + ")"))
     if method != "GET" and config.pull_only() and not _mirror_write_allowed(path) \
-            and not _ahs_create_allowed(method, path):
+            and not _ahs_create_allowed(method, path) \
+            and not _dispatch_write_allowed(method, path):
         # Backstop for the one-way mirror: every caller checks config.pull_only() first, so
         # reaching here is a bug — refuse before a connection exists rather than write.
         raise ZuperError("refused", config.PULL_ONLY_SENTENCE)

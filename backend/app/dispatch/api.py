@@ -79,7 +79,13 @@ def _suggestion(s: DispatchSuggestion) -> dict:
             "board": s.board, "kind": s.kind, "field": s.field, "current": s.current,
             "proposed": s.proposed, "evidence": s.evidence, "source": s.source,
             "state": s.state, "created_at": _iso(s.created_at),
+            "applied_at": _iso(s.applied_at), "apply_result": s.apply_result,
             "zuper_url": _zuper_url(s.job_uid)}
+
+
+# Shown on an item and in the Suggestions tab: still to do, or the agent could not confirm it
+# (phase 3) — that one stays in sight until a person looks at Zuper.
+SHOWN = ("open", "approved", "apply_failed")
 
 
 def _with_suggestions(db: Session, items: list[dict]) -> list[dict]:
@@ -90,7 +96,7 @@ def _with_suggestions(db: Session, items: list[dict]) -> list[dict]:
     by_job: dict[str, list[dict]] = {}
     for s in db.scalars(select(DispatchSuggestion).where(
             DispatchSuggestion.job_uid.in_(uids),
-            DispatchSuggestion.state.in_(("open", "approved"))).order_by(DispatchSuggestion.id)):
+            DispatchSuggestion.state.in_(SHOWN)).order_by(DispatchSuggestion.id)):
         by_job.setdefault(s.job_uid, []).append(_suggestion(s))
     for i in items:
         i["suggestions"] = by_job.get(i["job_uid"] or "", [])
