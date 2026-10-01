@@ -43,6 +43,10 @@ EXPLAIN_KINDS = {"new_not_called", "after_inspection", "after_repair", "talked_n
                  "book_visit", "needs_date", "missed_call", "missed_text", "visit_unconfirmed",
                  "off_board", "no_photos"}
 CHAT_STEPS = 6
+# Reasoning models (gpt-6-luna) spend part of this on thinking before they answer: 900 cut a
+# third of the live answers short (2026-10-01), so the room is generous; cost stays cents.
+EXPLAIN_MAX_TOKENS = 4000
+CHAT_MAX_TOKENS = 4000
 ADDRESS = "Job address"
 NOTE = "Note"
 
@@ -228,7 +232,7 @@ def explain(db: Session, item: DispatchItem, now: datetime,
     system = EXPLAIN_SYSTEM.format(rules=playbook.HOUSE_RULES, boards=playbook.board_text())
     try:
         turn = prov.complete(system=system, messages=[{"role": "user", "content": json.dumps(
-            facts, default=str)}], tools=[], model=model, max_tokens=900)
+            facts, default=str)}], tools=[], model=model, max_tokens=EXPLAIN_MAX_TOKENS)
     except providers.ProviderError as e:
         _record(db, "explain", model, None, item_id=item.id, error=str(e))
         item.ai_error, item.ai_at = str(e)[:500], now
@@ -406,7 +410,7 @@ def chat(db: Session, messages: list[dict], *, user_id: int, hidden: set[str],
     for _ in range(CHAT_STEPS):
         try:
             turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
-                                 max_tokens=1200)
+                                 max_tokens=CHAT_MAX_TOKENS)
         except providers.ProviderError as e:
             _record(db, "chat", model, None, user_id=user_id, error=str(e))
             db.commit()
