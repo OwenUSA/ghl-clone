@@ -59,6 +59,11 @@ def main() -> None:
     # Zuper sync (2026-09-16): pushes, webhooks, the 15-minute sweep and the daily digest, on
     # a thread of their own. Each tick does nothing unless the sync is armed.
     zuper_worker.start_worker_thread(SessionLocal, stop)
+    # The Dispatch page's AI explanations (2026-10-01): their own thread, so a reasoning
+    # model's minutes never hold up the Zuper sync. Off unless DISPATCH_ENABLED, and then
+    # off again unless an admin switched the AI on.
+    from .dispatch import service as dispatch_service
+    dispatch_service.start_ai_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

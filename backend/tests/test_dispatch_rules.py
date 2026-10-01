@@ -43,6 +43,9 @@ class J:
     photos_today: int = 0
     last_photo_at: datetime | None = None
     last_photo_by: str | None = None
+    visit_photo_at: datetime | None = None
+    visit_photo_count: int = 0
+    visit_photo_by: str | None = None
 
 
 def call(at, *, out=False, talked=False, missed=False, seconds=0, summary=""):
@@ -126,6 +129,10 @@ def visit(**kw):
             "scheduled_start": NOW - timedelta(hours=3),
             "scheduled_end": NOW - timedelta(hours=1)}
     base.update(kw)
+    # The reader keeps the visit's pictures (past midnight) beside today's count.
+    base.setdefault("visit_photo_at", base.get("last_photo_at"))
+    base.setdefault("visit_photo_count", base["photos_today"])
+    base.setdefault("visit_photo_by", base["last_photo_by"])
     return J(**base)
 
 
@@ -302,3 +309,21 @@ def test_a_deadline_is_fixed_by_the_evidence_not_by_when_the_pass_ran():
     first = one(rules.evaluate([job], {}, NOW)[0], "needs_date").due_at
     later = one(rules.evaluate([job], {}, NOW + timedelta(hours=2))[0], "needs_date").due_at
     assert first == later == NOW - timedelta(days=1)
+
+
+def test_the_after_visit_call_survives_midnight():
+    """Review 2026-10-01: the day's picture count resets at midnight, but the visit's record
+    does not — an inspection finished at 5:40 PM is still "call the customer" next morning."""
+    evening = datetime(2026, 9, 30, 21, 40, tzinfo=UTC)               # Wed 5:40 PM NY
+    next_morning = datetime(2026, 10, 1, 13, 0, tzinfo=UTC)           # Thu 9:00 AM NY
+    job = visit(photo_day="2026-10-01", photos_today=0, last_photo_at=None,
+                visit_photo_at=evening, visit_photo_count=14, visit_photo_by="Antonio Brown",
+                scheduled_start=evening - timedelta(hours=2), scheduled_end=evening)
+    items, events = rules.evaluate([job], {}, next_morning)
+    assert "after_inspection" in kinds(items)
+    assert not [e for e in events if e.kind == "inspection_done"]    # rang the evening before
+
+
+def test_an_answered_zuper_call_in_progress_is_not_missed():
+    from app.dispatch import comms as dcomms
+    assert "IN_PROGRESS" not in dcomms.NOT_ANSWERED and "NO_ANSWER" in dcomms.NOT_ANSWERED

@@ -44,10 +44,16 @@ def due(db: Session, now: datetime | None = None) -> bool:
     return last is None or now - last >= timedelta(seconds=c.poll_seconds())
 
 
-def store_items(db: Session, items: list[rules.Item], now: datetime) -> dict:
+FED_DAYS = 14
+AI_TICK_SECONDS = 60
+
+
+def store_items(db: Session, items: list[rules.Item], now: datetime,
+                jobs: list[DispatchJob] | None = None) -> dict:
     """Upsert by key. Staff's Done / Wrong stand; an open item the rules no longer find is
     `resolved` (somebody acted — usually Zuper was updated)."""
     counts = {"opened": 0, "updated": 0, "resolved": 0}
+    jobs_by_uid = {j.job_uid: j for j in jobs or []}
     current = {}
     for it in items:
         current.setdefault(it.key[:200], it)
@@ -70,8 +76,19 @@ def store_items(db: Session, items: list[rules.Item], now: datetime) -> dict:
             counts["updated"] += 1
     for key, r in rows.items():
         if r.state == "open" and key not in current and r.kind in rules.FED_KINDS:
-            # Written by a feed, not by these rules (an AHS authorization): never resolved
-            # here, only kept urgent once it falls due.
+            # Written by a feed (an AHS authorization), not by these rules. It closes when the
+            # job has moved on — a visit on the calendar, or past the AHS columns, or closed —
+            # or after FED_DAYS; until then it is kept urgent once due (review 2026-10-01).
+            j = jobs_by_uid.get(r.job_uid) if r.job_uid else None
+            moved_on = j is not None and (
+                not j.is_open or j.board == c.REPAIR_BOARD or (
+                    c.aware(j.scheduled_start) is not None and
+                    c.aware(j.scheduled_start) >= now - timedelta(hours=12) and
+                    c.aware(j.scheduled_start) > (c.aware(r.created_at) or now)))
+            if moved_on or now - (c.aware(r.created_at) or now) > timedelta(days=FED_DAYS):
+                r.state, r.closed_at = "resolved", now
+                counts["resolved"] += 1
+                continue
             due = c.aware(r.due_at)
             r.urgent = bool(due and now >= due)
             continue
@@ -138,7 +155,7 @@ def run(db: Session, now: datetime | None = None, *, commit: bool = True) -> dic
                         body="%s · %s." % (j.status or "new", ", ".join(
                             x for x in (j.address, j.city) if x) or "no address"),
                         job_uid=j.job_uid))
-        counts["items"] = store_items(db, found, now)
+        counts["items"] = store_items(db, found, now, jobs)
         counts["alerts"] = alerts.fire(db, events, ring=s.seeded,
                                        boards={j.job_uid: j.board for j in jobs})
         counts["open"] = len(found)
@@ -149,14 +166,8 @@ def run(db: Session, now: datetime | None = None, *, commit: bool = True) -> dic
             s.last_error = None
             s.last_counts = counts
             db.commit()
-            # Phase 2: the AI words a few new items per pass. It never raises into the pass and
-            # writes only onto the items (and suggestions) — never to Zuper.
-            try:
-                from . import ai
-                counts["ai"] = ai.explain_pending(db, now)
-            except Exception:
-                db.rollback()
-                log.exception("dispatch AI explanations failed")
+            # The AI's explanations run on their OWN thread (start_ai_thread), never here: a
+            # reasoning model's minutes must not hold up the Zuper sync (review 2026-10-01).
         else:
             db.rollback()
     except Exception as exc:
@@ -170,6 +181,36 @@ def run(db: Session, now: datetime | None = None, *, commit: bool = True) -> dic
             log.exception("dispatch pass failed")
         counts["error"] = s.last_error
     return counts
+
+
+def ai_tick(session_factory, now: datetime | None = None) -> dict | None:
+    """The AI's share, on its own thread: a few new items per minute. Never raises."""
+    if not c.enabled():
+        return None
+    db = session_factory()
+    try:
+        from . import ai
+        return ai.explain_pending(db, now or datetime.now(UTC))
+    except Exception:
+        db.rollback()
+        log.exception("dispatch AI explanations failed")
+        return None
+    finally:
+        db.close()
+
+
+def start_ai_thread(session_factory, stop) -> object:
+    """Started by app/worker.py beside the Zuper thread (review 2026-10-01)."""
+    import threading
+
+    def loop():
+        while True:
+            ai_tick(session_factory)
+            if stop.wait(AI_TICK_SECONDS):
+                return
+    t = threading.Thread(target=loop, name="dispatch-ai", daemon=True)
+    t.start()
+    return t
 
 
 def main(argv: list[str] | None = None) -> int:

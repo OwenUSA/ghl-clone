@@ -136,6 +136,9 @@ def apply_notes(j: DispatchJob, notes: list[dict], today: str,
     j.first_photo_at = first
     j.last_photo_at = last
     j.last_photo_by = by
+    if count and last is not None:
+        # The visit's record outlives the day (finding 3 of the 2026-10-01 review).
+        j.visit_photo_at, j.visit_photo_count, j.visit_photo_by = last, count, by
 
 
 def _visit_today(j: DispatchJob, today: str) -> bool:
@@ -147,7 +150,10 @@ def _visit_today(j: DispatchJob, today: str) -> bool:
 
 def read_jobs(db: Session, now: datetime) -> dict:
     today = c.local(now).date().isoformat()
-    counts = {"listed": 0, "new": 0, "detail": 0, "notes": 0, "unknown_stages": []}
+    counts = {"listed": 0, "new": 0, "detail": 0, "notes": 0, "unknown_stages": [],
+              "read_errors": 0, "closed_unlisted": 0}
+    stop_details = False    # Zuper unavailable / rate-limited: no more per-job reads this pass
+    listed: set[str] = set()
     existing = {j.job_uid: j for j in db.scalars(select(DispatchJob))}
     new: list[DispatchJob] = []
     known = set().union(*c.FIRST_CONTACT.values(), c.BOOK, c.CLOSED, c.WAITING_ON_AHS,
@@ -159,6 +165,7 @@ def read_jobs(db: Session, now: datetime) -> dict:
         if not isinstance(uid, str) or not uid:
             continue
         counts["listed"] += 1
+        listed.add(uid)
         j = existing.get(uid)
         if j is None:
             j = DispatchJob(job_uid=uid, first_seen_at=now)
@@ -168,29 +175,48 @@ def read_jobs(db: Session, now: datetime) -> dict:
         apply_row(j, row)
         if j.status and j.is_open and j.status not in known and not any(
                 j.status.startswith(p) for p in c.NEEDS_DATE) and \
-                j.status not in counts["unknown_stages"]:
-            counts["unknown_stages"].append(j.status)
+                "%s|%s" % (j.board, j.status) not in counts["unknown_stages"]:
+            # "board|stage", so the page can leave out a board hidden from its reader.
+            counts["unknown_stages"].append("%s|%s" % (j.board, j.status))
         updated = str(row.get("updated_at") or "")
         changed = j.zuper_updated_at != updated
         if j.photo_day != today:
             j.photo_day, j.photos_today = today, 0
             j.first_photo_at = j.last_photo_at = None
             j.last_photo_by = None
-        if j.is_open and j.board not in c.IGNORED_BOARDS and (
+        if j.is_open and j.board not in c.IGNORED_BOARDS and not stop_details and (
                 changed or j.notes_read_for is None or _visit_today(j, today)):
-            record = zapi_record(client.request("GET", client.path("job", uid=uid)))
-            counts["detail"] += 1
-            checklist = (0, None, None)
-            if record:
-                checklist = apply_detail(j, record, today)
-                history.capture_statuses(db, record)
-            notes = client.rows_of(client.request("GET", client.path("job_notes", uid=uid),
-                                                  params={"count": 100}))
-            counts["notes"] += 1
-            apply_notes(j, notes, today, checklist)
-            j.notes_read_for = updated or "-"
+            # One job that cannot be read (deleted between the list and the read, a 404, a
+            # bad answer) is skipped and read again next pass — it never throws away the
+            # whole pass's work (review 2026-10-01).
+            try:
+                record = zapi_record(client.request("GET", client.path("job", uid=uid)))
+                counts["detail"] += 1
+                checklist = (0, None, None)
+                if record:
+                    checklist = apply_detail(j, record, today)
+                    history.capture_statuses(db, record)
+                notes = client.rows_of(client.request(
+                    "GET", client.path("job_notes", uid=uid), params={"count": 100}))
+                counts["notes"] += 1
+                apply_notes(j, notes, today, checklist)
+                j.notes_read_for = updated or "-"
+            except client.ZuperError as exc:
+                counts["read_errors"] += 1
+                if exc.kind in ("unavailable", "rate_limited", "unauthorized"):
+                    stop_details = True
+                j.read_at = now
+                continue                         # zuper_updated_at stays: retried next pass
         j.zuper_updated_at = updated
         j.read_at = now
+    # A job Zuper's list no longer returns was deleted there: its items must close
+    # (review 2026-10-01). Only after a list that read to its end, and never all at once.
+    if counts["listed"]:
+        gone = [j for uid, j in existing.items() if uid not in listed and j.is_open]
+        if len(gone) <= max(20, counts["listed"] // 10):
+            for j in gone:
+                j.is_open = False
+            counts["closed_unlisted"] = len(gone)
     counts["new"] = len(new)
     counts["new_jobs"] = [j.job_uid for j in new]
     return counts
@@ -242,11 +268,14 @@ def read_calls(db: Session) -> int:
     payload = client.connect_calls(page=1, limit=100)
     rows = payload.get("data") if isinstance(payload, dict) else None
     seen = 0
+    uids = [c.get("call_uid") for c in rows or [] if isinstance(c, dict) and c.get("call_uid")]
+    known = {r.call_uid: r for r in db.scalars(select(DispatchCall).where(
+        DispatchCall.call_uid.in_(uids)))} if uids else {}
     for call in rows or []:
         uid = call.get("call_uid") if isinstance(call, dict) else None
         if not uid:
             continue
-        row = db.scalar(select(DispatchCall).where(DispatchCall.call_uid == uid))
+        row = known.get(uid)
         if row is None:
             row = DispatchCall(call_uid=uid)
             db.add(row)

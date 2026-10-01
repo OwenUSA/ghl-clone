@@ -98,7 +98,8 @@ def dispatch_job_slots(job_uid: str, kind: str | None = None, technician: str | 
     j = _visible_job(db, principal, job_uid)
     note = None if j.lat is not None and j.lng is not None else (
         "This job has no map position in Zuper, so the driving times are guesses.")
-    return {"slots": ai.slots_for(db, j, datetime.now(UTC), kind, technician), "note": note}
+    return {"slots": ai.slots_for(db, j, datetime.now(UTC), kind, technician,
+                                  _hidden(db, principal)), "note": note}
 
 
 # ---- the AI ----------------------------------------------------------------------------------
@@ -120,7 +121,9 @@ def dispatch_item_explain(item_id: int, principal: auth.Principal = VIEW,
 
 class ChatMessage(BaseModel):
     role: str = Field(pattern="^(user|assistant)$")
-    content: str = Field(max_length=4000)
+    # The assistant's own replies come back as history and can be long; a person's question
+    # is held to 4,000 characters in the route (review 2026-10-01).
+    content: str = Field(max_length=40000)
 
 
 class ChatIn(BaseModel):
@@ -134,6 +137,8 @@ def dispatch_chat(body: ChatIn, principal: auth.Principal = VIEW,
     suggestions; it never writes to Zuper or contacts anyone."""
     if body.messages[-1].role != "user":
         raise HTTPException(400, "the last message must be the user's")
+    if any(m.role == "user" and len(m.content) > 4000 for m in body.messages):
+        raise HTTPException(422, "a question can be at most 4,000 characters")
     try:
         out = ai.chat(db, [m.model_dump() for m in body.messages], user_id=principal.user_id,
                       hidden=_hidden(db, principal))
@@ -146,20 +151,21 @@ def dispatch_chat(body: ChatIn, principal: auth.Principal = VIEW,
 
 # ---- settings --------------------------------------------------------------------------------
 
-def _settings_out(db: Session) -> dict:
+def _settings_out(db: Session, admin: bool = True) -> dict:
     s = ai.settings(db)
     conns = db.scalars(select(AiConnection).order_by(AiConnection.name)).all()
     return {"ai_enabled": s.ai_enabled, "connection_id": s.connection_id, "model": s.model,
             "daily_cap": s.daily_cap, "runs_today": ai.runs_today(db, datetime.now(UTC)),
             "technicians": s.technicians or booking.DEFAULT_TECHNICIANS,
             "writes": writes.status(db),
+            # The AI connections are ADMIN's (CLAUDE.md); a dispatcher sees none.
             "connections": [{"id": x.id, "name": x.name, "provider": x.provider,
-                             "last4": x.api_key_last4} for x in conns]}
+                             "last4": x.api_key_last4} for x in conns] if admin else []}
 
 
 @router.get("/settings")
 def dispatch_get_settings(principal: auth.Principal = VIEW, db: Session = Depends(get_db)):
-    return _settings_out(db)
+    return _settings_out(db, principal.role is Role.ADMIN)
 
 
 HHMM = r"^\d{2}:\d{2}$"

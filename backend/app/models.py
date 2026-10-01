@@ -1840,6 +1840,11 @@ class DispatchJob(Base):
     first_photo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_photo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_photo_by: Mapped[str | None] = mapped_column(String(120))
+    # The LAST VISIT's pictures, kept past midnight (review 2026-10-01): "the visit is done,
+    # call the customer" must outlive the day the pictures were posted. Never reset by a day.
+    visit_photo_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    visit_photo_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    visit_photo_by: Mapped[str | None] = mapped_column(String(120))
     # The job's own fields as Zuper shows them ({label: value}), from the whole job — what the
     # AI compares a call against (phase 2).
     fields: Mapped[dict | None] = mapped_column(NullableJSONType)

@@ -29,6 +29,9 @@ from ..models import (
 from . import config
 
 NOT_SENT = {"FAILED", "REFUSED", "LOGGED_ONLY"}
+# Zuper Connect statuses that mean the caller got nobody.
+NOT_ANSWERED = {"NO_ANSWER", "NOT_ANSWERED", "MISSED", "BUSY", "FAILED", "REJECTED",
+                "CANCELED", "CANCELLED", "VOICEMAIL", "ABANDONED"}
 
 
 @dataclass
@@ -108,9 +111,11 @@ def load(db: Session, since: datetime) -> dict[str, list[Comm]]:
         secs = c.duration_seconds or 0
         done = (c.status or "").upper() == "COMPLETED"
         inbound = (c.direction or "").upper() != "OUTGOING"
+        # Ringing / in progress at the moment of the read is not "missed" (review 2026-10-01).
+        not_answered = (c.status or "").upper() in NOT_ANSWERED
         add(c.number, Comm(
             at=config.aware(c.occurred_at), kind="call", out=not inbound,
-            talked=done and secs >= config.TALK_SECONDS, missed=inbound and not done,
+            talked=done and secs >= config.TALK_SECONDS, missed=inbound and not_answered,
             seconds=secs, summary=c.summary or "", source="Zuper", staff=c.staff_name))
     for comms in out.values():
         comms.sort(key=lambda c: c.at)

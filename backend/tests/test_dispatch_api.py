@@ -314,3 +314,31 @@ def test_a_job_shows_its_moves_and_calls(api):
 
 def teardown_module():
     SessionLocal().close()
+
+
+def test_one_unreadable_job_is_skipped_and_a_deleted_job_closes(db, zuper, people):
+    """Review 2026-10-01: a job that cannot be read is retried next pass instead of throwing
+    the pass away; a job Zuper no longer lists was deleted there and its items close."""
+    zuper.jobs = [job("j1", 701, dconfig.INSPECTION_BOARD, "Work Order Received",
+                      created=NOW - timedelta(hours=5)),
+                  job("j2", 702, dconfig.INSPECTION_BOARD, "Work Order Received",
+                      created=NOW - timedelta(hours=5), phone="(941) 555-0177")]
+    real = zuper.handle
+
+    def flaky(request):
+        if request.url.path == "/api/jobs/j2":
+            return httpx.Response(404, json={"type": "error", "message": "gone"})
+        return real(request)
+
+    from app.zuper import client as zclient
+    zclient.TRANSPORT = httpx.MockTransport(flaky)
+    counts = service.run(db, NOW)
+    assert "error" not in counts and counts["jobs"]["read_errors"] == 1
+    assert db.query(DispatchJob).count() == 2
+    zclient.TRANSPORT = httpx.MockTransport(real)
+    zuper.jobs = zuper.jobs[:1]                          # j2 deleted in Zuper
+    service.run(db, NOW + timedelta(minutes=3))
+    j2 = db.query(DispatchJob).filter(DispatchJob.job_uid == "j2").one()
+    assert j2.is_open is False
+    assert db.query(DispatchItem).filter(DispatchItem.job_uid == "j2",
+                                         DispatchItem.state == "open").count() == 0

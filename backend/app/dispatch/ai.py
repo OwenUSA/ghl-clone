@@ -99,6 +99,9 @@ def _record(db: Session, kind: str, model: str, turn: providers.Turn | None, *,
                          input_tokens=turn.usage.input_tokens if turn else 0,
                          output_tokens=turn.usage.output_tokens if turn else 0,
                          ok=error is None, error=error))
+    # The sessions do not autoflush (app/db.py): without this, the cap's count in the next
+    # chat round or the next item would not see this run (review 2026-10-01).
+    db.flush()
 
 
 # ------------------------------------------------------------------------------- context
@@ -242,7 +245,11 @@ def explain(db: Session, item: DispatchItem, now: datetime,
     if data is None:
         item.ai_error, item.ai_at = "The AI's answer could not be read.", now
         return True
-    steps = [str(x)[:300] for x in data.get("zuper_steps") or [] if str(x).strip()][:8]
+    raw_steps = data.get("zuper_steps")
+    if isinstance(raw_steps, str):
+        raw_steps = [raw_steps]           # one step sent as text, not a list of letters
+    steps = [str(x)[:300] for x in raw_steps if str(x).strip()][:8] \
+        if isinstance(raw_steps, list) else []
     item.ai = {"zuper_steps": steps, "say": str(data.get("say") or "")[:800],
                "note": str(data.get("note") or "")[:800],
                "confidence": data.get("confidence") if data.get("confidence") in (
@@ -327,31 +334,34 @@ def _visible_job(db: Session, number: str, hidden: set[str]) -> DispatchJob | No
     return None if j is None or (j.board and j.board in hidden) else j
 
 
-def visits_for_booking(db: Session, now: datetime) -> list[booking.Visit]:
+def visits_for_booking(db: Session, now: datetime,
+                       hidden: set[str] | None = None) -> list[booking.Visit]:
+    """Every booked visit. A visit on a board hidden from the reader still blocks the time
+    (the technician is busy) but is never named (review 2026-10-01)."""
     out = []
     horizon = now + timedelta(days=booking.DAYS_AHEAD + 2)
     for v in db.scalars(select(DispatchJob).where(
             DispatchJob.scheduled_start >= now - timedelta(days=1),
             DispatchJob.scheduled_start <= horizon)):
         start, end = c.aware(v.scheduled_start), c.aware(v.scheduled_end)
-        if not start or not end or end - start > timedelta(hours=12) or \
-                (v.status or "") == "Cancelled":
+        if not start or not end or end - start > timedelta(hours=12) or not v.is_open:
             continue
+        label = None if v.board and v.board in (hidden or set()) else \
+            "#%s %s" % (v.job_number, v.city or "")
         for tech in set(v.assigned or []) | ({v.technician} if v.technician else set()):
-            out.append(booking.Visit(tech, start, end, v.lat, v.lng,
-                                     "#%s %s" % (v.job_number, v.city or "")))
+            out.append(booking.Visit(tech, start, end, v.lat, v.lng, label))
     return out
 
 
 def slots_for(db: Session, j: DispatchJob, now: datetime, kind: str | None = None,
-              tech: str | None = None) -> list[dict]:
+              tech: str | None = None, hidden: set[str] | None = None) -> list[dict]:
     from .rules import visit_kind
     kind = kind if kind in booking.SLOT_MINUTES else (
         "repair" if j.board == c.INSPECTION_BOARD and j.status == "AHS Approved"
         else visit_kind(j))
     techs = settings(db).technicians or booking.DEFAULT_TECHNICIANS
     return [s.as_dict() for s in booking.slots(
-        lat=j.lat, lng=j.lng, kind=kind, visits=visits_for_booking(db, now), now=now,
+        lat=j.lat, lng=j.lng, kind=kind, visits=visits_for_booking(db, now, hidden), now=now,
         technicians=techs, tech=tech)]
 
 
@@ -387,7 +397,8 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
         return json.dumps(job_context(db, j, comms.load(db, now - timedelta(days=c.COMMS_DAYS)),
                                       now), default=str)
     if name == "find_slots":
-        return json.dumps(slots_for(db, j, now, args.get("kind"), args.get("technician")))
+        return json.dumps(slots_for(db, j, now, args.get("kind"), args.get("technician"),
+                                    hidden))
     if name == "suggest_change":
         changes = _clean_changes([args], j)
         if not changes:
@@ -407,7 +418,16 @@ def chat(db: Session, messages: list[dict], *, user_id: int, hidden: set[str],
     convo = [{"role": m["role"], "content": m["content"]} if m["role"] == "user" else
              {"role": "assistant", "text": m["content"]} for m in messages]
     made: list[DispatchSuggestion] = []
-    for _ in range(CHAT_STEPS):
+    for step in range(CHAT_STEPS):
+        if step:
+            # Every round is a request: the cap and "Pause all AI agents" are asked again
+            # each time, not only before the first (review 2026-10-01).
+            try:
+                prov, model = provider_for(db, now)
+            except Unavailable as e:
+                db.commit()
+                return {"reply": "I stopped before finishing: %s" % e,
+                        "suggestions": [s.id for s in made]}
         try:
             turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
                                  max_tokens=CHAT_MAX_TOKENS)

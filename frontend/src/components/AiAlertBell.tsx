@@ -22,7 +22,9 @@ export function AiAlertBell({ user }: { user: Me }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const alerts = useQuery({ queryKey: ['ai-alerts'], queryFn: aiAlerts, enabled: allowed,
-    refetchInterval: 60000, refetchOnWindowFocus: true })
+    // In the background too (2026-10-01): a desktop notification is only useful if the bell
+    // keeps polling while the CRM tab is hidden, which TanStack Query stops by default.
+    refetchInterval: 60000, refetchIntervalInBackground: true, refetchOnWindowFocus: true })
   const read = useMutation({ mutationFn: readAiAlert, onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-alerts'] }) })
   const readAll = useMutation({ mutationFn: readAllAiAlerts, onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-alerts'] }) })
   // Desktop notifications (2026-09-30): a NEW alert also shows as the system's notification.

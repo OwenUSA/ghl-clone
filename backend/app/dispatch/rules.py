@@ -138,10 +138,11 @@ def _last_update(j) -> datetime | None:
 
 
 def visit_done_at(j, now: datetime) -> datetime | None:
-    """When the technician left: pictures posted on the visit day, then none for
-    PHOTO_QUIET_MINUTES (Q22). None while pictures are still coming in, or there are none."""
-    last = c.aware(j.last_photo_at)
-    if not last or not j.photos_today:
+    """When the technician left: pictures posted on a visit, then none for
+    PHOTO_QUIET_MINUTES (Q22). None while pictures are still coming in, or there are none.
+    Read from the kept visit record, so it outlives midnight (review 2026-10-01)."""
+    last = c.aware(getattr(j, "visit_photo_at", None))
+    if not last or not getattr(j, "visit_photo_count", 0):
         return None
     if now - last < timedelta(minutes=c.PHOTO_QUIET_MINUTES):
         return None
@@ -207,14 +208,15 @@ def evaluate(jobs, comms: dict[str, list[Comm]], now: datetime,
         # --- the visit is done: call the customer (Q4/Q22) ---------------------------------
         kind = visit_kind(j)
         done_at = visit_done_at(j, now)
-        if done_at is not None and j.photo_day == c.local(now).date().isoformat():
+        if done_at is not None and now - done_at <= timedelta(hours=12):
+            visit_day = c.local(done_at).date().isoformat()
             events.append(Event(
-                key="visit_done:%s:%s" % (j.job_uid, j.photo_day), kind="%s_done" % kind,
+                key="visit_done:%s:%s" % (j.job_uid, visit_day), kind="%s_done" % kind,
                 title="%s finished: %s" % ("Inspection" if kind == "inspection" else "Repair",
                                           _label(j)),
                 body="%s posted %d picture%s; the last at %s. %s" % (
-                    j.last_photo_by or "The technician", j.photos_today,
-                    "" if j.photos_today == 1 else "s", _when(done_at),
+                    j.visit_photo_by or "The technician", j.visit_photo_count,
+                    "" if j.visit_photo_count == 1 else "s", _when(done_at),
                     "Call the customer now." if kind == "inspection"
                     else "Satisfaction call and review request next."),
                 job_uid=j.job_uid))
@@ -262,8 +264,8 @@ def evaluate(jobs, comms: dict[str, list[Comm]], now: datetime,
                     (" Last conversation: %s." % _ago(now, last_talk) if last_talk else
                      " No conversation with the customer since."),
                 todo=todo, due_at=due,
-                evidence={"photos": j.photos_today, "last_photo_at": _iso(c.aware(
-                    j.last_photo_at)), "stage": j.status}, **base))
+                evidence={"photos": j.visit_photo_count, "last_photo_at": _iso(c.aware(
+                    j.visit_photo_at)), "stage": j.status}, **base))
 
         # --- a visit today with no pictures ----------------------------------------------
         end = c.aware(j.scheduled_end)

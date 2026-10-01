@@ -1,7 +1,7 @@
 """Three slots to offer a customer on the call (phase 2, the owner's Q15/Q16/Q25).
 
 PURE: the job, the visits already booked, the technicians' rules and `now` in; three slots out.
-Pinned by tests/test_dispatch_booking.py.
+Pinned by tests/test_dispatch_ai.py (the booking tests).
 
 How a slot is chosen:
   * who: the technician who PREFERS this kind of visit (Antonio repairs, Owen inspections) is
@@ -48,7 +48,7 @@ class Visit:
     end: datetime
     lat: float | None
     lng: float | None
-    label: str
+    label: str | None            # None: a visit the reader may not see — busy, never named
 
 
 @dataclass
@@ -132,8 +132,8 @@ def slots(*, lat: float | None, lng: float | None, kind: str, visits: list[Visit
                     extra = max(0, to_here + from_here - direct)
                     score = extra + offset * DAY_PENALTY_MINUTES + penalty
                     if best is None or score < best.score:
-                        near = min((v for v in today), default=None, key=lambda v: (
-                            km((v.lat, v.lng), here) or 1e9))
+                        near = min((v for v in today if v.label), default=None,
+                                   key=lambda v: (km((v.lat, v.lng), here) or 1e9))
                         best = Slot(t["name"], start, end, extra,
                                     near.label if near else None, score)
                 start += timedelta(minutes=GRID_MINUTES)

@@ -138,8 +138,9 @@ def dispatch_summary(principal: auth.Principal = VIEW, db: Session = Depends(get
             "last_success_at": _iso(s.last_success_at) if s else None,
             "last_error": s.last_error if s else None,
             "last_error_at": _iso(s.last_error_at) if s else None,
-            "unknown_stages": ((s.last_counts or {}).get("jobs") or {}).get(
-                "unknown_stages", []) if s else [],
+            "unknown_stages": [x.split("|", 1)[-1] for x in (
+                ((s.last_counts or {}).get("jobs") or {}).get("unknown_stages", [])
+                if s else []) if x.split("|", 1)[0] not in hidden],
             "poll_seconds": c.poll_seconds(),
         },
     }

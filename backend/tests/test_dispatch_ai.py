@@ -199,8 +199,11 @@ def test_settings_are_read_by_the_office_and_changed_by_an_admin_only(db, office
     cl = TestClient(app)
     got = cl.get("/api/dispatch/settings", headers=people["dispatcher"][1]).json()
     assert got["ai_enabled"] is False and got["model"] == "gpt-6-luna"
-    assert got["connections"] == [{"id": office["conn"].id, "name": "OpenAI (Dispatch)",
-                                   "provider": "openai", "last4": "1234"}]
+    # The AI connections are ADMIN's: a dispatcher sees none (review 2026-10-01).
+    assert got["connections"] == []
+    admin_view = cl.get("/api/dispatch/settings", headers=people["admin"][1]).json()
+    assert admin_view["connections"] == [{"id": office["conn"].id, "name": "OpenAI (Dispatch)",
+                                          "provider": "openai", "last4": "1234"}]
     assert cl.put("/api/dispatch/settings", json={"ai_enabled": True},
                   headers=people["dispatcher"][1]).status_code == 403
     assert cl.put("/api/dispatch/settings", json={"ai_enabled": True},
@@ -276,3 +279,42 @@ def test_the_chat_reads_through_tools_and_only_records_suggestions(db, office, p
     seen = json.loads(tool_msg["content"])
     assert [j["job_number"] for j in seen] == ["678"]
     assert db.query(DispatchAiRun).filter(DispatchAiRun.kind == "chat").count() == 3
+
+
+def test_the_chat_stops_when_the_cap_is_reached_mid_conversation(db, office, people, script):
+    """Review 2026-10-01: every tool round is a request, so the cap is asked again each round."""
+    switch_on(db, office, daily_cap=1)
+    script.responses = [
+        openai_completion(content=None, finish="tool_calls", tool_calls=[
+            openai_call("list_items", json.dumps({}), "call_1")]),
+        openai_completion(content="never reached"),
+    ]
+    r = TestClient(app).post("/api/dispatch/chat", json={"messages": [
+        {"role": "user", "content": "What is open?"}]}, headers=people["dispatcher"][1])
+    assert r.status_code == 200 and r.json()["reply"].startswith("I stopped before finishing")
+    assert script.calls == 1
+
+
+def test_a_hidden_board_visit_blocks_time_but_is_never_named(db, office):
+    busy = DispatchJob(job_uid="r5", job_number="555", board=c.RETAIL_BOARD, status="Scheduled",
+                       is_open=True, city="Weston", lat=26.10, lng=-80.40,
+                       assigned=["Antonio Brown"],
+                       scheduled_start=datetime(2026, 10, 2, 11, 30, tzinfo=UTC),
+                       scheduled_end=datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
+    db.add(busy)
+    db.commit()
+    visits = ai.visits_for_booking(db, NOW, hidden={c.RETAIL_BOARD})
+    mine = [v for v in visits if v.tech == "Antonio Brown"]
+    assert mine and all(v.label is None for v in mine)
+    slots = ai.slots_for(db, office["job"], NOW, "repair", hidden={c.RETAIL_BOARD})
+    assert all("#555" not in (s["next_to"] or "") for s in slots)
+
+
+def test_a_single_step_sent_as_text_is_one_step_not_letters(db, office, script):
+    switch_on(db, office)
+    script.responses = [openai_completion(content=json.dumps({
+        "zuper_steps": "Move #678 to Repair Scheduling Call", "say": "", "field_changes": [],
+        "note": "", "confidence": "low"}))]
+    ai.explain_pending(db, NOW)
+    assert db.get(DispatchItem, office["item"].id).ai["zuper_steps"] == [
+        "Move #678 to Repair Scheduling Call"]
