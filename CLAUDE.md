@@ -725,3 +725,23 @@ in `DECISIONS.md`.
   `client.dispatch_write()` (four requests, no DELETE), reads the job back, never retries.
 - Never a closing stage or another board; the job-address body is UNVERIFIED. The boss agrees and
   `zsafety.py` passes before anything is switched on — see the phase 3 amendment in `DECISIONS.md`.
+
+
+## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
+
+`backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's
+`events:write` token, in `auth.EVENTS_WRITE_PATHS`). owen-main recognises ONE note template as
+AHS approving a repair — `Note Added in Frontdoor System NCC $#### Net Total $#### AUTHO #
+####RNCL Thanks for being the best!` — and "items to service have been updated" as a maybe, and
+posts them here only while `CRM_LINK_AHS_AUTHORIZATIONS_ENABLED=true` over there (default false).
+**Only one real sample existed when this was built — watch the first ones.**
+
+- `authorization` → a `DispatchEvent` + the bell (`dispatch.alerts.fire`, kind `ahs_approved`,
+  "AHS approved #<n>: $<net>") + a `DispatchItem` in "Book a visit". `authorization_possible` →
+  the item only (`ahs_items_updated`), no bell. No table, no migration.
+- **Idempotent** per `ahs_auth:<job>:<autho>` (per email for the maybe): a repeat is 200
+  `existing`, writes nothing. **Nothing reaches Zuper and nothing is queued** (jobs counted).
+- The job is looked up (AHS email card's `ahs_job_id` → its Zuper job → a Dispatch job with the
+  number) and never required: not found still rings, with the AHS number in the item.
+- **A Dispatch pass never resolves these items** (`rules.FED_KINDS`); Done / Wrong close them.
+  See the 2026-10-01 amendment in `DECISIONS.md`.

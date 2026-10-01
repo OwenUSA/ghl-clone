@@ -69,6 +69,12 @@ def store_items(db: Session, items: list[rules.Item], now: datetime) -> dict:
             r.updated_at = now
             counts["updated"] += 1
     for key, r in rows.items():
+        if r.state == "open" and key not in current and r.kind in rules.FED_KINDS:
+            # Written by a feed, not by these rules (an AHS authorization): never resolved
+            # here, only kept urgent once it falls due.
+            due = c.aware(r.due_at)
+            r.urgent = bool(due and now >= due)
+            continue
         if r.state == "open" and key not in current:
             r.state, r.closed_at = "resolved", now
             counts["resolved"] += 1

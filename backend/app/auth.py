@@ -266,6 +266,7 @@ _ADMIN_PREFIXES = ("/api/users", "/api/jobs")
 
 EVENTS_WRITE_PATHS = ("/api/events", "/api/events/delivery",
                       "/api/ahs-jobs", "/api/ahs-jobs/cancellations",
+                      "/api/ahs-jobs/authorizations",
                       "/api/agent-context")
 
 
@@ -280,6 +281,9 @@ def _scope_allows(scopes: frozenset[str], method: str, path: str) -> bool:
     #
     # `/api/ahs-jobs` (2026-09-14) is the same machine account relaying the AHS work
     # orders it reads out of the Dispatch mailbox. Same feed, same scope.
+    #
+    # `/api/ahs-jobs/authorizations` (2026-10-01) is the same feed: an AHS note saying the
+    # repair was approved. See app/ahs_authorizations.py.
     #
     # `/api/agent-context` (2026-09-24) is the same machine asking who a caller is as a
     # voice agent answers. A POST because the phone number is in the body, not the URL

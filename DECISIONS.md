@@ -6578,3 +6578,36 @@ agrees first.
 - **Not verified:** no write has been sent to the live account from this code; the shapes above
   were measured by hand. The first live use should be one field on a test job, read back in
   Zuper's own screen.
+
+## 2026-10-01 amendment — knowing when AHS authorizes a repair (OFF by default)
+
+**What AHS sends.** Investigated read-only on 2026-09-30 / 10-01: owen-main polls the Dispatch
+mailbox; of 31 note emails ("American Home Shield sent you a note for job #<n>") exactly ONE was
+an authorization, with this body (digits redacted when it was read):
+`Note Added in Frontdoor System NCC $#### Net Total $#### AUTHO # ####RNCL Thanks for being the
+best!` — a 4-digit AUTHO number with the letters stuck to it, two plain dollar amounts. Four said
+"Your list of items to service have been updated" (may be approval-related, unverified); two ask
+for a report to be sent to the Authorization department (not an approval). The work order's
+"Authorization Link: Click Here" is boilerplate and is NOT an approval.
+
+**Decided.**
+- owen-main stores these as `parse_status` `authorization` / `authorization_possible` (never
+  relayed to GoHighLevel) and relays them through the existing `email_relay_crm` job behind its
+  OWN switch, `CRM_LINK_AHS_AUTHORIZATIONS_ENABLED`, **default false**, independent of
+  `CRM_LINK_EMAIL_JOBS_ENABLED`. No backfill: notes stored before stay `ignored`.
+- Here, `POST /api/ahs-jobs/authorizations` (`app/ahs_authorizations.py`) makes a Dispatch item in
+  "Book a visit" — "Move the job to AHS Approved, answer its questions (AHS authorized $), then
+  book the repair" — and, for an approval only, rings the bell once (`DispatchEvent`
+  `ahs_auth:<job>:<autho>`). The maybe is an item with no bell: "AHS may have updated #<n> —
+  check the portal". Existing tables only; no migration.
+- **Zuper is not written.** Moving the job to AHS Approved is a person's job, in Zuper — the
+  read-only rule (2026-09-27) stands.
+- The job is found by the AHS email card (`custom_fields.ahs_job_id`), the Zuper job it mirrors,
+  or a Dispatch job carrying the number (its number or an "AHS" field); a card or board hidden
+  from the token's owner counts as not found. Not found still rings and keeps the number.
+- A Dispatch pass would have resolved these items on its next run (it resolves every open item
+  its rules do not find), so `rules.FED_KINDS` exempts them; they turn urgent when due.
+
+**Watch it.** Built from ONE real sample. A reworded template silently falls back to `ignored`
+on owen-main (safe — nothing is sent — but quiet). After switching it on, check owen-main's
+Emails page for `AHS authorized` rows and this side's Dispatch → Book a visit.
