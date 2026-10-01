@@ -56,3 +56,82 @@ export function slotLabel(s: { tech: string; start: string; extra_drive_minutes:
   const extra = s.extra_drive_minutes ? `+${s.extra_drive_minutes} min driving` : 'no extra driving'
   return `${day}, ${time} - ${s.tech} (${extra}${s.next_to ? `, next to ${s.next_to}` : ''})`
 }
+
+// ---------------- the assistant (2026-10-01) ----------------
+
+/** "Good morning, Owen" — New York time, whatever the laptop's zone. First name only. */
+export function greeting(name: string | null | undefined, now: Date = new Date()): string {
+  const hour = Number(now.toLocaleString('en-US', { hour: 'numeric', hour12: false,
+    timeZone: 'America/New_York' })) % 24
+  const part = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
+  const first = (name ?? '').trim().split(/\s+/)[0]
+  return first ? `${part}, ${first}` : part
+}
+
+/** The questions the office asks most, offered as one-click chips. */
+export const SUGGESTED_QUESTIONS: readonly string[] = [
+  'What is urgent right now?',
+  'What are the next steps for today?',
+  'Which new jobs has nobody called yet?',
+  'Who is waiting on a repair date?',
+  'Which missed calls and texts should I return?',
+  'What visits are booked for tomorrow?',
+  'Which inspections are done and need the customer call?',
+  'Where did we talk to a customer but Zuper was not updated?',
+]
+
+/** A piece of a line: plain text, or **bold**. */
+export type Inline = { text: string; bold: boolean }
+/** A block of an answer: a paragraph, a bulleted list, a numbered list, or a heading. */
+export type Block =
+  | { kind: 'p'; parts: Inline[] }
+  | { kind: 'h'; parts: Inline[] }
+  | { kind: 'ul' | 'ol'; items: Inline[][] }
+
+export function inline(text: string): Inline[] {
+  const out: Inline[] = []
+  const re = /\*\*([^*]+)\*\*/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index), bold: false })
+    out.push({ text: m[1], bold: true })
+    last = m.index + m[0].length
+  }
+  if (last < text.length) out.push({ text: text.slice(last), bold: false })
+  return out.length ? out : [{ text, bold: false }]
+}
+
+/**
+ * The assistant's answer as blocks, from the small bit of Markdown models write: paragraphs,
+ * "- " / "* " bullets, "1. " numbered lists, "#" headings and **bold**. Rendered as React
+ * elements, never as HTML — an answer cannot inject markup into the page.
+ */
+export function blocks(text: string): Block[] {
+  const out: Block[] = []
+  let para: string[] = []
+  const flush = () => {
+    if (para.length) out.push({ kind: 'p', parts: inline(para.join(' ')) })
+    para = []
+  }
+  for (const raw of (text ?? '').split(/\r?\n/)) {
+    const line = raw.trim()
+    const bullet = /^[-*•]\s+(.*)$/.exec(line)
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(line)
+    const heading = /^#{1,6}\s+(.*)$/.exec(line)
+    if (!line) { flush(); continue }
+    if (heading) { flush(); out.push({ kind: 'h', parts: inline(heading[1]) }); continue }
+    if (bullet || numbered) {
+      flush()
+      const kind = bullet ? 'ul' : 'ol'
+      const item = inline((bullet ?? numbered)![1])
+      const prev = out[out.length - 1]
+      if (prev && prev.kind === kind) prev.items.push(item)
+      else out.push({ kind, items: [item] })
+      continue
+    }
+    para.push(line)
+  }
+  flush()
+  return out
+}

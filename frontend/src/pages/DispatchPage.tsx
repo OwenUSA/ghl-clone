@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { PageTabs } from '../components/PageTabs'
+import { AssistantChat, type ChatMsg } from '../components/dispatch/AssistantChat'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
 import {
-  applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion, dispatchChat,
+  applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion,
   dispatchItems, dispatchSettings, dispatchSlots, dispatchSuggestions, dispatchSummary,
   dispatchWrites, explainDispatchItem, saveDispatchSettings, saveDispatchWrites,
   type DispatchItem, type DispatchSettings, type DispatchSlot, type DispatchSuggestion,
@@ -42,7 +43,10 @@ const link: React.CSSProperties = { color: BLUE, fontWeight: 500 }
  */
 export function DispatchPage({ user }: { user: Me }) {
   const allowed = canOpenAiAgents(user)
-  const [tab, setTab] = useState<string>(URGENT)
+  // The assistant opens first (2026-10-01, the owner's ask); its conversation lives here so
+  // switching tabs keeps it.
+  const [tab, setTab] = useState<string>(ASK)
+  const [chat, setChat] = useState<ChatMsg[]>([])
   const summary = useQuery({ queryKey: ['dispatch-summary'], queryFn: dispatchSummary,
     enabled: allowed, refetchInterval: 60000, refetchOnWindowFocus: true })
   const sugs = useQuery({ queryKey: ['dispatch-suggestions'], queryFn: () => dispatchSuggestions(),
@@ -56,10 +60,10 @@ export function DispatchPage({ user }: { user: Me }) {
   const s = summary.data
   const openSugs = (sugs.data?.suggestions ?? []).filter((x) => x.state === 'open').length
   const tabs = [
+    { key: ASK, label: 'Assistant' },
     { key: URGENT, label: s ? `Urgent${s.urgent ? ` ${s.urgent}` : ''}` : 'Urgent' },
     ...(s?.queues ?? []).map((q) => ({ key: q.key, label: queueLabel(q) })),
     { key: SUGGESTIONS, label: openSugs ? `Suggestions ${openSugs}` : 'Suggestions' },
-    { key: ASK, label: 'Ask' },
     { key: SETTINGS, label: 'Settings' },
   ].map((t) => ({ ...t, onSelect: () => setTab(t.key) }))
   const shown = (items.data?.items ?? []).filter((i) => tab !== URGENT || i.urgent)
@@ -81,10 +85,13 @@ export function DispatchPage({ user }: { user: Me }) {
         {s && <span className="ml-auto">Last 30 days: {s.accuracy_30d.done} done ·{' '}
           {s.accuracy_30d.wrong} marked wrong</span>}
       </div>
+      {tab === ASK ? (
+        <AssistantChat name={user.name} messages={chat} setMessages={setChat}
+          onOpenSuggestions={() => setTab(SUGGESTIONS)} />
+      ) : (
       <div style={{ overflowY: 'auto', padding: '16px 24px', flex: 1 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 980 }}>
           {tab === SUGGESTIONS ? <SuggestionsTab list={sugs.data?.suggestions ?? []} />
-            : tab === ASK ? <AskTab />
             : tab === SETTINGS ? <SettingsTab admin={isAiAdmin(user)} />
             : (
               <>
@@ -101,6 +108,7 @@ export function DispatchPage({ user }: { user: Me }) {
             )}
         </div>
       </div>
+      )}
     </div>
   )
 }
@@ -322,53 +330,6 @@ function SuggestionsTab({ list }: { list: DispatchSuggestion[] }) {
       No suggested changes. The AI adds them when a call shows Zuper is missing something.</div>
   }
   return <>{list.map((s) => <div key={s.id} style={card}><SuggestionLine s={s} showJob /></div>)}</>
-}
-
-type Msg = { role: 'user' | 'assistant'; content: string }
-
-function AskTab() {
-  const refresh = useRefresh()
-  const [msgs, setMsgs] = useState<Msg[]>([])
-  const [draft, setDraft] = useState('')
-  const ask = useMutation({
-    mutationFn: (next: Msg[]) => dispatchChat(next),
-    onSuccess: (r, next) => { setMsgs([...next, { role: 'assistant', content: r.reply }]); refresh() },
-  })
-  const submit = () => {
-    const text = draft.trim()
-    if (!text || ask.isPending) return
-    const next = [...msgs, { role: 'user' as const, content: text }]
-    setMsgs(next)
-    setDraft('')
-    ask.mutate(next)
-  }
-  return (
-    <div style={card}>
-      <div style={{ fontSize: 13, color: MUTED, marginBottom: 8 }}>
-        Ask about any job, call or what to do next — “Who is waiting on a repair date?”,
-        “What happened with #678?”, “Find a Thursday slot near Weston”. It reads; it never
-        changes Zuper or contacts anyone.</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {msgs.map((m, n) => (
-          <div key={n} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-            maxWidth: '85%', whiteSpace: 'pre-wrap', fontSize: 13, padding: '8px 10px',
-            borderRadius: 8, background: m.role === 'user' ? 'rgb(235,242,255)' : 'rgb(249,250,251)',
-            color: INK }}>{m.content}</div>
-        ))}
-        {ask.isPending && <div style={{ color: MUTED, fontSize: 13 }}>Thinking…</div>}
-        {ask.isError && <div style={{ color: RED, fontSize: 13 }}>{(ask.error as Error).message}</div>}
-      </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <input value={draft} onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
-          placeholder="Ask the dispatch assistant…" style={{ flex: 1, border: `1px solid ${LINE}`,
-            borderRadius: 6, padding: '6px 10px', fontSize: 13 }} />
-        <button type="button" onClick={submit} disabled={ask.isPending || !draft.trim()}
-          style={{ color: '#fff', background: BLUE, borderRadius: 6, padding: '6px 14px',
-            fontWeight: 500 }}>Ask</button>
-      </div>
-    </div>
-  )
 }
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']

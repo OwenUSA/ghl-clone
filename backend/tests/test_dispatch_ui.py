@@ -60,3 +60,28 @@ def test_desktop_notifications_only_for_new_unread_alerts():
         out([first.map(a => a.id), second.map(a => a.id), third.map(a => a.id)])
     """)
     assert got == [[], [3], []]
+
+
+@node
+def test_the_assistant_greets_in_new_york_time_with_the_first_name():
+    got = run_js("dispatch.ts", """
+        out([m.greeting('Owen Buzaglo', new Date('2026-10-01T12:00:00Z')),
+             m.greeting('Luis', new Date('2026-10-01T19:00:00Z')),
+             m.greeting('', new Date('2026-10-02T01:30:00Z')),
+             m.SUGGESTED_QUESTIONS.length > 4])
+    """, tz="Asia/Tokyo")
+    assert got == ["Good morning, Owen", "Good afternoon, Luis", "Good evening", True]
+
+
+@node
+def test_an_answer_becomes_paragraphs_lists_and_bold_never_markup():
+    got = run_js("dispatch.ts", r"""
+        const b = m.blocks('**3 urgent** jobs:\n- #707 call back\n- #711 no pictures\n\n'
+          + '1. Open Zuper\n2. Move it\n\n<b>not html</b>')
+        out(b)
+    """)
+    assert got[0] == {"kind": "p", "parts": [{"text": "3 urgent", "bold": True},
+                                            {"text": " jobs:", "bold": False}]}
+    assert got[1]["kind"] == "ul" and len(got[1]["items"]) == 2
+    assert got[2]["kind"] == "ol" and got[2]["items"][1] == [{"text": "Move it", "bold": False}]
+    assert got[3] == {"kind": "p", "parts": [{"text": "<b>not html</b>", "bold": False}]}
