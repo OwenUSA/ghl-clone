@@ -80,7 +80,7 @@ def world():
     db.flush()
     tokens = {}
     for key, user, scopes in (("feed", feed, "events:write"), ("tech", tech, ""),
-                              ("admin", admin, "")):
+                              ("admin", admin, ""), ("hidden", hidden, ""), ("disp", disp, "")):
         plain, tok = mint_api_token(user, name=key, scopes=scopes)
         db.add(tok)
         tokens[key] = plain
@@ -203,14 +203,44 @@ def test_a_job_nobody_has_still_rings_and_keeps_the_number(world):
     out = r.json()
     assert out["found"] is False and out["opportunity_id"] is None
     item = read(lambda db: db.get(DispatchItem, out["item_id"]))
-    assert item.job_uid is None and item.job_number == "79999999" and item.board is None
+    assert item.job_uid is None and item.job_number == "79999999"
+    # Not found is still an AHS job: filed on AHS - Inspection, so the board filters apply.
+    assert item.board == "AHS - Inspection"
     assert item.title == "AHS approved #79999999: $1,350"
     assert "Nothing in the CRM or on the Dispatch page carries AHS job #79999999" in item.why
     got = alerts_for()
-    # No board, so nobody's pipeline permissions can hide it.
-    assert {a[0] for a in got} == {world.ids[u] for u in ("admin", "disp", "feed", "hidden")}
+    assert {a[0] for a in got} == {world.ids[u] for u in ("admin", "disp", "feed")}
     assert all(a[3] is None for a in got)
     assert counts()["jobs"] == before["jobs"]
+
+
+def dispatch_items(c, who):
+    r = c.get("/api/dispatch/items", headers={"Authorization": "Bearer " + c.tokens[who]})
+    assert r.status_code == 200, r.text
+    return {i["id"] for i in r.json()["items"]}
+
+
+@pytest.mark.parametrize("found", ["nobody", "hidden from the feed"])
+def test_a_dispatcher_the_ahs_board_is_hidden_from_never_learns_of_it(world, found):
+    """The AHS number and the amount must not reach someone the AHS pipeline is hidden from,
+    whether the job was not found at all or found and hidden from the feed's owner."""
+    if found == "hidden from the feed":
+        add_card(world, zuper_uid="zj-1")
+        read(lambda db: (db.query(PipelinePermission).filter(
+            PipelinePermission.user_id == world.ids["feed"]).delete(), db.commit()))
+        body = approval()
+    else:
+        body = approval(ahs_job_id="79999999")
+    out = post(world, body).json()
+    assert out["found"] is False
+    item = read(lambda db: db.get(DispatchItem, out["item_id"]))
+    assert item.board == "AHS - Inspection"
+    rung = {a[0] for a in alerts_for()}
+    assert world.ids["hidden"] not in rung
+    assert world.ids["admin"] in rung and world.ids["disp"] in rung
+    assert out["item_id"] not in dispatch_items(world, "hidden")
+    assert out["item_id"] in dispatch_items(world, "admin")
+    assert out["item_id"] in dispatch_items(world, "disp")
 
 
 def test_a_card_with_no_zuper_job_still_opens_from_the_bell(world):
@@ -232,6 +262,35 @@ def test_a_zuper_job_is_found_by_its_ahs_field_without_a_card(world):
     assert out["job_uid"] == "zj-9"
     item = read(lambda db: db.get(DispatchItem, out["item_id"]))
     assert item.job_number == "Z-9" and item.board == "AHS - Inspection"
+
+
+def test_a_zuper_number_or_another_board_never_stands_for_the_ahs_number(world):
+    """Zuper's own job number is a different series: one that happens to equal the AHS number
+    is not this job. Nor is a job on a non-AHS board whose fields mention the number."""
+    read(lambda db: (db.add_all([
+        DispatchJob(job_uid="zj-num", job_number="71234567", board="AHS - Inspection",
+                    customer_name="Someone Else"),
+        DispatchJob(job_uid="zj-retail", job_number="R-5", board="Retail",
+                    customer_name="Someone Else", fields={"AHS Job ID": "71234567"}),
+        DispatchJob(job_uid="zj-other", job_number="Z-7", board="AHS - Inspection",
+                    customer_name="Someone Else", fields={"AHS Job ID": "712345678"}),
+    ]), db.commit()))
+    out = post(world, approval()).json()
+    assert out["found"] is False and out["job_uid"] is None
+    item = read(lambda db: db.get(DispatchItem, out["item_id"]))
+    assert item.job_number == "71234567" and item.board == "AHS - Inspection"
+    assert "Someone Else" not in item.title
+
+
+def test_a_zuper_job_on_the_repair_board_is_found_by_its_ahs_field(world):
+    read(lambda db: (db.add(DispatchJob(job_uid="zj-r", job_number="Z-12",
+                                        board="AHS - Repair & Review", customer_name="Jane Doe",
+                                        fields={"Other": "x", "AHS Job #": " 71234567 "})),
+                     db.commit()))
+    out = post(world, approval()).json()
+    assert out["job_uid"] == "zj-r"
+    item = read(lambda db: db.get(DispatchItem, out["item_id"]))
+    assert item.board == "AHS - Repair & Review"
 
 
 def test_a_card_hidden_from_the_feed_is_not_found(world):
@@ -267,12 +326,21 @@ def test_items_updated_is_an_item_and_no_bell(world):
     approval(ahs_job_id="not a job!"),
     approval(kind="approved"),
     approval(autho_code="R1"),
+    approval(net_total=None, ncc=None),
+    approval(net_total="", ncc=" "),
 ])
 def test_bad_input_is_a_422_and_writes_nothing(world, body):
     before = counts()
     r = post(world, body)
     assert r.status_code == 422, r.text
     assert counts() == before
+
+
+def test_an_approval_with_only_the_ncc_names_that_amount(world):
+    out = post(world, approval(net_total=None, ncc="1500")).json()
+    item = read(lambda db: db.get(DispatchItem, out["item_id"]))
+    assert item.title == "AHS approved #71234567"
+    assert "(AHS authorized $1,500)" in item.todo and "$)" not in item.todo
 
 
 def test_who_may_post(world):
