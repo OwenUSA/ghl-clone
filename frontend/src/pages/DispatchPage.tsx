@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PageTabs } from '../components/PageTabs'
-import { AssistantChat, type ChatMsg } from '../components/dispatch/AssistantChat'
+import { AssistantChat } from '../components/dispatch/AssistantChat'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
 import {
   applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion,
@@ -43,10 +43,12 @@ const link: React.CSSProperties = { color: BLUE, fontWeight: 500 }
  */
 export function DispatchPage({ user }: { user: Me }) {
   const allowed = canOpenAiAgents(user)
-  // The assistant opens first (2026-10-01, the owner's ask); its conversation lives here so
-  // switching tabs keeps it.
+  // The assistant opens first (2026-10-01, the owner's ask). The server keeps the chats; the
+  // open one is remembered here (and in sessionStorage, as a convenience) so switching tabs
+  // keeps it.
   const [tab, setTab] = useState<string>(ASK)
-  const [chat, setChat] = useState<ChatMsg[]>([])
+  const [activeChatId, setActiveChatId] = useState<number | null>(readActiveChat)
+  useEffect(() => { writeActiveChat(activeChatId) }, [activeChatId])
   const summary = useQuery({ queryKey: ['dispatch-summary'], queryFn: dispatchSummary,
     enabled: allowed, refetchInterval: 60000, refetchOnWindowFocus: true })
   const sugs = useQuery({ queryKey: ['dispatch-suggestions'], queryFn: () => dispatchSuggestions(),
@@ -86,7 +88,7 @@ export function DispatchPage({ user }: { user: Me }) {
           {s.accuracy_30d.wrong} marked wrong</span>}
       </div>
       {tab === ASK ? (
-        <AssistantChat name={user.name} messages={chat} setMessages={setChat}
+        <AssistantChat user={user} activeChatId={activeChatId} setActiveChatId={setActiveChatId}
           onOpenSuggestions={() => setTab(SUGGESTIONS)} />
       ) : (
       <div style={{ overflowY: 'auto', padding: '16px 24px', flex: 1 }}>
@@ -111,6 +113,27 @@ export function DispatchPage({ user }: { user: Me }) {
       )}
     </div>
   )
+}
+
+const ACTIVE_CHAT_KEY = 'dispatch.activeChat'
+
+/** The chat open in this tab, if sessionStorage remembers one. Storage can throw; then none. */
+function readActiveChat(): number | null {
+  try {
+    const n = Number(window.sessionStorage.getItem(ACTIVE_CHAT_KEY))
+    return Number.isInteger(n) && n > 0 ? n : null
+  } catch {
+    return null
+  }
+}
+
+function writeActiveChat(id: number | null) {
+  try {
+    if (id == null) window.sessionStorage.removeItem(ACTIVE_CHAT_KEY)
+    else window.sessionStorage.setItem(ACTIVE_CHAT_KEY, String(id))
+  } catch {
+    // A private window or blocked storage: the chat is just not remembered.
+  }
 }
 
 function useWrites() {

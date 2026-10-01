@@ -50,6 +50,7 @@ from .db import DATABASE_URL, Base, engine, get_db
 from .dispatch import act as dispatch_act
 from .dispatch import api as dispatch_api
 from .dispatch import assist as dispatch_assist
+from .dispatch import chats as dispatch_chats
 from .models import (
     ACTIVITY_TYPES,
     CONVERSATION_TYPES,
@@ -140,6 +141,7 @@ app.include_router(zuper_api.router)
 # The Dispatch page (2026-09-30): queues from Zuper + every call; ADMIN + DISPATCHER.
 app.include_router(dispatch_api.router)
 app.include_router(dispatch_assist.router)
+app.include_router(dispatch_chats.router)
 app.include_router(dispatch_act.router)
 
 # AHS authorized a repair (2026-10-01): owen-main relays the note email; a Dispatch item

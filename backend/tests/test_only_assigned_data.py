@@ -1201,7 +1201,10 @@ AUDITED = {
                      # phase 2 (app/dispatch/assist.py): the same gate; PUT settings is ADMIN
                      "dispatch_suggestions", "dispatch_suggestion_approve",
                      "dispatch_suggestion_wrong", "dispatch_job_slots",
-                     "dispatch_item_explain", "dispatch_chat", "dispatch_get_settings",
+                     "dispatch_item_explain", "dispatch_get_settings",
+                     # saved chats (app/dispatch/chats.py, 2026-10-01): own chats only
+                     "dispatch_list_chats", "dispatch_get_chat", "dispatch_chat_message",
+                     "dispatch_rename_chat", "dispatch_delete_chat", "dispatch_chat_feedback",
                      "dispatch_put_settings",
                      # phase 3 (app/dispatch/act.py): the same gate; PUT writes is ADMIN —
                      # pinned by tests/test_dispatch_writes.py

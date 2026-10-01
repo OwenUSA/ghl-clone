@@ -2144,9 +2144,41 @@ export const dispatchSlots = (jobUid: string) =>
     `/api/dispatch/jobs/${encodeURIComponent(jobUid)}/slots`)
 export const explainDispatchItem = (id: number) =>
   send<DispatchItem>(`/api/dispatch/items/${id}/explain`, 'POST')
-export const dispatchChat = (messages: { role: 'user' | 'assistant'; content: string }[]) =>
-  send<{ reply: string; suggestions: DispatchSuggestion[] }>('/api/dispatch/chat', 'POST',
-    { messages })
+/** A saved assistant chat (2026-10-01): the server keeps the conversation, not the browser. */
+export type DispatchChatSummary = {
+  id: number; title: string; user_id: number; user_name: string | null
+  created_at: string; updated_at: string; message_count: number
+}
+/** One step the assistant took to answer: the tool it called, with what, and what came back. */
+export type DispatchChatStep = { tool: string; args: Record<string, unknown>; result: string }
+export type DispatchChatFeedback = { rating: 1 | -1; note: string | null }
+export type DispatchChatMessage = {
+  id: number; role: 'user' | 'assistant'; content: string; steps: DispatchChatStep[]
+  error: boolean; model: string | null; feedback: DispatchChatFeedback | null
+  suggestions: DispatchSuggestion[]; created_at: string
+}
+export type DispatchChatScope = 'mine' | 'all'
+/** scope=all is ADMIN only (403 otherwise) and names each chat's user. */
+export const dispatchChats = (scope: DispatchChatScope = 'mine') =>
+  get<{ chats: DispatchChatSummary[] }>(`/api/dispatch/chats?scope=${scope}`)
+export const dispatchChatThread = (id: number) =>
+  get<{ chat: DispatchChatSummary; can_write: boolean; messages: DispatchChatMessage[] }>(
+    `/api/dispatch/chats/${id}`)
+/** chat_id null starts a new chat; the answer says which chat it landed on. An unavailable
+ * AI still answers 200 with assistant_message.error = true and the reason as content. */
+export const sendDispatchChatMessage = (chatId: number | null, content: string) =>
+  send<{ chat: DispatchChatSummary; user_message: DispatchChatMessage;
+    assistant_message: DispatchChatMessage }>('/api/dispatch/chats/messages', 'POST',
+    { chat_id: chatId, content })
+export const renameDispatchChat = (id: number, title: string) =>
+  send<DispatchChatSummary>(`/api/dispatch/chats/${id}`, 'PATCH', { title })
+/** Hides the chat from every list; the server keeps it for review. */
+export const deleteDispatchChat = (id: number) =>
+  send<{ id: number; archived: true }>(`/api/dispatch/chats/${id}`, 'DELETE')
+export const rateDispatchChatMessage = (chatId: number, messageId: number, rating: 1 | -1,
+  note?: string | null) =>
+  send<DispatchChatMessage>(`/api/dispatch/chats/${chatId}/messages/${messageId}/feedback`,
+    'POST', { rating, note: note ?? null })
 export const dispatchSettings = () => get<DispatchSettings>('/api/dispatch/settings')
 export const saveDispatchSettings = (body: Partial<Omit<DispatchSettings,
   'runs_today' | 'connections' | 'writes'>>) =>

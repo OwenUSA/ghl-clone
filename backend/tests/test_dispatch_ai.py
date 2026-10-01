@@ -268,12 +268,19 @@ def test_the_chat_reads_through_tools_and_only_records_suggestions(db, office, p
                 "evidence": "said on the Sep 30 call"}), "call_2")]),
         openai_completion(content="#678 Marina Reyes is AHS Approved; I noted her preference."),
     ]
-    r = TestClient(app).post("/api/dispatch/chat", json={"messages": [
-        {"role": "user", "content": "What is open and what should I note?"}]},
+    r = TestClient(app).post("/api/dispatch/chats/messages", json={
+        "chat_id": None, "content": "What is open and what should I note?"},
         headers=people["dispatcher"][1])
     assert r.status_code == 200, r.text
-    assert r.json()["reply"].startswith("#678")
-    assert [s["proposed"] for s in r.json()["suggestions"]] == ["Prefers mornings"]
+    answer = r.json()["assistant_message"]
+    assert answer["content"].startswith("#678") and answer["error"] is False
+    assert [s["proposed"] for s in answer["suggestions"]] == ["Prefers mornings"]
+    # Saved with what it looked up (the owner's ask, 2026-10-01).
+    assert [st["tool"] for st in answer["steps"]] == ["find_jobs", "suggest_change"]
+    saved = TestClient(app).get("/api/dispatch/chats/%d" % r.json()["chat"]["id"],
+                                headers=people["dispatcher"][1]).json()
+    assert [m["role"] for m in saved["messages"]] == ["user", "assistant"]
+    assert saved["messages"][1]["steps"][0]["tool"] == "find_jobs"
     # The find_jobs result the model saw: the dispatcher's boards only.
     tool_msg = next(m for m in script.requests[1]["body"]["messages"] if m["role"] == "tool")
     seen = json.loads(tool_msg["content"])
@@ -289,9 +296,11 @@ def test_the_chat_stops_when_the_cap_is_reached_mid_conversation(db, office, peo
             openai_call("list_items", json.dumps({}), "call_1")]),
         openai_completion(content="never reached"),
     ]
-    r = TestClient(app).post("/api/dispatch/chat", json={"messages": [
-        {"role": "user", "content": "What is open?"}]}, headers=people["dispatcher"][1])
-    assert r.status_code == 200 and r.json()["reply"].startswith("I stopped before finishing")
+    r = TestClient(app).post("/api/dispatch/chats/messages", json={
+        "chat_id": None, "content": "What is open?"}, headers=people["dispatcher"][1])
+    answer = r.json()["assistant_message"]
+    assert r.status_code == 200 and answer["content"].startswith("I stopped before finishing")
+    assert answer["error"] is True
     assert script.calls == 1
 
 

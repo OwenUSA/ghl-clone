@@ -119,36 +119,6 @@ def dispatch_item_explain(item_id: int, principal: auth.Principal = VIEW,
     return _with_suggestions(db, [_item(r)])[0]
 
 
-class ChatMessage(BaseModel):
-    role: str = Field(pattern="^(user|assistant)$")
-    # The assistant's own replies come back as history and can be long; a person's question
-    # is held to 4,000 characters in the route (review 2026-10-01).
-    content: str = Field(max_length=40000)
-
-
-class ChatIn(BaseModel):
-    messages: list[ChatMessage] = Field(min_length=1, max_length=30)
-
-
-@router.post("/chat")
-def dispatch_chat(body: ChatIn, principal: auth.Principal = VIEW,
-                  db: Session = Depends(get_db)):
-    """Ask the Dispatch assistant. It reads the boards this user may see and may record
-    suggestions; it never writes to Zuper or contacts anyone."""
-    if body.messages[-1].role != "user":
-        raise HTTPException(400, "the last message must be the user's")
-    if any(m.role == "user" and len(m.content) > 4000 for m in body.messages):
-        raise HTTPException(422, "a question can be at most 4,000 characters")
-    try:
-        out = ai.chat(db, [m.model_dump() for m in body.messages], user_id=principal.user_id,
-                      hidden=_hidden(db, principal))
-    except ai.Unavailable as e:
-        raise HTTPException(409, str(e)) from None
-    sugs = db.scalars(select(DispatchSuggestion).where(
-        DispatchSuggestion.id.in_(out["suggestions"]))).all() if out["suggestions"] else []
-    return {"reply": out["reply"], "suggestions": [_suggestion(s) for s in sugs]}
-
-
 # ---- settings --------------------------------------------------------------------------------
 
 def _settings_out(db: Session, admin: bool = True) -> dict:

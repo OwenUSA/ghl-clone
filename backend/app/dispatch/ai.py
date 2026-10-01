@@ -409,15 +409,34 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
     return json.dumps({"error": "unknown tool"})
 
 
-def chat(db: Session, messages: list[dict], *, user_id: int, hidden: set[str],
+STEP_RESULT_MAX = 4000
+
+
+def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[str],
          now: datetime | None = None) -> dict:
+    """Answer the last user message of `messages` (oldest first, user / assistant).
+
+    Never raises for the AI being unavailable: the result says so (`error`), so a saved
+    conversation keeps the attempt. Returns {reply, error, suggestions (ids), steps (every
+    tool the assistant used: tool, args, result), model, input_tokens, output_tokens}."""
     now = now or datetime.now(UTC)
-    prov, model = provider_for(db, now)
+    made: list[DispatchSuggestion] = []
+    steps: list[dict] = []
+    usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def result(reply: str, *, error: bool = False, model: str | None = None) -> dict:
+        db.commit()
+        return {"reply": reply, "error": error, "suggestions": [x.id for x in made],
+                "steps": steps, "model": model, **usage}
+
+    try:
+        prov, model = provider_for(db, now)
+    except Unavailable as e:
+        return result(str(e), error=True)
     system = CHAT_SYSTEM.format(rules=playbook.HOUSE_RULES, boards=playbook.board_text(),
                                 today=_local(now))
     convo = [{"role": m["role"], "content": m["content"]} if m["role"] == "user" else
              {"role": "assistant", "text": m["content"]} for m in messages]
-    made: list[DispatchSuggestion] = []
     for step in range(CHAT_STEPS):
         if step:
             # Every round is a request: the cap and "Pause all AI agents" are asked again
@@ -425,29 +444,29 @@ def chat(db: Session, messages: list[dict], *, user_id: int, hidden: set[str],
             try:
                 prov, model = provider_for(db, now)
             except Unavailable as e:
-                db.commit()
-                return {"reply": "I stopped before finishing: %s" % e,
-                        "suggestions": [s.id for s in made]}
+                return result("I stopped before finishing: %s" % e, error=True, model=model)
         try:
             turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
                                  max_tokens=CHAT_MAX_TOKENS)
         except providers.ProviderError as e:
             _record(db, "chat", model, None, user_id=user_id, error=str(e))
-            db.commit()
-            raise Unavailable(str(e)) from None
+            return result(str(e), error=True, model=model)
         _record(db, "chat", model, turn, user_id=user_id)
+        usage["input_tokens"] += turn.usage.input_tokens
+        usage["output_tokens"] += turn.usage.output_tokens
+        model = turn.model or model
         if not turn.tool_calls:
-            db.commit()
-            return {"reply": turn.text, "suggestions": [s.id for s in made]}
+            return result(turn.text, model=model)
         convo.append({"role": "assistant", "text": turn.text, "tool_calls": turn.tool_calls,
                       "raw": turn.raw})
         results = []
         for call in turn.tool_calls:
             out = run_tool(db, call.name, call.arguments or {}, now, hidden, made) \
                 if call.arguments is not None else json.dumps({"error": "bad arguments"})
+            steps.append({"tool": call.name, "args": call.arguments or {},
+                          "result": out[:STEP_RESULT_MAX]})
             results.append({"id": call.id, "name": call.name, "content": out,
                             "is_error": False})
         convo.append({"role": "tool_results", "results": results})
-    db.commit()
-    return {"reply": "I could not finish that in a few steps — please ask more narrowly.",
-            "suggestions": [s.id for s in made]}
+    return result("I could not finish that in a few steps — please ask more narrowly.",
+                  error=True, model=model)

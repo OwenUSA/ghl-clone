@@ -6611,3 +6611,15 @@ for a report to be sent to the Authorization department (not an approval). The w
 **Watch it.** Built from ONE real sample. A reworded template silently falls back to `ignored`
 on owen-main (safe — nothing is sent — but quiet). After switching it on, check owen-main's
 Emails page for `AHS authorized` rows and this side's Dispatch → Book a visit.
+
+### The assistant's chats are saved, with a list beside them (2026-10-01)
+
+The owner: "these chats and movements in the chats are saved all of them right? because i need
+to know later how can we improve this conversation, also i need a list of all the chats in the
+side of the chat". They were not — the conversation lived in the browser. Now `dispatch_chats` /
+`dispatch_chat_messages` keep every question and answer with every tool step (tool, arguments,
+result up to 4,000 characters), the model, tokens, an unavailable-AI error, and a thumbs up /
+down with a note. The server builds the history it sends to the model (the browser sends only
+the new question, so a saved conversation cannot be rewritten). A person sees and writes only
+their own chats; an ADMIN reads everyone's, read-only, for review. Delete = archive: hidden from
+the owner, kept. The old unsaved `POST /api/dispatch/chat` is gone.

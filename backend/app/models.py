@@ -2026,3 +2026,41 @@ class DispatchAiRun(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+
+
+class DispatchChat(Base):
+    """One conversation with the Dispatch assistant (2026-10-01). Kept for good: a "deleted"
+    chat is only `archived` (hidden from its owner's list) so the owner can review how the
+    assistant answers and improve it."""
+    __tablename__ = "dispatch_chats"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(200), default="New chat",
+                                       server_default="New chat")
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+
+
+class DispatchChatMessage(Base):
+    """A message in a Dispatch chat: the person's question, or the assistant's answer with
+    every tool it used to get there (`steps`: tool, args, result), its model and tokens, and
+    the person's thumbs up / down (`rating`, `feedback_note`)."""
+    __tablename__ = "dispatch_chat_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    role: Mapped[str] = mapped_column(String(20))              # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    steps: Mapped[list | None] = mapped_column(NullableJSONType)
+    suggestion_ids: Mapped[list | None] = mapped_column(NullableJSONType)
+    error: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    model: Mapped[str | None] = mapped_column(String(120))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    rating: Mapped[int | None] = mapped_column(Integer)            # 1 | -1
+    feedback_note: Mapped[str | None] = mapped_column(Text)
+    feedback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())

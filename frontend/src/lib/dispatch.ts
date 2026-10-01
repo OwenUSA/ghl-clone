@@ -135,3 +135,56 @@ export function blocks(text: string): Block[] {
   flush()
   return out
 }
+
+// ---------------- saved chats (2026-10-01) ----------------
+
+export type ChatGroup = 'Today' | 'Yesterday' | 'Previous 7 days' | 'Older'
+export const CHAT_GROUPS: readonly ChatGroup[] = ['Today', 'Yesterday', 'Previous 7 days', 'Older']
+
+/** The New York calendar day of an instant, as days since 1970 — so "yesterday" is the office's. */
+function nyDay(d: Date): number {
+  const key = d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) // YYYY-MM-DD
+  const [y, m, day] = key.split('-').map(Number)
+  return Math.floor(Date.UTC(y, m - 1, day) / 86400000)
+}
+
+/** Which sidebar group a chat belongs in, by its updated_at in New York time. */
+export function chatGroup(updatedAt: string, now: Date = new Date()): ChatGroup {
+  const days = nyDay(now) - nyDay(new Date(updatedAt))
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days <= 7) return 'Previous 7 days'
+  return 'Older'
+}
+
+/** Chats grouped for the sidebar, newest first inside each group; empty groups are left out. */
+export function groupChats<T extends { updated_at: string }>(chats: T[],
+  now: Date = new Date()): { group: ChatGroup; chats: T[] }[] {
+  const sorted = [...chats].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+  return CHAT_GROUPS.map((group) => ({ group,
+    chats: sorted.filter((c) => chatGroup(c.updated_at, now) === group) }))
+    .filter((g) => g.chats.length > 0)
+}
+
+/** A step's tool in plain words. */
+export const STEP_LABELS: Record<string, string> = {
+  list_items: 'Listed open items', find_jobs: 'Searched jobs', get_job: 'Opened job',
+  find_slots: 'Looked for visit slots', suggest_change: 'Recorded a suggestion',
+}
+export function stepLabel(tool: string): string {
+  return STEP_LABELS[tool] ?? tool.replace(/_/g, ' ')
+}
+
+/** A step's arguments on one line: `queue: missed · limit: 10`. Empty values are left out. */
+export function stepArgs(args: Record<string, unknown> | null | undefined): string {
+  return Object.entries(args ?? {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== '')
+    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(' · ')
+}
+
+/** Text cut to `max` characters with an ellipsis. */
+export function clip(text: string | null | undefined, max = 300): string {
+  const t = text ?? ''
+  return t.length > max ? `${t.slice(0, max).trimEnd()}…` : t
+}

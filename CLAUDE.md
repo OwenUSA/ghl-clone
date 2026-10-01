@@ -719,6 +719,11 @@ in `DECISIONS.md`.
   (`dispatch/booking.py`, pure), the Ask chat. OFF until an ADMIN picks a connection and switches
   it on in Dispatch → Settings; "Pause all AI agents" and the daily cap stop it too — and then no
   request leaves. Change `dispatch/playbook.py` when the team changes a board.
+- **The assistant's chats are SAVED** (2026-10-01, `dispatch/chats.py`, `dispatch_chats` /
+  `dispatch_chat_messages`): every question, answer, tool step (what it looked up and got back),
+  model, tokens, error and the person's thumbs up / down + note — for reviewing and improving it.
+  The server keeps the history (the browser sends only the new question). Own chats only; an
+  ADMIN reads everyone's, read-only. "Delete" only archives.
 - **Phase 3 — the agent applies a confirmed change in Zuper** (`dispatch/writes.py`, routes in
   `dispatch/act.py`): BUILT AND OFF. Needs `DISPATCH_ZUPER_WRITES=true` AND an ADMIN's master +
   per-action switch (typed "TURN ON", every flip in `dispatch_write_log`); writes only through
