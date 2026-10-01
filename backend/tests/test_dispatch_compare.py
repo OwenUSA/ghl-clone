@@ -98,10 +98,10 @@ def test_rows_match_by_job_number_phone_name_and_differences_are_named():
     assert (john["job_number"], john["matched_by"], john["result"]) == ("300", "name", "same")
     assert rows[("To Invoice", "Nobody Here")]["result"] == "not in Zuper"
     ann = rows[("Calls", "Ann Lee")]
-    assert ann["matched_by"] == "phone" and ann["result"] == "different"   # Callback vs Call Back
+    assert ann["matched_by"] == "phone" and ann["result"] == "same"    # Callback = Call Back
     assert compare.columns_of(BOOK["To Invoice"][2])["job"] == "Zuper WO"   # not "Work / note"
-    assert result["counts"] == {"rows": 4, "matched": 3, "not_in_zuper": 1, "different": 2,
-                                "same": 1}
+    assert result["counts"] == {"rows": 4, "matched": 3, "not_in_zuper": 1, "different": 1,
+                                "same": 2, "not_a_customer_row": 0}
 
 
 def test_a_hidden_board_is_never_matched():
@@ -176,3 +176,17 @@ def test_an_upload_that_is_not_excel_is_refused(db, people):
                    files={"file": ("notes.txt", b"x", "text/plain")}).status_code == 415
     assert cl.post("/api/dispatch/chats/files", headers=people["dispatcher"],
                    files={"file": ("bad.xlsx", b"not excel", "application/x")}).status_code == 422
+
+
+def test_heading_rows_are_skipped_and_names_with_notes_or_two_people_still_match():
+    """From the owner's real list (2026-10-01): blank / day-heading rows, "(Northlake Dr)"
+    notes and "A / B" cells."""
+    book = {"Schedule": [["Day", "Customer", "Status"], ["Thursday", None, None],
+                         [None, "Jane Doe (back door)", "Callback - Needs to Schedule"],
+                         [None, "Nobody Else / John Roe", "AHS Approved"]]}
+    result = compare.compare(sheets.parse(xlsx(book), "s.xlsx"), JOBS, hidden=set(), now=NOW)
+    assert result["counts"]["not_a_customer_row"] == 1
+    got = {r["customer"]: r for r in result["rows"]}
+    assert got["Jane Doe (back door)"]["job_number"] == "291"
+    assert got["Nobody Else / John Roe"]["job_number"] == "300"
+    assert compare.names_in("A Smith / B Jones (Main St)") == ["a smith", "b jones"]

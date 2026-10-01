@@ -69,8 +69,18 @@ def columns_of(columns: list[str]) -> dict[str, str | None]:
 
 
 def _same_stage(file_status: str, zuper: str | None) -> bool:
-    a, b = " ".join(words(file_status)), " ".join(words(zuper))
+    """Spacing and dashes do not make a stage different: "Callback" is "Call Back", and
+    "Callback - Needs to Schedule" is still Call Back (live list, 2026-10-01)."""
+    a, b = "".join(words(file_status)), "".join(words(zuper))
     return bool(a and b) and (a == b or a in b or b in a)
+
+
+def names_in(cell: str) -> list[str]:
+    """The customer names in a cell: "(Northlake Dr)" notes dropped, "A / B" and "A & B" split
+    into two people (live list, 2026-10-01)."""
+    cell = re.sub(r"\([^)]*\)", " ", cell or "")
+    return [" ".join(words(x)) for x in re.split(r"\s*(?:/|&|\+| and )\s*", cell)
+            if words(x)]
 
 
 def _when(dt) -> str:
@@ -105,11 +115,17 @@ def compare(sheets: list[dict], jobs, *, hidden: set[str], now: datetime) -> dic
                 if key.split()[:1] == t[:1] and key.split()[-1:] == t[-1:]]
 
     results = []
+    skipped = 0
     for sheet in sheets:
         cols = columns_of(sheet["columns"])
         for r in sheet["rows"]:
             v = r["values"]
             name = v.get(cols["name"] or "", "")
+            # A row with no customer, job number, phone or address is a heading, a day
+            # separator or a total — not a customer (live list, 2026-10-01).
+            if not any(v.get(cols[k] or "") for k in ("name", "job", "phone", "address")):
+                skipped += 1
+                continue
             found, how = [], []
             for num in re.findall(r"\d{2,6}", v.get(cols["job"] or "", "")):
                 if num in by_number:
@@ -121,11 +137,11 @@ def compare(sheets: list[dict], jobs, *, hidden: set[str], now: datetime) -> dic
                         found += by_phone[p]
                         how.append("phone")
             if not found and name:
-                key = " ".join(words(name))
-                match = by_name.get(key) or by_first_last(key)
-                if match:
-                    found += match
-                    how.append("name")
+                for key in names_in(name):
+                    match = by_name.get(key) or by_first_last(key)
+                    if match:
+                        found += match
+                        how.append("name")
             if not found and cols["address"]:
                 k = addr_key(v.get(cols["address"]))
                 if k and k in by_addr:
@@ -175,6 +191,7 @@ def compare(sheets: list[dict], jobs, *, hidden: set[str], now: datetime) -> dic
               "matched": sum(1 for x in results if x["result"] != "not in Zuper"),
               "not_in_zuper": sum(1 for x in results if x["result"] == "not in Zuper"),
               "different": sum(1 for x in results if x["result"] == "different"),
-              "same": sum(1 for x in results if x["result"] == "same")}
+              "same": sum(1 for x in results if x["result"] == "same"),
+              "not_a_customer_row": skipped}
     return {"counts": counts, "columns_used": {s["name"]: columns_of(s["columns"])
                                                for s in sheets}, "rows": results}
