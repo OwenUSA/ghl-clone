@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { PageTabs } from '../components/PageTabs'
 import { AssistantChat } from '../components/dispatch/AssistantChat'
+import { WeekPlan } from '../components/dispatch/WeekPlan'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
 import {
   applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion,
@@ -22,6 +23,7 @@ const URGENT = 'urgent'
 const SUGGESTIONS = 'suggestions'
 const ASK = 'ask'
 const SETTINGS = 'settings'
+const BOOK = 'book'
 const BOOKABLE = new Set(['book_visit', 'new_not_called', 'needs_date'])
 
 const card: React.CSSProperties = { background: '#fff', border: `1px solid ${LINE}`,
@@ -97,6 +99,7 @@ export function DispatchPage({ user }: { user: Me }) {
             : tab === SETTINGS ? <SettingsTab admin={isAiAdmin(user)} />
             : (
               <>
+                {tab === BOOK && <WeekPlan />}
                 {items.isLoading && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
                 {items.isError && <div style={{ color: RED, fontSize: 13 }}>
                   Could not load the list: {(items.error as Error).message}</div>}

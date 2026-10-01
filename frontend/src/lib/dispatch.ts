@@ -188,3 +188,70 @@ export function clip(text: string | null | undefined, max = 300): string {
   const t = text ?? ''
   return t.length > max ? `${t.slice(0, max).trimEnd()}…` : t
 }
+
+// ---------------- the week plan (2026-10-01) ----------------
+
+function nyParts(iso: string): { time: string; ampm: string } {
+  const s = new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit',
+    timeZone: 'America/New_York' }) // "8:00 AM"
+  const [time, ampm = ''] = s.split(/\s+/)
+  return { time, ampm }
+}
+
+/** "8:00–10:00 AM", or "11:00 AM–1:00 PM" across noon — New York time. */
+export function visitRange(start: string, end: string): string {
+  const a = nyParts(start)
+  const b = nyParts(end)
+  return a.ampm === b.ampm ? `${a.time}–${b.time} ${b.ampm}`
+    : `${a.time} ${a.ampm}–${b.time} ${b.ampm}`
+}
+
+/** "~55 min driving" / "~1 h 20 min driving". */
+export function driveLabel(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes))
+  if (m < 60) return `~${m} min driving`
+  const h = Math.floor(m / 60)
+  const r = m % 60
+  return `~${h} h${r ? ` ${r} min` : ''} driving`
+}
+
+export const KIND_LABEL: Record<string, string> = { inspection: 'Inspection', repair: 'Repair' }
+
+type PlanVisitLike = { job_number: string | null; customer: string | null; city: string | null
+  kind: string; start: string; end: string; existing: boolean; drive_minutes_before: number }
+
+/** "#273 Jane Doe — Weston", leaving out what is unknown. */
+export function visitTitle(v: { job_number: string | null; customer: string | null;
+  city: string | null }): string {
+  const head = [v.job_number ? `#${v.job_number}` : '', v.customer ?? ''].filter(Boolean).join(' ')
+  return [head || 'Job', v.city].filter(Boolean).join(' — ')
+}
+
+/** The plan as plain text, for the clipboard. */
+export function planText(plan: {
+  days: { label: string; techs: { tech: string; start_from: string; count: number;
+    capacity: number; drive_minutes: number; visits: PlanVisitLike[] }[] }[]
+  unplaced: { job_number: string | null; customer: string | null; city: string | null;
+    kind: string; reason: string }[]
+}): string {
+  const lines: string[] = ['DRAFT — nothing is booked until it is booked in Zuper.', '']
+  for (const d of plan.days) {
+    lines.push(d.label)
+    for (const t of d.techs) {
+      lines.push(`  ${t.tech} — ${t.count} of ${t.capacity}, ${driveLabel(t.drive_minutes)}, from ${t.start_from}`)
+      for (const v of t.visits) {
+        const drive = v.drive_minutes_before ? ` (+${v.drive_minutes_before} min drive)` : ''
+        lines.push(`    ${visitRange(v.start, v.end)}  ${visitTitle(v)} [${KIND_LABEL[v.kind] ?? v.kind}]` +
+          `${v.existing ? ' (booked)' : ''}${drive}`)
+      }
+    }
+    lines.push('')
+  }
+  if (plan.unplaced.length) {
+    lines.push('Not placed')
+    for (const u of plan.unplaced) {
+      lines.push(`  ${visitTitle(u)} [${KIND_LABEL[u.kind] ?? u.kind}] — ${u.reason}`)
+    }
+  }
+  return lines.join('\n').trimEnd() + '\n'
+}

@@ -87,6 +87,10 @@ HOUSE_RULES = """\
   most inspections.
 - Never delete a job and never touch its pictures. Never move a job backwards because of an old
   piece of information.
+- To decide WHEN to book several jobs, use the plan_schedule tool: it groups close jobs on
+  the same day per technician (4-5 a day, Monday to Saturday) around what is already booked,
+  using how long visits were really booked before. Present it day by day; it is a draft the
+  office confirms with each customer.
 - Nothing is ever sent to a customer automatically. Calls and texts are made by people.
 - AHS jobs: AHS - Inspection ends at AHS Approved; the repair, invoice and review happen on
   AHS - Repair & Review. Retail jobs stay on Retail from lead to paid.

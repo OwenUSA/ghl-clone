@@ -42,7 +42,7 @@ PER_PASS = 8                 # explanations per reader pass (the rest wait for t
 EXPLAIN_KINDS = {"new_not_called", "after_inspection", "after_repair", "talked_not_updated",
                  "book_visit", "needs_date", "missed_call", "missed_text", "visit_unconfirmed",
                  "off_board", "no_photos"}
-CHAT_STEPS = 6
+CHAT_STEPS = 8
 # Reasoning models (gpt-6-luna) spend part of this on thinking before they answer: 900 cut a
 # third of the live answers short (2026-10-01), so the room is generous; cost stays cents.
 EXPLAIN_MAX_TOKENS = 4000
@@ -319,6 +319,14 @@ TOOLS = [
                            "job_number": {"type": "string"}, "kind": {"type": "string"},
                            "technician": {"type": "string"}},
                         "required": ["job_number"], "additionalProperties": False}),
+    providers.ToolSpec("plan_schedule", "A DRAFT schedule for EVERY job waiting for a visit: "
+                       "close jobs grouped on the same day, per technician, 4-5 a day, Monday to "
+                       "Saturday, around the visits already booked, with times and driving. Use "
+                       "it for any question about when / how to book several jobs. kind: all, "
+                       "inspection or repair; days: how many business days ahead (default 6).",
+                       {"type": "object", "properties": {
+                           "days": {"type": "integer"}, "kind": {"type": "string"}},
+                        "additionalProperties": False}),
     providers.ToolSpec("suggest_change", "Record a change Zuper needs on a job, for the office to "
                        "approve (it is NOT applied). field: an exact job field label, 'Job "
                        "address' or 'Note'.", {"type": "object", "properties": {
@@ -390,6 +398,10 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
         return json.dumps([{"job_number": j.job_number, "customer": j.customer_name,
                             "board": j.board, "stage": j.status, "city": j.city,
                             "visit": _local(j.scheduled_start)} for j in rows[:30]])
+    if name == "plan_schedule":
+        out = build_plan(db, now, days=int(args.get("days") or 6),
+                         kind=str(args.get("kind") or "all"), hidden=hidden)
+        return json.dumps(plan_for_model(out))
     j = _visible_job(db, args.get("job_number", ""), hidden)
     if j is None:
         return json.dumps({"error": "no such job"})
@@ -468,5 +480,128 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
             results.append({"id": call.id, "name": call.name, "content": out,
                             "is_error": False})
         convo.append({"role": "tool_results", "results": results})
+    # Out of look-ups: one last request WITHOUT more look-ups, answering with what it found
+    # (the owner's chat on 2026-10-01 ended in "I could not finish" instead).
+    try:
+        prov, model = provider_for(db, now)
+        convo.append({"role": "user", "content": "You have no more look-ups. Answer now with "
+                      "what you found, and say briefly what you could not check."})
+        turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
+                             max_tokens=CHAT_MAX_TOKENS)
+        _record(db, "chat", model, turn, user_id=user_id)
+        usage["input_tokens"] += turn.usage.input_tokens
+        usage["output_tokens"] += turn.usage.output_tokens
+        if turn.text.strip():
+            return result(turn.text, model=turn.model or model)
+    except (Unavailable, providers.ProviderError):
+        pass
     return result("I could not finish that in a few steps — please ask more narrowly.",
                   error=True, model=model)
+
+
+
+# ------------------------------------------------------------------------------ the planner
+
+def learned_minutes(db: Session) -> dict[str, dict[str, int]]:
+    """How long visits were really booked, per technician and kind (planner.learned_minutes)."""
+    from . import planner
+    from .rules import visit_kind
+    rows = []
+    for j in db.scalars(select(DispatchJob).where(DispatchJob.scheduled_start.is_not(None))):
+        s, e = c.aware(j.scheduled_start), c.aware(j.scheduled_end)
+        if not s or not e or e <= s:
+            continue
+        for tech in j.assigned or []:
+            rows.append((tech, visit_kind(j), (e - s).total_seconds() / 60))
+    return planner.learned_minutes(rows)
+
+
+def _plan_kind(j: DispatchJob) -> str:
+    from .rules import visit_kind
+    if j.board == c.INSPECTION_BOARD and j.status == "AHS Approved":
+        return "repair"
+    return visit_kind(j)
+
+
+def build_plan(db: Session, now: datetime, *, days: int = 6, kind: str = "all",
+               hidden: set[str] | None = None) -> dict:
+    """The draft schedule for every job waiting for a visit (planner.plan), with its
+    assumptions. Read only."""
+    from ..zuper import config as zuper_config
+    from . import planner
+    hidden = hidden or set()
+    days = max(1, min(int(days), 18))
+    today = c.local(now).date()
+    template = zuper_config.job_url_template()
+    jobs = []
+    for j in db.scalars(select(DispatchJob).where(DispatchJob.is_open.is_(True))):
+        if (j.board or "") in hidden or j.board not in (*c.BOARDS, *c.OTHER_PIPELINES) or \
+                j.status not in c.BOOK:
+            continue
+        start = c.aware(j.scheduled_start)
+        if start and c.local(start).date() >= today:
+            continue                                   # already has a visit
+        k = _plan_kind(j)
+        if kind in ("inspection", "repair") and k != kind:
+            continue
+        jobs.append(planner.PlanJob(
+            uid=j.job_uid, number=j.job_number, customer=j.customer_name, city=j.city,
+            lat=j.lat, lng=j.lng, kind=k, waiting_since=j.status_since,
+            zuper_url=template.format(uid=j.job_uid) if template else None))
+    techs = settings(db).technicians or booking.DEFAULT_TECHNICIANS
+    learned = learned_minutes(db)
+    minutes: dict[str, dict[str, int]] = {}
+    sources: dict[str, dict] = {}
+    for t in techs:
+        mine = {}
+        src = "default"
+        for k in ("inspection", "repair"):
+            set_by_admin = (t.get("minutes") or {}).get(k)
+            if set_by_admin:
+                mine[k], src = int(set_by_admin), "settings"
+            elif learned.get(t["name"], {}).get(k):
+                mine[k] = learned[t["name"]][k]
+                src = "history" if src == "default" else src
+            else:
+                mine[k] = planner.DEFAULT_MINUTES[k]
+        minutes[t["name"]] = mine
+        sources[t["name"]] = {**mine, "source": src}
+    out = planner.plan(jobs=jobs, booked=visits_for_booking(db, now, hidden),
+                       technicians=techs, minutes=minutes, now=now, days=days)
+    out["generated_at"] = now.isoformat()
+    out["assumptions"] = {
+        "minutes": sources,
+        "hours": {t["name"]: {"start": t["start"], "end": t["end"], "days": t.get("days", []),
+                              "max": t.get("max", 5)} for t in techs},
+        "note": "Visit lengths come from how jobs were booked before; change them per "
+                "technician in Dispatch → Settings. Driving is a straight-line estimate."}
+    return out
+
+
+def plan_for_model(out: dict) -> dict:
+    """The plan, compact, for the chat model."""
+    days = []
+    for d in out["days"]:
+        techs = []
+        for t in d["techs"]:
+            new = [v for v in t["visits"] if not v["existing"]]
+            if not t["visits"]:
+                continue
+            techs.append({"tech": t["tech"], "visits": "%d of %d" % (t["count"], t["capacity"]),
+                          "driving_min": t["drive_minutes"], "list": [
+                              "%s-%s %s #%s %s (%s)%s" % (
+                                  _hm(v["start"]), _hm(v["end"]), v["kind"],
+                                  v["job_number"] or "?", v["customer"] or "", v["city"] or "",
+                                  " BOOKED" if v["existing"] else "")
+                              for v in t["visits"]], "new": len(new)})
+        if techs:
+            days.append({"day": d["label"], "techs": techs})
+    return {"pending": out["pending"], "days": days,
+            "not_placed": ["#%s %s: %s" % (u["job_number"], u["customer"] or "", u["reason"])
+                           for u in out["unplaced"]],
+            "visit_minutes": out.get("assumptions", {}).get("minutes")}
+
+
+def _hm(iso: str) -> str:
+    t = c.local(datetime.fromisoformat(iso))
+    return t.strftime("%I:%M%p").lstrip("0").lower()

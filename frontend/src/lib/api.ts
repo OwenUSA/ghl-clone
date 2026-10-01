@@ -2214,3 +2214,36 @@ export const dispatchItems = (queue: string | null, state: 'open' | 'closed' = '
     (queue ? `&queue=${encodeURIComponent(queue)}` : ''))
 export const closeDispatchItem = (id: number, how: 'done' | 'wrong', note?: string) =>
   send<DispatchItem>(`/api/dispatch/items/${id}/${how}`, 'POST', { note: note || null })
+
+// ---------------- the week plan (2026-10-01) ----------------
+
+export type DispatchPlanKind = 'inspection' | 'repair'
+export type DispatchPlanVisit = {
+  job_uid: string; job_number: string | null; customer: string | null; city: string | null
+  kind: DispatchPlanKind; start: string; end: string; existing: boolean
+  drive_minutes_before: number; zuper_url: string | null
+}
+export type DispatchPlanTech = {
+  tech: string; start_from: 'home' | 'first job'; count: number; capacity: number
+  drive_minutes: number; visits: DispatchPlanVisit[]
+}
+export type DispatchPlanDay = { date: string; label: string; techs: DispatchPlanTech[] }
+export type DispatchPlanUnplaced = {
+  job_uid: string; job_number: string | null; customer: string | null; city: string | null
+  kind: DispatchPlanKind; reason: string; zuper_url: string | null
+}
+export type DispatchPlan = {
+  generated_at: string
+  assumptions: {
+    minutes: Record<string, { inspection: number; repair: number;
+      source: 'history' | 'settings' | 'default' }>
+    hours: Record<string, { start: string; end: string; days: number[]; max: number }>
+    note: string | null
+  }
+  days: DispatchPlanDay[]
+  unplaced: DispatchPlanUnplaced[]
+  pending: number
+}
+/** A DRAFT: proposes visits for every job waiting for one. Books nothing. */
+export const dispatchPlan = (days: number, kind: 'all' | DispatchPlanKind) =>
+  get<DispatchPlan>(`/api/dispatch/plan?days=${days}&kind=${kind}`)

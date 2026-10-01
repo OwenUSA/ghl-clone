@@ -34,7 +34,7 @@ SLOT_MINUTES = {"inspection": 90, "repair": 150}
 # North Lauderdale, roughly the city centre (the owner: Antonio starts from home).
 DEFAULT_TECHNICIANS = [
     {"name": "Antonio Brown", "does": ["repair", "inspection"], "prefers": "repair",
-     "days": [0, 1, 2, 3, 4, 5], "start": "07:30", "end": "17:00", "max": 3,
+     "days": [0, 1, 2, 3, 4, 5], "start": "07:30", "end": "17:00", "max": 5,
      "home": [26.2173, -80.2259]},
     {"name": "Owen Buzaglo", "does": ["inspection", "repair"], "prefers": "inspection",
      "days": [0, 1, 2, 3, 4, 5], "start": "09:00", "end": "17:00", "max": 5, "home": None},

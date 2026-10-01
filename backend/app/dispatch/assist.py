@@ -102,6 +102,18 @@ def dispatch_job_slots(job_uid: str, kind: str | None = None, technician: str | 
                                   _hidden(db, principal)), "note": note}
 
 
+# ---- the week planner ----------------------------------------------------------------------
+
+@router.get("/plan")
+def dispatch_plan(days: int = 6, kind: str = "all", principal: auth.Principal = VIEW,
+                  db: Session = Depends(get_db)):
+    """A DRAFT schedule for every job waiting for a visit (planner.py). Nothing is booked."""
+    if kind not in ("all", "inspection", "repair"):
+        raise HTTPException(400, "kind is all, inspection or repair")
+    return ai.build_plan(db, datetime.now(UTC), days=days, kind=kind,
+                         hidden=_hidden(db, principal))
+
+
 # ---- the AI ----------------------------------------------------------------------------------
 
 @router.post("/items/{item_id}/explain")

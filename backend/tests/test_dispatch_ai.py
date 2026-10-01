@@ -327,3 +327,34 @@ def test_a_single_step_sent_as_text_is_one_step_not_letters(db, office, script):
     ai.explain_pending(db, NOW)
     assert db.get(DispatchItem, office["item"].id).ai["zuper_steps"] == [
         "Move #678 to Repair Scheduling Call"]
+
+
+def test_the_week_plan_endpoint_groups_waiting_jobs_and_hides_hidden_boards(db, office, people):
+    db.add(DispatchJob(job_uid="r7", job_number="777", board=c.RETAIL_BOARD, status="New Lead",
+                       is_open=True, lat=26.11, lng=-80.39, customer_name="Retail Lead"))
+    p = Pipeline(name="Retail")
+    db.add(p)
+    db.flush()
+    db.add(PipelinePermission(pipeline_id=p.id, user_id=people["admin"][0]))
+    db.commit()
+    cl = TestClient(app)
+    mine = cl.get("/api/dispatch/plan?days=3", headers=people["admin"][1]).json()
+    planned = {v["job_number"] for d in mine["days"] for t in d["techs"] for v in t["visits"]}
+    assert {"678", "777"} <= planned and mine["pending"] == 2
+    assert mine["assumptions"]["minutes"]["Antonio Brown"]["source"] in ("default", "history")
+    theirs = cl.get("/api/dispatch/plan?days=3", headers=people["dispatcher"][1]).json()
+    planned = {v["job_number"] for d in theirs["days"] for t in d["techs"] for v in t["visits"]}
+    assert "777" not in planned and theirs["pending"] == 1
+    assert cl.get("/api/dispatch/plan", headers=people["tech"][1]).status_code == 403
+
+
+def test_out_of_look_ups_the_chat_still_answers_with_what_it_found(db, office, people, script):
+    """2026-10-01: the owner's scheduling question ended in "I could not finish"."""
+    switch_on(db, office)
+    loop = [openai_completion(content=None, finish="tool_calls", tool_calls=[
+        openai_call("list_items", json.dumps({}), "call_%d" % i)]) for i in range(ai.CHAT_STEPS)]
+    script.responses = [*loop, openai_completion(content="Here is what I found so far.")]
+    r = TestClient(app).post("/api/dispatch/chats/messages", json={
+        "chat_id": None, "content": "Plan everything"}, headers=people["dispatcher"][1])
+    answer = r.json()["assistant_message"]
+    assert answer["content"] == "Here is what I found so far." and answer["error"] is False
