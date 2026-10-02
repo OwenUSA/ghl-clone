@@ -104,8 +104,10 @@ def plan(estimate: dict, job: dict | None, products: dict[str, dict]) -> dict:
 
 
 def _fingerprint(job: dict) -> list:
-    keys = ("product_id", "quantity", "total")
-    return sorted(json.dumps({k: p.get(k) for k in keys}, sort_keys=True)
+    """The lines as (code, quantity, total) — numbers compared as numbers: Zuper answers a
+    quantity of 1 for the 1.0 it was sent (live, test job #701, 2026-10-02)."""
+    return sorted((str(p.get("product_id")), round(_num(p.get("quantity")) or 1.0, 4),
+                   round(line_total(p), 2))
                   for p in job.get("products") or [] if isinstance(p, dict))
 
 

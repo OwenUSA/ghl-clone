@@ -66,6 +66,22 @@ def test_the_signed_option_is_added_to_its_job_once_and_nothing_else_changes(loa
     assert len(fake.jobs[uid]["products"]) == 2 and len(rows()) == 1
 
 
+def test_zuper_answering_whole_numbers_is_still_a_match(loaded, fake, on, monkeypatch):
+    # Live, Zuper answered quantity 1 / total 1500 for the 1.0 / 1500.0 it was sent, and an exact
+    # comparison recorded a successful write as refused (test job #701, 2026-10-02).
+    uid = uid_of("opportunity", loaded.ids["jane_card"])
+    signed(fake, uid)
+    real = fake.update_job
+
+    def as_zuper_answers(params, body):
+        for p in body["job"].get("products") or []:
+            p["quantity"], p["total"] = int(p["quantity"]), int(p["total"])
+        return real(params, body)
+    monkeypatch.setattr(fake, "update_job", as_zuper_answers)
+    assert run() == {"added": 1}
+    assert rows()[0].outcome == "added"
+
+
 def test_a_zero_option_adds_nothing(loaded, fake, on):
     uid = uid_of("opportunity", loaded.ids["jane_card"])
     signed(fake, uid, option="GOOD - AHS covered", total=0,
