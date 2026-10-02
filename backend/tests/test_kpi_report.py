@@ -272,6 +272,36 @@ def test_a_copied_pay_sheet_tab_is_counted_once_under_its_real_period(tmp_path):
     assert got["07152026 to 08012026"][6].startswith("copy of tab 08012026")
 
 
+def test_a_revisit_is_a_callback_shown_with_its_original_job_and_technician(tmp_path, db):
+    board = {"category_uid": "c", "category_name": "AHS - Repair & Review"}
+    original = {"job_uid": "o1", "work_order_number": 554, "is_deleted": False, "job_type": "NEW",
+                "job_category": board, "scheduled_start_time": "2026-03-01T13:00:00Z",
+                "custom_fields": [{"label": "Technician", "value": "Antonio Brown"}]}
+    revisit = {"job_uid": "r1", "work_order_number": 495, "is_deleted": False,
+               "job_type": "REVISIT", "parent_job": {"job_uid": "o1"}, "job_category": board,
+               "scheduled_start_time": "2026-03-27T13:00:00Z", "custom_fields": []}
+    old_mark = {"job_uid": "r2", "work_order_number": 600, "is_deleted": False, "job_type": "NEW",
+                "job_category": board, "scheduled_start_time": "2026-04-02T13:00:00Z",
+                "custom_fields": [{"label": "Job Type", "value": "Callback/Warranty"}]}
+    with SessionLocal() as s:
+        for r in (original, revisit, old_mark):
+            s.add(ZuperRecordVersion(module="job", zuper_uid=r["job_uid"], content_hash="h",
+                                     record=r))
+        s.commit()
+        path, _ = kpi_report.write(s, tmp_path / "none", tmp_path / "out",
+                                   datetime(2026, 10, 2, 7, 0, tzinfo=UTC))
+    wb = load_workbook(path)
+    head, *rows = cells(wb["Callbacks"])
+    got = {r[0]: dict(zip(head, r, strict=True)) for r in rows}
+    assert set(got) == {495, 600}                                  # the original is not one
+    assert got[495]["Original job #"] == 554 and got[495]["Days later"] == 26
+    assert got[495]["Original technician"] == "Antonio Brown"
+    assert got[600]["How it is marked"] == "marked, original unknown"
+    summary = {(r[0], r[1]): r[2] for r in cells(wb["Summary"])}
+    assert summary[("All boards", "callbacks")] == 2
+    assert summary[("All boards", "callbacks on Antonio Brown's repairs")] == 1
+
+
 def test_a_day_s_file_is_never_overwritten(tmp_path, db):
     now = datetime(2026, 10, 1, 7, 0, tzinfo=UTC)
     with SessionLocal() as s:

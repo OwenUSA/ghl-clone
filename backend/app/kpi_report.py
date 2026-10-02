@@ -344,9 +344,18 @@ def answers(job: dict) -> dict[str, Any]:
 
 
 def is_callback(job: dict) -> bool:
+    """A re-work / warranty job: Zuper's own Job Type "Revisit" (linked to its original job,
+    2026-10-02), or the Workiz-era marks — the "Job Type" field "Callback/Warranty" or the tag."""
+    if job.get("job_type") == "REVISIT":
+        return True
     kind = str(custom_field(job, "Job Type") or "")
     tags = " ".join(str(t) for t in job.get("job_tags") or [])
     return "callback" in kind.lower() or "callback" in tags.lower()
+
+
+def parent_uid(job: dict) -> str | None:
+    p = job.get("parent_job")
+    return (p.get("job_uid") if isinstance(p, dict) else p) or None
 
 
 def moves_by_job(db: Session) -> dict[str, list[ZuperStatusHistory]]:
@@ -705,6 +714,34 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
         _sheet(wb, "Antonio pay sheets", ["Pay period (tab)", "AHS jobs", "AHS $", "Extras",
                                           "Extras sold $", "Antonio pay", "Note"], periods,
                {"Pay period (tab)": 24, "Note": 40}, money_cols=(3, 5, 6))
+
+    # ---- Callbacks, each with the job it came back from (Zuper's parent link)
+    by_uid = {j.get("job_uid"): j for j in latest_jobs(db)}
+    cb_rows, per_tech = [], defaultdict(int)
+    for j in sorted((j for j in jobs if is_callback(j)),
+                    key=lambda x: str(x.get("scheduled_start_time") or "")):
+        orig = by_uid.get(parent_uid(j))
+        tech = custom_field(orig, "Technician") if orig else None
+        day = parse_dt(str(j.get("scheduled_start_time") or ""))
+        oday = parse_dt(str(orig.get("scheduled_start_time") or "")) if orig else None
+        if orig:
+            per_tech[str(tech or "(none)")] += 1
+        marked = ("Revisit (linked)" if j.get("job_type") == "REVISIT"
+                  else "marked, original unknown")
+        cb_rows.append([j.get("work_order_number"), board_of(j), day, marked,
+                        orig.get("work_order_number") if orig else None, tech, oday,
+                        (day - oday).days if day and oday else None])
+    _sheet(wb, "Callbacks", ["Callback job #", "Board", "Callback visit", "How it is marked",
+                             "Original job #", "Original technician", "Original visit",
+                             "Days later"], cb_rows,
+           {"Board": 24, "How it is marked": 24, "Original technician": 20})
+    wb["Summary"].append(["", "", ""])
+    wb["Summary"].append(["CALLBACKS (re-work / warranty)", "", ""])
+    wb["Summary"].append(["All boards", "callbacks", len(cb_rows)])
+    wb["Summary"].append(["All boards", "linked to their original job in Zuper",
+                          sum(1 for r in cb_rows if r[4])])
+    for tech, n in sorted(per_tech.items()):
+        wb["Summary"].append(["All boards", "callbacks on %s's repairs" % tech, n])
 
     # ---- New jobs per month from Zuper (loaded Workiz jobs kept apart)
     new_jobs: dict[tuple[str, str, str], int] = defaultdict(int)

@@ -6653,3 +6653,14 @@ rewrites an old period; the report shows the rule's expected commission beside w
 Zuper's own "Commission Structures" were considered and not used: per user, revenue/profit tiers
 only, and they never create a commission by themselves.
 
+### Callbacks are Zuper revisits, linked to the job that came back (2026-10-02)
+
+Owner's OK (Q53): "without losing the job we did before". 32 of the 53 callback jobs (marked in
+Workiz's days by the "Job Type" field "Callback/Warranty" or the tag) now carry Zuper's own Job
+Type **Revisit** and its **parent job** link to the original — the earlier job at the same
+address, median 56 days before. Zuper REFUSES a revisit without a parent, so the 21 whose
+original is not in Zuper stay as they were until the owner names it. Nothing else on any job
+changed. Zuper's dashboard ("Jobs By Type") counts by VISIT date, so each lands in its month.
+The KPI Excel counts all 53 and lists each with its original job and the original technician.
+From now on the team makes a callback as a new job of type Revisit and picks the original.
+
