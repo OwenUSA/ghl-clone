@@ -1763,6 +1763,25 @@ class ZuperStatusHistory(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now())
 
 
+class ZuperProposalLine(Base):
+    """One signed Good / Better / Best proposal, and what the CRM did about it (2026-10-02):
+    copied the accepted option onto its job's line items, or why not. One row per proposal, so
+    an option is never added twice; never deleted."""
+    __tablename__ = "zuper_proposal_lines"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    estimate_no: Mapped[str | None] = mapped_column(String(40))
+    option_name: Mapped[str | None] = mapped_column(String(200))
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    # added | already_on_job | job_has_other_upgrade | zero_option | no_job | refused
+    outcome: Mapped[str] = mapped_column(String(40))
+    amount: Mapped[float | None] = mapped_column(Float)
+    detail: Mapped[dict | None] = mapped_column(NullableJSONType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
 class ZuperRecordVersion(Base):
     """A full copy of one Zuper record — a job, a quote/proposal, an invoice, a payment or a
     commission — kept each time its content changes (2026-09-30, the KPI reports). A new row is

@@ -336,6 +336,12 @@ never overwritten, job numbers only. The Workiz / AHS exports it reads for the m
 Zuper are REAL customer data in `.../ghl-clone-kpi/input` (root-only, mounted read-only) —
 never copy them anywhere else. By hand: `docker exec ghl_clone_worker python -m app.kpi_report`.
 
+**A signed proposal's option goes onto its job** (2026-10-02, `app/zuper/proposals.py`): the
+job's line items are the ONE source for upsells and sales. After each sweep, a proposal's accepted
+option is added to its own job (never twice, never over an upgrade a person added, $0 options
+skipped), through `client.proposal_lines()` — one `PUT /jobs` with only job_uid / products /
+job_total. Off unless `ZUPER_PROPOSAL_LINES=true`. Dry run: `python -m app.zuper.proposals`.
+
 ## It is deployed
 
 Live at **https://crm.dreamteamroofingfl.com** on the `owen-main` VPS, behind the shared

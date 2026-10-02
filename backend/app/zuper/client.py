@@ -99,6 +99,20 @@ def ahs_create():
 
 
 _DISPATCH_WRITE: ContextVar[bool] = ContextVar("zuper_dispatch_write", default=False)
+_PROPOSAL_LINES: ContextVar[bool] = ContextVar("zuper_proposal_lines", default=False)
+
+
+@contextlib.contextmanager
+def proposal_lines():
+    """A signed proposal's accepted option copied onto its job's line items (2026-10-02,
+    `proposals.py`). Inside this scope the ONE write is `PUT /jobs` whose job carries only
+    `job_uid`, `products` and `job_total` (checked in `request`); every other non-GET is refused,
+    and nothing at all while `ZUPER_PROPOSAL_LINES` is off."""
+    token = _PROPOSAL_LINES.set(True)
+    try:
+        yield
+    finally:
+        _PROPOSAL_LINES.reset(token)
 
 
 @contextlib.contextmanager
@@ -206,6 +220,7 @@ PATHS = {
     # payments stay on the denylist below.
     "payments": "/payments/transactions",
     "commissions": "/commissions",
+    "product": "/product/{uid}",
     "custom_fields": "/settings/custom_fields",     # definitions: REST path unverified
     "lead_sources": "/settings/lead_sources",       # MCP-only per research: unverified
     "webhooks": "/service/notifications/webhook",
@@ -246,6 +261,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("GET", _rx(PATHS["estimates"])), ("GET", _rx(PATHS["estimate"])),
     ("GET", _rx(PATHS["invoices"])), ("GET", _rx(PATHS["invoice"])),
     ("GET", _rx(PATHS["payments"])), ("GET", _rx(PATHS["commissions"])),
+    ("GET", _rx(PATHS["product"])),
     ("GET", _rx(PATHS["custom_fields"])), ("GET", _rx(PATHS["lead_sources"])),
     ("GET", _rx(PATHS["webhooks"])), ("POST", _rx(PATHS["webhook_create"])),
     ("GET", _rx(PATHS["webhook_list"])),
@@ -393,6 +409,20 @@ def _dispatch_write_allowed(method: str, path: str) -> bool:
     return any(m == method and re.match(rx, path) for m, rx in DISPATCH_WRITES)
 
 
+# A signed proposal's option onto its job (2026-10-02): one request, and only these job keys.
+PROPOSAL_LINE_WRITES: tuple[tuple[str, str], ...] = (("PUT", _rx(PATHS["jobs"])),)
+PROPOSAL_LINE_JOB_KEYS = frozenset({"job_uid", "products", "job_total"})
+
+
+def _proposal_lines_allowed(method: str, path: str, body: Any = None) -> bool:
+    if not (_PROPOSAL_LINES.get() and config.proposal_lines_enabled()):
+        return False
+    if not any(m == method and re.match(rx, path) for m, rx in PROPOSAL_LINE_WRITES):
+        return False
+    job = body.get("job") if isinstance(body, dict) else None
+    return isinstance(job, dict) and set(job) <= PROPOSAL_LINE_JOB_KEYS and "job_uid" in job
+
+
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None) -> Any:
     method = method.upper()
@@ -414,9 +444,16 @@ def request(method: str, path: str, *, params: dict | None = None,
         raise ZuperError("refused", "%s %s is not a change the Dispatch page may make%s" % (
             method, path, "" if config.dispatch_writes_enabled()
             else " (" + config.DISPATCH_WRITES_OFF_SENTENCE + ")"))
+    if method != "GET" and _PROPOSAL_LINES.get() \
+            and not _proposal_lines_allowed(method, path, body):
+        raise ZuperError("refused", "%s %s is not the proposal-lines write (only PUT /jobs with "
+                                    "job_uid, products and job_total)%s" % (
+                                        method, path, "" if config.proposal_lines_enabled()
+                                        else "; ZUPER_PROPOSAL_LINES is off"))
     if method != "GET" and config.pull_only() and not _mirror_write_allowed(path) \
             and not _ahs_create_allowed(method, path) \
-            and not _dispatch_write_allowed(method, path):
+            and not _dispatch_write_allowed(method, path) \
+            and not _proposal_lines_allowed(method, path, body):
         # Backstop for the one-way mirror: every caller checks config.pull_only() first, so
         # reaching here is a bug — refuse before a connection exists rather than write.
         raise ZuperError("refused", config.PULL_ONLY_SENTENCE)

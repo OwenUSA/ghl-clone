@@ -54,6 +54,7 @@ class FakeZuper:
     tasks: dict[str, list[dict]] = field(default_factory=dict)
     appointments: dict[str, dict] = field(default_factory=dict)
     estimates: dict[str, dict] = field(default_factory=dict)
+    products: dict[str, dict] = field(default_factory=dict)
     invoices: dict[str, dict] = field(default_factory=dict)
     # A job's pictures, keyed by job uid. Served as a note of note_type IMAGE, which is how
     # Zuper actually holds them (2026-09-24).
@@ -250,6 +251,7 @@ class FakeZuper:
             (r"/estimate", ("GET", lambda p, b: self.page(
                 self.filtered(list(self.estimates.values()), p), p))),
             (r"/estimate/([^/]+)", ("GET", lambda p, b, u: self.get(self.estimates, u))),
+            (r"/product/([^/]+)", ("GET", lambda p, b, u: self.get(self.products, u))),
             (r"/invoice", ("GET", lambda p, b: self.page(
                 self.filtered(list(self.invoices.values()), p), p))),
             (r"/invoice/([^/]+)", ("GET", lambda p, b, u: self.get(self.invoices, u))),

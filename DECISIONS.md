@@ -6676,3 +6676,16 @@ AHS covered" option at $0 is not an upsell. A new Proposals sheet counts signed 
 proposals or invoices not linked to a job (their upgrade is on no board), options priced under
 $10. Zuper's own "auto convert estimate to invoice" stays NO (the button) for now.
 
+### A signed proposal's option goes onto its job — one source (2026-10-02)
+
+The owner wants ONE source for upsells, sales and line items: the job's line items (what Zuper's
+Job Products Report and the CRM report read). Zuper only copies a signed option to the INVOICE,
+and has no setting that copies it to the job, so `app/zuper/proposals.py` does it: after each
+sweep, every proposal with an accepted option it has not handled gets its option's lines ADDED to
+its own job (existing lines sent back unchanged), never twice (`zuper_proposal_lines`, one row per
+proposal), not for a $0 option, not when the job already has those lines or ANY upgrade a person
+added. Job Value becomes the lines' sum only when it equalled them before. The job is read back.
+It writes through `client.proposal_lines()`: one `PUT /jobs` whose job carries only `job_uid`,
+`products`, `job_total`. Off unless `ZUPER_PROPOSAL_LINES=true`; an exception to the read-only
+rule granted by the owner ("a sounds good", Q63).
+

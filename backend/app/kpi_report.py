@@ -36,7 +36,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import ZuperRecordVersion, ZuperStatusHistory
+from .models import ZuperProposalLine, ZuperRecordVersion, ZuperStatusHistory
 
 log = logging.getLogger("kpi_report")
 
@@ -737,6 +737,7 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
 
     # ---- Signed Good / Better / Best proposals (the moment the upsell is SOLD)
     job_of = {j.get("job_uid"): j for j in jobs}
+    copied = {r.estimate_uid: r.outcome for r in db.scalars(select(ZuperProposalLine)).all()}
     prop_rows, checks = [], []
     for e in sorted(latest_records(db, "estimate"), key=lambda x: str(x.get("updated_at") or "")):
         options = e.get("proposal_options") or []
@@ -756,7 +757,8 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
                               (o or {}).get("option_name"), tier, amount,
                               "yes" if (o and amount) else ("no ($0 option)" if o else ""),
                               "yes" if e.get("is_converted") else "no",
-                              parse_dt(str(e.get("updated_at") or ""))])
+                              parse_dt(str(e.get("updated_at") or "")),
+                              copied.get(e.get("estimate_uid"), "not yet") if o else ""])
             if o and not e.get("is_converted"):
                 checks.append("proposal #%s: option accepted, not converted to an invoice"
                               % e.get("estimate_no"))
@@ -773,7 +775,7 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
                           % inv.get("invoice_no"))
     _sheet(wb, "Proposals", ["Proposal #", "Job #", "Board", "Status", "Accepted option", "Tier",
                              "Amount", "Upsell (customer pays)", "Converted to invoice",
-                             "Last updated"], prop_rows,
+                             "Last updated", "On the job's line items"], prop_rows,
            {"Accepted option": 40, "Board": 24, "Upsell (customer pays)": 20}, money_cols=(7,))
     signed = [r for r in prop_rows if r[4] and r[6]]
     wb["Summary"].append(["", "", ""])

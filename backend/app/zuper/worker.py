@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import queue
 from ..models import Job
-from . import client, config, digest, engine, history, listener, setup, sweep, webhooks
+from . import client, config, digest, engine, history, listener, proposals, setup, sweep, webhooks
 
 log = logging.getLogger("zuper.worker")
 
@@ -105,6 +105,14 @@ def tick(session_factory, now: datetime | None = None) -> None:
         webhooks.process_inbox(db)
         if sweep.due(db, now):
             sweep.run(db)
+            # A signed proposal's option onto its job's line items (2026-10-02). Its own switch
+            # (ZUPER_PROPOSAL_LINES, default off); a failure is logged, never breaks the tick.
+            if config.proposal_lines_enabled():
+                try:
+                    proposals.run(db)
+                except Exception:
+                    db.rollback()
+                    log.exception("proposal lines failed")
         # The Dispatch page's read of Zuper (2026-09-30): reads only, its own switch
         # (DISPATCH_ENABLED), and it never raises — a failure is its own heartbeat's error.
         from ..dispatch import service as dispatch

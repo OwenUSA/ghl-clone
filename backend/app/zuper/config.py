@@ -81,6 +81,13 @@ DISPATCH_WRITES_OFF_SENTENCE = (
     "true), so nothing is written whatever the switches on the page say.")
 
 
+def proposal_lines_enabled() -> bool:
+    """A signed proposal's accepted option is copied onto its job's line items (2026-10-02,
+    `app/zuper/proposals.py`). Off unless the deployment says so: the owner switches it on after
+    the test on test job #701. With it off, `client.proposal_lines()` allows nothing."""
+    return _flag("ZUPER_PROPOSAL_LINES", False)
+
+
 def dispatch_writes_enabled() -> bool:
     """The server's gate on the Dispatch page's "let the agent do it" (phase 3, 2026-10-01).
 
