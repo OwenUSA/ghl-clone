@@ -375,6 +375,37 @@ def _aware(dt: datetime | None) -> datetime | None:
 AHS_ITEMS = ("AHS-LEAK-REPAIR", "AHS-TRIP", "AHS-ADDL-LEAK")
 UPGRADE_TIERS = {"UPG-GOOD": "Good", "UPG-BETTER": "Better", "UPG-BEST": "Best",
                  "UPG-UNKNOWN": "not recorded"}
+TIER_WORDS = {"GOOD": "Good", "BETTER": "Better", "BEST": "Best"}
+# An invoice that no longer counts as a sale.
+DEAD_INVOICE = {"CANCELED", "ARCHIVED"}
+
+
+def upgrade_tier(item: dict) -> str | None:
+    """The tier of a customer-upgrade line, else None: the "Customer Upgrade - ..." items, and the
+    DTR proposal packages (DTR-FLAT-GOOD, DTR-CUSTOM-BETTER, DTR-SHINGLE-RR-BETTER, ...) that a
+    signed Good / Better / Best proposal puts on its invoice (2026-10-02). Tier from the code's
+    last word, else the item name's first word."""
+    code = str(item.get("product_id") or "")
+    if code in UPGRADE_TIERS:
+        return UPGRADE_TIERS[code]
+    if not code.startswith("DTR-"):
+        return None
+    last = code.rsplit("-", 1)[-1].upper()
+    first = str(item.get("product_name") or item.get("name") or "").strip().split(" ")[0].upper()
+    return TIER_WORDS.get(last) or TIER_WORDS.get(first) or "not recorded"
+
+
+def line_total(item: dict) -> float:
+    total = money(item.get("total"))
+    if total is not None:
+        return total
+    qty = money(item.get("quantity")) or 1
+    return (money(item.get("unit_price")) or money(item.get("price")) or 0) * qty
+
+
+def upgrade_lines(items: list[dict]) -> list[dict]:
+    """Upgrade lines worth something: a $0 "AHS covered" Good option is not an upsell."""
+    return [p for p in items if upgrade_tier(p) and line_total(p) > 0]
 
 # The commission rule, kept OUT of the code so it can change without a deploy: a CSV named
 # `commission-rules.csv` in the input folder (technician,item,kind,value,from) replaces these.
@@ -385,7 +416,8 @@ DEFAULT_RULES = [
     {"technician": "Antonio Brown", "item": item, "kind": kind, "value": value,
      "from": "2026-01-01"}
     for item, kind, value in (("AHS-LEAK-REPAIR", "flat", 350), ("AHS-TRIP", "flat", 50),
-                              ("AHS-ADDL-LEAK", "flat", 350), ("UPG-*", "percent", 50))
+                              ("AHS-ADDL-LEAK", "flat", 350), ("UPG-*", "percent", 50),
+                              ("DTR-*", "percent", 50))
 ]
 
 
@@ -417,18 +449,20 @@ def line_items(job: dict) -> list[dict]:
     return [p for p in job.get("products") or [] if isinstance(p, dict)]
 
 
-def expected_commission(job: dict, rules: list[dict]) -> float | None:
+def expected_commission(job: dict, rules: list[dict],
+                        extra_items: list[dict] | None = None) -> float | None:
+    """`extra_items`: upgrade lines found on the job's invoice rather than on the job itself."""
     tech = str(custom_field(job, "Technician") or "").strip()
     day = str(job.get("scheduled_start_time") or job.get("created_at") or "")[:10]
     total, any_rule = 0.0, False
-    for p in line_items(job):
+    for p in line_items(job) + list(extra_items or []):
         rule = _rule_for(rules, tech, str(p.get("product_id") or ""), day)
         if rule is None:
             continue
         any_rule = True
         qty = float(p.get("quantity") or 1)
-        line_total = money(p.get("total")) or (money(p.get("price")) or 0) * qty
-        total += rule["value"] * qty if rule["kind"] == "flat" else line_total * rule["value"] / 100
+        total += (rule["value"] * qty if rule["kind"] == "flat"
+                  else line_total(p) * rule["value"] / 100)
     return round(total, 2) if any_rule else None
 
 
@@ -655,35 +689,102 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
     for c in commissions:
         job_uid = str(c.get("job_uid") or (c.get("job") or {}).get("job_uid"))
         comm_by_job[job_uid] += money(c.get("commission_amount")) or 0
+    # A signed proposal converted to an invoice puts its option on the INVOICE, not on the job's
+    # line items (measured on test job #701, 2026-10-02) — so a job's upgrade is read from its own
+    # lines first, else from the live invoices linked to it.
+    invoices = latest_records(db, "invoice")
+    inv_by_job: dict[str, list[dict]] = defaultdict(list)
+    for inv in invoices:
+        job_ref = inv.get("job") if isinstance(inv.get("job"), dict) else {}
+        if job_ref.get("job_uid") and inv.get("invoice_status") not in DEAD_INVOICE:
+            inv_by_job[job_ref["job_uid"]].append(inv)
     income_rows = []
     for j in sorted(jobs, key=lambda x: (board_of(x) or "", str(x.get("work_order_number")))):
         items = line_items(j)
-        if not items and not money(j.get("job_total")):
+        invs = inv_by_job.get(j.get("job_uid"), [])
+        if not items and not money(j.get("job_total")) and not invs:
             continue
-        ahs_paid = sum(money(p.get("total")) or 0 for p in items
-                       if p.get("product_id") in AHS_ITEMS)
-        upg = [p for p in items if p.get("product_id") in UPGRADE_TIERS]
-        cust = sum(money(p.get("total")) or 0 for p in upg)
-        tiers = ", ".join(sorted({UPGRADE_TIERS[p["product_id"]] for p in upg}))
+        ahs_paid = sum(line_total(p) for p in items if p.get("product_id") in AHS_ITEMS)
+        upg, source, extra = upgrade_lines(items), "job line items", []
+        if not upg:
+            extra = [p for inv in invs for p in upgrade_lines(inv.get("line_items") or [])]
+            upg = extra
+            source = ", ".join("invoice #%s" % inv.get("invoice_no") for inv in invs
+                               if upgrade_lines(inv.get("line_items") or []))
+        cust = sum(line_total(p) for p in upg)
+        tiers = ", ".join(sorted({upgrade_tier(p) for p in upg}))
         a = answers(j)
         actual = comm_by_job.get(j.get("job_uid"))
-        expected = expected_commission(j, rules)
+        expected = expected_commission(j, rules, extra)
         income_rows.append([
             j.get("work_order_number"), board_of(j),
             (j.get("current_job_status") or {}).get("status_name"),
             custom_field(j, "Technician"), money(j.get("job_total")), ahs_paid or None,
             cust or None,
-            tiers or ("AHS only" if items and ahs_paid else ""), len(items),
+            tiers or ("AHS only" if items and ahs_paid else ""), source if upg else "",
+            len(items),
             a.get(Q_CUSTOMER_CHOSE), money(a.get(Q_CUSTOMER_PAID)), money(a.get(Q_SOLD_PRICE)),
             actual, expected,
             round(actual - expected, 2) if expected is not None and actual is not None
             else None])
     _sheet(wb, "Income per job", ["Job #", "Board", "Column", "Technician", "Job total", "AHS paid",
-                                  "Customer paid (upgrade)", "Upgrade tier", "Line items",
-                                  Q_CUSTOMER_CHOSE, Q_CUSTOMER_PAID, Q_SOLD_PRICE,
+                                  "Customer paid (upgrade)", "Upgrade tier", "Upgrade found on",
+                                  "Line items", Q_CUSTOMER_CHOSE, Q_CUSTOMER_PAID, Q_SOLD_PRICE,
                                   "Commission in Zuper", "Expected commission (rule)",
                                   "Difference (Zuper - rule)"], income_rows,
-           {"Board": 24, "Column": 26, "Technician": 16}, money_cols=(5, 6, 7, 11, 12, 13, 14, 15))
+           {"Board": 24, "Column": 26, "Technician": 16, "Upgrade found on": 18},
+           money_cols=(5, 6, 7, 12, 13, 14, 15, 16))
+
+    # ---- Signed Good / Better / Best proposals (the moment the upsell is SOLD)
+    job_of = {j.get("job_uid"): j for j in jobs}
+    prop_rows, checks = [], []
+    for e in sorted(latest_records(db, "estimate"), key=lambda x: str(x.get("updated_at") or "")):
+        options = e.get("proposal_options") or []
+        if not options:
+            continue
+        job_ref = e.get("job") if isinstance(e.get("job"), dict) else {}
+        job = job_of.get(job_ref.get("job_uid"))
+        accepted = [o for o in options if o.get("is_accepted")]
+        for o in accepted or [None]:
+            amount = money(o.get("total")) if o else None
+            first = str((o or {}).get("option_name") or "").strip().split(" ")[0].upper()
+            option_lines = (o or {}).get("line_items") or []
+            tier = TIER_WORDS.get(first) or next(
+                (upgrade_tier(p) for p in option_lines if upgrade_tier(p)), None)
+            prop_rows.append([e.get("estimate_no"), job_ref.get("work_order_number"),
+                              board_of(job) if job else None, e.get("estimate_status"),
+                              (o or {}).get("option_name"), tier, amount,
+                              "yes" if (o and amount) else ("no ($0 option)" if o else ""),
+                              "yes" if e.get("is_converted") else "no",
+                              parse_dt(str(e.get("updated_at") or ""))])
+            if o and not e.get("is_converted"):
+                checks.append("proposal #%s: option accepted, not converted to an invoice"
+                              % e.get("estimate_no"))
+        if not job_ref.get("job_uid"):
+            checks.append("proposal #%s is not linked to a job" % e.get("estimate_no"))
+        for o in options:
+            if 0 < (money(o.get("total")) or 0) < 10:
+                checks.append("proposal #%s: %s priced $%s - typo?" % (
+                    e.get("estimate_no"), o.get("option_name"), o.get("total")))
+    for inv in invoices:
+        if inv.get("invoice_status") not in DEAD_INVOICE and not (
+                isinstance(inv.get("job"), dict) and inv["job"].get("job_uid")):
+            checks.append("invoice #%s is not linked to a job - its upgrade is on no board"
+                          % inv.get("invoice_no"))
+    _sheet(wb, "Proposals", ["Proposal #", "Job #", "Board", "Status", "Accepted option", "Tier",
+                             "Amount", "Upsell (customer pays)", "Converted to invoice",
+                             "Last updated"], prop_rows,
+           {"Accepted option": 40, "Board": 24, "Upsell (customer pays)": 20}, money_cols=(7,))
+    signed = [r for r in prop_rows if r[4] and r[6]]
+    wb["Summary"].append(["", "", ""])
+    wb["Summary"].append(["PROPOSALS (Good / Better / Best)", "", ""])
+    wb["Summary"].append(["All boards", "proposals with an option signed / accepted", len(signed)])
+    for tier in ("Good", "Better", "Best"):
+        mine = [r for r in signed if r[5] == tier]
+        wb["Summary"].append(["All boards", "signed %s: count / $" % tier,
+                              "%d / $%s" % (len(mine), round(sum(r[6] for r in mine), 2))])
+    for line in checks:
+        wb["Summary"].append(["CHECK", line, ""])
 
     comm_rows = []
     weekly: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0, 0.0, 0.0])
@@ -757,7 +858,7 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
     comm_owed = sum(money(c.get("commission_amount")) or 0 for c in commissions
                     if c.get("payout_status") != "PAID")
     summary_tail = [["", "", ""], ["MONEY ON JOBS (Zuper line items)", "", ""],
-                    ["AHS", "jobs with line items", sum(1 for r in income_rows if r[8])],
+                    ["AHS", "jobs with line items", sum(1 for r in income_rows if r[9])],
                     ["AHS", "AHS paid on those jobs ($)",
                      round(sum(r[5] or 0 for r in income_rows), 2)],
                     ["AHS", "jobs with a customer upgrade", len(upg_jobs)],

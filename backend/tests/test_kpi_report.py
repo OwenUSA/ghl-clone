@@ -302,6 +302,60 @@ def test_a_revisit_is_a_callback_shown_with_its_original_job_and_technician(tmp_
     assert summary[("All boards", "callbacks on Antonio Brown's repairs")] == 1
 
 
+def test_dtr_packages_count_as_upgrades_but_a_zero_option_does_not():
+    assert kpi_report.upgrade_tier({"product_id": "DTR-FLAT-GOOD"}) == "Good"
+    assert kpi_report.upgrade_tier({"product_id": "DTR-SHINGLE-RR-BETTER"}) == "Better"
+    assert kpi_report.upgrade_tier({"product_id": "UPG-BEST"}) == "Best"
+    assert kpi_report.upgrade_tier({"product_id": "AHS-LEAK-REPAIR"}) is None
+    lines = [{"product_id": "DTR-CUSTOM-GOOD", "total": 0},          # "AHS covered" Good, $0
+             {"product_id": "DTR-TILE-BEST", "unit_price": 3000, "quantity": 1}]
+    assert [p["product_id"] for p in kpi_report.upgrade_lines(lines)] == ["DTR-TILE-BEST"]
+
+
+def test_a_converted_proposal_s_invoice_is_the_job_s_upgrade(tmp_path, db):
+    now = datetime(2026, 10, 3, 7, 0, tzinfo=UTC)
+    job = {"job_uid": "j7", "work_order_number": 701, "is_deleted": False, "job_total": 0,
+           "job_category": {"category_uid": "c", "category_name": "AHS - Repair & Review"},
+           "current_job_status": {"status_name": "Invoice Submitted to AHS",
+                                  "status_type": "OTHER"},
+           "custom_fields": [{"label": "Technician", "value": "Antonio Brown"}],
+           "scheduled_start_time": "2026-10-02T13:00:00Z", "products": []}
+    invoice = {"invoice_uid": "i3", "invoice_no": 3, "invoice_status": "AWAIT_PAYMENT",
+               "job": {"job_uid": "j7"}, "is_deleted": False,
+               "line_items": [{"product_id": "DTR-FLAT-GOOD", "unit_price": 1500, "quantity": 1,
+                               "total": 1500}]}
+    stray = {"invoice_uid": "i2", "invoice_no": 2, "invoice_status": "AWAIT_PAYMENT", "job": None,
+             "is_deleted": False, "line_items": [{"product_id": "UPG-GOOD", "total": 1380}]}
+    proposal = {"estimate_uid": "e28", "estimate_no": 28, "estimate_status": "APPROVED",
+                "is_converted": True, "job": {"job_uid": "j7", "work_order_number": 701},
+                "is_deleted": False, "updated_at": "2026-10-02T18:40:00Z",
+                "proposal_options": [
+                    {"option_name": "GOOD", "is_accepted": True, "total": 1500,
+                     "line_items": [{"product_id": "DTR-FLAT-GOOD"}]},
+                    {"option_name": "BETTER", "is_accepted": False, "total": 1900},
+                    {"option_name": "BEST", "is_accepted": False, "total": 4.8}]}
+    with SessionLocal() as s:
+        for module, uid, rec in (("job", "j7", job), ("invoice", "i3", invoice),
+                                 ("invoice", "i2", stray), ("estimate", "e28", proposal)):
+            s.add(ZuperRecordVersion(module=module, zuper_uid=uid, content_hash="h", record=rec))
+        s.commit()
+        path, _ = kpi_report.write(s, tmp_path / "none", tmp_path / "out", now)
+    wb = load_workbook(path)
+    head, *rows = cells(wb["Income per job"])
+    row = dict(zip(head, rows[0], strict=True))
+    assert row["Customer paid (upgrade)"] == 1500 and row["Upgrade tier"] == "Good"
+    assert row["Upgrade found on"] == "invoice #3"
+    assert row["Expected commission (rule)"] == 750                # 50% of the package
+    props = cells(wb["Proposals"])
+    assert props[1][:9] == [28, 701, "AHS - Repair & Review", "APPROVED", "GOOD", "Good", 1500,
+                            "yes", "yes"]
+    summary = list(cells(wb["Summary"]))
+    assert ["All boards", "signed Good: count / $", "1 / $1500.0"] in summary
+    checks = " | ".join(r[1] for r in summary if r[0] == "CHECK")
+    assert "invoice #2 is not linked to a job" in checks
+    assert "proposal #28: BEST priced $4.8" in checks
+
+
 def test_a_day_s_file_is_never_overwritten(tmp_path, db):
     now = datetime(2026, 10, 1, 7, 0, tzinfo=UTC)
     with SessionLocal() as s:

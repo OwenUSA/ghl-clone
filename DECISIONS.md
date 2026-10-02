@@ -6664,3 +6664,15 @@ changed. Zuper's dashboard ("Jobs By Type") counts by VISIT date, so each lands 
 The KPI Excel counts all 53 and lists each with its original job and the original technician.
 From now on the team makes a callback as a new job of type Revisit and picks the original.
 
+### Upsells sold through Good / Better / Best proposals (2026-10-02)
+
+The owner tested a DTR proposal end to end on test job #701: the customer accepted GOOD and
+"Convert to Invoice" made invoice #3 with ONLY the accepted option (DTR-FLAT-GOOD $1,500). The
+item lands on the INVOICE, not on the job's line items (job #701 kept 0 items, Job Value $0), so
+the report now also reads invoices linked to a job. An upgrade line is any "Customer Upgrade"
+item OR any DTR package item (tier from its code, else its name), and only above $0 — a "GOOD -
+AHS covered" option at $0 is not an upsell. A new Proposals sheet counts signed options by tier
+(the moment the upsell is SOLD), and the Summary lists CHECK lines: accepted but not converted,
+proposals or invoices not linked to a job (their upgrade is on no board), options priced under
+$10. Zuper's own "auto convert estimate to invoice" stays NO (the button) for now.
+
