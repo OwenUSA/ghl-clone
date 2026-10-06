@@ -17,16 +17,21 @@
  * ADMIN / DISPATCHER only, by `canOpenAiAgents` (the server enforces the same rule in
  * app/live_calls.py). For anybody else the query is disabled: no polling at all.
  *
+ * A call that starts while the CRM is open is also shown ONCE as a desktop notification
+ * (2026-10-06, decision 19; `lib/desktopAlerts.ts` — only when the bell's desktop alerts are on).
+ * A Retell call comes through the same relay with `engine: "retell"` and is drawn the same way.
+ *
  * Mounted ONCE in App.tsx beside the status dot and the bell, never in a page — a live call
  * matters whatever page is open. It sits to their left and draws nothing while no call is live.
  */
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   listLiveCalls, listenToLiveCall, takeOverLiveCall, type LiveCall,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
 import { canOpenAiAgents } from '../lib/aiAgents'
+import { freshCalls, showCall } from '../lib/desktopAlerts'
 import { formatPhone } from '../lib/phone'
 import { useSoftphoneContext } from '../lib/softphoneContext'
 import { Elapsed } from './Softphone'
@@ -63,6 +68,14 @@ export function LiveAgentCall({ user }: { user: Me }) {
     queryKey: ['live-calls'], queryFn: listLiveCalls, enabled: allowed,
     refetchInterval: allowed ? POLL_MS : false, refetchOnWindowFocus: allowed,
   })
+  // Decision 19 (2026-10-06): a desktop notification too, once per call, with the bell's opt-in.
+  const seen = useRef({ primed: false, ids: new Set<string>() })
+  useEffect(() => {
+    if (!live.data) return
+    for (const c of freshCalls(seen.current, live.data.calls ?? [])) {
+      showCall({ linkedid: c.linkedid, who: callerLabel(c), agent: c.agent }, () => {})
+    }
+  }, [live.data])
   if (!allowed) return null
   const calls = live.data?.calls ?? []
   if (calls.length === 0) return null

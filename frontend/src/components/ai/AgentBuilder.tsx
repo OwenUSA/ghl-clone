@@ -8,7 +8,8 @@ import {
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  actionsFor, addItem, ANSWERING_TITLE, answeringConfirm, channelLabel, DAYS, dayLabel, draftForSave, formatCost, formatLatency, formatTokens,
+  actionsFor, addItem, ANSWERING_TITLE, answeringConfirm, channelLabel, CONTEXT_SOURCES, contextSources, DAYS, dayLabel,
+  draftForSave, ENGINES, formatCost, formatLatency, formatTokens, isRetell, RETELL_VARIABLES, voiceActionsFor,
   isAiAdmin, knowledgeBudget, MODE_LABEL, MODE_TONE, modeLabel, modesFor, moveItem, needsConfirm, newTrigger,
   offerTakeOff, outcomeLabel, phoneSystemPending, phoneSystemTone, removeItem, sameDraft, scheduleSummary,
   sectionsFor, setItem, stamp, toggle,
@@ -78,6 +79,12 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
   const dirty = !sameDraft(draftForSave(draft), draftForSave(agent.draft)) || name !== agent.name
     || description !== (agent.description ?? '') || folderId !== agent.folder_id
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
+  // A Retell agent has fewer sections (Retell owns the prompt); switching the engine must not
+  // leave the form on a section that is no longer listed.
+  const sections = sectionsFor(agent.channel, draft.engine)
+  useEffect(() => {
+    if (!sections.some((s) => s.key === section)) setSection('basics')
+  }, [sections, section])
 
   const refreshAll = (a: AiAgentDetail) => {
     qc.setQueryData(['ai-agent', a.id], a)
@@ -233,7 +240,7 @@ function BuilderLoaded({ user, agent, onBack }: { user: Me; agent: AiAgentDetail
       <div className="flex min-h-0 flex-1" style={{ padding: 16, gap: 16 }}>
         <nav aria-label="Agent sections" className="shrink-0 overflow-y-auto bg-white"
           style={{ width: 210, border: `1px solid ${LINE}`, borderRadius: 8, padding: 8 }}>
-          {sectionsFor(agent.channel).map((s) => (
+          {sections.map((s) => (
             <button key={s.key} type="button" onClick={() => setSection(s.key)}
               aria-current={section === s.key ? 'page' : undefined}
               className="block w-full text-left"
@@ -295,6 +302,7 @@ function SectionBody(p: SectionProps) {
   switch (p.section) {
     case 'basics': return <Basics {...p} />
     case 'call': return <CallSettings {...p} />
+    case 'customer': return <CustomerInfo {...p} />
     case 'persona': return <Persona {...p} />
     case 'rules': return <Rules {...p} />
     case 'knowledge': return p.draft.channel === 'voice' ? <VoiceKnowledge {...p} /> : <Knowledge {...p} />
@@ -456,7 +464,9 @@ function Actions({ admin, draft, set }: SectionProps) {
   const cat = useQuery({ queryKey: ['ai-catalogue'], queryFn: aiCatalogue })
   // Only the agent's own channel's actions: a voice agent is never offered send_text (the phone
   // system cannot text), a text agent never a call action. The server refuses both anyway.
-  const offered = actionsFor(cat.data?.actions ?? [], draft.channel)
+  // A voice agent's `request_change` is Retell's only (the server refuses it otherwise).
+  const offered = voiceActionsFor(actionsFor(cat.data?.actions ?? [], draft.channel),
+    draft.channel === 'voice' ? draft.engine : 'retell')
   const order = offered.map((a) => a.name)
   return (
     <>
@@ -736,14 +746,65 @@ function Carried({ label, value }: { label: string; value: unknown }) {
 
 function CallSettings({ admin, draft, set }: SectionProps) {
   const g = draft.guardrails ?? {}
+  const retell = isRetell(draft.engine)
+  const engine = ENGINES.find((e) => e.value === (draft.engine ?? '')) ?? ENGINES[0]
   return (
     <>
       <SectionTitle>Call settings</SectionTitle>
       <Help>What the phone system (owen-main) needs to answer a call as this agent. Publishing sends the version there;
-        which numbers it answers, and when, is decided by the phone system's flow — never by a CRM schedule.</Help>
+        which numbers it answers is set on the Phone numbers tab, and the phone system's flow does the rest — never a
+        CRM schedule.</Help>
       <TextSetting label="Phone system agent" required admin={admin} value={draft.owen_agent}
         onChange={(owen_agent) => set({ owen_agent })} placeholder="The agent's name in owen-main"
         hint="Publishing updates this existing agent there. It is never created." />
+      <Field label="Engine" hint={engine.help}>
+        {admin ? (
+          <select value={draft.engine ?? ''} aria-label="Engine" style={{ ...INPUT, width: 260 }}
+            onChange={(e) => set({ engine: e.target.value })}>
+            {ENGINES.map((e) => <option key={e.value} value={e.value}>{e.label}</option>)}
+          </select>
+        ) : <ReadText>{engine.label}</ReadText>}
+      </Field>
+      {retell ? <RetellSettings admin={admin} draft={draft} set={set} /> : <OwenVoiceSettings admin={admin} draft={draft} set={set} />}
+      <div className="flex flex-wrap gap-12">
+        <Seconds label="Longest call (seconds)" admin={admin} value={g.max_call_seconds}
+          onChange={(v) => set({ guardrails: { ...g, max_call_seconds: v } })} />
+        <Seconds label="Longest silence (seconds)" admin={admin} value={g.max_silence_seconds}
+          onChange={(v) => set({ guardrails: { ...g, max_silence_seconds: v } })} />
+      </div>
+      <div style={{ marginTop: 18, fontSize: 13, fontWeight: 600, color: INK }}>Carried unchanged</div>
+      <Help>Set on the phone system and kept exactly as they are on every publish. They are not edited here yet.</Help>
+      <Carried label="Transfer targets" value={draft.transfer_targets} />
+      <Carried label="Caller context" value={draft.context_provider} />
+      <Carried label="Custom tools" value={draft.custom_tools} />
+      <Carried label="Other settings" value={draft.owen_settings} />
+    </>
+  )
+}
+
+/** Retell (2026-10-06): the CRM stores the agent's id; how it talks is Retell's (decision 1). */
+function RetellSettings({ admin, draft, set }: Pick<SectionProps, 'admin' | 'draft' | 'set'>) {
+  return (
+    <>
+      <TextSetting label="Retell agent id" required admin={admin} value={draft.retell_agent_id}
+        onChange={(retell_agent_id) => set({ retell_agent_id })} placeholder="agent_…"
+        hint="From Retell's dashboard. Calls use that agent's latest published version; each call records which one answered." />
+      <div role="note" style={{ marginTop: 14, padding: '10px 12px', fontSize: 13, color: TEXT, lineHeight: 1.5,
+        backgroundColor: PAGE_BG, border: `1px solid ${LINE}`, borderRadius: 8 }}>
+        The prompt, the voice and the knowledge base are edited in Retell's dashboard, not here — read-only from this
+        side. For the agent to know who is calling, its Retell prompt must use{' '}
+        {RETELL_VARIABLES.map((v, i) => (
+          <span key={v}><code style={{ fontSize: 12 }}>{v}</code>{i < RETELL_VARIABLES.length - 1 ? ', ' : ''}</span>
+        ))}
+        . What goes into them is set under Customer information.
+      </div>
+    </>
+  )
+}
+
+function OwenVoiceSettings({ admin, draft, set }: Pick<SectionProps, 'admin' | 'draft' | 'set'>) {
+  return (
+    <>
       <TextSetting label="Greeting" admin={admin} value={draft.greeting} onChange={(greeting) => set({ greeting })}
         placeholder="Thanks for calling Dream Team Roofing, how can I help?" />
       <TextSetting label="Model" required admin={admin} value={draft.model} onChange={(model) => set({ model })}
@@ -764,18 +825,34 @@ function CallSettings({ admin, draft, set }: SectionProps) {
       </div>
       <TextSetting label="Model base URL" admin={admin} value={draft.llm_base_url}
         onChange={(llm_base_url) => set({ llm_base_url })} hint="Blank = the phone system's default." />
-      <div className="flex flex-wrap gap-12">
-        <Seconds label="Longest call (seconds)" admin={admin} value={g.max_call_seconds}
-          onChange={(v) => set({ guardrails: { ...g, max_call_seconds: v } })} />
-        <Seconds label="Longest silence (seconds)" admin={admin} value={g.max_silence_seconds}
-          onChange={(v) => set({ guardrails: { ...g, max_silence_seconds: v } })} />
+    </>
+  )
+}
+
+/**
+ * "Customer information this agent receives" (2026-10-06, decision 7): six switches, every one
+ * off until an ADMIN turns it on. The CRM enforces them when the phone system asks who is
+ * calling (app/agent_context.py); they apply from the next Publish, like every other setting.
+ */
+function CustomerInfo({ admin, draft, set }: SectionProps) {
+  const on = contextSources(draft)
+  return (
+    <>
+      <SectionTitle>Customer information this agent receives</SectionTitle>
+      <Help>When a caller is one known customer (a CRM contact, or a customer only Zuper knows), the phone system
+        asks the CRM about them as the call is answered. Only what is switched on here is sent. Money, invoices,
+        internal notes, email addresses and other customers are never sent. Takes effect when you publish.</Help>
+      <div style={{ marginTop: 10 }}>
+        {CONTEXT_SOURCES.map((s) => admin ? (
+          <CheckRow key={s.key} admin checked={on[s.key]} label={s.label} help={s.help}
+            onChange={() => set({ context_sources: { ...on, [s.key]: !on[s.key] } })} />
+        ) : (
+          <div key={s.key} style={{ padding: '8px 0', borderBottom: `1px solid ${LINE}` }}>
+            <div style={{ fontSize: 14, color: TEXT }}>{s.label}: {on[s.key] ? 'On' : 'Off'}</div>
+            <div style={{ fontSize: 12, color: FAINT, marginTop: 2 }}>{s.help}</div>
+          </div>
+        ))}
       </div>
-      <div style={{ marginTop: 18, fontSize: 13, fontWeight: 600, color: INK }}>Carried unchanged</div>
-      <Help>Set on the phone system and kept exactly as they are on every publish. They are not edited here yet.</Help>
-      <Carried label="Transfer targets" value={draft.transfer_targets} />
-      <Carried label="Caller context" value={draft.context_provider} />
-      <Carried label="Custom tools" value={draft.custom_tools} />
-      <Carried label="Other settings" value={draft.owen_settings} />
     </>
   )
 }

@@ -371,6 +371,19 @@ export type AiCall = {
   campaign?: string | null
   /** name / phone / address / intent / urgency / notes - whatever the caller gave. */
   captured?: Record<string, string> | null
+  /** Retell (2026-10-06, C4): which engine answered, and what Retell reported after the call. */
+  engine?: string | null
+  retell_call_id?: string | null
+  /** The Retell agent version that answered (decision 14). */
+  retell_agent_version?: number | null
+  summary?: string | null
+  sentiment?: string | null
+  successful?: boolean | null
+  /** Retell's own `call_cost.combined_cost`, in cents. */
+  cost_cents?: number | null
+  disconnection_reason?: string | null
+  /** The change requests the agent passed on during the call (C3). */
+  requests?: unknown[] | null
 }
 
 /**
@@ -1749,6 +1762,36 @@ export const setAiAgentMode = (id: number, mode: string, confirm = false) =>
 export const deleteAiAgent = (id: number) => send<{ deleted: number }>(`/api/ai/agents/${id}`, 'DELETE')
 export const duplicateAiAgent = (id: number) => send<AiAgentDetail>(`/api/ai/agents/${id}/duplicate`, 'POST')
 
+// ---- AI Agents → Phone numbers and the spend cap (2026-10-06, Retell C5 / C6; ADMIN only) ----
+
+export type AssignMode = 'ai_first' | 'staff_then_ai' | 'after_hours_ai'
+export type PhoneHours = { tz: string; days: Record<string, [string, string][]> }
+export type PhoneNumberRow = {
+  id: string; e164: string | null; label: string | null; assignable: boolean; reason: string | null
+  assignment: {
+    agent_name: string; mode: AssignMode; mode_label: string; hours: PhoneHours | null
+    crm_agent_id: number | null; crm_agent_name: string | null
+  } | null
+}
+export type PhoneNumbers = {
+  configured: boolean; detail: string | null; numbers: PhoneNumberRow[]
+  agents: { id: number; name: string; owen_agent: string; engine: string }[]
+  modes: { value: AssignMode; label: string }[]; timezone: string
+}
+export type AgentSpend = {
+  configured: boolean; detail: string | null; daily_cap_usd: number | null; alert_pct: number | null
+  today_usd: number | null; used_pct: number | null; over_alert: boolean
+}
+export const aiPhoneNumbers = () => get<PhoneNumbers>('/api/ai/phone-numbers')
+/** A 409 means the number's flow was built by hand: confirm, then send `replace: true`. */
+export const assignAiPhoneNumber = (id: string, body: { agent_id: number; mode: AssignMode; hours?: PhoneHours | null; replace?: boolean }) =>
+  send<{ ok: boolean }>(`/api/ai/phone-numbers/${encodeURIComponent(id)}/assignment`, 'PUT', body)
+export const unassignAiPhoneNumber = (id: string) =>
+  send<{ ok: boolean }>(`/api/ai/phone-numbers/${encodeURIComponent(id)}/assignment`, 'DELETE')
+export const aiAgentSpend = () => get<AgentSpend>('/api/ai/agent-spend')
+export const setAiAgentSpend = (daily_cap_usd: number, alert_pct: number) =>
+  send<AgentSpend>('/api/ai/agent-spend', 'PUT', { daily_cap_usd, alert_pct })
+
 export type AiStep = {
   id: number; position: number; kind: string; text: string | null; tool_name: string | null
   tool_call_id: string | null; data: Record<string, unknown> | null; action_status: string | null
@@ -1890,6 +1933,8 @@ export type LiveCall = {
   duration_s: number | null
   turns: number | null
   contact: { id: number; name: string | null } | null
+  /** "retell" for a Retell call (2026-10-06); null for owen-voice. */
+  engine?: string | null
 }
 /** Never an error for an unconfigured or unreachable phone system: `calls` is simply empty. */
 export const listLiveCalls = () => get<{ calls: LiveCall[] }>('/api/live-calls')

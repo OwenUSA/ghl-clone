@@ -5,14 +5,15 @@ import { AgentBuilder } from '../components/ai/AgentBuilder'
 import { KnowledgeTab } from '../components/ai/KnowledgeTab'
 import { TemplatesTab } from '../components/ai/TemplatesTab'
 import { LogsTab } from '../components/ai/LogsTab'
+import { PhoneNumbersTab } from '../components/ai/PhoneNumbersTab'
 import { PAGE_BG } from '../components/ai/aiUi'
 import type { Me } from '../lib/auth'
 import { aiTabs, canOpenAiAgents, type AiTab } from '../lib/aiAgents'
 
 /**
  * AI Agents (2026-09-15): GoHighLevel's module, phase 1. One header with the shared tab
- * bar (PageTabs, as on every module); Agents · Knowledge Base · Templates · Agent Logs
- * (ADMIN). Opening an agent replaces the tab's content with its builder.
+ * bar (PageTabs, as on every module); Agents · Knowledge Base · Templates · Phone numbers
+ * (ADMIN, 2026-10-06) · Agent Logs (ADMIN). Opening an agent replaces the tab's content with its builder.
  */
 export function AiAgentsPage({ user }: { user: Me }) {
   const tabs = aiTabs(user)
@@ -39,6 +40,8 @@ export function AiAgentsPage({ user }: { user: Me }) {
       ) : active === 'templates' ? (
         <TemplatesTab user={user}
           onUse={(id) => { setTemplateToUse(id); setTab('agents') }} />
+      ) : active === 'numbers' ? (
+        <PhoneNumbersTab user={user} />
       ) : (
         <LogsTab user={user} />
       )}

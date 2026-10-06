@@ -19,9 +19,10 @@ export function canOpenAiAgents(user: AiUser | null | undefined): boolean {
 
 export const isAiAdmin = (user: AiUser | null | undefined) => !!user && user.role === 'ADMIN'
 
-export type AiTab = 'agents' | 'knowledge' | 'templates' | 'logs'
+export type AiTab = 'agents' | 'knowledge' | 'templates' | 'numbers' | 'logs'
 
-/** The module's tabs. Agent Logs is not drawn for a dispatcher (logs are ADMIN-only). */
+/** The module's tabs. Phone numbers and Agent Logs are not drawn for a dispatcher (both are
+    ADMIN-only on the server — decision 18 of 2026-10-06 for the numbers). */
 export function aiTabs(user: AiUser | null | undefined): { key: AiTab; label: string }[] {
   if (!canOpenAiAgents(user)) return []
   const tabs: { key: AiTab; label: string }[] = [
@@ -29,7 +30,7 @@ export function aiTabs(user: AiUser | null | undefined): { key: AiTab; label: st
     { key: 'knowledge', label: 'Knowledge Base' },
     { key: 'templates', label: 'Templates' },
   ]
-  if (isAiAdmin(user)) tabs.push({ key: 'logs', label: 'Agent Logs' })
+  if (isAiAdmin(user)) tabs.push({ key: 'numbers', label: 'Phone numbers' }, { key: 'logs', label: 'Agent Logs' })
   return tabs
 }
 
@@ -68,7 +69,7 @@ export const BUILDER_SECTIONS = [
   { key: 'versions', label: 'Versions' },
 ] as const
 
-export type BuilderSection = (typeof BUILDER_SECTIONS)[number]['key'] | 'call'
+export type BuilderSection = (typeof BUILDER_SECTIONS)[number]['key'] | 'call' | 'customer'
 
 /**
  * A VOICE agent's sections (2026-09-25). No triggers, schedule, AI connection or escalation:
@@ -78,6 +79,7 @@ export type BuilderSection = (typeof BUILDER_SECTIONS)[number]['key'] | 'call'
 export const VOICE_SECTIONS: { key: BuilderSection; label: string }[] = [
   { key: 'basics', label: 'Basics' },
   { key: 'call', label: 'Call settings' },
+  { key: 'customer', label: 'Customer information' },
   { key: 'persona', label: 'Persona & goals' },
   { key: 'rules', label: 'Rules' },
   { key: 'knowledge', label: 'In-call knowledge' },
@@ -87,8 +89,102 @@ export const VOICE_SECTIONS: { key: BuilderSection; label: string }[] = [
   { key: 'versions', label: 'Versions' },
 ]
 
-export function sectionsFor(channel: string): { key: BuilderSection; label: string }[] {
-  return channel === 'voice' ? VOICE_SECTIONS : [...BUILDER_SECTIONS]
+/**
+ * A RETELL voice agent (2026-10-06): Retell's dashboard owns the prompt, voice and knowledge
+ * (decision 1), so persona, rules, in-call knowledge, extra instructions and "what the phone
+ * system gets" are not edited here at all — one copy of a prompt, Retell's.
+ */
+const RETELL_OWNS_SECTIONS: BuilderSection[] = ['persona', 'rules', 'knowledge', 'advanced', 'prompt']
+
+export function sectionsFor(channel: string, engine?: string | null): { key: BuilderSection; label: string }[] {
+  if (channel !== 'voice') return [...BUILDER_SECTIONS]
+  if (isRetell(engine)) return VOICE_SECTIONS.filter((s) => !RETELL_OWNS_SECTIONS.includes(s.key))
+  return VOICE_SECTIONS
+}
+
+// ---------------- Retell (2026-10-06, docs/RETELL-PLAN.md) ----------------
+
+export const isRetell = (engine: string | null | undefined) => engine === 'retell'
+
+/** Which engine runs the call. Empty = the phone system's own choice (owen-voice today). */
+export const ENGINES: { value: string; label: string; help: string }[] = [
+  { value: '', label: 'Phone system default', help: "owen-main's own choice (owen-voice today)." },
+  { value: 'owen_voice', label: 'owen-voice', help: "The phone system's own voice engine. The persona, voice and knowledge are edited here." },
+  { value: 'retell', label: 'Retell', help: "Retell answers the call. Its prompt, voice and knowledge are edited in Retell's dashboard." },
+]
+
+/** The dynamic variables owen-main fills from the customer brief. A Retell prompt must use them. */
+export const RETELL_VARIABLES = ['{{customer_brief}}', '{{customer_first_name}}', '{{customer_known}}']
+
+/** A voice agent's actions for its engine: `request_change` is a Retell tool only (the server refuses it otherwise). */
+export function voiceActionsFor<T extends { name: string }>(actions: T[], engine: string | null | undefined): T[] {
+  return actions.filter((a) => a.name !== 'request_change' || isRetell(engine))
+}
+
+/** "Customer information this agent receives" — every switch OFF by default (decision 7). */
+export const CONTEXT_SOURCES: { key: string; label: string; help: string }[] = [
+  { key: 'crm_card', label: 'Their CRM card',
+    help: 'First and last name, their open card (title, stage, pipeline), the next visit, and when we last spoke.' },
+  { key: 'zuper_job', label: 'Their Zuper job',
+    help: 'Job number, board, status and since when, the technician and the scheduled start.' },
+  { key: 'call_summaries', label: 'Summaries of recent calls',
+    help: 'Quo and Zuper Connect summaries of their last calls — at most 3, from the last 90 days.' },
+  { key: 'texts', label: 'Recent texts',
+    help: 'Their last 3 texts, sent or received. Never internal notes, never a text that did not go out.' },
+  { key: 'ai_calls', label: 'Earlier AI calls',
+    help: 'What an AI agent summarised on their earlier calls (counted in the same 3 calls).' },
+  { key: 'address', label: 'Their address',
+    help: "Street and city, so the agent can check who it is talking to. It is told never to read it aloud — but the address is then stored in Retell's call logs." },
+]
+
+export function contextSources(d: { context_sources?: Record<string, boolean> | null } | null | undefined): Record<string, boolean> {
+  const raw = d?.context_sources ?? {}
+  return Object.fromEntries(CONTEXT_SOURCES.map((s) => [s.key, raw[s.key] === true]))
+}
+
+// ---------------- phone numbers (2026-10-06, C5) ----------------
+
+export type HoursRanges = Record<string, [string, string][]>
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+
+/** Sentences for what stops an "AI outside office hours" assignment — the server says the same. No default hours. */
+export function hoursProblems(days: HoursRanges): string[] {
+  const out: string[] = []
+  const used = DAYS.filter((d) => (days[d] ?? []).length > 0)
+  if (used.length === 0) out.push('Choose at least one day with office hours.')
+  for (const d of used) {
+    const ranges = [...(days[d] ?? [])].sort((a, b) => a[0].localeCompare(b[0]))
+    for (const [a, b] of ranges) {
+      if (!HHMM.test(a) || !HHMM.test(b)) out.push(`${dayLabel(d)}: times are HH:MM.`)
+      else if (a >= b) out.push(`${dayLabel(d)}: ${a}–${b} ends before it starts.`)
+    }
+    for (let i = 1; i < ranges.length; i++) {
+      if (ranges[i][0] < ranges[i - 1][1]) out.push(`${dayLabel(d)}: two time ranges overlap.`)
+    }
+  }
+  return out
+}
+
+/** The body's `hours`: only the days given, in the account's zone. */
+export function hoursBody(days: HoursRanges): { tz: string; days: HoursRanges } {
+  const kept: HoursRanges = {}
+  for (const d of DAYS) if ((days[d] ?? []).length) kept[d] = days[d]
+  return { tz: 'America/New_York', days: kept }
+}
+
+export function hoursSummary(hours: { days?: HoursRanges } | null | undefined): string {
+  const days = hours?.days ?? {}
+  const parts = DAYS.filter((d) => (days[d] ?? []).length)
+    .map((d) => `${dayLabel(d)} ${(days[d] ?? []).map(([a, b]) => `${clock(a)}–${clock(b)}`).join(', ')}`)
+  return parts.length ? parts.join(' · ') + ' Eastern' : 'No office hours'
+}
+
+/** "$21.50 of $25.00 today (86%)". Unknown is a dash, never $0. */
+export function spendLine(s: { today_usd: number | null; daily_cap_usd: number | null; used_pct: number | null }): string {
+  const usd = (n: number) => '$' + n.toFixed(2)
+  if (s.today_usd == null || s.daily_cap_usd == null) return '—'
+  return `${usd(s.today_usd)} of ${usd(s.daily_cap_usd)} today` + (s.used_pct != null ? ` (${s.used_pct}%)` : '')
 }
 
 export const CHANNEL_LABEL: Record<string, string> = { text: 'Text / Chat', voice: 'Voice' }
@@ -209,6 +305,10 @@ export type Draft = {
   stt_provider?: string
   tts_provider?: string
   engine?: string
+  /** Retell only (2026-10-06): the agent's id in Retell's dashboard. */
+  retell_agent_id?: string
+  /** What the agent is told about the caller, every switch off by default (CONTEXT_SOURCES). */
+  context_sources?: Record<string, boolean>
   knowledge_text?: string
   guardrails?: { max_call_seconds?: number | null; max_silence_seconds?: number | null; [k: string]: unknown }
   transfer_targets?: Record<string, { kind?: string; target?: string }>

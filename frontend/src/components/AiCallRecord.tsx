@@ -50,6 +50,21 @@ function urgencyTone(value: string): string | undefined {
   return /emerg/i.test(value) ? 'rgb(180,35,24)' : undefined
 }
 
+/**
+ * "Answered by AI: Intake · Retell v4" (2026-10-06, C4). A Retell call names the Retell agent
+ * version that answered (decision 14); an owen-voice call keeps the plain "AI: <agent>".
+ */
+export function retellSuffix(call: AiCall): string {
+  if (call.engine !== 'retell') return ''
+  return ' · Retell' + (call.retell_agent_version != null ? ` v${call.retell_agent_version}` : '')
+}
+
+/** Cents as dollars; absent is nothing at all (never "$0.00" for an unknown cost). */
+export function costLabel(cents: number | null | undefined): string {
+  if (cents == null || !Number.isFinite(Number(cents))) return ''
+  return '$' + (Number(cents) / 100).toFixed(2)
+}
+
 export function AiCallRecord({ call }: { call: AiCall | null | undefined }) {
   if (!call) return null
   const agent = (call.agent ?? '').trim()
@@ -62,7 +77,9 @@ export function AiCallRecord({ call }: { call: AiCall | null | undefined }) {
       k => !FIELD_ORDER.includes(k) && (captured[k] ?? '').toString().trim()),
   ]
   const outcome = call.outcome ? (OUTCOME_LABEL[call.outcome] ?? call.outcome) : ''
-  if (!agent && !keys.length && !outcome) return null
+  const summary = (call.summary ?? '').toString().trim()
+  const cost = costLabel(call.cost_cents)
+  if (!agent && !keys.length && !outcome && !summary) return null
 
   return (
     <div style={{ marginTop: 8, borderTop: `1px solid ${LINE}`, paddingTop: 8, fontSize: 13 }}>
@@ -75,14 +92,22 @@ export function AiCallRecord({ call }: { call: AiCall | null | undefined }) {
               color: 'rgb(83,56,158)', backgroundColor: 'rgb(244,243,255)',
             }}
           >
-            Answered by AI: {agent}
+            Answered by AI: {agent}{retellSuffix(call)}
           </span>
         )}
         {outcome && <span style={{ color: MUTED, fontSize: 12 }}>{outcome}</span>}
         {call.campaign && (
           <span style={{ color: MUTED, fontSize: 12 }}>· {call.campaign}</span>
         )}
+        {cost && <span style={{ color: MUTED, fontSize: 12 }} title="What the call cost, as Retell counted it">· {cost}</span>}
       </div>
+
+      {summary && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ color: MUTED, fontSize: 12, marginBottom: 2 }}>Summary</div>
+          <div style={{ color: TEXT, lineHeight: '18px', whiteSpace: 'pre-wrap' }}>{summary}</div>
+        </div>
+      )}
 
       {keys.length > 0 && (
         <div style={{ marginTop: 6 }}>

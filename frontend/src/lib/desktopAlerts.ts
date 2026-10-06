@@ -41,3 +41,30 @@ export function show(a: { id: number; title: string; body: string | null; urgent
     // Some browsers only allow notifications from a service worker; the bell still has it.
   }
 }
+
+/**
+ * A live AI call (2026-10-06, decision 19): "AI is on a call with <name>", ONCE per call. Same
+ * opt-in as the bell — nothing shows unless this browser granted notifications ("Turn on desktop
+ * alerts" in the bell). The tag is the call's linkedid, so two open tabs show it once; `announced`
+ * remembers the calls this tab already showed, and the first list a tab sees is only remembered
+ * (opening the CRM mid-call does not announce it), exactly like `fresh`.
+ */
+export function freshCalls<T extends { linkedid: string }>(seen: { primed: boolean; ids: Set<string> }, calls: T[]): T[] {
+  const out = seen.primed ? calls.filter((c) => !seen.ids.has(c.linkedid)) : []
+  for (const c of calls) seen.ids.add(c.linkedid)
+  seen.primed = true
+  return out
+}
+
+export function showCall(c: { linkedid: string; who: string; agent?: string | null }, onClick: () => void): void {
+  if (permission() !== 'granted') return
+  try {
+    const n = new Notification(`AI is on a call with ${c.who}`, {
+      body: c.agent ? `${c.agent} answered. Listen or take over from the CRM.` : 'Listen or take over from the CRM.',
+      tag: `ghl-live-call-${c.linkedid}`,
+    })
+    n.onclick = () => { window.focus(); onClick(); n.close() }
+  } catch {
+    // Some browsers only allow notifications from a service worker; the banner still shows it.
+  }
+}
