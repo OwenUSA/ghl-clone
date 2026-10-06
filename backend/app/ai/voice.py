@@ -18,12 +18,22 @@ Nothing else in the CRM knows owen-main's key names.
     tts_provider           tts_provider
     knowledge_text         knowledge                ≤ 6000 characters or Publish refuses
     actions                tools                    transfer_call → transfer, end_call,
-                                                    capture_lead; nothing else maps
+                                                    capture_lead; request_change →
+                                                    request_change (engine retell ONLY);
+                                                    nothing else maps
     guardrails             guardrails               max_call_seconds, max_silence_seconds
     transfer_targets       transfer_targets         {name: {kind, target}}
     context_provider       context_provider         e.g. {"kind": "crm_link"}
     custom_tools           custom_tools             owen-main's HTTP tool declarations
-    engine                 engine                   left unset = owen-main's own choice
+    engine                 engine                   "" (owen-main's own choice), "owen_voice"
+                                                    or "retell" (2026-10-06)
+    retell_agent_id        retell_agent_id          Retell's agent id, ≤ 100 chars; required to
+                                                    publish a retell agent
+    context_sources        (NOT SENT)               {crm_card, zuper_job, call_summaries, texts,
+                                                    ai_calls, address}, all false by default.
+                                                    The CRM enforces them in
+                                                    `app/agent_context.py`; owen-main never
+                                                    decides what it may read (C1)
     owen_settings          (spread at top level)    owen-main keys the CRM does not edit,
                                                     carried unchanged so a push never drops
                                                     one (tts_instructions, …)
@@ -42,6 +52,14 @@ WHAT A VOICE AGENT MAY NOT HAVE, and why (refused by `clean`, not just hidden):
   through an owen-main flow; business hours live in that flow and nowhere else (decision 6).
 * An AI connection, knowledge bases and escalation users: owen-voice uses its own model key,
   cannot search a CRM knowledge base mid-call yet, and has no escalate tool.
+
+RETELL (2026-10-06, docs/RETELL-PLAN.md C1). `engine: "retell"` makes Retell's dashboard the
+owner of HOW the agent talks — prompt, voice, knowledge — so for a Retell agent the persona,
+greeting, voice, model and in-call knowledge are not required, are not sent, and the 6,000-
+character knowledge rule does not apply. What is required instead is `retell_agent_id`. A
+Retell agent may also have `request_change` (an urgent CRM task, `app/agent_requests.py`);
+owen-voice has no such tool, so an owen-voice agent may not. `send_text` stays refused for
+every engine.
 """
 from __future__ import annotations
 
@@ -56,18 +74,32 @@ MAX_PASSTHROUGH = 20000
 
 # CRM action name → owen-main tool name. The ONLY actions a voice agent may have.
 OWEN_TOOLS = {"transfer_call": "transfer", "end_call": "end_call",
-              "capture_lead": "capture_lead"}
+              "capture_lead": "capture_lead", "request_change": "request_change"}
+# Tools only the Retell engine carries out (owen-voice has no change-request tool).
+RETELL_ONLY = frozenset({"request_change"})
+
+RETELL = "retell"
+ENGINES = ("", "owen_voice", RETELL)
+
+# What a voice agent may be told about the caller (decision 7, 2026-10-06). Every one OFF by
+# default; the CRM enforces them when owen-main asks for the brief (`app/agent_context.py`).
+CONTEXT_SOURCES = ("crm_card", "zuper_job", "call_summaries", "texts", "ai_calls", "address")
 
 # CRM key → owen-main key, for the plain text settings (only sent when set).
 TEXT_KEYS = {"greeting": "greeting", "voice": "voice", "model": "model",
              "llm_base_url": "llm_base_url", "stt_provider": "stt_provider",
-             "tts_provider": "tts_provider", "engine": "engine"}
+             "tts_provider": "tts_provider", "engine": "engine",
+             "retell_agent_id": "retell_agent_id"}
 TEXT_LIMITS = {"greeting": 2000, "voice": 100, "model": 100, "llm_base_url": 500,
-               "stt_provider": 50, "tts_provider": 50, "engine": 50, "owen_agent": 200}
+               "stt_provider": 50, "tts_provider": 50, "engine": 50, "owen_agent": 200,
+               "retell_agent_id": 100}
+# What Retell owns (decision 1): never sent for a Retell agent, never required.
+RETELL_OWNS = ("greeting", "voice", "model", "llm_base_url", "stt_provider", "tts_provider")
 STRUCTURED = ("guardrails", "transfer_targets", "context_provider", "custom_tools")
 # owen-main keys the mapping owns. `crm_*` are owen-main's own stamp on a pushed version.
+# `context_sources` is here so it can never ride along in `owen_settings` either way.
 OWEN_MODELLED = {"persona", "knowledge", "tools", *TEXT_KEYS.values(), *STRUCTURED,
-                 "crm_version", "crm_agent_id"}
+                 "crm_version", "crm_agent_id", "context_sources"}
 TRANSFER_KINDS = ("number", "operator", "flow", "agent")
 
 SEND_TEXT_REFUSAL = ("A voice agent cannot send texts: the phone system's voice engine has no "
@@ -79,7 +111,16 @@ def defaults() -> dict:
     return {"greeting": "", "voice": "", "llm_base_url": "", "stt_provider": "",
             "tts_provider": "", "engine": "", "knowledge_text": "",
             "guardrails": {}, "transfer_targets": {}, "context_provider": None,
-            "custom_tools": [], "owen_settings": {}, "owen_agent": ""}
+            "custom_tools": [], "owen_settings": {}, "owen_agent": "",
+            "retell_agent_id": "", "context_sources": dict.fromkeys(CONTEXT_SOURCES, False)}
+
+
+def context_sources(c: dict | None) -> dict:
+    """The switches, every known one present and a bool — a config from before 2026-10-06
+    (or a partial one) reads all OFF."""
+    raw = (c or {}).get("context_sources")
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: raw.get(k) is True for k in CONTEXT_SOURCES}
 
 
 DEFAULT_ACTIONS = ["capture_lead", "end_call"]
@@ -107,12 +148,32 @@ def clean(c: dict) -> dict:
         raise ConfigError("the in-call knowledge is %d characters — even a draft holds at "
                           "most %d" % (len(c["knowledge_text"]), KNOWLEDGE_DRAFT_MAX))
 
+    if c["engine"] not in ENGINES:
+        raise ConfigError("engine is empty (the phone system's own choice), owen_voice or "
+                          "retell — not %r" % c["engine"])
+    cs = c["context_sources"]
+    if not isinstance(cs, dict):
+        raise ConfigError("context_sources must be an object of on/off switches")
+    unknown = sorted(set(cs) - set(CONTEXT_SOURCES))
+    if unknown:
+        raise ConfigError("unknown customer information source(s): %s (%s)" % (
+            ", ".join(map(str, unknown)), ", ".join(CONTEXT_SOURCES)))
+    if any(not isinstance(v, bool) for v in cs.values()):
+        raise ConfigError("each customer information switch is true or false")
+    c["context_sources"] = context_sources(c)
+
     if "send_text" in c["actions"]:
         raise ConfigError(SEND_TEXT_REFUSAL)
     other = [a for a in c["actions"] if a not in OWEN_TOOLS]
     if other:
         raise ConfigError("a voice agent can only transfer the call, end the call and "
-                          "capture a lead — not %s" % ", ".join(other))
+                          "capture a lead%s — not %s" % (
+                              " (a Retell agent can also request a change)"
+                              if c["engine"] == RETELL else "", ", ".join(other)))
+    retell_only = [a for a in c["actions"] if a in RETELL_ONLY]
+    if retell_only and c["engine"] != RETELL:
+        raise ConfigError("only a Retell agent can request a change — the phone system's own "
+                          "voice engine has no such tool (%s)" % ", ".join(retell_only))
     if c["triggers"]:
         raise ConfigError("a voice agent is started by a call reaching it through the phone "
                           "system's flow, so it takes no CRM triggers")
@@ -181,6 +242,12 @@ def publish_problems(c: dict) -> list[str]:
     problems = []
     if not c["owen_agent"]:
         problems.append("Name the phone system agent this publishes to.")
+    if c.get("engine") == RETELL:
+        # Retell owns the prompt, voice and knowledge (decision 1): none is required here,
+        # and the knowledge limit is owen-voice's, not Retell's.
+        if not c.get("retell_agent_id"):
+            problems.append("Enter the Retell agent id.")
+        return problems
     if not c["model"]:
         problems.append("Choose a model.")
     if not c["persona"] and not c["goals"]:
@@ -213,13 +280,19 @@ def persona_for(c: dict) -> str:
 
 
 def to_owen(c: dict) -> dict:
-    """A published CRM version as owen-main's `agent_versions.config`."""
+    """A published CRM version as owen-main's `agent_versions.config`. `context_sources` is
+    never in it (C1). For a Retell agent, what Retell owns (persona, greeting, voice, model,
+    knowledge, speech settings) is not sent either — there is one copy of a prompt, Retell's."""
     out = copy.deepcopy(c.get("owen_settings") or {})
-    out["persona"] = persona_for(c)
+    retell = c.get("engine") == RETELL
+    if not retell:
+        out["persona"] = persona_for(c)
     for crm_key, owen_key in TEXT_KEYS.items():
+        if retell and crm_key in RETELL_OWNS:
+            continue
         if c.get(crm_key):
             out[owen_key] = c[crm_key]
-    if c.get("knowledge_text"):
+    if c.get("knowledge_text") and not retell:
         out["knowledge"] = c["knowledge_text"]
     out["tools"] = {OWEN_TOOLS[a]: True for a in c.get("actions") or [] if a in OWEN_TOOLS}
     for key in STRUCTURED:
@@ -239,6 +312,10 @@ def from_owen(cfg: dict, agent_name: str) -> tuple[dict, list[str]]:
     d["persona"] = str(cfg.get("persona") or "")
     for crm_key, owen_key in TEXT_KEYS.items():
         d[crm_key] = str(cfg.get(owen_key) or "")
+    if d["engine"] not in ENGINES:
+        notes.append("engine %r is not one the CRM edits (%s) — left as the phone system's "
+                     "own choice" % (d["engine"], ", ".join(e or '""' for e in ENGINES)))
+        d["engine"] = ""
     d["knowledge_text"] = str(cfg.get("knowledge") or "")
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
     to_crm = {owen: crm for crm, owen in OWEN_TOOLS.items()}

@@ -41,9 +41,11 @@ QUEUE_LABEL = {
     "stale": "Gone quiet",
 }
 # Items a FEED writes rather than these rules — an AHS authorization note from owen-main
-# (app/ahs_authorizations.py, 2026-10-01). A pass never resolves one for not finding it (the
+# (app/ahs_authorizations.py, 2026-10-01), and a caller's change request a voice agent passed
+# on (app/agent_requests.py, 2026-10-06).
+# A pass never resolves one for not finding it (the
 # rules never would); staff close it with Done / Wrong.
-FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated"})
+FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated", "ai_change_request"})
 
 
 @dataclass

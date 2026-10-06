@@ -222,7 +222,9 @@ def test_a_voice_agent_is_created_off_with_only_voice_actions(world):
     assert {c["value"]: c["available"] for c in cat["channels"]} == {"text": True,
                                                                      "voice": True}
     offered_voice = sorted(a["name"] for a in cat["actions"] if "voice" in a["channels"])
-    assert offered_voice == ["capture_lead", "end_call", "transfer_call"]
+    # request_change is offered to a voice agent and refused unless its engine is Retell
+    # (2026-10-06; tests/test_retell_voice.py).
+    assert offered_voice == ["capture_lead", "end_call", "request_change", "transfer_call"]
     assert "send_text" not in offered_voice
 
 

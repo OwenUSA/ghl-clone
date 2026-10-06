@@ -1132,6 +1132,13 @@ AUDITED = {
     # The voice agent's customer brief (2026-09-24): the same feed, read-only. A token whose
     # owner has "Only assigned data" on is refused outright (403), never narrowed.
     "agent_context": "EVENTS_INGEST (machine, staff); restricted owner refused 403",
+    # A caller's change request from a voice agent (2026-10-06): the same feed. Refused 403
+    # for a restricted owner, never narrowed; files onto a card only through pipeline_access.
+    "ingest_agent_request": "EVENTS_INGEST (machine, staff); restricted owner refused 403",
+    # AI Agents -> Phone numbers and the spend cap (2026-10-06): ADMIN only, no customer record.
+    "ai_list_phone_numbers": "ADMIN", "ai_assign_phone_number": "ADMIN",
+    "ai_unassign_phone_number": "ADMIN", "ai_get_agent_spend": "ADMIN",
+    "ai_set_agent_spend": "ADMIN",
     # calendars
     "list_calendars": "assigned_access.calendars(scope)",
     "list_appointments": "assigned_access.appointments(scope); deal link sees_job",

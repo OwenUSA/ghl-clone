@@ -74,6 +74,8 @@ def _names(db: Session, principal: auth.Principal, calls: list[dict]) -> list[di
             "started_at": c.get("started_at"),
             "duration_s": c.get("duration_s"),
             "turns": c.get("turns"),
+            # "retell" for a Retell call (2026-10-06, C7); absent / null for owen-voice.
+            "engine": c.get("engine") if isinstance(c.get("engine"), str) else None,
             "contact": None if contact is None else {
                 "id": contact.id, "name": contact.name or None},
         })

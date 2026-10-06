@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import assigned_access, auth, pipeline_access
+from .. import assigned_access, auth, crmlink, pipeline_access
 from ..db import get_db
 from ..models import (
     AiAgent,
@@ -50,7 +50,19 @@ from ..models import (
     User,
 )
 from ..phones import format_phone, store_phone
-from . import actions, config, engine, knowledge, pricing, providers, push, triggers, vault, voice
+from . import (
+    actions,
+    config,
+    engine,
+    knowledge,
+    numbers,
+    pricing,
+    providers,
+    push,
+    triggers,
+    vault,
+    voice,
+)
 from .prompt import compile_prompt
 
 router = APIRouter(prefix="/api/ai")
@@ -1429,3 +1441,139 @@ def ai_read_all_alerts(db: Session = Depends(get_db), principal: auth.Principal 
         n += 1
     db.commit()
     return {"marked": n}
+
+
+# ============================================================ phone numbers and spend (ADMIN)
+#
+# 2026-10-06, docs/RETELL-PLAN.md C5 / C6, decisions 6, 11 and 18: which number goes to which
+# voice agent, and the agents' daily spend cap, are ADMIN decisions made here and carried out by
+# owen-main. Every route relays through `crmlink` and asks nothing while the link is unset.
+
+def _voice_agents_by_owen(db: Session) -> dict[str, dict]:
+    """Every PUBLISHED voice agent, by the phone-system agent it publishes to."""
+    out: dict[str, dict] = {}
+    for a in db.scalars(select(AiAgent).where(AiAgent.channel == AiAgent.VOICE,
+                                              AiAgent.archived_at.is_(None))
+                        .order_by(AiAgent.id)).all():
+        v = db.get(AiAgentVersion, a.published_version_id) if a.published_version_id \
+            else None
+        owen = (config.merged(v.config).get("owen_agent") or "").strip() if v else ""
+        if owen:
+            out.setdefault(" ".join(owen.split()).lower(), {
+                "id": a.id, "name": a.name, "owen_agent": owen,
+                "engine": config.merged(v.config).get("engine") or ""})
+    return out
+
+
+def _number_id(number_id: str) -> str:
+    if not numbers.NUMBER_ID.match(number_id or ""):
+        raise HTTPException(404, "number not found")
+    return number_id
+
+
+def _link_failed(r) -> HTTPException:
+    # 404 / 409 / 422 mean something on screen (gone, hand-built flow, refused); anything
+    # else is owen-main unreachable or broken.
+    if r.status in (404, 409):
+        return HTTPException(r.status, r.reason)
+    if 400 <= r.status < 500:
+        return HTTPException(400, r.reason)
+    return HTTPException(502, r.reason or "could not reach the phone system")
+
+
+@router.get("/phone-numbers")
+def ai_list_phone_numbers(db: Session = Depends(get_db), _: auth.Principal = ADMIN):
+    """owen-main's numbers, which are assignable (and why not), and what each is assigned to;
+    plus the published voice agents an assignment may name. Never an error for an unset or
+    unreachable link — the page says so in a sentence."""
+    agents = _voice_agents_by_owen(db)
+    base = {"agents": sorted(agents.values(), key=lambda a: a["name"].lower()),
+            "modes": [{"value": m, "label": numbers.MODE_LABEL[m]} for m in numbers.MODES],
+            "timezone": numbers.TIMEZONE}
+    if not crmlink.configured():
+        return {**base, "configured": False, "numbers": [], "detail": numbers.NOT_LINKED}
+    r = crmlink.phone_numbers()
+    if not r.ok:
+        return {**base, "configured": True, "numbers": [], "detail": r.reason}
+    rows = [numbers.number_out(n, agents) for n in (r.data or {}).get("numbers") or []]
+    return {**base, "configured": True, "numbers": [n for n in rows if n], "detail": None}
+
+
+class AssignmentIn(BaseModel):
+    agent_id: int
+    mode: str
+    hours: dict | None = None
+    replace: bool = False
+
+
+@router.put("/phone-numbers/{number_id}/assignment")
+def ai_assign_phone_number(number_id: str, body: AssignmentIn, db: Session = Depends(get_db),
+                           principal: auth.Principal = ADMIN):
+    """Send this number's calls to a published VOICE agent, in a mode. owen-main answers 409
+    when the number's flow was built by hand; the page then asks, and resends `replace`."""
+    number_id = _number_id(number_id)
+    a = _get_agent(db, body.agent_id)
+    if a.channel != AiAgent.VOICE:
+        raise HTTPException(400, "only a voice agent answers a phone number")
+    owen = next((x["owen_agent"] for x in _voice_agents_by_owen(db).values()
+                 if x["id"] == a.id), None)
+    if not owen:
+        raise HTTPException(400, "Publish “%s” first — the phone system only knows a "
+                                 "published agent." % a.name)
+    if body.mode not in numbers.MODES:
+        raise HTTPException(400, "mode is %s" % ", ".join(numbers.MODES))
+    hours = None
+    if body.hours is not None or body.mode == "after_hours_ai":
+        if body.hours is None:
+            raise HTTPException(400, "“AI outside office hours” needs the office hours — "
+                                     "nothing is assumed")
+        try:
+            hours = numbers.clean_hours(body.hours)
+        except numbers.HoursError as e:
+            raise HTTPException(400, str(e)) from None
+    if not crmlink.configured():
+        raise HTTPException(503, numbers.NOT_LINKED)
+    r = crmlink.assign_number(number_id, owen, body.mode, hours, replace=body.replace)
+    if not r.ok:
+        raise _link_failed(r)
+    return {"ok": True, "number": numbers.number_out((r.data or {}).get("number") or {},
+                                                     _voice_agents_by_owen(db))}
+
+
+@router.delete("/phone-numbers/{number_id}/assignment")
+def ai_unassign_phone_number(number_id: str, _: auth.Principal = ADMIN):
+    """Take the agent off this number: owen-main restores the flow it had before."""
+    number_id = _number_id(number_id)
+    if not crmlink.configured():
+        raise HTTPException(503, numbers.NOT_LINKED)
+    r = crmlink.unassign_number(number_id)
+    if not r.ok:
+        raise _link_failed(r)
+    return {"ok": True}
+
+
+@router.get("/agent-spend")
+def ai_get_agent_spend(_: auth.Principal = ADMIN):
+    """Today's voice-agent spend against the daily cap (counted by owen-main with Retell's
+    real cost). Never an error for an unset or unreachable link."""
+    if not crmlink.configured():
+        return {"configured": False, "detail": numbers.NOT_LINKED, **numbers.spend_out(None)}
+    r = crmlink.agent_spend()
+    if not r.ok:
+        return {"configured": True, "detail": r.reason, **numbers.spend_out(None)}
+    return {"configured": True, "detail": None, **numbers.spend_out(r.data)}
+
+
+class SpendIn(BaseModel):
+    daily_cap_usd: float = Field(ge=0, le=10000)
+    alert_pct: int = Field(ge=1, le=100)
+
+
+@router.put("/agent-spend")
+def ai_set_agent_spend(body: SpendIn, _: auth.Principal = ADMIN):
+    if not crmlink.configured():
+        raise HTTPException(503, numbers.NOT_LINKED)
+    r = crmlink.set_agent_spend(round(body.daily_cap_usd, 2), body.alert_pct)
+    if not r.ok:
+        raise _link_failed(r)
+    return {"configured": True, "detail": None, **numbers.spend_out(r.data)}

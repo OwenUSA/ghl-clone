@@ -590,3 +590,80 @@ def agent_versions() -> LinkResult:
                           _human(_detail_text(payload, resp.status_code)))
     return LinkResult(True, resp.status_code, "",
                       payload if isinstance(payload, dict) else None)
+
+
+# --- phone numbers and the agents' spend (2026-10-06, docs/RETELL-PLAN.md C5 / C6) ---------
+#
+# Which number goes to which voice agent is decided in the CRM (decision 6) and BUILT by
+# owen-main: it keeps the flow, writes a CRM-managed one from a template and remembers the
+# flow it replaced. The CRM only asks. The spend cap (decision 11) is owen-main's to enforce —
+# it is what knows Retell's real `call_cost.combined_cost` — and the CRM's to set. Only
+# `app/ai/api.py`'s ADMIN routes call these.
+
+NUMBERS_PATH = "/api/crm-link/numbers"
+AGENT_SPEND_PATH = "/api/crm-link/agent-spend"
+
+
+def _send(method: str, path: str, body: dict | None = None) -> LinkResult:
+    """GET / PUT / DELETE on the link, with `_post`'s conventions: never raises, a refusal is
+    a sentence, a transport failure is status 0. `httpx.<method>` so a test mocks it at the
+    same boundary as every other call here."""
+    cfg = current()
+    if not cfg.configured:
+        return LinkResult(False, 0, "the phone link is not configured")
+    url = cfg.base_url + path
+    headers = {"X-OWEN-Key": cfg.api_key, "Accept": "application/json"}
+    try:
+        fn = getattr(httpx, method.lower())
+        if body is None:
+            resp = fn(url, timeout=cfg.timeout_seconds, headers=headers)
+        else:
+            resp = fn(url, json=body, timeout=cfg.timeout_seconds, headers=headers)
+    except Exception as exc:  # noqa: BLE001 - any transport failure is one outcome
+        log.warning("crm-link: %s %s failed: %r", method, url, exc)
+        return LinkResult(False, 0, "could not reach the phone system")
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {}
+    if resp.status_code >= 400:
+        raw = _detail_text(payload, resp.status_code)
+        log.warning("crm-link: %s %s refused (%d): %s", method, path, resp.status_code, raw)
+        return LinkResult(False, resp.status_code, _human(raw),
+                          payload if isinstance(payload, dict) else None)
+    return LinkResult(True, resp.status_code, "",
+                      payload if isinstance(payload, dict) else None)
+
+
+def phone_numbers() -> LinkResult:
+    """`GET /api/crm-link/numbers`: `data["numbers"]`, each {id, e164, label, assignable,
+    reason, assignment {agent_name, mode, hours} | null}."""
+    return _send("GET", NUMBERS_PATH)
+
+
+def assign_number(number_id: str, agent_name: str, mode: str, hours: dict | None = None,
+                  replace: bool = False) -> LinkResult:
+    """`PUT /api/crm-link/numbers/{id}/assignment`. owen-main answers 409 when the number's
+    flow was built by hand and `replace` is not set — it never overwrites one silently."""
+    body: dict = {"agent_name": agent_name, "mode": mode}
+    if hours is not None:
+        body["hours"] = hours
+    if replace:
+        body["replace"] = True
+    return _send("PUT", "%s/%s/assignment" % (NUMBERS_PATH, number_id), body)
+
+
+def unassign_number(number_id: str) -> LinkResult:
+    """`DELETE /api/crm-link/numbers/{id}/assignment`: owen-main restores the previous flow."""
+    return _send("DELETE", "%s/%s/assignment" % (NUMBERS_PATH, number_id))
+
+
+def agent_spend() -> LinkResult:
+    """`GET /api/crm-link/agent-spend`: {daily_cap_usd, alert_pct, today_usd}."""
+    return _send("GET", AGENT_SPEND_PATH)
+
+
+def set_agent_spend(daily_cap_usd: float, alert_pct: int) -> LinkResult:
+    """`PUT /api/crm-link/agent-spend` {daily_cap_usd, alert_pct}."""
+    return _send("PUT", AGENT_SPEND_PATH, {"daily_cap_usd": daily_cap_usd,
+                                           "alert_pct": alert_pct})

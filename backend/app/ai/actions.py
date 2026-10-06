@@ -19,7 +19,8 @@ Agents act with DISPATCHER rules and are never narrowed by "Only assigned data".
 as a system principal with no user id, so a pipeline restricted to named users is hidden
 from every agent. What they write carries `ai_agent_id` and reads "AI: <agent name>".
 
-Voice-only actions (transfer_call, end_call, capture_lead) are offered to Voice agents only,
+Voice-only actions (transfer_call, end_call, capture_lead, request_change) are offered to Voice
+agents only (request_change to a Retell agent only),
 and are carried out by owen-main during the call — never here (`voice.py` maps them to
 owen-main's tools). A Voice agent may have nothing else (`voice.clean` says why).
 Agents never create contacts or opportunities: there is no such action, and a tool
@@ -924,6 +925,16 @@ CATALOGUE: dict[str, Action] = {a.name: a for a in (
               "Record the caller's name, roofing need and property address. The CRM decides "
               "whether that is a qualified lead; the agent never creates one.",
               _obj({}), VOICE, ("voice",)),
+    # Retell agents only (2026-10-06, `voice.RETELL_ONLY`): the caller asks to reschedule,
+    # cancel or change something and the agent passes it on. It changes nothing itself — the
+    # CRM files an urgent task on the card (or a Dispatch item): app/agent_requests.py.
+    VoiceOnly("request_change", "Request a change",
+              "Pass the caller's request to reschedule, cancel or change something to the "
+              "office: an urgent task on their card, or a Dispatch item. The agent never "
+              "changes a booking itself. Retell agents only.",
+              _obj({"kind": {"type": "string", "enum": ["reschedule", "cancel", "other"]},
+                    "request": _str("what the caller asked for", 1000)},
+                   ("kind", "request")), VOICE, ("voice",)),
 )}
 
 

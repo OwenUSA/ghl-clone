@@ -267,7 +267,7 @@ _ADMIN_PREFIXES = ("/api/users", "/api/jobs")
 EVENTS_WRITE_PATHS = ("/api/events", "/api/events/delivery",
                       "/api/ahs-jobs", "/api/ahs-jobs/cancellations",
                       "/api/ahs-jobs/authorizations",
-                      "/api/agent-context")
+                      "/api/agent-context", "/api/agent-requests")
 
 
 def _scope_allows(scopes: frozenset[str], method: str, path: str) -> bool:
@@ -288,6 +288,10 @@ def _scope_allows(scopes: frozenset[str], method: str, path: str) -> bool:
     # `/api/agent-context` (2026-09-24) is the same machine asking who a caller is as a
     # voice agent answers. A POST because the phone number is in the body, not the URL
     # (and so not in an access log); it writes nothing. See app/agent_context.py.
+    #
+    # `/api/agent-requests` (2026-10-06) is the same machine passing on a caller's change
+    # request from a voice agent: an urgent task or a Dispatch item, nothing queued, nothing
+    # to Zuper. See app/agent_requests.py.
     if ("events:write" in scopes and method == "POST"
             and path in EVENTS_WRITE_PATHS):
         return True

@@ -532,7 +532,11 @@ AUDITED = {
                                 "hidden_boards on the Zuper job -> not found; the bell "
                                 "honours each reader's boards",
     "agent_context": "agent_context.brief: hidden_pipeline_ids(token owner) on card, "
-                     "visit's deal and visit's calendar",
+                     "visit's deal and visit's calendar; with an agent, Zuper jobs through "
+                     "alerts.hidden_boards(token owner)",
+    "ingest_agent_request": "agent_requests._card: visible_opportunities(hidden_pipeline_ids "
+                            "of the token owner) -> a hidden card is not filed on; the Zuper "
+                            "job via alerts.hidden_boards; the bell honours each reader's boards",
     "delete_opportunity": "ADMIN; pipeline_access.get_opportunity",
     "bulk_move_stage": "_bulk_load visible_opportunities + stage can_see",
     "bulk_assign_owner": "_bulk_load visible_opportunities",

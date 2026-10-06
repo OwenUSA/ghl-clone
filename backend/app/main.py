@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, object_session, selectinload
 
 from . import (
     agent_context,
+    agent_requests,
     ahs_authorizations,
     ahs_jobs,
     assigned_access,
@@ -123,6 +124,9 @@ app.include_router(live_calls.router)
 # agent answers — name, open card, next visit, last contact; never money or notes. The
 # feed's machine token, like /api/events. See app/agent_context.py.
 app.include_router(agent_context.router)
+# A caller's change request from a voice agent (2026-10-06, Retell C3): an urgent task on
+# the card, else a Dispatch item and the bell. Same feed token. See app/agent_requests.py.
+app.include_router(agent_requests.router)
 # The opportunity modal's tasks, notes and custom-field tabs (2026-09-13). One
 # router, under the same app-level gate — see app/opportunity_workspace.py.
 app.include_router(opportunity_workspace.router)

@@ -1232,6 +1232,35 @@ class AiVoicePush(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now())
 
 
+class AiAgentRequest(Base):
+    """A change a caller asked a VOICE agent for during a call (2026-10-06, Retell C3):
+    reschedule, cancel or something else. The agent changes nothing itself; the CRM filed it
+    as an urgent task on the card (`task_id`) or a Dispatch item (`dispatch_item_id`).
+
+    The idempotency record AND the audit of what agents passed on: `key` is a hash of
+    (owen_call_id, kind, request), so a retried request is one task. Written only by
+    `app/agent_requests.py`; never updated. An unknown caller's request writes no row."""
+    __tablename__ = "ai_agent_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    owen_call_id: Mapped[str] = mapped_column(String(120), index=True)
+    agent_id: Mapped[int | None] = mapped_column(Integer)
+    agent_name: Mapped[str] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(20))
+    request: Mapped[str] = mapped_column(Text)
+    caller_number: Mapped[str] = mapped_column(String(40))
+    # crm | zuper — how the caller was recognised (app/agent_context.identify)
+    source: Mapped[str] = mapped_column(String(10))
+    contact_id: Mapped[int | None] = mapped_column(Integer)
+    opportunity_id: Mapped[int | None] = mapped_column(Integer)
+    task_id: Mapped[int | None] = mapped_column(Integer)
+    dispatch_item_id: Mapped[int | None] = mapped_column(Integer)
+    # task | dispatch
+    filed_as: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
 class AiKnowledgeBase(Base):
     __tablename__ = "ai_knowledge_bases"
     id: Mapped[int] = mapped_column(primary_key=True)

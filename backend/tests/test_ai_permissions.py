@@ -31,6 +31,11 @@ ADMIN_ONLY = {
     # unlike the mode, where a dispatcher may switch off, because turning answering off sends
     # every caller to voicemail. It is a phone decision, not the CRM-writes emergency stop.
     ("POST", "/api/ai/agents/{agent_id}/answering"),
+    # Phone numbers and the agents' spend cap (2026-10-06, Retell C5 / C6): ADMIN only, reads
+    # included — decision 18. Relayed to owen-main; nothing asked while the link is unset.
+    ("GET", "/api/ai/phone-numbers"), ("PUT", "/api/ai/phone-numbers/{number_id}/assignment"),
+    ("DELETE", "/api/ai/phone-numbers/{number_id}/assignment"),
+    ("GET", "/api/ai/agent-spend"), ("PUT", "/api/ai/agent-spend"),
     ("DELETE", "/api/ai/templates/{template_id}"), ("POST", "/api/ai/knowledge-bases"),
     ("PATCH", "/api/ai/knowledge-bases/{kb_id}"), ("DELETE", "/api/ai/knowledge-bases/{kb_id}"),
     ("POST", "/api/ai/knowledge-bases/{kb_id}/items"),

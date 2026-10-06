@@ -121,6 +121,8 @@ def run(db, *, wanted: str | None = None, commit: bool = False) -> tuple[int, di
         "knowledge_chars": len(c["knowledge_text"]),
         "model": c["model"] or None,
         "voice": c["voice"] or None,
+        "engine": c["engine"] or None,
+        "retell_agent_id": c["retell_agent_id"] or None,
         "tools": [voice.OWEN_TOOLS[a] for a in c["actions"]],
         "transfer_targets": len(c["transfer_targets"]),
         "custom_tools": len(c["custom_tools"]),
