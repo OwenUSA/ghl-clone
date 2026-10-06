@@ -594,6 +594,30 @@ never "Answering" unless owen-main said THIS version is active. The import creat
 agent **answering, mode Off**. Making Off block activation was tried and rejected — the import
 would have read "off" about the live receptionist. See DECISIONS.md.
 
+## Retell voice agents (2026-10-06)
+
+Plan and the cross-repo contract (C1–C7): `docs/RETELL-PLAN.md`, the same file in owen-main.
+Retell's dashboard owns how an agent talks; the CRM owns the business. **The CRM never talks to
+Retell** — owen-main holds the key; `tests/retell_guard.py` refuses any retellai.com lookup.
+
+- **Config** (`app/ai/voice.py`): `engine` ("" / owen_voice / retell), `retell_agent_id` (required
+  to publish a Retell agent; persona, voice, model and knowledge are then neither required nor
+  sent), `request_change` (Retell only), and `context_sources` — six switches, all OFF, **never
+  sent to owen-main**. Agent edits are ADMIN-only, so are the switches.
+- **The brief** (`app/agent_context.py`): with `agent_name` naming a voice agent, the answer is
+  built from its PUBLISHED switches, and a Zuper-only customer can be known (`source: "zuper"`,
+  via `dispatch_jobs.phones`). Without it: the 2026-09-24 answer, byte for byte. The matching rule
+  (`identify`) is in the module docstring and DECISIONS.md — two people on a line is unknown.
+- **Change requests** — `POST /api/agent-requests` (`app/agent_requests.py`, `events:write`): an
+  urgent task on the caller's card ("AI: <agent>"), else a Dispatch item `ai_change_request` + the
+  bell. Idempotent (`ai_agent_requests`), nothing queued, `zuper_quiet`.
+- **Phone numbers / spend cap** — AI Agents → Phone numbers (ADMIN): `/api/ai/phone-numbers`,
+  `/api/ai/agent-spend`, relayed through `crmlink`; nothing asked while the link is unset; an
+  after-hours assignment needs hours (none invented); a hand-built flow is replaced only after a
+  second confirmation (owen-main's 409).
+- The thread shows Retell's summary, cost and "Retell v<n>" (`ai_call`); a live AI call is also a
+  desktop notification once (`lib/desktopAlerts.ts` `showCall`). See DECISIONS.md, 2026-10-06.
+
 ## A live AI call: Listen / Take over (2026-09-23)
 
 While an AI agent is on a call, `components/LiveAgentCall.tsx` (mounted once in `App.tsx`, left of

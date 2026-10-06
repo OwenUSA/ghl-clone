@@ -6689,3 +6689,97 @@ It writes through `client.proposal_lines()`: one `PUT /jobs` whose job carries o
 `products`, `job_total`. Off unless `ZUPER_PROPOSAL_LINES=true`; an exception to the read-only
 rule granted by the owner ("a sounds good", Q63).
 
+
+
+## AMENDMENT (2026-10-06): Retell voice agents — amends 2026-09-22 (voice AI agents) and 2026-09-24 (the caller brief)
+
+The owner's decisions, recorded in full with the cross-repo contract (C1–C7) in
+`docs/RETELL-PLAN.md`, which lives in both repositories. In short:
+
+1. **Split of ownership.** Retell's dashboard owns HOW an agent talks (prompt, flow, voice,
+   knowledge base). The CRM owns the business: number → agent, Answering on/off, which customer
+   facts the agent receives, the call log on the thread. The CRM stores the Retell agent id. The
+   customer is known before the agent's first word.
+2. **Call path:** BulkVS → Asterisk → owen-main's flow → Retell by "dial to SIP URI"
+   (`register-phone-call`, then `sip:{call_id}@sip.retellai.com`). Flows, recording, voicemail
+   fallback, Listen / Take over stay in owen-main.
+3. **Retell is one engine** (`engine: "retell"`) beside owen-voice, chosen per agent; rollback is a
+   setting; owen-voice and its tests stay.
+4. **Tiered disclosure:** first name / "you have a job with us" at once; dates, Zuper status,
+   technician and history only after the caller confirms the street address; NEVER prices,
+   invoices, money, internal notes.
+5. **"Registered"** = a CRM contact, or a customer only Zuper knows (`dispatch_jobs.phones`). Last
+   ten digits, exactly one customer; anything else is unknown.
+6. **Numbers are assigned to agents in the CRM** (AI Agents → Phone numbers, ADMIN) with a mode:
+   `ai_first`, `staff_then_ai`, `after_hours_ai`; owen-main builds and keeps the flow.
+7. **Context sources are switched per agent**, every one OFF by default.
+8. **History = summaries that already exist** (Quo, Zuper Connect, earlier AI calls) + last 3 texts.
+   No new AI spend.
+9. **The address IS sent** (owner's choice); the agent compares it and never reads it back.
+   Accepted consequence: addresses sit in Retell's call logs.
+10. **General FAQs live in Retell knowledge bases.**
+11. **Spend cap is a setting:** pilot $25/day, alert at 80%, counted with Retell's
+    `call_cost.combined_cost`.
+12. **Pilot** on a spare BulkVS DID first; real traffic decided after.
+13. **Tools:** transfer, end call, capture lead, and `request_change` (→ an urgent CRM task).
+14. **Versions:** the CRM stores the Retell agent id; calls use Retell's latest published version;
+    every call records the version that answered.
+15. **After a call** the CRM gets transcript, Retell's summary/outcome, owen-main's recording, the
+    captured lead, the cost. Retell's own recording storage is off — owen-main records the bridge.
+16. **One multilingual agent per number.**
+17. **Retell failure → the flow's fallback (voicemail)** + an alert.
+18. **Numbers, context switches and the cap are ADMIN only** in the CRM; calls follow thread rules.
+19. **A live AI call shows in the top bar AND as a desktop notification**; Listen / Take over work.
+20. **Company-owned Retell account; the key only in owen-main's env**; every webhook and function
+    call signature-checked. The CRM never talks to Retell.
+
+### What this amends
+
+* 2026-09-22: a voice agent may now run on Retell; for a Retell agent the persona, greeting,
+  voice, model and in-call knowledge are not required or sent, and the 6,000-character knowledge
+  rule does not apply. `send_text` stays refused for every engine. Numbers are now assigned in
+  the CRM (decision 6) where 2026-09-22 left routing wholly in owen-main's flows.
+* 2026-09-24: `POST /api/agent-context` takes an optional `agent_name`. Without it (or with a name
+  no voice agent has) the answer is unchanged, byte for byte, and Zuper is not consulted. With a
+  known agent the answer is built from that agent's PUBLISHED switches, and a Zuper-only customer
+  can be known (`source: "zuper"`). The 2026-09-24 "never the address" now reads "only by the
+  agent's own `address` switch" (decision 9).
+
+### The matching rule, exactly (decision 5, `agent_context.identify`)
+
+Two CRM contacts on the line: unknown, whatever Zuper says. One contact: known — unless a Zuper
+customer on the same line is somebody else. A Zuper customer is the same person when a
+`zuper_mappings` row links them (customer ↔ contact, or one of its jobs ↔ one of the contact's
+cards) or Zuper's customer name equals the contact's full name (case and spacing ignored);
+otherwise two people → unknown. No contact: exactly one Zuper customer (by uid, else name), with
+at least one job on a board the token's owner may see → `source: "zuper"`; else unknown.
+
+### Built in the CRM (phase 2 + the CRM part of phase 0)
+
+* C1 — `voice.py`: `engine` ("", owen_voice, retell), `retell_agent_id` (≤ 100, required to
+  publish a Retell agent), `context_sources` (six booleans, all false, NEVER sent to owen-main),
+  `request_change` (Retell only). Changing any of them is an agent edit, which is ADMIN-only.
+* C2 — `agent_context.py`: the switches, recent calls (≤ 3, 90 days, ≤ 400 chars), texts (≤ 3,
+  ≤ 200, sent/received only), Zuper job, address; hidden pipelines and Zuper boards stay hidden.
+* C3 — `POST /api/agent-requests` (`app/agent_requests.py`, `events:write`): an urgent task on the
+  caller's most recent open visible card attributed to the agent, else a Dispatch item
+  (`ai_change_request`, in `rules.FED_KINDS`) and the bell; unknown → `created: false`. Idempotent
+  on (owen_call_id, kind, request) through the new `ai_agent_requests` table (one migration, one
+  new table). Nothing queued (jobs counted); the session is `zuper_quiet`, so the listener queues
+  no push — under the one-way mirror (production) a task never reaches Zuper; with a two-way sync
+  armed the sweep would carry a task on a SENT card like any task a person adds.
+* C4 — the `ai_call` merge already took new keys; the thread shows Retell's summary, cost and
+  "Retell v<n>".
+* C5/C6 — `crmlink` numbers / assignment / agent-spend; ADMIN routes under `/api/ai/phone-numbers`
+  and `/api/ai/agent-spend`; the Phone numbers tab (owen-main's 409 "hand-built flow" is confirmed
+  and resent with `replace`; after-hours needs hours — none invented). Unset link: a sentence, no
+  request.
+* C7 — the live-call relay passes `engine` through; the banner also raises a desktop notification
+  once per call, with the bell's opt-in.
+* `tests/retell_guard.py`: no test may look up a retellai.com host.
+
+### Not verified
+
+Nothing here has met a real owen-main or Retell: every request is mocked at `crmlink.httpx`. The
+numbers / spend shapes are the contract's, not observed. Phase 0's Asterisk endpoint and Retell
+IP allow-list are operator steps in owen-main, not applied.
