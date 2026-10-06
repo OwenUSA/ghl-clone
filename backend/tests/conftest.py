@@ -47,6 +47,14 @@ from tests import ai_guard  # noqa: E402
 
 ai_guard.install()
 
+# ---- no test may reach Retell (Retell voice agents, 2026-10-06) --------------------------
+# owen-main holds the only Retell key; the CRM never calls it. Every lookup of a retellai.com
+# host is refused and a test that attempted one FAILS. See tests/retell_guard.py.
+from tests import retell_guard  # noqa: E402
+
+retell_guard.strip_environment()
+retell_guard.install()
+
 # The AI Agents fixtures (mocked providers, a seeded world), shared by tests/test_ai_*.py.
 from tests.ai_support import script, secrets_key, world  # noqa: E402, F401
 
@@ -91,6 +99,16 @@ def _no_provider_network():
     ai_guard.ATTEMPTS.clear()
     assert not attempted, ("this test tried to reach a real AI provider (%s) — mock it at "
                            "the HTTP boundary (tests/ai_support.py)" % ", ".join(attempted))
+
+
+@pytest.fixture(autouse=True)
+def _no_retell_network():
+    retell_guard.ATTEMPTS.clear()
+    yield
+    attempted = list(retell_guard.ATTEMPTS)
+    retell_guard.ATTEMPTS.clear()
+    assert not attempted, ("this test tried to reach Retell (%s) — the CRM never talks to "
+                           "Retell; owen-main does" % ", ".join(attempted))
 
 
 # ---- rules 3 and 4 are OFF (owner's decision, 2026-09-15) --------------------------------
