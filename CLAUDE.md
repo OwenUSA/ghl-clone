@@ -617,6 +617,11 @@ Retell** — owen-main holds the key; `tests/retell_guard.py` refuses any retell
   second confirmation (owen-main's 409).
 - The thread shows Retell's summary, cost and "Retell v<n>" (`ai_call`); a live AI call is also a
   desktop notification once (`lib/desktopAlerts.ts` `showCall`). See DECISIONS.md, 2026-10-06.
+- **The office is texted after every AI call** (`app/ai_call_notify.py`, job `ai_call_notify`) —
+  the ONE exception to "no automatic texts", because it is INTERNAL: recipients ONLY from
+  `AI_CALL_NOTIFY_NUMBERS` (empty = off), a number any contact holds is refused, never the
+  caller, one text per call, through `get_transport()`. The link is `CRM_PUBLIC_URL` + the CRM's
+  own signed-in recording relay (no default). See DECISIONS.md, 2026-10-06 (AI call notifications).
 
 ## A live AI call: Listen / Take over (2026-09-23)
 

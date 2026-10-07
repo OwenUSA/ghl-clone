@@ -573,6 +573,15 @@ def _h_ai_voice_push(db: Session, payload: dict) -> None:
     push.handle_job(db, payload)
 
 
+def _h_ai_call_notify(db: Session, payload: dict) -> None:
+    """Text the OFFICE about a call an AI agent answered (2026-10-06). Internal only — the
+    one exception to "no automatic texts": recipients come solely from
+    `AI_CALL_NOTIFY_NUMBERS`, and a number any contact holds is refused. Never raises and
+    is never retried. See app/ai_call_notify.py."""
+    from . import ai_call_notify
+    ai_call_notify.handle_job(db, payload)
+
+
 HANDLERS = {
     "missed_call_textback": _h_missed_call,
     "new_lead_notify": _h_new_lead,
@@ -581,6 +590,7 @@ HANDLERS = {
     "ai_agent_run": _h_ai_agent_run,
     "fetch_message_media": _h_fetch_message_media,
     "ai_voice_push": _h_ai_voice_push,
+    "ai_call_notify": _h_ai_call_notify,
 }
 
 
@@ -616,4 +626,19 @@ def rules() -> list[dict]:
          "Off. No automatic texts — only texts a person sends go out "
          "(owner's decision, 2026-09-15). AI agents' “stage entered” triggers are "
          "separate and follow each agent's own Off / Suggest / Auto-pilot setting."},
+        _ai_call_notify_rule(),
     ]
+
+
+def _ai_call_notify_rule() -> dict:
+    from . import ai_call_notify
+    on = bool(ai_call_notify.recipients())
+    return {
+        "key": "ai_call_notify", "name": "AI call ended → text the office",
+        "trigger": "A call an AI voice agent answered",
+        "texts_customer": False, "enabled": on,
+        "reason": ("On. Internal only: texts the office line(s) in %s about the call, "
+                   "never a customer — a number any contact holds is refused (2026-10-06)."
+                   % ai_call_notify.NUMBERS_ENV) if on else
+                  ("Off. Set %s to the office line(s) to turn it on. Internal only: it "
+                   "never texts a customer (2026-10-06)." % ai_call_notify.NUMBERS_ENV)}

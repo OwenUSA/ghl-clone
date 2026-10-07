@@ -21,6 +21,7 @@ from . import (
     agent_requests,
     ahs_authorizations,
     ahs_jobs,
+    ai_call_notify,
     assigned_access,
     attachments,
     auth,
@@ -1895,6 +1896,8 @@ def _ingest_to_number(db: Session, body: EventIngest, key: str) -> dict:
     if body.direction == "INBOUND" and automations.is_fresh(ev.occurred_at):
         thread.unread_count += 1
     pictures = _plan_pictures(db, ev, body)
+    # The office's text about an AI call (2026-10-06): ONE queued job, ~90 s later.
+    ai_call_notify.maybe_enqueue(db, ev, body.from_number)
     db.commit()
     return {"id": ev.id, "conversation_id": None, "number_thread_id": thread.id,
             "contact_id": None, "attachments_expected": pictures,
@@ -1928,6 +1931,10 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
         seen = _duplicate_event(db, key)
         if seen is not None:
             filled = _enrich(seen, body)
+            if "ai_call" in filled:
+                # The call became an AI call only on this report. Queued once per call —
+                # the job's dedupe key makes every later merge a no-op (2026-10-06).
+                ai_call_notify.maybe_enqueue(db, seen, body.from_number)
             if filled:
                 db.commit()
             if isinstance(seen, NumberThreadEvent):
@@ -2029,6 +2036,7 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
     if fresh:
         ai_triggers.inbound_event(db, contact, conv, ev)
     pictures = _plan_pictures(db, ev, body)
+    ai_call_notify.maybe_enqueue(db, ev, body.from_number)
     db.commit()
     return {"id": ev.id, "conversation_id": conv.id, "contact_id": contact.id,
             "attachments_expected": pictures, "automation": outcome}

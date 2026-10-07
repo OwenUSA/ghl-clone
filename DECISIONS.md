@@ -6783,3 +6783,45 @@ at least one job on a board the token's owner may see → `source: "zuper"`; els
 Nothing here has met a real owen-main or Retell: every request is mocked at `crmlink.httpx`. The
 numbers / spend shapes are the contract's, not observed. Phase 0's Asterisk endpoint and Retell
 IP allow-list are operator steps in owen-main, not applied.
+
+## AMENDMENT (2026-10-06): the office is texted after every AI voice-agent call — amends 2026-09-15 ("no automatic texts")
+
+The owner asked that every call an AI voice agent answers ends with a text to the company's
+staff line, (954) 914-7244 — the office's Quo line, not a customer. This is the ONE exception
+to "no automatic texts at all — only texts a person sends", and it is an exception only
+because it is INTERNAL. It never texts a customer.
+
+* **Recipients come only from `AI_CALL_NOTIFY_NUMBERS`** (comma-separated E.164). Empty or
+  unset = off: nothing is queued, and a job already queued sends nothing. Nothing in the code
+  names the office number.
+* **A recipient any contact holds is refused** (last ten digits, `number_threads.
+  contact_holding`), with a logged sentence. So are the caller's own number and our own
+  sending line. Only CALL events with an `ai_call`, and only fresh ones (`automations.
+  is_fresh`) — a backfilled call is history, not news.
+* **When:** the first ingest that makes an event an AI call queues ONE `ai_call_notify` job
+  (`app.queue`, ~90 s later, dedupe key per call — the event's own `dedupe_key`, which survives
+  adoption). Later reports merge into the row and queue nothing. The job reads the event as it
+  is then (summary, recording) and sends once: the sent row carries a per-call, per-recipient
+  dedupe key checked before sending, and the job is never retried (`max_attempts = 1`).
+* **How:** `automations.send_outbound_to_number` on the recipient's number thread — the same
+  `get_transport()` as a staff text (LoggingTransport while the link is unset), recorded on
+  that thread as the log. At most 1,200 characters (the summary is cut first; the lead's fields
+  are never cut — each value is capped at 200, unknown extra keys dropped before a known one).
+  No pictures.
+* **New lead or existing customer:** the ingest has created no contact since 2026-09-13, so a
+  NEW LEAD is a call on a number-only thread — or one moved onto a contact saved after the call
+  began (the job recorded the number thread, or the contact's `created_at` is not before the
+  call). A new lead's text: "New lead from AI call", every captured key present with a human
+  label (known keys in a fixed order, unknown keys as "key: value"), Retell's summary, the
+  link. Anything else is an EXISTING CUSTOMER: "AI call from <name> (existing customer)", two
+  sentences of summary, each `ai_call.requests` entry as "Asked: <kind> — <request>", the link.
+* **The link** is the CRM's own authenticated relay (`/api/owen/recordings/<id>`, sign-in
+  required), made absolute on `CRM_PUBLIC_URL` — a new setting with NO default (unset = "(recording
+  in the CRM)" and a log line). Any other `recording_url` is never texted. No recording yet: an
+  existing customer gets `<CRM_PUBLIC_URL>/contacts?contact=<id>`; a new lead "(recording not
+  available yet)" (a number thread has no deep link).
+* Settings → Automations lists it ("AI call ended → text the office", internal only).
+
+**Not verified:** the captured keys a Retell agent sends are not fixed by any contract in this
+repo — the labels cover the owner's list under common names, and anything else still appears
+generically. Nothing here has met a real call or owen-main; the transport is mocked in tests.
