@@ -108,7 +108,7 @@ LEAD_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Roof age", ("roof_age", "age_of_roof")),
     ("Previous repairs", ("previous_repairs", "prior_repairs")),
     ("Stories", ("stories", "floors", "number_of_stories")),
-    ("Owner or tenant", ("owner_or_tenant", "ownership", "owner_tenant", "is_owner")),
+    ("Owner or tenant", ("occupancy", "owner_or_tenant", "ownership", "owner_tenant", "is_owner")),
     ("Payment", ("payment_type", "payment", "payer")),
     ("AHS dispatch #", ("ahs_dispatch_number", "ahs_dispatch", "dispatch_number")),
     ("First time with AHS", ("first_time_ahs", "ahs_first_time")),
