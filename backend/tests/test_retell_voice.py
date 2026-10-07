@@ -353,6 +353,7 @@ class Owen:
     def __init__(self):
         self.calls = []
         self.conflict = True
+        self.refusal = None
 
     def _r(self, method, url, json=None):
         self.calls.append((method, url.replace(BASE, ""), json))
@@ -366,7 +367,11 @@ class Owen:
                  "reason": "not an Asterisk number", "assignment": None, "secret": "x"}]})
         if path.endswith("/assignment") and method == "PUT":
             if self.conflict and not (json or {}).get("replace"):
-                return FakeResponse(409, {"detail": "number n1 has a hand-built flow"})
+                return FakeResponse(409, {"detail": (
+                    "this number runs the hand-built flow 'Main IVR'; send \"replace\": true "
+                    "to replace it (removing the assignment later puts it back)")})
+            if self.refusal:
+                return FakeResponse(409, {"detail": self.refusal})
             return FakeResponse(200, {"ok": True, "number": {
                 "id": "n1", "e164": "+19546859990", "assignable": True,
                 "assignment": {"agent_name": json["agent_name"], "mode": json["mode"],
@@ -521,3 +526,21 @@ def test_a_dispatcher_cannot_touch_numbers_or_spend(world, link, monkeypatch):
                  json={"agent_id": 1, "mode": "ai_first"}).status_code == 403
     assert d.delete("/api/ai/phone-numbers/n1/assignment").status_code == 403
     assert link.calls == []
+
+
+def test_a_refusal_replace_cannot_fix_is_an_error_not_a_replace_question(world, link,
+                                                                       monkeypatch):
+    # owen-main's own words (integrations/crm/numbers.py): neither is answered by `replace`.
+    aid = _voice_agent(world)
+    _configure(monkeypatch)
+    link.conflict = False
+    admin = world.client("admin")
+    for refusal in (("the recording-consent notice is not configured (INBOUND_CONSENT_MEDIA); "
+                     "an agent's call is recorded, so no number can be given to an agent "
+                     "without it"),
+                    ("there is nobody to ring: no operators on this number's CRM line and "
+                     "none on CRM_LINK_SOFTPHONE_OPERATORS")):
+        link.refusal = refusal
+        r = admin.put("/api/ai/phone-numbers/n1/assignment",
+                      json={"agent_id": aid, "mode": "staff_then_ai", "replace": True})
+        assert r.status_code == 400 and r.json()["detail"] == refusal

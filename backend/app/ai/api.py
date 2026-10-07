@@ -1471,6 +1471,11 @@ def _number_id(number_id: str) -> str:
     return number_id
 
 
+# Copied from owen-main `integrations/crm/numbers.py` assign(): the one 409 that `replace`
+# answers. Both ends pin it in a test.
+HAND_BUILT_NEEDLE = "hand-built flow"
+
+
 def _link_failed(r) -> HTTPException:
     # 404 / 409 / 422 mean something on screen (gone, hand-built flow, refused); anything
     # else is owen-main unreachable or broken.
@@ -1535,6 +1540,12 @@ def ai_assign_phone_number(number_id: str, body: AssignmentIn, db: Session = Dep
         raise HTTPException(503, numbers.NOT_LINKED)
     r = crmlink.assign_number(number_id, owen, body.mode, hours, replace=body.replace)
     if not r.ok:
+        # owen-main answers 409 for three different things: a hand-built flow (which
+        # `replace` resolves) and two it cannot (no consent notice, nobody to ring). Only the
+        # first may become the page's "replace it?" question — resending `replace` for the
+        # others would ask the same question forever.
+        if r.status == 409 and HAND_BUILT_NEEDLE not in r.reason:
+            raise HTTPException(400, r.reason)
         raise _link_failed(r)
     return {"ok": True, "number": numbers.number_out((r.data or {}).get("number") or {},
                                                      _voice_agents_by_owen(db))}
