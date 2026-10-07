@@ -90,7 +90,12 @@ services:
     healthcheck:
       disable: true
     # No Traefik labels and NOT on traefik-public: the worker is never routed to.
-    networks: [ghl-net]
+    # It IS on owen-main's internal network, because its queued jobs talk to owen-main
+    # (`http://callmon_app:8888`): a voice agent's publish (`ai_voice_push`) and an inbound
+    # picture's fetch (`fetch_message_media`). Without it every such job failed with "could
+    # not reach the phone system" while the api, which reaches owen-main over traefik-public,
+    # looked healthy (found 2026-10-06, the first Retell publish).
+    networks: [ghl-net, callmon-net]
     depends_on:
       api: { condition: service_healthy }
     deploy:
@@ -143,4 +148,9 @@ networks:
     driver: bridge
   traefik-public:
     name: traefik-public
+    external: true
+  # owen-main's own network (its compose project "callmon"); the worker joins it only to
+  # reach callmon_app. Created by owen-main's stack, so it must be up first.
+  callmon-net:
+    name: callmon_callmon-net
     external: true
