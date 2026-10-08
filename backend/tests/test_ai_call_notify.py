@@ -244,7 +244,7 @@ def test_an_existing_customer_is_exactly_the_agreed_format_with_the_recording(of
     assert body == (
         "AI call from Maria Lopez (existing customer) (+1 941-555-0123)\n"
         "\n"
-        "Summary: Maria wants to move her inspection. She asked for Friday.\n"
+        "Summary: Maria wants to move her inspection. She asked for Friday. More detail.\n"
         "\n"
         "Asked: reschedule — move Thursday's visit to Friday\n"
         "\n"

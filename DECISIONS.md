@@ -6839,3 +6839,14 @@ because it is INTERNAL. It never texts a customer.
 **Not verified:** the captured keys a Retell agent sends are not fixed by any contract in this
 repo — the labels cover the owner's list under common names, and anything else still appears
 generically. Nothing here has met a real call or owen-main; the transport is mocked in tests.
+
+### A phone-matched caller is answered without an address check (2026-10-08)
+
+Owner, after the first test calls: when the caller's number matches exactly ONE customer (the
+unchanged C2 rule — last ten digits, one customer, else unknown), the voice agent greets them by
+first name and answers about their job straight away; it no longer asks them to confirm the
+street address first. Amends decision 4 of the 2026-10-06 Retell amendment. Still never: prices,
+invoices or money, other customers, or reading the full address aloud unless the caller asks
+which property. The risk accepted knowingly: anyone calling from that customer's phone (a
+relative, a spoofed number) hears the job status. The rule lives in owen-main
+(`integrations/retell/brief.py` DISCLOSURE_RULE) and the Retell prompt.

@@ -47,7 +47,7 @@ Blocks separated by a blank line, no emoji. The header names the CALLER's number
 `+1 XXX-XXX-XXXX`:
 
     AI call from <first last> (existing customer) (+1 941-555-0123)
-    Summary: <two sentences>
+    Summary: <the full summary, trimmed only by the length cap>
     Asked: <kind> — <request>          (one per change request; block left out when none)
     Recording: <link>
 
@@ -329,7 +329,7 @@ def _request_lines(ai_call: dict) -> list[str]:
 def existing_text(ai_call: dict, contact: Contact, caller: str | None, link: str) -> str:
     name = contact.name or format_phone(contact.phone) or "a customer"
     header = _header("AI call from %s (existing customer)" % name, caller)
-    summary = _sentences(str(ai_call.get("summary") or ""), 2)
+    summary = " ".join(str(ai_call.get("summary") or "").split())  # full; the cap trims it
     return _assemble([header], summary, ["\n".join(_request_lines(ai_call)), link])
 
 
