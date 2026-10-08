@@ -6825,3 +6825,124 @@ because it is INTERNAL. It never texts a customer.
 **Not verified:** the captured keys a Retell agent sends are not fixed by any contract in this
 repo — the labels cover the owner's list under common names, and anything else still appears
 generically. Nothing here has met a real call or owen-main; the transport is mocked in tests.
+
+## AMENDMENT (2026-10-08): the Dispatch assistant reads like the office — amends 2026-09-30 (Dispatch, phase 2) and 2026-10-01 (saved chats, spreadsheets)
+
+The owner asked for the CRM's Dispatch assistant to work the way a person had just worked in a
+Claude Code session: take the office's Excel, compare its visits for the week with Zuper, read
+every call and text to see whether each customer really confirmed, say who changed what in
+Zuper, and say where a technician is. That session needed things the assistant did not have.
+
+**New look-ups** (`app/dispatch/lookups.py`, all READ ONLY, all behind the reader's pipeline
+permissions — a hidden board's jobs, calls, notes and log lines are left out):
+
+* `day_schedule` — visits with a time for a day or range, per technician, with what is wrong
+  (closed job, a stage that is not a booked visit — "Reschedule Required" included, nobody
+  assigned, a Technician field that disagrees with the assignee). Whose visit = the ASSIGNED
+  person, as on the routes; the Technician field only when nobody is.
+* `compare_schedule` — an attached Excel's DATED rows (any sheet: a day column, "Booked for",
+  a day written once above its rows) against Zuper: day, time window (any dash, AM/PM inferred
+  when missing: 1-6 afternoon, 7-12 morning), technician, stage; plus the customer's last calls
+  and texts, and Zuper visits the file does not have. The existing `compare_file` (row status)
+  stays.
+* `search_comms` — Quo, the CRM line and Zuper Connect by ANY number (a son's, a mother's), job
+  number, name or words; transcripts are cut unless `full=true`.
+* `activity_log` — Zuper's account activity log; `job_notes` — a job's note text; `tech_day` —
+  a technician's day rebuilt from visits, stage moves, notes, their own Connect calls and their
+  field-app actions, with the last place there is evidence for. **Zuper reports no live location
+  (tracking is off)** and the tool says so every time.
+
+**Kept by the reader** (migration `b4e1d7a2c9f6`, two new tables, nothing else changed):
+`dispatch_notes` (each note's TEXT, HTML stripped; a note gone from Zuper is marked deleted,
+never removed) and `dispatch_activity` (GET `/activities/recent`, newest first until a line
+already kept, at most 6 pages a pass; append-only). Verified live 2026-10-08: each line's
+`metadata.request_source.type` says where it came from — `WEB_APP` (the office), `zuper_v3_ios`
+/ `zuper_v3_android` (the field app), `API_KEY` (our scripts); a JOB line's
+`activity_action_uid` is the job's uid. **Our scripts' lines appear in Zuper under the API key
+owner's name (Owen)**; they are stored `automatic` and the assistant must never say Owen did
+them. The day this was built, the log showed the office deleting job #712 and a customer — the
+reason the assistant names every deletion (the owner's rule is never to delete).
+
+**The answer:** a new chat prompt — a visit is CONFIRMED only when a call or text shows the
+customer agreeing (the Excel saying "confirmed" is not proof; a transcript with only our side is
+"not on record"); the newest evidence wins; disagreements are named with their times; the
+direct answer first, then a table. 30 look-ups an answer (was 8), 8,000 output tokens, each
+look-up's result cut at 40,000 characters and the answer forced once 300,000 have been read.
+
+**DeepSeek** (the owner's choice of model, 2026-10-08): a connection type of its own
+(`deepseek`, `https://api.deepseek.com`, the `openai` SDK — DeepSeek's API is OpenAI-compatible).
+A thinking model's `reasoning_content` is echoed inside a tool loop and, if a model refuses it,
+the request is retried once without it (DeepSeek's models have differed on this). Added to the
+test network guard. **Decided knowingly: the assistant's questions carry real customers' names,
+phones, addresses and call transcripts, and with DeepSeek they go to DeepSeek's servers.** The
+model id is free text (default `deepseek-chat`); "Load models" lists what the key can use.
+
+**Not verified:** no request has reached DeepSeek (no key here); the reasoning echo is from its
+documentation, not a live call. Nothing has asked the new tools a real question in production.
+
+## AMENDMENT (2026-10-08): remaking the schedule — amends 2026-10-01 (the week planner)
+
+The owner: "take all the unscheduled new jobs that need inspection, the jobs AHS approved that
+need to be scheduled, and jobs that need to be rescheduled or whose appointment got cancelled,
+and help me remake the schedule Monday to Saturday with two technicians, Owen and Antonio, both
+doing inspections and repairs — fit as many jobs as possible, grouped so they drive the least —
+and show it in an Excel, a table and a week-to-week calendar." The same assistant does it (one
+place, the same data as the checks); a second agent would have duplicated every tool.
+
+* **What goes in** (`dispatch/scheduling.py`): a "book a visit" stage (`config.BOOK`) with no
+  visit from today on; and — new — a visit stage whose visit has NO time or whose date has
+  PASSED (the visit fell through and Zuper was not moved on: #721 on 2026-10-07). AHS -
+  Inspection and AHS - Repair & Review only, unless "all boards" (the owner, 2026-10-06: only
+  those two for now). A customer nobody has reached (first-contact stages, "Not Answering") is
+  placed as **CALL FIRST**, or left out on ask. Hidden boards never.
+* **The customers' limits** come from the calls: the assistant reads each proposed visit's last
+  calls and texts (returned with the plan) and plans again with `limits` (not before a day, only
+  some weekdays, after / before a time, one technician), each with its evidence. A visit never
+  breaks one; a job no day can satisfy is "not placed" with the limit named.
+* **The search** (`dispatch/planner.py`): built from 8 starting orders (longest waiting, most
+  limited first, two map sweeps, four seeded shuffles), each improved by local search — move a
+  visit, swap two visits across days / technicians, every order of each day's stops — and the
+  best kept: most jobs placed, then least driving ("most jobs", default) or "oldest first". The
+  one-pass plan is reported beside it (`baseline`). Same input, same plan.
+* **Day cost lowered 12 -> 5 "minutes"**: at 12 it outweighed real driving (it split two
+  Homestead repairs across days to save a day). A day further out is now only a tie-breaker.
+* **Driving stays an estimate** (straight line x 1.3 at 50 km/h) — the owner's choice on
+  2026-10-08 over a self-hosted OSRM or Google Maps; `planner.plan(drive=...)` takes a road-time
+  function when that changes. Every time in the plan is New York time.
+* **Each plan is kept** (`dispatch_plans`) so the chat, the calendar and the Excel show the same
+  one: `POST /api/dispatch/plans`, `GET /api/dispatch/plans/{id}`, `.../schedule.xlsx` — the
+  maker and an ADMIN; anyone else 404. The old `GET /api/dispatch/plan` keeps its contract (every
+  board). The Excel: Schedule (the office's layout, CALL FIRST in yellow, booked in grey, map and
+  Zuper links), Calendar (week by week, a row per technician), By day, Not placed, How it was
+  planned. The page: Dispatch → Book a visit → "Remake the schedule", a week-to-week calendar
+  with the technicians as rows; `?tab=book&plan=N` opens a kept plan (the assistant's link).
+
+Nothing is booked and nothing reaches Zuper: the office books each visit after agreeing it.
+
+### What each customer said about WHEN (same day, the owner's follow-up)
+
+"If a customer said on a call or a text that they won't be available next week, will the schedule
+consider that?" Before: only the chat, from the last three messages cut to ~220 characters, and
+"Remake the schedule" (the button) not at all. Now `dispatch/availability.py`:
+
+* For **every job that needs a visit**, the AI reads ALL the customer's calls and texts of the
+  last 21 days — every number on the job, Quo transcripts whole (cut from the oldest end past
+  24,000 characters), Zuper Connect summaries, texts — and writes `dispatch_availability`:
+  `limits` {not_before, blocked [{from, to}], only_days, not_days, after, before, technician},
+  a one-line summary, the quotes with their dates, a confidence. Relative dates are turned into
+  dates from the message's own date ("next week" said Thu 10/08 = 10/12-10/17). The reply is
+  checked (`clean`): real dates and days only, a range that already ended dropped.
+* **Read again only when the conversation changes** (`fingerprint`: the numbers, how many
+  messages, the newest one's time). On the AI thread, 6 customers a tick, most recently contacted
+  first; "Read the calls now" on the panel reads 8. Each reading is a `dispatch_ai_runs` row
+  (kind "availability") against the daily cap; off / paused / over the cap reads nothing, and
+  the saved readings still apply.
+* **Every plan applies it** — the button, the chat, the Excel ("Customer limits" column, with
+  the quote). A customer away for the whole window is "not placed", the limit named. The planner
+  gained blocked ranges and not-days.
+* **The office corrects a reading** (Remake the schedule → "What customers said…" → Correct): it
+  stands until "Use the calls again"; newer messages only flag it. `GET/PUT/DELETE
+  /api/dispatch/availability[/{job #}]`, `POST .../refresh`; a hidden board's job is 404.
+
+Not verified: the reading prompt has met no real conversation (no provider key here); watch the
+first readings on the panel before trusting a plan built on them.

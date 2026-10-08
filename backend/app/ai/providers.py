@@ -15,8 +15,11 @@ request when the same provider produced it — an Anthropic model's thinking blo
 echoed as they came.
 
 Anthropic uses the official `anthropic` SDK (Messages API, custom tools, tool_result loop);
-OpenAI and every OpenAI-compatible server use the official `openai` SDK with `base_url`
-(chat.completions + tools). Both SDKs sit on `httpx2`. Tests replace the HTTP client through
+OpenAI, DeepSeek and every OpenAI-compatible server use the official `openai` SDK with
+`base_url` (chat.completions + tools). DeepSeek (2026-10-08) is a compatible server with its
+own address; a thinking model's `reasoning_content` is sent back inside a tool loop, and a
+request refused over it is retried once without it (its API has required both, by model).
+Both SDKs sit on `httpx2`. Tests replace the HTTP client through
 `HTTP_CLIENT_FACTORY` — a mock transport at the HTTP boundary — and no test ever reaches a
 provider (tests/test_ai_network_guard.py).
 
@@ -40,8 +43,9 @@ import openai
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 # The hosts a test must never reach. tests/test_ai_network_guard.py blocks them.
-PROVIDER_HOSTS = ("api.anthropic.com", "api.openai.com")
+PROVIDER_HOSTS = ("api.anthropic.com", "api.openai.com", "api.deepseek.com")
 
 TIMEOUT_SECONDS = 60.0
 MAX_RETRIES = 1
@@ -301,8 +305,9 @@ class OpenAIProvider(Provider):
                              timeout=TIMEOUT_SECONDS, max_retries=MAX_RETRIES,
                              **self._http())
 
-    @staticmethod
-    def _messages(system: str, messages: list[dict]) -> list[dict]:
+    echo_reasoning = False
+
+    def _messages(self, system: str, messages: list[dict]) -> list[dict]:
         out: list[dict] = [{"role": "system", "content": system}]
         for m in messages:
             if m["role"] == "user":
@@ -314,6 +319,9 @@ class OpenAIProvider(Provider):
                         {"id": c.id, "type": "function",
                          "function": {"name": c.name, "arguments": c.raw or "{}"}}
                         for c in m["tool_calls"]]
+                reasoning = _reasoning_of(m.get("raw"))
+                if self.echo_reasoning and reasoning and m.get("tool_calls"):
+                    msg["reasoning_content"] = reasoning
                 out.append(msg)
             elif m["role"] == "tool_results":
                 out.extend({"role": "tool", "tool_call_id": r["id"], "content": r["content"]}
@@ -332,6 +340,14 @@ class OpenAIProvider(Provider):
         try:
             resp = self._client().chat.completions.create(**kwargs)
         except openai.BadRequestError as e:
+            if self.echo_reasoning and "reasoning_content" in str(e):
+                # The model refuses an echoed reasoning: once more without any.
+                self.echo_reasoning = False
+                try:
+                    return self.complete(system=system, messages=messages, tools=tools,
+                                         model=model, max_tokens=max_tokens)
+                finally:
+                    self.echo_reasoning = True
             # Some reasoning models (gpt-6-luna, live 2026-10-01) refuse function tools on
             # chat.completions unless reasoning is off: "Function tools with reasoning_effort
             # are not supported ... set reasoning_effort to 'none'". Only that refusal, only
@@ -371,7 +387,10 @@ class OpenAIProvider(Provider):
             if stop == OTHER and calls:
                 stop = TOOL_USE
         text = msg.content or (msg.refusal if getattr(msg, "refusal", None) else "") or ""
-        return Turn(text.strip(), calls, stop, usage, finish, None, resp.model)
+        reasoning = getattr(msg, "reasoning_content", None)
+        raw = [{"reasoning_content": reasoning}] if isinstance(reasoning, str) and reasoning \
+            else None
+        return Turn(text.strip(), calls, stop, usage, finish, raw, resp.model)
 
     def list_models(self) -> list[str]:
         try:
@@ -385,11 +404,29 @@ class CompatibleProvider(OpenAIProvider):
     compatible = True
 
 
+class DeepSeekProvider(CompatibleProvider):
+    who = "DeepSeek"
+    echo_reasoning = True
+
+    def __init__(self, api_key: str, base_url: str | None = None):
+        super().__init__(api_key, base_url or DEEPSEEK_BASE_URL)
+
+
+def _reasoning_of(raw) -> str | None:
+    if isinstance(raw, list):
+        for block in raw:
+            if isinstance(block, dict) and isinstance(block.get("reasoning_content"), str):
+                return block["reasoning_content"]
+    return None
+
+
 def build(provider: str, api_key: str, base_url: str | None) -> Provider:
     if provider == "anthropic":
         return AnthropicProvider(api_key)
     if provider == "openai":
         return OpenAIProvider(api_key)
+    if provider == "deepseek":
+        return DeepSeekProvider(api_key)
     if provider == "openai_compatible":
         if not base_url:
             raise ProviderError("An OpenAI-compatible connection needs a base URL.")

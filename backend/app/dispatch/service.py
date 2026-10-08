@@ -137,6 +137,10 @@ def run(db: Session, now: datetime | None = None, *, commit: bool = True) -> dic
                 s.calls_read_at = now
             except client.ZuperError as exc:
                 counts["zuper_calls_error"] = client.sentence(exc)
+            try:
+                counts["activity"] = reader.read_activity(db)
+            except client.ZuperError as exc:
+                counts["activity_error"] = client.sentence(exc)
         db.flush()
         jobs = list(db.scalars(select(DispatchJob)))
         found, events = rules.evaluate(
@@ -189,8 +193,18 @@ def ai_tick(session_factory, now: datetime | None = None) -> dict | None:
         return None
     db = session_factory()
     try:
-        from . import ai
-        return ai.explain_pending(db, now or datetime.now(UTC))
+        from . import ai, availability
+        now = now or datetime.now(UTC)
+        counts = ai.explain_pending(db, now)
+        # What each customer said about WHEN they can have the visit, a few a minute, only
+        # for customers whose calls and texts changed (2026-10-08). A failure is logged and
+        # never stops the explanations.
+        try:
+            counts["availability"] = availability.refresh(db, now)
+        except Exception:
+            db.rollback()
+            log.exception("dispatch availability reading failed")
+        return counts
     except Exception:
         db.rollback()
         log.exception("dispatch AI explanations failed")

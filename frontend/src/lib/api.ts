@@ -2283,18 +2283,26 @@ export type DispatchPlanVisit = {
   job_uid: string; job_number: string | null; customer: string | null; city: string | null
   kind: DispatchPlanKind; start: string; end: string; existing: boolean
   drive_minutes_before: number; zuper_url: string | null
+  // 2026-10-08: remaking the schedule
+  address?: string | null; stage?: string | null; tentative?: boolean; why?: string | null
+  limits?: string[] | null; lat?: number | null; lng?: number | null
 }
 export type DispatchPlanTech = {
   tech: string; start_from: 'home' | 'first job'; count: number; capacity: number
   drive_minutes: number; visits: DispatchPlanVisit[]
+  first_start?: string | null; last_end?: string | null
 }
 export type DispatchPlanDay = { date: string; label: string; techs: DispatchPlanTech[] }
 export type DispatchPlanUnplaced = {
   job_uid: string; job_number: string | null; customer: string | null; city: string | null
   kind: DispatchPlanKind; reason: string; zuper_url: string | null
+  stage?: string | null; tentative?: boolean; limits?: string[] | null
 }
+export type DispatchPlanMode = 'most_jobs' | 'oldest_first'
 export type DispatchPlan = {
+  id?: number
   generated_at: string
+  mode?: DispatchPlanMode
   assumptions: {
     minutes: Record<string, { inspection: number; repair: number;
       source: 'history' | 'settings' | 'default' }>
@@ -2304,7 +2312,43 @@ export type DispatchPlan = {
   days: DispatchPlanDay[]
   unplaced: DispatchPlanUnplaced[]
   pending: number
+  summary?: { placed: number; not_placed: number; tentative: number; drive_minutes: number
+    starts_tried: number }
+  baseline?: { placed: number; drive_minutes: number }
+  asked?: { days: number; kind: string; mode: DispatchPlanMode; boards: 'ahs' | 'all'
+    include_unreached: boolean; limits: unknown[] | null }
+  availability?: { jobs: number; read: number; with_limits: number; office: number
+    not_read_yet: number; note: string }
 }
+export type DispatchPlanRequest = { days: number; kind: 'all' | DispatchPlanKind
+  mode: DispatchPlanMode; boards: 'ahs' | 'all'; include_unreached: boolean }
+/** Remake the schedule (2026-10-08): a DRAFT, kept so the calendar and the Excel match. */
+export const makeDispatchPlan = (body: DispatchPlanRequest) =>
+  send<DispatchPlan>('/api/dispatch/plans', 'POST', body)
+export const getDispatchPlan = (id: number) => get<DispatchPlan>(`/api/dispatch/plans/${id}`)
+export const dispatchPlanExcelUrl = (id: number) => `${BASE}/api/dispatch/plans/${id}/schedule.xlsx`
+
+/** What a customer said about WHEN they can have the visit (2026-10-08), read by the AI from
+    their calls and texts, or set by the office. */
+export type DispatchLimits = {
+  not_before?: string; blocked?: { from: string; to: string }[]; only_days?: string[]
+  not_days?: string[]; after?: string; before?: string; technician?: string
+}
+export type DispatchAvailability = {
+  job_uid: string; job_number: string | null; customer: string | null; limits: DispatchLimits
+  in_words: string; summary: string | null; evidence: { at: string; quote: string }[]
+  confidence: string | null; source: 'ai' | 'office' | null; newer_messages: boolean
+  read_at: string | null; error: string | null
+}
+export const dispatchAvailability = () =>
+  get<{ jobs: DispatchAvailability[] }>('/api/dispatch/availability')
+export const setDispatchAvailability = (job: string, limits: DispatchLimits, summary: string | null) =>
+  send<DispatchAvailability>(`/api/dispatch/availability/${encodeURIComponent(job)}`, 'PUT',
+    { limits, summary })
+export const clearDispatchAvailability = (job: string) =>
+  send<{ cleared: boolean }>(`/api/dispatch/availability/${encodeURIComponent(job)}`, 'DELETE')
+export const refreshDispatchAvailability = () =>
+  send<Record<string, unknown>>('/api/dispatch/availability/refresh', 'POST', {})
 /** A DRAFT: proposes visits for every job waiting for one. Books nothing. */
 export const dispatchPlan = (days: number, kind: 'all' | DispatchPlanKind) =>
   get<DispatchPlan>(`/api/dispatch/plan?days=${days}&kind=${kind}`)

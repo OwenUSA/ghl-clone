@@ -9,21 +9,26 @@ Each pass (every DISPATCH_POLL_SECONDS, on the worker's Zuper thread):
      a list row, because a list row's moves carry no `done_by`;
   3. the job's NOTES under the same condition: when Zuper was last written to, and the
      pictures posted on the visit day (a picture is an IMAGE / VIDEO note);
-  4. the latest page of Zuper Connect's call history -> `dispatch_calls`.
+  4. the latest page of Zuper Connect's call history -> `dispatch_calls`;
+  5. Zuper's activity log, newest first, until a line already kept -> `dispatch_activity`
+     (who moved, rescheduled, assigned or deleted what, and from where: office, field app or
+     our own scripts). The notes of step 3 are kept as text too (`dispatch_notes`).
 
 The first pass reads every open job once (about 150 jobs, two requests each); after that only
 what changed, plus the day's visits.
 """
 from __future__ import annotations
 
+import ast
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import DispatchCall, DispatchJob
+from ..models import DispatchActivity, DispatchCall, DispatchJob, DispatchNote
 from ..zuper import client, history, mapping
 from . import config as c
 from .comms import digits
@@ -141,6 +146,48 @@ def apply_notes(j: DispatchJob, notes: list[dict], today: str,
         j.visit_photo_at, j.visit_photo_count, j.visit_photo_by = last, count, by
 
 
+_TAG = re.compile(r"<[^>]+>")
+
+
+def note_text(value) -> str | None:
+    """A note's words: Zuper's editor stores HTML."""
+    if not isinstance(value, str):
+        return None
+    text = _TAG.sub(" ", value.replace("<br>", "\n").replace("</p>", "\n"))
+    text = re.sub(r"[ \t]+", " ", text.replace("&nbsp;", " ").replace("&amp;", "&")).strip()
+    return text[:20000] or None
+
+
+def store_notes(db: Session, j: DispatchJob, notes: list[dict]) -> int:
+    """Keep every note's text (2026-10-08): what a technician dictated on site is the best
+    record of the visit. Insert or refresh by note_uid; a note gone from Zuper is marked
+    deleted, never removed here."""
+    have = {n.note_uid: n for n in db.scalars(select(DispatchNote).where(
+        DispatchNote.job_uid == j.job_uid))}
+    seen = set()
+    for n in notes:
+        uid = n.get("note_uid") if isinstance(n, dict) else None
+        if not isinstance(uid, str) or not uid:
+            continue
+        seen.add(uid)
+        row = have.get(uid)
+        if row is None:
+            row = DispatchNote(note_uid=uid[:64], job_uid=j.job_uid)
+            db.add(row)
+            have[uid] = row
+        row.job_number = j.job_number
+        row.created_at = _time(n.get("created_at"))
+        row.by_name = _name(n.get("created_by")) or row.by_name
+        row.note_type = (n.get("note_type") or "TEXT")[:30]
+        row.text = note_text(n.get("note"))
+        row.attachments = len(n.get("attachments") or [])
+        row.is_deleted = bool(n.get("is_deleted"))
+    for uid, row in have.items():
+        if uid not in seen:
+            row.is_deleted = True
+    return len(seen)
+
+
 def _visit_today(j: DispatchJob, today: str) -> bool:
     for t in (j.scheduled_start, j.scheduled_end):
         if t and c.local(t).date().isoformat() == today:
@@ -200,6 +247,7 @@ def read_jobs(db: Session, now: datetime) -> dict:
                     "GET", client.path("job_notes", uid=uid), params={"count": 100}))
                 counts["notes"] += 1
                 apply_notes(j, notes, today, checklist)
+                store_notes(db, j, notes)
                 j.notes_read_for = updated or "-"
             except client.ZuperError as exc:
                 counts["read_errors"] += 1
@@ -339,3 +387,63 @@ def fetch_summaries(rows: list[DispatchCall], now: datetime | None = None) -> in
             row.summary = text
             got += 1
     return got
+
+
+# --------------------------------------------------------------------------- activity log
+
+ACTIVITY_PAGE = 50
+ACTIVITY_MAX_PAGES = 6      # 300 lines a pass at most; a pass runs every few minutes
+SCRIPT_SOURCE = "API_KEY"   # our scripts' lines (the key belongs to a person's login)
+
+
+def _source(meta) -> str | None:
+    rs = meta.get("request_source") if isinstance(meta, dict) else None
+    if isinstance(rs, str):
+        try:
+            rs = ast.literal_eval(rs)          # live: a Python-repr string of a dict
+        except (ValueError, SyntaxError):
+            return rs[:40] or None
+    if isinstance(rs, dict) and isinstance(rs.get("type"), str):
+        return rs["type"][:40]
+    return None
+
+
+def read_activity(db: Session) -> int:
+    """New lines of Zuper's activity log, newest first, until a line already kept (or the page
+    limit). Append-only: a kept line is never changed."""
+    numbers = {j.job_uid: j.job_number for j in db.scalars(select(DispatchJob))}
+    added = 0
+    for page in range(1, ACTIVITY_MAX_PAGES + 1):
+        rows = client.rows_of(client.request("GET", client.path("activities"), params={
+            "count": ACTIVITY_PAGE, "page": page}))
+        uids = [r.get("user_activity_uid") for r in rows if isinstance(r, dict)]
+        known = set(db.scalars(select(DispatchActivity.activity_uid).where(
+            DispatchActivity.activity_uid.in_([u for u in uids if u])))) if uids else set()
+        caught_up = False
+        for r in rows:
+            uid = r.get("user_activity_uid") if isinstance(r, dict) else None
+            if not isinstance(uid, str) or not uid:
+                continue
+            if uid in known:
+                caught_up = True
+                continue
+            meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else None
+            user = r.get("users") if isinstance(r.get("users"), dict) else {}
+            module = (r.get("activity_module") or "")[:40] or None
+            target = r.get("activity_action_uid") if isinstance(r.get("activity_action_uid"),
+                                                               str) else None
+            via = _source(meta)
+            db.add(DispatchActivity(
+                activity_uid=uid[:64], at=_time(r.get("created_at")),
+                user_name=_name(user), user_uid=(user.get("user_uid") or "")[:64] or None,
+                activity_type=(r.get("activity_type") or "")[:30] or None, module=module,
+                message=(r.get("activity_message") or "")[:4000] or None,
+                job_uid=target[:64] if module == "JOB" and target else None,
+                job_number=numbers.get(target) if module == "JOB" else None,
+                via=via, automatic=via == SCRIPT_SOURCE,
+                meta={k: v for k, v in (meta or {}).items() if k != "request_source"} or None))
+            known.add(uid)
+            added += 1
+        if caught_up or len(rows) < ACTIVITY_PAGE:
+            break
+    return added

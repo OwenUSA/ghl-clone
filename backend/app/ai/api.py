@@ -113,6 +113,8 @@ def ai_catalogue(_: auth.Principal = VIEW):
              "needs_base_url": False},
             {"value": "openai", "label": "OpenAI", "default_model": "gpt-5-mini",
              "needs_base_url": False},
+            {"value": "deepseek", "label": "DeepSeek", "default_model": "deepseek-chat",
+             "needs_base_url": False},
             {"value": "openai_compatible", "label": "OpenAI-compatible (custom base URL)",
              "default_model": "", "needs_base_url": True}],
         "known_prices": {m: {"input": pricing.dollars(i), "output": pricing.dollars(o)}

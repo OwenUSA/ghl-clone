@@ -1101,12 +1101,13 @@ class AiSettings(Base):
 
 
 class AiConnection(Base):
-    """An AI provider account: Anthropic, OpenAI, or any OpenAI-compatible server."""
+    """An AI provider account: Anthropic, OpenAI, DeepSeek, or any OpenAI-compatible server."""
     __tablename__ = "ai_connections"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    DEEPSEEK = "deepseek"
     COMPATIBLE = "openai_compatible"
-    PROVIDERS = (ANTHROPIC, OPENAI, COMPATIBLE)
+    PROVIDERS = (ANTHROPIC, OPENAI, DEEPSEEK, COMPATIBLE)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
@@ -1916,6 +1917,87 @@ class DispatchCall(Base):
     job_uids: Mapped[list | None] = mapped_column(NullableJSONType)
     # Zuper's own summary of the recording; it arrives some time after the call ends.
     summary: Mapped[str | None] = mapped_column(Text)
+
+
+class DispatchNote(Base):
+    """A note on a Zuper job, kept as text (2026-10-08) so the assistant can read what a
+    technician dictated on site. Read with the job (reader.read_jobs); never written to Zuper."""
+    __tablename__ = "dispatch_notes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    note_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    by_name: Mapped[str | None] = mapped_column(String(120))
+    note_type: Mapped[str | None] = mapped_column(String(30))
+    text: Mapped[str | None] = mapped_column(Text)
+    attachments: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
+class DispatchPlan(Base):
+    """A week plan as it was made (2026-10-08): what was asked and what came out, so the chat,
+    the calendar and the Excel show the SAME plan. A draft: nothing in it is booked. Read by
+    the person who made it and an ADMIN."""
+    __tablename__ = "dispatch_plans"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    created_by_id: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(20), default="page", server_default="page")
+    params: Mapped[dict | None] = mapped_column(NullableJSONType)
+    result: Mapped[dict | None] = mapped_column(NullableJSONType)
+
+
+class DispatchAvailability(Base):
+    """What a customer said about when they can or cannot have the visit (2026-10-08), read by
+    the AI from ALL their calls and texts and kept, with the quotes, so every plan respects it:
+    "I'm away next week", "only after 3 PM", "not Tuesdays".
+
+    `limits` = {not_before, blocked: [{from, to}], only_days, not_days, after, before,
+    technician} (dates ISO, days Mon..Sat, times HH:MM). Re-read only when the customer's
+    calls and texts change (`fingerprint`). An office correction (`source` = "office") stands
+    until the office clears it; new messages after it only flag `newer_messages`."""
+    __tablename__ = "dispatch_availability"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    limits: Mapped[dict | None] = mapped_column(NullableJSONType)
+    summary: Mapped[str | None] = mapped_column(Text)
+    evidence: Mapped[list | None] = mapped_column(NullableJSONType)
+    confidence: Mapped[str | None] = mapped_column(String(10))
+    source: Mapped[str] = mapped_column(String(10), default="ai", server_default="ai")
+    fingerprint: Mapped[str | None] = mapped_column(String(80))
+    newer_messages: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    model: Mapped[str | None] = mapped_column(String(120))
+    error: Mapped[str | None] = mapped_column(String(500))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    edited_by_id: Mapped[int | None] = mapped_column(Integer)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DispatchActivity(Base):
+    """One line of Zuper's account activity log (GET /activities/recent): who moved,
+    rescheduled, assigned or DELETED what, and when (2026-10-08). Append-only.
+
+    `automatic` marks a line our own scripts wrote (via API_KEY): the key belongs to a person's
+    login, so Zuper shows those lines under that person's name (verified live 2026-10-08)."""
+    __tablename__ = "dispatch_activity"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    activity_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    user_name: Mapped[str | None] = mapped_column(String(120))
+    user_uid: Mapped[str | None] = mapped_column(String(64))
+    activity_type: Mapped[str | None] = mapped_column(String(30))
+    module: Mapped[str | None] = mapped_column(String(40))
+    message: Mapped[str | None] = mapped_column(Text)
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    # Where the change came from, as Zuper records it (metadata.request_source.type): WEB_APP
+    # (the office), zuper_v3_android / zuper_v3_ios (the field app), API_KEY (our scripts).
+    via: Mapped[str | None] = mapped_column(String(40))
+    automatic: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    meta: Mapped[dict | None] = mapped_column(NullableJSONType)
 
 
 class DispatchItem(Base):
