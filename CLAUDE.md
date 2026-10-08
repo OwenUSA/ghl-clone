@@ -620,8 +620,12 @@ Retell** — owen-main holds the key; `tests/retell_guard.py` refuses any retell
 - **The office is texted after every AI call** (`app/ai_call_notify.py`, job `ai_call_notify`) —
   the ONE exception to "no automatic texts", because it is INTERNAL: recipients ONLY from
   `AI_CALL_NOTIFY_NUMBERS` (empty = off), a number any contact holds is refused, never the
-  caller, one text per call, through `get_transport()`. The link is `CRM_PUBLIC_URL` + the CRM's
-  own signed-in recording relay (no default). See DECISIONS.md, 2026-10-06 (AI call notifications).
+  caller, one text per call, through `get_transport()`, ~120 s after the call. The link is the
+  conversation deep link `CRM_PUBLIC_URL/conversations?thread=<c12|n3>` (no default; opens the
+  call's player after sign-in) — never the recording relay's URL. Format (2026-10-08): blocks
+  with blank lines, header with the caller as `+1 XXX-XXX-XXXX`, "Recording: <link>" or
+  "Recording not available yet. The call is on:" + link. See DECISIONS.md, 2026-10-06 (AI call
+  notifications) and its 2026-10-08 amendment.
 
 ## A live AI call: Listen / Take over (2026-09-23)
 

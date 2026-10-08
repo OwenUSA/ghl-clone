@@ -7,7 +7,7 @@ it is INTERNAL: it texts the office, never a customer. See DECISIONS.md, 2026-10
 notifications).
 
     POST /api/events (a CALL carrying `ai_call`)
-        └─ maybe_enqueue()  ─ ONE `ai_call_notify` job, ~90 s later, dedupe key per event
+        └─ maybe_enqueue()  ─ ONE `ai_call_notify` job, ~120 s later, dedupe key per event
               └─ worker: handle_job() reads the event AS IT IS THEN (the summary and the
                  recording arrive in later reports, merged onto the same row) and sends one
                  text per configured recipient through `automations.send_outbound_to_number`
@@ -36,21 +36,37 @@ notifications).
 
 Since 2026-09-13 the ingest never creates a contact, so a caller is a NEW LEAD when the call
 landed on a number-only thread (nobody holds the number). If a person saves the caller as a
-contact in the ~90 seconds before the job runs, the call moves onto the contact's thread
+contact in the ~120 seconds before the job runs, the call moves onto the contact's thread
 (`number_threads.adopt_on_flush`); it is still a new lead when the job recorded the number
 thread at enqueue time, or the contact was created at or after the call began. Anything else
 on a contact's thread is an EXISTING CUSTOMER.
 
+## The text (2026-10-08 format)
+
+Blocks separated by a blank line, no emoji. The header names the CALLER's number as
+`+1 XXX-XXX-XXXX`:
+
+    AI call from <first last> (existing customer) (+1 941-555-0123)
+    Summary: <two sentences>
+    Asked: <kind> — <request>          (one per change request; block left out when none)
+    Recording: <link>
+
+    New lead from AI call (+1 813-555-0142)
+    Name: ... / Address: ... / every captured field, one per line
+    Summary: <summary>
+    Recording: <link>
+
 ## The link
 
-`recording_url` on an AI call is the CRM-relative path owen-main writes
-(`owen_recordings.RECORDINGS_PATH` + "/<call id>"), served by the authenticated relay — a
-person must be signed in to play it. The text carries it as an ABSOLUTE link on
-`CRM_PUBLIC_URL` (no default: unset = "(recording in the CRM)" and a log line). Any other
-`recording_url` (a carrier's, owen-main's, Quo's) is never put in a text. With no recording
-yet, an existing customer gets the contact's page (`/contacts?contact=<id>`, the deep link
-`lib/zuper.ts recordFromLocation` opens); a number-only thread has no deep link, so the text
-says "(recording not available yet)".
+`<link>` is ALWAYS the conversation deep link `<CRM_PUBLIC_URL>/conversations?thread=<key>` for
+the thread the call is on (`c<conversation id>` or `n<number thread id>`, the inbox's own row
+key; `lib/zuper.ts recordFromLocation` opens it after sign-in, with the call's player). The
+recording relay's own URL is never texted: on a phone that is not signed in it answers 401 JSON.
+`Recording: <link>` once the event carries the CRM relay's `recording_url`
+(`owen_recordings.RECORDINGS_PATH` + "/<call id>"); before that, "Recording not available yet.
+The call is on:" and the link on its own line. Any other `recording_url` (a carrier's,
+owen-main's, Quo's) counts as no recording. `CRM_PUBLIC_URL` has no default: unset = the old
+link-less wording ("(recording in the CRM)" / "(recording not available yet)") and a log line.
 """
 from __future__ import annotations
 
@@ -82,7 +98,7 @@ JOB_TYPE = "ai_call_notify"
 NUMBERS_ENV = "AI_CALL_NOTIFY_NUMBERS"
 PUBLIC_URL_ENV = "CRM_PUBLIC_URL"
 # Long enough for owen-main's later reports (Retell's analysis, the recording) to land.
-DELAY_SECONDS = 90
+DELAY_SECONDS = 120
 MAX_CHARS = 1200
 # One captured value is never allowed to swallow the text on its own.
 VALUE_CAP = 200
@@ -220,8 +236,6 @@ def lead_lines(captured: dict | None, caller: str | None) -> tuple[list[str], li
     used.update(_NAME_PARTS)
     if name:
         known.append("Name: " + name)
-    if caller:
-        known.append("Caller: " + (format_phone(caller) or caller))
 
     for label, aliases in LEAD_FIELDS[1:]:
         for alias in aliases:
@@ -250,11 +264,27 @@ def _sentences(text: str, n: int) -> str:
     return " ".join(parts[:n]).strip()
 
 
-def _fit_summary(fixed_len: int, summary: str) -> str:
-    """The summary, cut to whatever room is left. Empty when there is none."""
+def caller_phone(number: str | None) -> str:
+    """The caller's number as the header shows it: `+1 813-555-0142`. A number that is not a
+    US one is shown as given."""
+    raw = (number or "").strip()
+    d = re.sub(r"\D", "", raw)
+    if len(d) == 11 and d.startswith("1"):
+        d = d[1:]
+    if len(d) == 10 and (raw.startswith("+1") or not raw.startswith("+")):
+        return "+1 %s-%s-%s" % (d[0:3], d[3:6], d[6:10])
+    return raw
+
+
+def _header(text: str, caller: str | None) -> str:
+    phone = caller_phone(caller)
+    return "%s (%s)" % (text, phone) if phone else text
+
+
+def _fit_summary(room: int, summary: str) -> str:
+    """The summary line, cut to `room` characters. Empty when there is none or no room."""
     if not summary:
         return ""
-    room = MAX_CHARS - fixed_len
     if room <= len("Summary: …"):
         return ""
     line = "Summary: " + summary
@@ -263,21 +293,25 @@ def _fit_summary(fixed_len: int, summary: str) -> str:
     return line[:room - 1].rstrip() + "…"
 
 
-def _assemble(head: list[str], summary: str, tail: list[str]) -> str:
-    fixed = "\n".join(head + tail)
-    s = _fit_summary(len(fixed) + 1, summary)
-    return "\n".join(head + ([s] if s else []) + tail)
+def _join(blocks: list[str]) -> str:
+    return "\n\n".join(b for b in blocks if b)
+
+
+def _assemble(before: list[str], summary: str, after: list[str]) -> str:
+    """`before` + the summary block + `after`, the summary cut first to fit MAX_CHARS."""
+    fixed = len(_join(before + after))
+    s = _fit_summary(MAX_CHARS - fixed - 2, summary)
+    return _join([*before, s, *after])
 
 
 def new_lead_text(ai_call: dict, caller: str | None, link: str) -> str:
     known, extra = lead_lines(ai_call.get("captured"), caller)
     summary = re.sub(r"\s+", " ", str(ai_call.get("summary") or "")).strip()
-    tail = [link]
+    header = _header("New lead from AI call", caller)
     # Extra keys go before a known field ever would; known lines are never cut.
-    while extra and len("\n".join(["New lead from AI call", *known, *extra, *tail])) > MAX_CHARS:
+    while extra and len(_join([header, "\n".join(known + extra), link])) > MAX_CHARS:
         extra.pop()
-    head = ["New lead from AI call", *known, *extra]
-    return _assemble(head, summary, tail)
+    return _assemble([header, "\n".join(known + extra)], summary, [link])
 
 
 def _request_lines(ai_call: dict) -> list[str]:
@@ -292,29 +326,40 @@ def _request_lines(ai_call: dict) -> list[str]:
     return out
 
 
-def existing_text(ai_call: dict, contact: Contact, link: str) -> str:
+def existing_text(ai_call: dict, contact: Contact, caller: str | None, link: str) -> str:
     name = contact.name or format_phone(contact.phone) or "a customer"
-    head = ["AI call from %s (existing customer)" % name]
+    header = _header("AI call from %s (existing customer)" % name, caller)
     summary = _sentences(str(ai_call.get("summary") or ""), 2)
-    tail = [*_request_lines(ai_call), link]
-    return _assemble(head, summary, tail)
+    return _assemble([header], summary, ["\n".join(_request_lines(ai_call)), link])
 
 
-def link_line(ev, contact: Contact | None) -> str:
-    """"Full details are in the call recording: <absolute link>", or the fallback wording."""
+def thread_key(ev) -> str:
+    """The inbox row key of the thread the call is on: `c<conversation id>` / `n<thread id>`."""
+    if isinstance(ev, NumberThreadEvent):
+        return "n%d" % ev.number_thread_id
+    return "c%d" % ev.conversation_id
+
+
+def thread_link(ev) -> str | None:
+    """`<CRM_PUBLIC_URL>/conversations?thread=<key>`, or None while the setting is unset."""
     base = public_base()
+    return "%s/conversations?thread=%s" % (base, thread_key(ev)) if base else None
+
+
+def link_line(ev) -> str:
+    """The recording block: "Recording: <deep link>", "Recording not available yet. The call
+    is on:" + the link on its own line, or the link-less wording when CRM_PUBLIC_URL is unset."""
     rec = (ev.recording_url or "").strip()
     has_recording = rec.startswith(RECORDINGS_PATH + "/")
+    link = thread_link(ev)
+    if link is None:
+        log.warning("ai_call_notify: %s is not set, so the text carries no link",
+                    PUBLIC_URL_ENV)
+        return "Full details are in the call recording: " + (
+            RECORDING_IN_CRM if has_recording else NO_RECORDING)
     if has_recording:
-        if not base:
-            log.warning("ai_call_notify: %s is not set, so the text says the recording is "
-                        "in the CRM without a link", PUBLIC_URL_ENV)
-            return "Full details are in the call recording: " + RECORDING_IN_CRM
-        return "Full details are in the call recording: " + base + rec
-    if contact is not None and base:
-        return "Recording not available yet. The call is on %s/contacts?contact=%d" % (
-            base, contact.id)
-    return "Full details are in the call recording: " + NO_RECORDING
+        return "Recording: " + link
+    return "Recording not available yet. The call is on:\n" + link
 
 
 # ------------------------------------------------------------------------------- the job
@@ -354,13 +399,14 @@ def _is_new_lead(ev, contact: Contact | None, payload: dict) -> bool:
 
 def build_text(db: Session, ev, payload: dict) -> tuple[str, str | None]:
     """`(text, caller number)` for this call as it stands now."""
-    caller, contact = _caller_and_contact(db, ev)
-    caller = caller or payload.get("caller_number")
+    on_thread, contact = _caller_and_contact(db, ev)
+    # The number that actually called (the ingest's from_number) wins over the thread's.
+    caller = payload.get("caller_number") or on_thread
     ai_call = ev.ai_call or {}
-    line = link_line(ev, contact)
+    line = link_line(ev)
     if _is_new_lead(ev, contact, payload):
         return new_lead_text(ai_call, caller, line), caller
-    return existing_text(ai_call, contact, line), caller
+    return existing_text(ai_call, contact, caller, line), caller
 
 
 def refusal(db: Session, recipient: str, caller: str | None) -> str | None:

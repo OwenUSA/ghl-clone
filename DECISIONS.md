@@ -6799,7 +6799,7 @@ because it is INTERNAL. It never texts a customer.
   sending line. Only CALL events with an `ai_call`, and only fresh ones (`automations.
   is_fresh`) — a backfilled call is history, not news.
 * **When:** the first ingest that makes an event an AI call queues ONE `ai_call_notify` job
-  (`app.queue`, ~90 s later, dedupe key per call — the event's own `dedupe_key`, which survives
+  (`app.queue`, ~120 s later since 2026-10-08 — was ~90 s, dedupe key per call — the event's own `dedupe_key`, which survives
   adoption). Later reports merge into the row and queue nothing. The job reads the event as it
   is then (summary, recording) and sends once: the sent row carries a per-call, per-recipient
   dedupe key checked before sending, and the job is never retried (`max_attempts = 1`).
@@ -6820,6 +6820,20 @@ because it is INTERNAL. It never texts a customer.
   in the CRM)" and a log line). Any other `recording_url` is never texted. No recording yet: an
   existing customer gets `<CRM_PUBLIC_URL>/contacts?contact=<id>`; a new lead "(recording not
   available yet)" (a number thread has no deep link).
+* **Amended 2026-10-08 (owner): a cleaner text and a link that works on a phone.** The raw
+  relay URL answered 401 JSON on a phone that was not signed in, so it is no longer texted. The
+  link is ALWAYS the conversation deep link `<CRM_PUBLIC_URL>/conversations?thread=<key>` for
+  the thread the call is on (the inbox row key, `c<conversation id>` or `n<number thread id>`;
+  `lib/zuper.ts recordFromLocation` opens it after sign-in, read once at boot then removed; a
+  thread the reader cannot see is not in the inbox and the page lands on its first row). Blocks
+  are separated by a blank line, no emoji, and the header carries the CALLER's number:
+  "AI call from <first last> (existing customer) (+1 941-555-0123)" / "New lead from AI call
+  (+1 813-555-0142)" (the "Caller:" line is gone); then the lead's fields (new lead), "Summary:
+  ...", the "Asked: ..." lines (existing, only when any), and "Recording: <link>" — or, with no
+  relay `recording_url` on the event yet, "Recording not available yet. The call is on:" and the
+  link on the next line. `CRM_PUBLIC_URL` unset keeps the old link-less wording. The delay is
+  ~120 s (owen-main's fix lands the recording within seconds of hangup; this is margin). Every
+  guard above is unchanged.
 * Settings → Automations lists it ("AI call ended → text the office", internal only).
 
 **Not verified:** the captured keys a Retell agent sends are not fixed by any contract in this

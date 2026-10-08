@@ -1896,7 +1896,7 @@ def _ingest_to_number(db: Session, body: EventIngest, key: str) -> dict:
     if body.direction == "INBOUND" and automations.is_fresh(ev.occurred_at):
         thread.unread_count += 1
     pictures = _plan_pictures(db, ev, body)
-    # The office's text about an AI call (2026-10-06): ONE queued job, ~90 s later.
+    # The office's text about an AI call (2026-10-06): ONE queued job, ~120 s later.
     ai_call_notify.maybe_enqueue(db, ev, body.from_number)
     db.commit()
     return {"id": ev.id, "conversation_id": None, "number_thread_id": thread.id,

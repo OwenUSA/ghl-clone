@@ -10,4 +10,6 @@
  * record twice produces an identical prop and the effect that reacts to it never
  * fires, so closing a panel and searching for it again would do nothing.
  */
-export type Focus = { id: number; n: number }
+export type Focus = { id: number; n: number; key?: string }
+// `key` is set only by the conversation deep link (/conversations?thread=<key>): an inbox row
+// key, "c<conversation id>" or "n<number thread id>". The palette never sets it.
