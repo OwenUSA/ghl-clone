@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.Column('note_type', sa.String(length=30), nullable=True),
         sa.Column('text', sa.Text(), nullable=True),
         sa.Column('attachments', sa.Integer(), server_default='0', nullable=False),
-        sa.Column('is_deleted', sa.Boolean(), server_default=sa.false(), nullable=False),
+        sa.Column('removed', sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index('ix_dispatch_notes_note_uid', 'dispatch_notes', ['note_uid'], unique=True)

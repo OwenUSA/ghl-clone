@@ -1932,7 +1932,7 @@ class DispatchNote(Base):
     note_type: Mapped[str | None] = mapped_column(String(30))
     text: Mapped[str | None] = mapped_column(Text)
     attachments: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    removed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class DispatchPlan(Base):

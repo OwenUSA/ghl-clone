@@ -181,10 +181,10 @@ def store_notes(db: Session, j: DispatchJob, notes: list[dict]) -> int:
         row.note_type = (n.get("note_type") or "TEXT")[:30]
         row.text = note_text(n.get("note"))
         row.attachments = len(n.get("attachments") or [])
-        row.is_deleted = bool(n.get("is_deleted"))
+        row.removed = bool(n.get("is_deleted"))
     for uid, row in have.items():
         if uid not in seen:
-            row.is_deleted = True
+            row.removed = True
     return len(seen)
 
 

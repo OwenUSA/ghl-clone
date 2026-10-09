@@ -335,7 +335,7 @@ def job_notes(db: Session, hidden: set[str], job_number: str, limit: int = 30) -
     if not _visible(j, hidden):
         return {"error": "no such job"}
     notes = db.scalars(select(DispatchNote).where(
-        DispatchNote.job_uid == j.job_uid, DispatchNote.is_deleted.is_(False))
+        DispatchNote.job_uid == j.job_uid, DispatchNote.removed.is_(False))
         .order_by(DispatchNote.created_at)).all()[-limit:]
     return {"job": _job_line(j), "notes_oldest_first": [
         {"at": _when(n.created_at), "by": n.by_name, "type": n.note_type,
