@@ -23,7 +23,7 @@ from ..dispatch.assist import ADMIN
 from ..models import AppointmentReminder, ReminderSwitchLog
 from ..number_threads import phone_key
 from . import config as c
-from . import language, rules, service
+from . import language, rules, service, stage_texts
 
 router = APIRouter(prefix="/api/reminders", tags=["reminders"])
 
@@ -47,26 +47,23 @@ def _status(db: Session) -> dict:
         why = "Test: only the test numbers are texted; every other reminder is recorded."
     else:
         why = "On: customers are texted."
-    ahs_mode = s.ahs_submitted_mode or "off"
-    if not gate:
-        ahs_why = "The server gate is off, so nothing is sent."
-    elif ahs_mode == "off":
-        ahs_why = "Off. No text is sent when a job moves to Submit To AHS / Awaiting AHS Decision."
-    elif ahs_mode == "test":
-        ahs_why = ("Test: only the test numbers are texted when their job moves there; every "
-                   "other move is recorded.")
-    else:
-        ahs_why = ("On: a customer is texted once when their job moves to Submit To AHS or "
-                   "Awaiting AHS Decision.")
+    stage = []
+    for t in c.STAGE_TEXTS.values():
+        m = stage_texts.mode_of(s, t.kind)
+        where = " or ".join(t.columns)
+        sentence = ("The server gate is off, so nothing is sent." if not gate else
+                    "Off. No text is sent when a job moves to %s." % where if m == "off" else
+                    "Test: only the test numbers are texted when their job moves there; every "
+                    "other move is recorded." if m == "test" else
+                    "On: a customer is texted once when their job moves to %s." % where)
+        stage.append({"kind": t.kind, "title": t.title, "mode": m,
+                      "sending": gate and m in ("test", "on"), "sentence": sentence,
+                      "board": t.board, "columns": list(t.columns)})
     log = db.scalars(select(ReminderSwitchLog).order_by(ReminderSwitchLog.id.desc()).limit(10))
     return {
         "server_gate": gate, "mode": s.mode, "sending": gate and s.mode in ("test", "on"),
         "sentence": why,
-        "ahs_submitted": {
-            "mode": ahs_mode, "sending": gate and ahs_mode in ("test", "on"),
-            "sentence": ahs_why, "board": c.AHS_SUBMITTED_BOARD,
-            "columns": list(c.AHS_SUBMITTED_COLUMNS),
-            "watching_since": _iso(s.stage_watch_at)},
+        "stage_texts": stage,
         "test_numbers": s.test_numbers or [], "templates": templates,
         "default_templates": c.DEFAULT_TEMPLATES,
         "columns": {b: list(cols) for b, cols in c.COLUMNS.items()},
@@ -113,6 +110,7 @@ def reminders_log(principal: auth.Principal = VIEW, db: Session = Depends(get_db
 class SettingsIn(BaseModel):
     mode: str | None = None
     ahs_submitted_mode: str | None = None
+    ahs_approved_mode: str | None = None
     test_numbers: list[str] | None = Field(default=None, max_length=20)
     templates: dict[str, dict[str, str | None]] | None = None
     confirm: str | None = Field(default=None, max_length=40)
@@ -139,19 +137,24 @@ def reminders_put_settings(body: SettingsIn, principal: auth.Principal = ADMIN,
         if body.mode != s.mode:
             _log(db, principal.user_id, "mode", s.mode, body.mode)
             s.mode = body.mode
-    if body.ahs_submitted_mode is not None:
-        new_mode, cur = body.ahs_submitted_mode, s.ahs_submitted_mode or "off"
+    for t in c.STAGE_TEXTS.values():
+        field = "%s_mode" % t.kind
+        new_mode = getattr(body, field, None)
+        if new_mode is None:
+            continue
+        cur = stage_texts.mode_of(s, t.kind)
         if new_mode not in c.MODES:
-            raise HTTPException(400, "ahs_submitted_mode must be off, test or on")
+            raise HTTPException(400, "%s must be off, test or on" % field)
         if new_mode != "off" and new_mode != cur and body.confirm != c.CONFIRM:
-            raise HTTPException(400, 'Type "TURN ON" to switch the AHS text to %s.' % new_mode)
+            raise HTTPException(400, 'Type "TURN ON" to switch "%s" to %s.' % (t.title, new_mode))
         if new_mode != cur:
-            _log(db, principal.user_id, "ahs_submitted_mode", cur, new_mode)
-            s.ahs_submitted_mode = new_mode
+            _log(db, principal.user_id, field, cur, new_mode)
+            setattr(s, field, new_mode)
             if cur == "off":
-                # Switched on: the next pass only records where every job is — a job already
-                # sitting in the column is never texted.
-                s.stage_watch_at = None
+                # Switched on: this text's next pass only records where every job is — a job
+                # already sitting in its column is never texted. The other texts are untouched.
+                s.stage_watch_kinds = {k: v for k, v in (s.stage_watch_kinds or {}).items()
+                                       if k != t.kind}
     if body.test_numbers is not None:
         keys = []
         for n in body.test_numbers:
