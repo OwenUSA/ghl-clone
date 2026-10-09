@@ -1988,13 +1988,16 @@ export const listAutomations = () => get<{ rules: AutomationRule[] }>('/api/auto
 // Appointment reminder texts from Zuper's job status (2026-10-08, backend/app/reminders).
 // Off unless the server gate is set AND an ADMIN picks Test or On (typed "TURN ON").
 // ---------------------------------------------------------------------------
-export type ReminderKind = 'day_before' | 'four_hour'
+export type ReminderKind = 'day_before' | 'four_hour' | 'ahs_submitted'
 export type ReminderLang = 'en' | 'es'
 export type ReminderStatus = {
   server_gate: boolean
   mode: 'off' | 'test' | 'on'
   sending: boolean
   sentence: string
+  /** "Inspection report submitted to AHS" (2026-10-09): its own Off / Test / On. */
+  ahs_submitted: { mode: 'off' | 'test' | 'on'; sending: boolean; sentence: string;
+    board: string; columns: string[]; watching_since: string | null }
   test_numbers: string[]
   templates: Record<ReminderKind, Record<ReminderLang, string>>
   default_templates: Record<ReminderKind, Record<ReminderLang, string>>
@@ -2027,7 +2030,8 @@ export const reminderLog = () => get<{ reminders: ReminderRow[] }>('/api/reminde
 export const reminderUpcoming = () => get<{ visits: ReminderVisit[] }>('/api/reminders/upcoming')
 /** ADMIN. Test or On needs `confirm: "TURN ON"`; Off never does. */
 export const saveReminderSettings = (body: {
-  mode?: 'off' | 'test' | 'on'; confirm?: string; test_numbers?: string[]
+  mode?: 'off' | 'test' | 'on'; ahs_submitted_mode?: 'off' | 'test' | 'on'
+  confirm?: string; test_numbers?: string[]
   templates?: Partial<Record<ReminderKind, Partial<Record<ReminderLang, string>>>>
 }) => send<ReminderStatus>('/api/reminders/settings', 'PUT', body)
 export const reminderLanguage = (phone: string) =>

@@ -47,10 +47,27 @@ def _status(db: Session) -> dict:
         why = "Test: only the test numbers are texted; every other reminder is recorded."
     else:
         why = "On: customers are texted."
+    ahs_mode = s.ahs_submitted_mode or "off"
+    if not gate:
+        ahs_why = "The server gate is off, so nothing is sent."
+    elif ahs_mode == "off":
+        ahs_why = "Off. No text is sent when a job moves to Submit To AHS / Awaiting AHS Decision."
+    elif ahs_mode == "test":
+        ahs_why = ("Test: only the test numbers are texted when their job moves there; every "
+                   "other move is recorded.")
+    else:
+        ahs_why = ("On: a customer is texted once when their job moves to Submit To AHS or "
+                   "Awaiting AHS Decision.")
     log = db.scalars(select(ReminderSwitchLog).order_by(ReminderSwitchLog.id.desc()).limit(10))
     return {
         "server_gate": gate, "mode": s.mode, "sending": gate and s.mode in ("test", "on"),
-        "sentence": why, "test_numbers": s.test_numbers or [], "templates": templates,
+        "sentence": why,
+        "ahs_submitted": {
+            "mode": ahs_mode, "sending": gate and ahs_mode in ("test", "on"),
+            "sentence": ahs_why, "board": c.AHS_SUBMITTED_BOARD,
+            "columns": list(c.AHS_SUBMITTED_COLUMNS),
+            "watching_since": _iso(s.stage_watch_at)},
+        "test_numbers": s.test_numbers or [], "templates": templates,
         "default_templates": c.DEFAULT_TEMPLATES,
         "columns": {b: list(cols) for b, cols in c.COLUMNS.items()},
         "times": {"day_before_from": c.DAY_BEFORE_FROM.strftime("%H:%M"),
@@ -95,6 +112,7 @@ def reminders_log(principal: auth.Principal = VIEW, db: Session = Depends(get_db
 
 class SettingsIn(BaseModel):
     mode: str | None = None
+    ahs_submitted_mode: str | None = None
     test_numbers: list[str] | None = Field(default=None, max_length=20)
     templates: dict[str, dict[str, str | None]] | None = None
     confirm: str | None = Field(default=None, max_length=40)
@@ -121,6 +139,19 @@ def reminders_put_settings(body: SettingsIn, principal: auth.Principal = ADMIN,
         if body.mode != s.mode:
             _log(db, principal.user_id, "mode", s.mode, body.mode)
             s.mode = body.mode
+    if body.ahs_submitted_mode is not None:
+        new_mode, cur = body.ahs_submitted_mode, s.ahs_submitted_mode or "off"
+        if new_mode not in c.MODES:
+            raise HTTPException(400, "ahs_submitted_mode must be off, test or on")
+        if new_mode != "off" and new_mode != cur and body.confirm != c.CONFIRM:
+            raise HTTPException(400, 'Type "TURN ON" to switch the AHS text to %s.' % new_mode)
+        if new_mode != cur:
+            _log(db, principal.user_id, "ahs_submitted_mode", cur, new_mode)
+            s.ahs_submitted_mode = new_mode
+            if cur == "off":
+                # Switched on: the next pass only records where every job is — a job already
+                # sitting in the column is never texted.
+                s.stage_watch_at = None
     if body.test_numbers is not None:
         keys = []
         for n in body.test_numbers:
@@ -143,7 +174,8 @@ def reminders_put_settings(body: SettingsIn, principal: auth.Principal = ADMIN,
                 text = (text or "").strip()
                 if text and len(text) > 600:
                     raise HTTPException(400, "a reminder is at most 600 characters")
-                if text and "{window}" not in text and "{time}" not in text:
+                keeps_time = "{window}" in text or "{time}" in text
+                if text and kind in c.REMINDER_KINDS and not keeps_time:
                     raise HTTPException(400, "the wording must keep {window} (or {time})")
                 old = service.template(s, kind, lang)
                 if not text or text == c.DEFAULT_TEMPLATES[kind][lang]:

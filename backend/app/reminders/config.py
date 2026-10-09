@@ -29,7 +29,24 @@ def boards() -> list[str]:
 
 DAY_BEFORE = "day_before"
 FOUR_HOUR = "four_hour"
-KINDS = (DAY_BEFORE, FOUR_HOUR)
+REMINDER_KINDS = (DAY_BEFORE, FOUR_HOUR)
+
+# "Your inspection report was submitted to AHS" (2026-10-09, Owen's second lift): ONE text per
+# job, when an AHS - Inspection job is moved into either column below (the office sometimes
+# skips the first and goes straight to the second — it is the same news). Prefix match.
+AHS_SUBMITTED = "ahs_submitted"
+AHS_SUBMITTED_BOARD = "AHS - Inspection"
+AHS_SUBMITTED_COLUMNS = ("Submit To AHS", "Awaiting AHS Decision")
+# A text held overnight still goes at 8 AM if the job is in those columns or further along.
+AHS_SUBMITTED_LATER = ("AHS Approved", "Proposal Made")
+AHS_SUBMITTED_LATER_BOARDS = ("AHS - Repair & Review",)
+# The column each job was in is remembered between passes; after a gap this long nothing is
+# known about the moves in between, so the next pass only records where every job is.
+STAGE_WATCH_STALE_MINUTES = 30
+# A text held overnight that has still not gone after this long is cancelled, never sent late.
+HELD_MAX_HOURS = 14
+
+KINDS = (*REMINDER_KINDS, AHS_SUBMITTED)
 
 # The day-before text: from 10:00 until 20:00 on the day before the visit.
 DAY_BEFORE_FROM = time(10, 0)
@@ -67,6 +84,16 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
               "mañana, {day}, {window}. Si necesita cambiarla, escriba o llame al "
               + RESCHEDULE_NUMBER + ". Responda STOP para no recibir más mensajes.",
     },
+    AHS_SUBMITTED: {
+        "en": "Hi {first_name}, this is Dream Team Roofing. We submitted your inspection report "
+              "to American Home Shield and are waiting for their approval. We'll contact you as "
+              "soon as we hear back. Questions? Text or call " + RESCHEDULE_NUMBER + ". Reply "
+              "STOP to opt out.",
+        "es": "Hola {first_name}, le saluda Dream Team Roofing. Enviamos su informe de inspección "
+              "a American Home Shield y estamos esperando su aprobación. Le avisaremos en cuanto "
+              "tengamos respuesta. ¿Preguntas? Escriba o llame al " + RESCHEDULE_NUMBER + ". "
+              "Responda STOP para no recibir más mensajes.",
+    },
     FOUR_HOUR: {
         "en": "Hi {first_name}, this is Dream Team Roofing. Reminder: our visit is today "
               "{window}. Text or call " + RESCHEDULE_NUMBER + " if you need to reschedule. "
@@ -92,3 +119,22 @@ def column_counts(board: str | None, status: str | None) -> bool:
         return False
     s = status.strip().lower()
     return any(s.startswith(p.lower()) for p in prefixes)
+
+
+def _starts(status: str | None, prefixes: tuple[str, ...]) -> bool:
+    s = (status or "").strip().lower()
+    return bool(s) and any(s.startswith(p.lower()) for p in prefixes)
+
+
+def ahs_submitted_column(board: str | None, status: str | None) -> bool:
+    return board == AHS_SUBMITTED_BOARD and _starts(status, AHS_SUBMITTED_COLUMNS)
+
+
+def ahs_submitted_still_true(board: str | None, status: str | None, is_open: bool) -> bool:
+    """At 8 AM, does a held "submitted to AHS" text still say something true?"""
+    if not is_open:
+        return False
+    if board in AHS_SUBMITTED_LATER_BOARDS:
+        return True
+    return board == AHS_SUBMITTED_BOARD and _starts(
+        status, AHS_SUBMITTED_COLUMNS + AHS_SUBMITTED_LATER)
