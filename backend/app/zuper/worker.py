@@ -118,6 +118,14 @@ def tick(session_factory, now: datetime | None = None) -> None:
         from ..dispatch import service as dispatch
         if dispatch.due(db, now):
             dispatch.run(db, now)
+        # Appointment reminder texts from that copy of Zuper (2026-10-08). Its own gate
+        # (ZUPER_REMINDERS_ENABLED + the mode in Settings → Automations); never raises.
+        from ..reminders import service as reminders
+        try:
+            reminders.run(db, now)
+        except Exception:
+            db.rollback()
+            log.exception("reminder pass failed")
         day = digest.due_day(db, now)
         if day is not None:
             digest.run(db, day)

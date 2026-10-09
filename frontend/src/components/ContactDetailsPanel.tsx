@@ -23,6 +23,8 @@ import {
   showContactMoney,
 } from '../lib/zuper'
 import { Chip } from './ZuperMoneyPanel'
+import { ReminderLanguageRow } from './ZuperRemindersCard'
+import { canOpenAiAgents } from '../lib/aiAgents'
 
 /**
  * Contact Details panel.
@@ -500,6 +502,10 @@ export function ContactDetailsPanel({
               </Section>
               <Section title="Additional Info">
                 <Row label="Do Not Disturb" value={c.dnd ? 'On' : 'Off'} />
+                {/* Appointment reminders from Zuper (2026-10-08): which language they go in. */}
+                {c.phone && canOpenAiAgents(user) && (
+                  <ReminderLanguageRow phone={c.phone} labelStyle={LABEL} valueStyle={VALUE} />
+                )}
                 <Row
                   label="Owner"
                   value={c.owner_name ?? 'Unassigned'}
@@ -550,7 +556,7 @@ export function ContactDetailsPanel({
               </label>
               <div style={{ fontSize: 12, color: 'rgb(102,112,133)', marginTop: 8 }}>
                 With DND on, texts to this contact are not sent — from the composer, New
-                message or an AI agent. Nothing texts a customer automatically.
+                message, an AI agent or an appointment reminder.
               </div>
             </div>
           )}

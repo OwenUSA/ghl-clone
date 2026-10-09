@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { listAutomations } from '../lib/api'
+import { canOpenAiAgents } from '../lib/aiAgents'
+import type { Me } from '../lib/auth'
+import { ZuperRemindersCard } from './ZuperRemindersCard'
 import { DIVIDER, ErrorLine, FAINT, MUTED, TEXT } from './opportunity/ui'
 
 /**
@@ -7,22 +10,27 @@ import { DIVIDER, ErrorLine, FAINT, MUTED, TEXT } from './opportunity/ui'
  *
  * The four hard-coded rules (backend/app/automations.py) and whether each is on, read
  * from the server's own flags through `GET /api/automations` — so the page can never say
- * something the code does not do. There are deliberately NO switches: the owner's decision
+ * something the code does not do. They have deliberately NO switches: the owner's decision
  * is that nothing texts a customer by itself, so a toggle would be either a control that
  * silently does nothing or a way round that decision. Each rule shows On / Off and why.
+ *
+ * The ONE exception (2026-10-08): "Appointment reminders (from Zuper)", which Owen allowed
+ * while Zuper's own texting waits for its 10DLC approval — `ZuperRemindersCard`, drawn for
+ * ADMIN and unrestricted DISPATCHER, switched by an ADMIN only.
  *
  * OUR design: GoHighLevel's Automation module is a workflow builder this product does not
  * have (DECISIONS.md, 2026-08-14). Styled like Settings → CompanyCam.
  */
-export function AutomationsSettings() {
+export function AutomationsSettings({ user }: { user: Me }) {
   const rules = useQuery({ queryKey: ['automations'], queryFn: listAutomations })
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 32 }}>
       <section style={{ maxWidth: 860 }}>
         <div style={{ fontSize: 16, fontWeight: 600, color: TEXT }}>Automations</div>
         <div style={{ fontSize: 14, color: FAINT, marginTop: 4, lineHeight: 1.5 }}>
-          No text goes to a customer unless a person sends it. These are the built-in rules and
-          what each one does today. AI agents are separate: each has its own Off, Suggest or
+          No text goes to a customer unless a person sends it — except the appointment
+          reminders below, when they are switched on. These are the built-in rules and what each
+          one does today. AI agents are separate: each has its own Off, Suggest or
           Auto-pilot setting on the AI Agents page.
         </div>
         <ErrorLine error={rules.error ? (rules.error as Error).message : null} />
@@ -50,6 +58,7 @@ export function AutomationsSettings() {
               )}
             </div>
           ))}
+          {canOpenAiAgents(user) && <ZuperRemindersCard isAdmin={user.role === 'ADMIN'} />}
         </div>
       </section>
     </div>

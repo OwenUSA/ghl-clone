@@ -74,6 +74,8 @@ def apply_row(j: DispatchJob, row: dict) -> None:
     addr = row.get("customer_address") if isinstance(row.get("customer_address"), dict) else {}
     phones = {digits(v) for v in [*nums.values(), addr.get("phone_number")] if digits(v)}
     j.phones = sorted(phones) or None
+    # Which one is the mobile: a reminder text goes there (app/reminders, 2026-10-08).
+    j.mobile = digits(nums.get("mobile")) or None
     j.address = (addr.get("street") or "")[:300] or None
     j.city = (addr.get("city") or "")[:120] or None
     geo = addr.get("geo_cordinates")

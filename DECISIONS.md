@@ -6971,3 +6971,79 @@ consider that?" Before: only the chat, from the last three messages cut to ~220 
 
 Not verified: the reading prompt has met no real conversation (no provider key here); watch the
 first readings on the panel before trusting a plan built on them.
+
+## AMENDMENT (2026-10-08): appointment reminder texts from Zuper's job status — amends 2026-09-15 ("no automatic texts")
+
+**The lift, exactly.** Zuper will text customers through its own workflows once its 10DLC
+registration is approved; until then Owen approved the CRM texting two appointment reminders
+automatically, and nothing else: **the day before** a visit and **4 hours before** it. Asked
+through the developer on 2026-10-08 ("Yes, Owen approved"). Every other automatic text stays
+off: rules 1, 3 (the CRM-appointment reminders) and 4 are untouched. When Zuper's workflows take
+over, this is switched Off — one press in Settings → Automations, or the server gate.
+
+**Driven by Zuper, read from the CRM's copy.** `app/reminders/` reads `dispatch_jobs` (the
+Dispatch pass's copy of every Zuper job, refreshed every 150 s), so it sends no request to Zuper
+and the read-only rule (2026-09-27) is untouched. It runs on the worker's Zuper thread right after
+that pass. If the copy is older than 10 minutes nothing is sent — a visit cancelled in Zuper must
+not be reminded from a stale read — and the heartbeat says why.
+
+**Which jobs (the user's answers).** Only a job sitting in a column that means the visit is
+confirmed: Retail "Scheduled"; AHS - Inspection "Scheduled", "Inspection: Day-Before Call",
+"Inspection: Same-Day Confirm" (prefix match — Zuper cuts these names). AHS - Repair & Review has
+no "Scheduled" column (a booked repair waits in "Repair Scheduling Call" until "Day-Before Call");
+the user left that board out for now. Any other column, a closed job, or a job with no time gets
+nothing. The list is `reminders/config.COLUMNS`; a column the team renames past its prefix stops
+reminding — the Upcoming table in Settings shows "column does not get reminders".
+
+**When (America/New_York).** Day-before: from 10:00 until 20:00 on the day before. 4-hour: due at
+start − 4 h, still sent by a late pass until start − 2 h, never before 08:00 or from 20:00, so a
+visit before noon gets no 4-hour text (the day-before one covers it). Florida's solicitation hours
+are the reason for 8–8.
+
+**Exactly once.** A reminder's key is job + visit start (UTC) + kind. The `appointment_reminders`
+row is committed as `sending` BEFORE the text is handed to the transport and is never retried —
+a crash leaves a `sending` row, never a second text. A rescheduled visit is a new key and gets its
+own reminders; moved back, it finds the old key and sends nothing again. A pass that finds more
+than 40 due at once sends none (a renamed board or a bulk reschedule; a person looks first).
+
+**How it is sent.** To the Zuper customer's MOBILE (the reader now keeps which number is the
+mobile, `dispatch_jobs.mobile`); no mobile and one number → that number; two numbers and no
+mobile → skipped. A contact holding the number gets it through `automations.send_outbound` (DND
+honoured, the text on their thread); otherwise `send_outbound_to_number` on a number-only thread
+(no contact is created). Same transport as a staff text, from the CRM line; owen-main refuses
+STOP / opted-out numbers and the refusal is recorded. The wording is editable per reminder and
+language (must keep `{window}` or `{time}`). Default (the user, 2026-10-08): "Hi Maria, this is
+Dream Team Roofing. Reminder: our visit is tomorrow, Friday, October 9, from 2 PM to 4 PM. Text or
+call (954) 914-7244 if you need to reschedule. Reply STOP to opt out." — the range is Zuper's
+scheduled start and end ("at 2 PM" when there is no end, or it is on another day); the 4-hour text
+says "today"; Spanish says the same.
+
+**Language (the user: "check the language the customer is using in Quo or Zuper, save it").**
+Neither Zuper nor the CRM stored one (checked: no Zuper customer field or custom field). So
+`reminders/language.py` reads the customer's own inbound texts and Quo / CRM-line call
+transcripts for the number and scores Spanish against English function words; Spanish needs two
+Spanish texts or one Spanish call and more Spanish than English evidence. The result is saved in
+`customer_languages` per number (`source` auto). A person can set it in the contact panel
+("Reminder language"); a manual choice is never overwritten. No evidence = English. Zuper
+Connect's call summaries are written by Zuper in English and are not used.
+
+**Switches.** `ZUPER_REMINDERS_ENABLED` (the deployment's gate, default false) AND the mode in
+`reminder_settings` (off | test | on, default off). Test texts only the listed test numbers and
+records every other due reminder as `would_send` (key prefixed `preview:`, so turning On later
+still sends one whose window is open). Test / On need an ADMIN and the typed "TURN ON"; Off is one
+press. Every change is a `reminder_switch_log` row. Reading — status, Upcoming, the log, a
+customer's language — is the Dispatch audience (ADMIN + unrestricted DISPATCHER; a TECH or a
+restricted user 403); a board hidden by pipeline permissions is left out.
+
+**Screens — OURS.** Settings → Automations gains one card with a switch (the other rules stay
+read-only): mode buttons, the typed confirmation, test numbers, wording per reminder × language
+with a segment count, "Visits today and tomorrow" and the reminder log. The contact panel gains
+"Reminder language" under Additional Info for that audience; the DND tab's sentence now names
+reminders.
+
+**Built, tested, not deployed.** Migration `c8d2f4a6b1e9` (four new tables, one nullable column; on `b4e1d7a2c9f6`).
+`tests/test_reminders_rules.py` (windows, DST, columns, keys, language) and
+`tests/test_reminders_service.py` (off = nothing, test mode, exactly once, crash, refusal, stale,
+burst, DND, number threads, language, routes). No real text has been sent by it. To go live:
+deploy with migrations, `ZUPER_REMINDERS_ENABLED=true`, mode Test with your own number on a test
+job scheduled for tomorrow, read the "would send" rows for real jobs for a day or two, then On.

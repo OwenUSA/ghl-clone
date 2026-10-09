@@ -1228,6 +1228,13 @@ AUDITED = {
                      "dispatch_get_writes", "dispatch_put_writes", "dispatch_suggestion_apply",
                      "dispatch_job_book", "dispatch_job_stage"),
                     "DISPATCH_VIEW: restricted refused 403"),
+    # Appointment reminders from Zuper (app/reminders/api.py, 2026-10-08): the Dispatch gate
+    # (`dispatch.api.VIEW`) refuses a TECH or any restricted user 403 before anything is read;
+    # settings are ADMIN. Pinned by tests/test_reminders_service.py.
+    **dict.fromkeys(("reminders_status", "reminders_upcoming", "reminders_log",
+                     "reminders_put_settings", "reminders_get_language",
+                     "reminders_put_language"),
+                    "DISPATCH_VIEW: restricted refused 403"),
     # AI Agents (app/ai/api.py, 2026-09-15): the whole module refuses a restricted user
     # 403 before anything is read (`_viewer`), whatever their role — pinned by
     # tests/test_ai_permissions.py route by route.

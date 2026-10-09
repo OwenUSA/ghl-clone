@@ -245,4 +245,11 @@ def test_settings_lists_the_rules_with_no_switch():
     assert 'type="checkbox"' not in panel and "role=\"switch\"" not in panel
     assert "onClick" not in panel, "Automations is read-only: nothing to switch"
     settings = read("pages", "SettingsPage.tsx")
-    assert "section === 'automations' ? <AutomationsSettings />" in settings
+    assert "section === 'automations' ? <AutomationsSettings user={user} />" in settings
+    # The ONE switch on the page (2026-10-08, Owen's lift for appointment reminders): its own
+    # card, drawn for the Dispatch audience, switchable by an ADMIN with the typed phrase only.
+    assert "canOpenAiAgents(user) && <ZuperRemindersCard isAdmin={user.role === 'ADMIN'} />" \
+        in panel
+    card = strip_comments(read("components", "ZuperRemindersCard.tsx"))
+    assert "{isAdmin && (" in card and "phrase !== 'TURN ON'" in card
+    assert "save.mutate({ mode: 'off' })" in card       # off is one press, no phrase
