@@ -2228,8 +2228,14 @@ class ReminderSettings(Base):
     # The "inspection report submitted to AHS" text (2026-10-09): its own off | test | on.
     ahs_submitted_mode: Mapped[str] = mapped_column(String(10), default="off",
                                                     server_default="off")
+    # "AHS authorized the repair" (2026-10-09): its own off | test | on.
+    ahs_approved_mode: Mapped[str] = mapped_column(String(10), default="off",
+                                                   server_default="off")
     # When the remembered columns (reminder_stage_watch) were last brought up to date.
     stage_watch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # {kind: ISO time} — when each column text last ran. A kind switched on, or idle 30+ min,
+    # has no recent time, so its next pass only records (nobody already there is texted).
+    stage_watch_kinds: Mapped[dict | None] = mapped_column(NullableJSONType)
     # Test mode texts only these numbers (last ten digits); the rest are recorded "would send".
     test_numbers: Mapped[list | None] = mapped_column(NullableJSONType)
     # {"day_before": {"en": ..., "es": ...}, "four_hour": {...}} — a missing one is the default.

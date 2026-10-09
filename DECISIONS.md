@@ -7083,3 +7083,25 @@ same test numbers, ADMIN + "TURN ON" to switch on, Off in one press, every flip 
 Automations shows it inside the reminders card; its wording is editable there (no `{time}` needed).
 Migration `d3a7b9e2f415` (one table, two columns on `reminder_settings`), on `c8d2f4a6b1e9`.
 `tests/test_ahs_submitted_text.py` pins all of the above.
+
+## AMENDMENT (2026-10-09): "AHS authorized the repair" — a third narrow lift of 2026-09-15 ("no automatic texts")
+
+Owen approved (asked through the developer, 2026-10-09) one more automatic text: when a job on
+**AHS - Inspection** moves into **"AHS Approved"**, the customer is texted once — the careful
+wording, chosen because an AHS authorization can still leave a customer portion (an upgrade, what
+AHS does not cover), and because of Owen's rule for the voice agents never to promise an approval:
+"Hi Maria, this is Dream Team Roofing. Good news: American Home Shield has authorized the repair on
+your roof. Someone from our team will reach out shortly to go over the details and schedule it.
+Questions? Text or call (954) 914-7244. Reply STOP to opt out." (Spanish likewise.)
+
+Same rules as the "submitted to AHS" text: only moves made after it is switched on, once per job
+(`ahs_approved:<job_uid>` — a different key from the submitted text, so a job gets both, once
+each), night moves held to 8 AM and sent only if the job is still in AHS Approved or further along
+(Proposal Made, or the Repair & Review board) and open.
+
+The column texts are now one table, `reminders/config.STAGE_TEXTS` (kind, title, board, columns,
+"still true" columns and boards); the next one is a row there, a `<kind>_mode` column and its
+wording. Each text has its own off | test | on and its own "last ran" time in
+`reminder_settings.stage_watch_kinds`, so switching one on makes only THAT text record first —
+the others keep texting through the same pass. Migration `e6c1f8a4d290` (two columns), on
+`d3a7b9e2f415`. Tests: `tests/test_ahs_submitted_text.py`.

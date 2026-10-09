@@ -176,7 +176,7 @@ def run(db: Session, now: datetime | None = None) -> dict:
     if not c.enabled():
         return {"off": "ZUPER_REMINDERS_ENABLED is not set"}
     s = read_settings(db)
-    if not _active(s.mode) and not _active(s.ahs_submitted_mode):
+    if not _active(s.mode) and not stage_texts.active_kinds(s):
         return {"off": "mode is off"}
     last = rules.aware(s.last_run_at)
     if last is not None and now - last < timedelta(seconds=c.EVERY_SECONDS):
@@ -195,10 +195,10 @@ def run(db: Session, now: datetime | None = None) -> dict:
         work: list[tuple[DispatchJob, rules.Due, str, AppointmentReminder | None]] = []
         if _active(s.mode):
             work += [(j, d, s.mode, None) for j, d in candidates(db, now)]
-        if _active(s.ahs_submitted_mode):
-            for j in stage_texts.moves(db, s, now):
-                work.append((j, rules.Due(c.AHS_SUBMITTED, stage_texts.key_for(j.job_uid), now),
-                             s.ahs_submitted_mode, None))
+        if stage_texts.active_kinds(s):
+            for kind, j in stage_texts.moves(db, s, now):
+                work.append((j, rules.Due(kind, stage_texts.key_for(kind, j.job_uid), now),
+                             stage_texts.mode_of(s, kind), None))
             if not rules.quiet(now):
                 for row in stage_texts.held(db):
                     j = stage_texts.job_of(db, row.job_uid)
@@ -209,7 +209,9 @@ def run(db: Session, now: datetime | None = None) -> dict:
                                       "meanwhile), so it was not sent." % c.HELD_MAX_HOURS)
                         counts["cancelled"] += 1
                         continue
-                    if j is None or not c.ahs_submitted_still_true(j.board, j.status, j.is_open):
+                    if stage_texts.mode_of(s, row.kind) not in ("test", "on"):
+                        continue                    # its text is off: it waits, then expires
+                    if j is None or not c.still_true(row.kind, j.board, j.status, j.is_open):
                         row.state, row.finished_at = "cancelled", now
                         row.reason = ("Held overnight; by 8 AM the job was no longer waiting on "
                                       "AHS (now %s / %s), so it was not sent." % (
@@ -217,7 +219,7 @@ def run(db: Session, now: datetime | None = None) -> dict:
                         counts["cancelled"] += 1
                         continue
                     work.append((j, rules.Due(row.kind, row.key, rules.aware(row.visit_start)),
-                                 s.ahs_submitted_mode, row))
+                                 stage_texts.mode_of(s, row.kind), row))
             db.commit()
         keys = [d.key for _, d, _, r in work if r is None]
         used = _used(db, keys + [PREVIEW + k for k in keys])
@@ -253,7 +255,7 @@ def run(db: Session, now: datetime | None = None) -> dict:
                 db.commit()
                 counts["would_send"] += 1
                 continue
-            if row is None and d.kind == c.AHS_SUBMITTED and rules.quiet(now):
+            if row is None and d.kind in c.STAGE_KINDS and rules.quiet(now):
                 db.add(_row(job, d, key, state="waiting", phone=phone, language=lang, body=body,
                             reason="Moved outside 8 AM-8 PM: held until 8 AM."))
                 db.commit()
