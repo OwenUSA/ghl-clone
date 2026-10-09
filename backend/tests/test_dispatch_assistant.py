@@ -464,3 +464,30 @@ def test_one_customer_with_many_jobs_does_not_make_their_relative_look_like_our_
     db.commit()
     reach = lookups.customer_phones(db, NOW)
     assert all("9547018639" in reach["j" + n] for n in ("721", "418", "467", "311"))
+
+
+def test_an_answer_lost_to_thinking_is_asked_for_again_never_shown_empty(db, deepseek_on, script):
+    """Live 2026-10-09: deepseek-v4-pro spent its whole limit thinking on the final answer and
+    the chat showed "(no answer)"."""
+    empty = _deepseek_turn(content="", reasoning="thinking " * 50)
+    empty["choices"][0]["finish_reason"] = "length"
+    script.responses = [
+        _deepseek_turn(calls=[openai_call("day_schedule", json.dumps({"date_from": "today"}))]),
+        empty,
+        _deepseek_turn(content="Owen has #481 at 11:00 AM."),
+    ]
+    out = ai.chat(db, [{"role": "user", "content": "What is booked today?"}], user_id=None,
+                  hidden=set(), now=NOW)
+    assert out["reply"] == "Owen has #481 at 11:00 AM." and not out["error"]
+    assert script.requests[1]["body"]["max_tokens"] == ai.CHAT_MAX_TOKENS == 16000
+    assert script.requests[2]["body"]["max_tokens"] == ai.ANSWER_RETRY_TOKENS
+    assert "Write your answer" in script.requests[2]["body"]["messages"][-1]["content"]
+
+
+def test_when_the_retry_is_empty_too_the_chat_says_so_in_a_sentence(db, deepseek_on, script):
+    empty = _deepseek_turn(content="")
+    empty["choices"][0]["finish_reason"] = "length"
+    script.responses = [empty, dict(empty)]
+    out = ai.chat(db, [{"role": "user", "content": "What is booked today?"}], user_id=None,
+                  hidden=set(), now=NOW)
+    assert out["error"] and "ran out of room" in out["reply"]
