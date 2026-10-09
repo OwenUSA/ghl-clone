@@ -216,6 +216,44 @@ def _events(db: Session, since: datetime):
                "transcript": "", "staff": z.staff_name}
 
 
+# A number written in a call or text: "my son 954-701-8639", "call her directly 954 573 0002".
+PHONE_IN_TEXT = re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?(\d{3})\)?[\s.\-]?(\d{3})[\s.\-]?"
+                           r"(\d{4})(?!\d)")
+SHARED = 3          # a number in this many customers' conversations is one of OUR lines
+
+
+def customer_phones(db: Session, now: datetime, events: list[dict] | None = None,
+                    days: int = 30) -> dict[str, set[str]]:
+    """Every number each job's customer can be reached on: the Zuper customer's, plus a number
+    given in their OWN calls or texts (live 2026-10-08: Janeth Palacio's son confirmed on a
+    number she gave on 10/02; Gladys Barona's daughter texted her mother's). Our own lines are
+    in every conversation (transcript speaker labels), so a number in SHARED or more
+    customers' conversations is ours and never added; neither is another customer's number."""
+    from .. import crmlink
+    evs = events if events is not None else list(_events(db, now - timedelta(days=days)))
+    by_phone: dict[str, list[dict]] = {}
+    for e in evs:
+        if e["phone"]:
+            by_phone.setdefault(e["phone"], []).append(e)
+    jobs = list(db.scalars(select(DispatchJob)))
+    own = {p for j in jobs for p in (j.phones or [])}
+    mentioned: dict[str, set[str]] = {}
+    count: dict[str, int] = {}
+    for j in jobs:
+        found = set()
+        for p in j.phones or []:
+            for e in by_phone.get(p, []):
+                for m in PHONE_IN_TEXT.finditer(" ".join((e["text"] or "", e["transcript"] or ""))):
+                    found.add(m[1] + m[2] + m[3])
+        mentioned[j.job_uid] = found
+        for n in found:
+            count[n] = count.get(n, 0) + 1
+    ours = {digits(crmlink.DEFAULT_FROM_NUMBER)} | {n for n, k in count.items() if k >= SHARED}
+    return {j.job_uid: set(j.phones or []) | {n for n in mentioned[j.job_uid]
+                                              if n not in ours and n not in own}
+            for j in jobs}
+
+
 def _comm_out(ev: dict, full: bool, jobs: list[DispatchJob]) -> dict:
     text = " ".join((ev["text"] or "").split())
     out = {"at": _when(ev["at"]), "source": ev["source"], "kind": ev["kind"], "from": ev["who"],
@@ -226,8 +264,10 @@ def _comm_out(ev: dict, full: bool, jobs: list[DispatchJob]) -> dict:
                    summary=(text[:SHORT * 3] if full else text[:SHORT]) or None)
         tr = " ".join((ev["transcript"] or "").split())
         if tr:
-            out["transcript"] = tr[:TRANSCRIPT_MAX] if full else tr[:SHORT] + (
-                "…" if len(tr) > SHORT else "")
+            # The agreement is at the END of a call (live 2026-10-08: "mañana de una a 3 —
+            # Perfecto" came after the first 400 characters): the start AND the end.
+            out["transcript"] = tr[:TRANSCRIPT_MAX] if full else (
+                tr if len(tr) <= 900 else tr[:200] + " … " + tr[-700:])
     else:
         out["text"] = text[:SHORT * 3]
     return out
@@ -249,7 +289,7 @@ def search_comms(db: Session, now: datetime, hidden: set[str], *, phone: str | N
             DispatchJob.job_number == str(job_number).lstrip("#")))
         if not _visible(j, hidden):
             return {"error": "no such job"}
-        phones |= set(j.phones or [])
+        phones |= customer_phones(db, now).get(j.job_uid, set(j.phones or []))
     words = [w for w in re.split(r"\s+", (text or "").lower()) if w]
     nm = (name or "").strip().lower()
     hits = []
@@ -450,11 +490,17 @@ def _fmt(minutes: int) -> str:
     return "%d:%02d %s" % ((h - 1) % 12 + 1, m, "AM" if h < 12 else "PM")
 
 
-def _file_visits(sheets: list[dict], start: date, end: date, now: datetime) -> list[dict]:
-    """Every row that names a day in range: customer, day, window, technician, status. A
-    customer listed on several sheets for the same day is one visit (the row with a time
-    window wins)."""
+def _file_visits(sheets: list[dict], start: date, end: date, now: datetime
+                 ) -> tuple[list[dict], list[dict]]:
+    """Every row that names a day in range: customer, day, window, technician, status — and
+    where the file disagrees with itself. A customer listed on several sheets for the same day
+    is one visit (the row with a time window wins). When a sheet with a time window (the day
+    plan) has the customer on ANOTHER day, a summary sheet's row for this day is not a visit:
+    it is reported as a disagreement (live 2026-10-08: By City kept Diana Reyes on Friday
+    after the Schedule sheet moved her to Saturday)."""
     found: dict[tuple, dict] = {}
+    planned: dict[str, set[date]] = {}            # customer -> days on a sheet with a window
+    every: list[dict] = []
     for sheet in sheets:
         cols = compare.columns_of(sheet["columns"])
         datecols = [h for h in sheet["columns"] if any(k in h.lower() for k in DATE_HEADERS)]
@@ -472,7 +518,11 @@ def _file_visits(sheets: list[dict], start: date, end: date, now: datetime) -> l
                 carry = d
                 continue
             d = d or carry
-            if not name or d is None or not (start <= d <= end):
+            if not name or d is None:
+                continue
+            if windowcol:
+                planned.setdefault(" ".join(compare.words(name)), set()).add(d)
+            if not (start <= d <= end):
                 continue
             text = " ".join([v.get(windowcol or "", ""), dtext])
             win = _window(text)
@@ -484,11 +534,25 @@ def _file_visits(sheets: list[dict], start: date, end: date, now: datetime) -> l
                    "address": v.get(cols["address"] or "", "") or None,
                    "phone": v.get(cols["phone"] or "", "") or None,
                    "job_number_in_file": v.get(cols["job"] or "", "") or None,
-                   "status_in_file": v.get(cols["status"] or "", "") or None}
-            have = found.get(key)
-            if have is None or (win and not have["window"]):
-                found[key] = row
-    return sorted(found.values(), key=lambda x: (x["day"], x["window"] or (0, 0)))
+                   "status_in_file": v.get(cols["status"] or "", "") or None,
+                   "planned": bool(windowcol)}
+            every.append(row)
+    for row in every:
+        key = (" ".join(compare.words(row["customer"])), row["day"])
+        have = found.get(key)
+        if have is None or (row["window"] and not have["window"]):
+            found[key] = row
+    visits, disagree = [], []
+    for (who, d), row in found.items():
+        days = planned.get(who, set())
+        if not row["planned"] and days and d not in days:
+            disagree.append({"customer": row["customer"], "this_sheet": row["sheet"],
+                             "row": row["row"], "says": d.strftime("%a %m/%d"),
+                             "day_plan_says": ", ".join(x.strftime("%a %m/%d")
+                                                        for x in sorted(days))})
+            continue
+        visits.append(row)
+    return sorted(visits, key=lambda x: (x["day"], x["window"] or (0, 0))), disagree
 
 
 def _match(row: dict, jobs: list[DispatchJob]) -> list[DispatchJob]:
@@ -530,8 +594,10 @@ def compare_schedule(db: Session, now: datetime, hidden: set[str], sheets: list[
         for p in j.phones or []:
             pj.setdefault(p, []).append(j)
     recent = list(_events(db, now - timedelta(days=10)))
+    reach = customer_phones(db, now)
     out, used = [], set()
-    for row in _file_visits(sheets, start, end, now):
+    visits, disagree = _file_visits(sheets, start, end, now)
+    for row in visits:
         cands = _match(row, jobs)
         live = [j for j in cands if j.is_open] or cands
         # The job booked nearest the file's day is the one this row is about.
@@ -572,8 +638,11 @@ def compare_schedule(db: Session, now: datetime, hidden: set[str], sheets: list[
                             % (row["technician"], ", ".join(j.assigned)))
             if j.is_open and not booked_stage(j.status):
                 diff.append("Zuper stage “%s” is not a booked-visit stage" % j.status)
-            phones = set(j.phones or [])
+            phones = reach.get(j.job_uid, set(j.phones or []))
             talk = [e for e in recent if e["phone"] in phones][-8:]
+            extra = sorted(phones - set(j.phones or []))
+            if extra:
+                item["also_reached_on"] = extra          # numbers given in their own calls
             item["recent_calls_and_texts"] = [_comm_out(e, False, []) for e in talk] or None
         out.append(item)
     extra = []
@@ -581,9 +650,17 @@ def compare_schedule(db: Session, now: datetime, hidden: set[str], sheets: list[
         s = c.aware(j.scheduled_start)
         if s and start <= c.local(s).date() <= end and j.job_uid not in used and j.is_open:
             extra.append({**_job_line(j), "difference": "in Zuper on this day, not in the file"})
+    for item in out:
+        if not item["differences"] and item["zuper"]:
+            item["matches"] = "day, time, technician and stage agree with Zuper"
     return {"from": start.isoformat(), "to": end.isoformat(), "visits_in_file": len(out),
             "visits": out, "zuper_visits_not_in_file": extra or None,
+            "file_disagrees_with_itself": disagree or None,
             "how_to_judge": "A visit is CONFIRMED only when a call or text shows the customer "
                             "agreeing to that day (and time). The file saying 'confirmed' is "
-                            "not proof. Check recent_calls_and_texts; read a transcript with "
-                            "search_comms(full=true) when a reply is cut off."}
+                            "not proof. Check recent_calls_and_texts (a call's END holds the "
+                            "agreement; read it whole with search_comms(full=true) when cut); "
+                            "also_reached_on are numbers the customer gave (a son, a tenant). "
+                            "An entry with `matches` agrees with Zuper: say so, never call it "
+                            "missing. file_disagrees_with_itself: a summary sheet still has an "
+                            "old day; the day plan (the sheet with times) wins."}

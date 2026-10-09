@@ -82,11 +82,26 @@ export const SUGGESTED_QUESTIONS: readonly string[] = [
 
 /** A piece of a line: plain text, or **bold**. */
 export type Inline = { text: string; bold: boolean }
-/** A block of an answer: a paragraph, a bulleted list, a numbered list, or a heading. */
+/** A block of an answer: a paragraph, a bulleted list, a numbered list, a heading or a table. */
 export type Block =
   | { kind: 'p'; parts: Inline[] }
   | { kind: 'h'; parts: Inline[] }
   | { kind: 'ul' | 'ol'; items: Inline[][] }
+  | { kind: 'table'; head: Inline[][]; rows: Inline[][][] }
+
+/** The "|---|---|" line under a table's header. */
+const SEPARATOR = /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/
+
+function cells(line: string): string[] {
+  return line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+}
+
+/** A table written on ONE line ("| a | b | |---|---| | 1 | 2 |"), back into its rows. */
+function unfold(line: string): string[] {
+  if (!/\|\s*:?-{3,}/.test(line) || (line.match(/\|/g) ?? []).length < 6) return [line]
+  const parts = line.split(/\|\s+\|/)
+  return parts.map((r, i) => `${i === 0 ? '' : '|'}${r}${i === parts.length - 1 ? '' : '|'}`.trim())
+}
 
 export function inline(text: string): Inline[] {
   const out: Inline[] = []
@@ -114,8 +129,32 @@ export function blocks(text: string): Block[] {
     if (para.length) out.push({ kind: 'p', parts: inline(para.join(' ')) })
     para = []
   }
-  for (const raw of (text ?? '').split(/\r?\n/)) {
-    const line = raw.trim()
+  let table: { head: string[]; rows: string[][] } | null = null
+  let pending: string | null = null          // a "| a | b |" line that may start a table
+  const flushTable = () => {
+    if (table) {
+      out.push({ kind: 'table', head: table.head.map(inline),
+        rows: table.rows.map((r) => r.map(inline)) })
+    }
+    table = null
+  }
+  const lines = (text ?? '').split(/\r?\n/).flatMap((raw) => unfold(raw.trim()))
+  for (const line of lines) {
+    if (table) {
+      if (line.startsWith('|')) { table.rows.push(cells(line)); continue }
+      flushTable()
+    }
+    if (pending !== null) {
+      if (SEPARATOR.test(line)) {
+        flush()
+        table = { head: cells(pending), rows: [] }
+        pending = null
+        continue
+      }
+      para.push(pending)
+      pending = null
+    }
+    if (line.startsWith('|') && line.endsWith('|') && line.length > 2) { pending = line; continue }
     const bullet = /^[-*•]\s+(.*)$/.exec(line)
     const numbered = /^\d+[.)]\s+(.*)$/.exec(line)
     const heading = /^#{1,6}\s+(.*)$/.exec(line)
@@ -132,6 +171,8 @@ export function blocks(text: string): Block[] {
     }
     para.push(line)
   }
+  if (pending !== null) para.push(pending)
+  flushTable()
   flush()
   return out
 }
