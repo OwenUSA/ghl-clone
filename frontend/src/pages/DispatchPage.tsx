@@ -48,7 +48,9 @@ export function DispatchPage({ user }: { user: Me }) {
   // The assistant opens first (2026-10-01, the owner's ask). The server keeps the chats; the
   // open one is remembered here (and in sessionStorage, as a convenience) so switching tabs
   // keeps it.
-  const [tab, setTab] = useState<string>(ASK)
+  // A link can open a tab: the assistant's "Open plan on the calendar" is ?tab=book&plan=N.
+  const [tab, setTab] = useState<string>(() =>
+    new URLSearchParams(window.location.search).get('tab') === BOOK ? BOOK : ASK)
   const [activeChatId, setActiveChatId] = useState<number | null>(readActiveChat)
   useEffect(() => { writeActiveChat(activeChatId) }, [activeChatId])
   const summary = useQuery({ queryKey: ['dispatch-summary'], queryFn: dispatchSummary,

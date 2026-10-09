@@ -7,17 +7,28 @@ agent do it" is act.py, off unless the server and an ADMIN both say so.)
 """
 from __future__ import annotations
 
+import io
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import auth
 from ..db import get_db
-from ..models import AiConnection, DispatchItem, DispatchJob, DispatchSuggestion, Role
-from . import ai, booking, writes
+from ..models import (
+    AiConnection,
+    DispatchAvailability,
+    DispatchItem,
+    DispatchJob,
+    DispatchPlan,
+    DispatchSuggestion,
+    Role,
+)
+from . import ai, availability, booking, plan_excel, planner, scheduling, writes
+from . import config as c
 from .api import SHOWN, VIEW, _hidden, _item, _suggestion, _viewer, _with_suggestions
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
@@ -110,8 +121,131 @@ def dispatch_plan(days: int = 6, kind: str = "all", principal: auth.Principal = 
     """A DRAFT schedule for every job waiting for a visit (planner.py). Nothing is booked."""
     if kind not in ("all", "inspection", "repair"):
         raise HTTPException(400, "kind is all, inspection or repair")
-    return ai.build_plan(db, datetime.now(UTC), days=days, kind=kind,
-                         hidden=_hidden(db, principal))
+    # The 2026-10-01 contract: every board. POST /plans (2026-10-08) is AHS-only by default.
+    return ai.build_plan(db, datetime.now(UTC), days=days, kind=kind, boards="all",
+                         hidden=_hidden(db, principal), user_id=principal.user_id)
+
+
+class PlanBody(BaseModel):
+    days: int = Field(6, ge=1, le=18)
+    kind: str = "all"
+    mode: str = "most_jobs"
+    boards: str = "ahs"
+    include_unreached: bool = True
+
+
+@router.post("/plans")
+def dispatch_make_plan(body: PlanBody, principal: auth.Principal = VIEW,
+                       db: Session = Depends(get_db)):
+    """Remake the schedule (2026-10-08): a DRAFT plan for every job that needs a visit, as many
+    as fit with the least driving, kept so the calendar and the Excel show this same plan.
+    Nothing is booked and nothing reaches Zuper."""
+    if body.kind not in ("all", "inspection", "repair"):
+        raise HTTPException(400, "kind is all, inspection or repair")
+    if body.mode not in planner.MODES:
+        raise HTTPException(400, "mode is most_jobs or oldest_first")
+    if body.boards not in ("ahs", "all"):
+        raise HTTPException(400, "boards is ahs or all")
+    return scheduling.make_plan(db, datetime.now(UTC), days=body.days, kind=body.kind,
+                                mode=body.mode, boards=body.boards,
+                                include_unreached=body.include_unreached,
+                                hidden=_hidden(db, principal), user_id=principal.user_id,
+                                source="page")
+
+
+def _own_plan(db: Session, principal: auth.Principal, plan_id: int) -> DispatchPlan:
+    """A plan is read by the person who made it and an ADMIN — it was made with the maker's
+    boards; anyone else gets 404, never 403."""
+    p = db.get(DispatchPlan, plan_id)
+    if p is None or not p.result or (principal.role is not Role.ADMIN and
+                                     p.created_by_id != principal.user_id):
+        raise HTTPException(404, "no such plan")
+    return p
+
+
+@router.get("/plans/{plan_id}")
+def dispatch_get_plan(plan_id: int, principal: auth.Principal = VIEW,
+                      db: Session = Depends(get_db)):
+    return _own_plan(db, principal, plan_id).result
+
+
+@router.get("/plans/{plan_id}/schedule.xlsx")
+def dispatch_plan_excel(plan_id: int, principal: auth.Principal = VIEW,
+                        db: Session = Depends(get_db)):
+    p = _own_plan(db, principal, plan_id)
+    made = p.created_at.astimezone(c.TZ) if p.created_at.tzinfo else p.created_at
+    name = "Schedule plan %d - %s.xlsx" % (p.id, made.strftime("%Y-%m-%d %H%M"))
+    return StreamingResponse(io.BytesIO(plan_excel.workbook(p.result)), media_type=(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        headers={"Content-Disposition": 'attachment; filename="%s"' % name})
+
+
+# ---- what each customer said about when they can have the visit (2026-10-08) -------------
+
+def _waiting_visible(db: Session, principal: auth.Principal) -> dict[str, DispatchJob]:
+    uids = {pj.uid for pj in scheduling.waiting_jobs(db, datetime.now(UTC), boards="all",
+                                                     hidden=_hidden(db, principal),
+                                                     use_saved=False)}
+    return {j.job_uid: j for j in db.scalars(select(DispatchJob).where(
+        DispatchJob.job_uid.in_(uids)))} if uids else {}
+
+
+def _job_by_number(db: Session, principal: auth.Principal, number: str) -> DispatchJob:
+    j = db.scalar(select(DispatchJob).where(DispatchJob.job_number == number.lstrip("#")))
+    if j is None or (j.board and j.board in _hidden(db, principal)):
+        raise HTTPException(404, "no such job")
+    return j
+
+
+@router.get("/availability")
+def dispatch_availability(principal: auth.Principal = VIEW, db: Session = Depends(get_db)):
+    """Every job that needs a visit, with what its customer said about WHEN — read from the
+    calls and texts, or set by the office. A job not read yet says so."""
+    jobs = _waiting_visible(db, principal)
+    rows = {r.job_uid: r for r in db.scalars(select(DispatchAvailability).where(
+        DispatchAvailability.job_uid.in_(list(jobs))))} if jobs else {}
+    out = []
+    for uid, j in sorted(jobs.items(), key=lambda x: int(x[1].job_number or 0)
+                         if (x[1].job_number or "").isdigit() else 0):
+        r = rows.get(uid)
+        out.append(availability.payload(r, j) if r else {
+            "job_uid": uid, "job_number": j.job_number, "customer": j.customer_name,
+            "limits": {}, "in_words": "", "summary": None, "evidence": [], "confidence": None,
+            "source": None, "newer_messages": False, "read_at": None, "error": None})
+    return {"jobs": out}
+
+
+class AvailabilityBody(BaseModel):
+    limits: dict = Field(default_factory=dict)
+    summary: str | None = Field(None, max_length=500)
+
+
+@router.put("/availability/{job_number}")
+def dispatch_set_availability(job_number: str, body: AvailabilityBody,
+                              principal: auth.Principal = VIEW, db: Session = Depends(get_db)):
+    """The office corrects what the AI read. It stands until the office clears it."""
+    j = _job_by_number(db, principal, job_number)
+    row = availability.office_set(db, j, body.limits, body.summary, principal.user_id,
+                                  datetime.now(UTC))
+    return availability.payload(row, j)
+
+
+@router.delete("/availability/{job_number}")
+def dispatch_clear_availability(job_number: str, principal: auth.Principal = VIEW,
+                                db: Session = Depends(get_db)):
+    """Drop the office's correction: the calls are read again on the next pass."""
+    j = _job_by_number(db, principal, job_number)
+    availability.office_clear(db, j)
+    return {"cleared": True}
+
+
+@router.post("/availability/refresh")
+def dispatch_refresh_availability(principal: auth.Principal = VIEW,
+                                  db: Session = Depends(get_db)):
+    """Read now the customers whose calls and texts changed (a few at a time; the rest are
+    read on the next passes). Counts against the AI's daily cap."""
+    jobs = _waiting_visible(db, principal)
+    return availability.refresh(db, datetime.now(UTC), limit=8, job_uids=set(jobs))
 
 
 # ---- the AI ----------------------------------------------------------------------------------

@@ -1214,6 +1214,12 @@ AUDITED = {
                      "dispatch_rename_chat", "dispatch_delete_chat", "dispatch_chat_feedback",
                      # the week planner (2026-10-01): read only, hidden boards left out
                      "dispatch_plan",
+                     # remaking the schedule (2026-10-08): kept plans, own plans only (ADMIN all)
+                     "dispatch_make_plan", "dispatch_get_plan", "dispatch_plan_excel",
+                     # what customers said about when (2026-10-08): the same gate, hidden
+                     # boards' jobs answer 404
+                     "dispatch_availability", "dispatch_set_availability",
+                     "dispatch_clear_availability", "dispatch_refresh_availability",
                      # spreadsheets in the chat (2026-10-01): own files only
                      "dispatch_upload_chat_file", "dispatch_file_comparison",
                      "dispatch_put_settings",

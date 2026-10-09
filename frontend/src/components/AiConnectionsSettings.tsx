@@ -16,7 +16,7 @@ import {
 } from './ai/aiUi'
 
 const PROVIDER_LABEL: Record<string, string> = {
-  anthropic: 'Anthropic', openai: 'OpenAI', openai_compatible: 'OpenAI-compatible',
+  anthropic: 'Anthropic', openai: 'OpenAI', deepseek: 'DeepSeek', openai_compatible: 'OpenAI-compatible',
 }
 
 /**
@@ -245,6 +245,7 @@ function ConnectionModal({ connection, onClose, onSaved }: {
             onChange={(e) => set({ provider: e.target.value, default_model: DEFAULT_MODEL[e.target.value] ?? '' })}>
             <option value="anthropic">Anthropic</option>
             <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
             <option value="openai_compatible">OpenAI-compatible (custom base URL)</option>
           </select>
         )}

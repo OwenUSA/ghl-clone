@@ -501,12 +501,17 @@ const chipName: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellip
 function Downloads({ items }: { items: DispatchChatDownload[] }) {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-      {items.map((d, i) => (
-        <a key={`${d.url}-${i}`} href={d.url} download className="hover:bg-[rgb(243,244,246)]"
-          style={{ fontSize: 13, color: BLUE, border: `1px solid ${LINE}`, borderRadius: 8,
-            padding: '6px 10px', background: '#fff', textDecoration: 'none' }}>
-          Download: {d.label}</a>
-      ))}
+      {items.map((d, i) => {
+        // A file is downloaded; a page link (the plan's calendar) is opened (2026-10-08).
+        const file = /\.(xlsx|csv)(\?|$)/.test(d.url)
+        return (
+          <a key={`${d.url}-${i}`} href={d.url} download={file || undefined}
+            className="hover:bg-[rgb(243,244,246)]"
+            style={{ fontSize: 13, color: BLUE, border: `1px solid ${LINE}`, borderRadius: 8,
+              padding: '6px 10px', background: '#fff', textDecoration: 'none' }}>
+            {file ? 'Download' : 'Open'}: {d.label}</a>
+        )
+      })}
     </div>
   )
 }

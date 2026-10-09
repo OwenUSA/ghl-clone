@@ -223,6 +223,10 @@ PATHS = {
     "product": "/product/{uid}",
     "custom_fields": "/settings/custom_fields",     # definitions: REST path unverified
     "lead_sources": "/settings/lead_sources",       # MCP-only per research: unverified
+    # The account's activity log, newest first (Dispatch assistant, 2026-10-08). GET only;
+    # verified live: ?count=50&page=N, each row with users, metadata.request_source and, for a
+    # job, activity_action_uid = the job's uid.
+    "activities": "/activities/recent",
     "webhooks": "/service/notifications/webhook",
     "webhook_create": "/webhook",
     "webhook_list": "/webhook",                     # a second guess at the list (UNVERIFIED)
@@ -261,7 +265,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("GET", _rx(PATHS["estimates"])), ("GET", _rx(PATHS["estimate"])),
     ("GET", _rx(PATHS["invoices"])), ("GET", _rx(PATHS["invoice"])),
     ("GET", _rx(PATHS["payments"])), ("GET", _rx(PATHS["commissions"])),
-    ("GET", _rx(PATHS["product"])),
+    ("GET", _rx(PATHS["product"])), ("GET", _rx(PATHS["activities"])),
     ("GET", _rx(PATHS["custom_fields"])), ("GET", _rx(PATHS["lead_sources"])),
     ("GET", _rx(PATHS["webhooks"])), ("POST", _rx(PATHS["webhook_create"])),
     ("GET", _rx(PATHS["webhook_list"])),

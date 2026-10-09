@@ -71,6 +71,7 @@ class Zuper:
         self.notes: dict[str, list[dict]] = {}
         self.calls: list[dict] = []
         self.details: dict[str, dict] = {}
+        self.activities: list[dict] = []          # newest first, as Zuper lists them
         self.requests: list[tuple[str, str]] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -88,6 +89,10 @@ class Zuper:
             return httpx.Response(418)
         if path == "/api/jobs":
             return ok(self.jobs, total_records=len(self.jobs), total_pages=1)
+        if path == "/api/activities/recent":
+            page = int(request.url.params.get("page", 1))
+            count = int(request.url.params.get("count", 50))
+            return ok(self.activities[(page - 1) * count: page * count])
         for j in self.jobs:
             if path == "/api/jobs/%s" % j["job_uid"]:
                 detail = json.loads(json.dumps(j))

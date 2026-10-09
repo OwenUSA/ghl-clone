@@ -33,7 +33,7 @@ from ..models import (
     DispatchSuggestion,
     ZuperStatusHistory,
 )
-from . import booking, comms, playbook
+from . import booking, comms, lookups, playbook
 from . import config as c
 
 log = logging.getLogger("dispatch.ai")
@@ -42,11 +42,17 @@ PER_PASS = 8                 # explanations per reader pass (the rest wait for t
 EXPLAIN_KINDS = {"new_not_called", "after_inspection", "after_repair", "talked_not_updated",
                  "book_visit", "needs_date", "missed_call", "missed_text", "visit_unconfirmed",
                  "off_board", "no_photos"}
-CHAT_STEPS = 8
+# A question about a day or a week takes many look-ups: the schedule, the file, then the calls of
+# every customer whose visit is not clearly confirmed (the 2026-10-08 session took 15-30).
+CHAT_STEPS = 30
+# What the look-ups of ONE answer may add to the conversation before it must answer: a
+# model's context is finite, and a provider that is not Claude may have far less than 1M.
+CHAT_READ_BUDGET = 300_000
+TOOL_RESULT_MAX = 40_000
 # Reasoning models (gpt-6-luna) spend part of this on thinking before they answer: 900 cut a
 # third of the live answers short (2026-10-01), so the room is generous; cost stays cents.
 EXPLAIN_MAX_TOKENS = 4000
-CHAT_MAX_TOKENS = 4000
+CHAT_MAX_TOKENS = 8000
 ADDRESS = "Job address"
 NOTE = "Note"
 
@@ -112,7 +118,7 @@ def job_context(db: Session, j: DispatchJob, talk: dict[str, list[comms.Comm]],
                        .order_by(ZuperStatusHistory.changed_at.desc()).limit(8)).all()
     mine = sorted((x for p in j.phones or [] for x in talk.get(p, [])),
                   key=lambda x: x.at)[-10:]
-    last_talks = [x for x in mine if x.talked][-2:]
+    last_talks = [x for x in mine if x.talked][-4:]
     return {
         "job_number": j.job_number, "board": j.board, "stage": j.status,
         "in_stage_since": _local(j.status_since), "stage_set_by": j.status_by,
@@ -129,7 +135,7 @@ def job_context(db: Session, j: DispatchJob, talk: dict[str, list[comms.Comm]],
             "line": x.source, "seconds": x.seconds, "answered": x.talked,
             "missed": x.missed, "summary_or_text": x.summary[:600]} for x in mine],
         "transcripts_of_last_conversations": [
-            {"at": _local(x.at), "transcript": x.transcript[:3000]} for x in last_talks
+            {"at": _local(x.at), "transcript": x.transcript[:4000]} for x in last_talks
             if x.transcript],
         "now": _local(now),
     }
@@ -286,16 +292,51 @@ def explain_pending(db: Session, now: datetime, limit: int = PER_PASS) -> dict:
 
 # ---------------------------------------------------------------------------------- chat
 
-CHAT_SYSTEM = """You are the dispatch assistant of Dream Team Roofing (Florida), talking with \
-the office staff inside their CRM. Answer questions about jobs, calls and what to do next, using \
-the tools to look things up — never from memory. Be brief and concrete: job numbers, names, \
-dates. You cannot change Zuper or contact anyone; when something should change in Zuper, say \
-exactly what and how, and you may record it with suggest_change so the office can approve it.
+CHAT_SYSTEM = """You are the dispatch assistant of Dream Team Roofing (South Florida), talking \
+with the office staff inside their CRM. You check Zuper, every call and text (Quo and Zuper \
+Connect), Zuper's activity log, the technicians' notes and the office's spreadsheet, and tell \
+the person what is right, what is wrong and exactly what to do, like a careful dispatcher who \
+has read everything before answering.
+
+Today is {today} (New York). "Today", "tomorrow" and "this week" (to Saturday) are New York \
+dates.
+
+How to work
+- Look everything up; never answer from memory. Use as many look-ups as the question needs. \
+A question about a day or a week usually needs day_schedule, compare_schedule when a file is \
+attached, then search_comms for each customer whose visit is not clearly confirmed.
+- A visit is CONFIRMED only when a call or text shows the customer agreeing to that day (and \
+time). A spreadsheet saying "confirmed" is not proof. If a transcript has only our side, say \
+the customer's answer is not on record.
+- The newest evidence wins: a later "can I reschedule?" beats an earlier booking. When the \
+file, Zuper and the calls disagree, say which says what, with the time of each.
+- Read a cut-off conversation in full (search_comms with full=true) before deciding.
+- Zuper's activity log: lines from OUR SCRIPT appear under the API key owner's name (Owen); \
+never say that person did them. "field app" is the technician in the field; "office" is the \
+office. Name every deletion of a job or customer: the owner's rule is never to delete.
+- Zuper has no live location. "Where is X" is reconstructed with tech_day: give the last place \
+with evidence and its time, and say it is an inference.
+- Remaking the schedule: call plan_schedule. What each customer said about when they can \
+have the visit is already read from all their calls and texts and applied (`limits`); if a \
+proposed visit's last calls and texts show something newer or missed (a day, a time, "away \
+next week", a technician), call plan_schedule again with those limits and their evidence. \
+Then give the summary (visits placed, not placed, \
+driving), a table per day and technician, the tentative ones (call first) and the links. \
+Nothing is booked: the office books each visit in Zuper.
+- You cannot change Zuper or contact anyone. When Zuper needs a change, say exactly which job, \
+which stage / time / technician / field, to what, and the evidence. You may record a field, \
+address or note change with suggest_change for the office to approve.
+
+How to answer
+- First the direct answer in one or two sentences (yes / no, and how many).
+- Then a short table per day or per group: job #, customer, what Zuper shows, what the calls \
+show, what to do. Keep "confirmed by a call / text" apart from "not confirmed, call first".
+- Times as 7:30 AM, dates as Thu 10/08, jobs as #724. Short and concrete, no filler. Answer \
+in the language the person writes in.
 
 {rules}
 The boards:
-{boards}
-Today is {today}."""
+{boards}"""
 
 TOOLS = [
     providers.ToolSpec("list_items", "The open Dispatch items (what the office must do), "
@@ -319,13 +360,38 @@ TOOLS = [
                            "job_number": {"type": "string"}, "kind": {"type": "string"},
                            "technician": {"type": "string"}},
                         "required": ["job_number"], "additionalProperties": False}),
-    providers.ToolSpec("plan_schedule", "A DRAFT schedule for EVERY job waiting for a visit: "
-                       "close jobs grouped on the same day, per technician, 4-5 a day, Monday to "
-                       "Saturday, around the visits already booked, with times and driving. Use "
-                       "it for any question about when / how to book several jobs. kind: all, "
-                       "inspection or repair; days: how many business days ahead (default 6).",
+    providers.ToolSpec("plan_schedule", "Remake the schedule: a DRAFT plan for EVERY job that "
+                       "needs a visit (new inspections, AHS-approved repairs, reschedules, "
+                       "visits that did not happen or have no time), fitted Monday to Saturday "
+                       "for the technicians around what is booked, as many jobs as possible "
+                       "with the least driving. Returns the plan, each proposed visit's last "
+                       "calls and texts, and links to an Excel and a calendar. Customers' "
+                       "limits from the calls go in `limits`; call it again with them. "
+                       "mode: most_jobs (default) or oldest_first; kind: all, inspection or "
+                       "repair; days: business days ahead (6 = a week, 12 = two); boards: ahs "
+                       "(default) or all; include_unreached: place customers nobody reached "
+                       "yet as tentative (default true).",
                        {"type": "object", "properties": {
-                           "days": {"type": "integer"}, "kind": {"type": "string"}},
+                           "days": {"type": "integer"}, "kind": {"type": "string"},
+                           "mode": {"type": "string"}, "boards": {"type": "string"},
+                           "include_unreached": {"type": "boolean"},
+                           "limits": {"type": "array", "items": {
+                               "type": "object", "properties": {
+                                   "job_number": {"type": "string"},
+                                   "not_before": {"type": "string"},
+                                   "blocked": {"type": "array", "items": {
+                                       "type": "object", "properties": {
+                                           "from": {"type": "string"},
+                                           "to": {"type": "string"}},
+                                       "required": ["from", "to"],
+                                       "additionalProperties": False}},
+                                   "not_days": {"type": "array", "items": {"type": "string"}},
+                                   "days": {"type": "array", "items": {"type": "string"}},
+                                   "after": {"type": "string"},
+                                   "before": {"type": "string"},
+                                   "technician": {"type": "string"},
+                                   "evidence": {"type": "string"}},
+                               "required": ["job_number"], "additionalProperties": False}}},
                         "additionalProperties": False}),
     providers.ToolSpec("read_file", "Read rows of a spreadsheet attached to this chat, in order "
                        "(top to bottom). Page with offset; up to 100 rows a call.",
@@ -339,6 +405,52 @@ TOOLS = [
                        "workbook for the person. Use it for any 'compare with Zuper' request.",
                        {"type": "object", "properties": {"file_id": {"type": "integer"}},
                         "required": ["file_id"], "additionalProperties": False}),
+    providers.ToolSpec("day_schedule", "Every visit with a time in Zuper for a day or a range "
+                       "(up to 14 days), per technician, in time order, each with what looks "
+                       "wrong (closed job, stage that is not a booked visit, nobody assigned, "
+                       "Technician field disagreeing). Dates: today, tomorrow, 2026-10-08, 10/08.",
+                       {"type": "object", "properties": {
+                           "date_from": {"type": "string"}, "date_to": {"type": "string"},
+                           "technician": {"type": "string"}},
+                        "required": ["date_from"], "additionalProperties": False}),
+    providers.ToolSpec("compare_schedule", "Compare the DATED visits of an attached "
+                       "spreadsheet (its schedule / booked-for days) with Zuper for a day or a "
+                       "range: for each visit, the Zuper job, its day, time, technician and "
+                       "stage, every difference, and the customer's recent calls and texts; "
+                       "plus Zuper visits the file does not have. Use it for 'what needs "
+                       "updating in Zuper this week'.", {"type": "object", "properties": {
+                           "file_id": {"type": "integer"}, "date_from": {"type": "string"},
+                           "date_to": {"type": "string"}},
+                           "required": ["file_id", "date_from"],
+                           "additionalProperties": False}),
+    providers.ToolSpec("search_comms", "Calls and texts (Quo, the CRM line and Zuper Connect) "
+                       "by phone (ANY number, e.g. a relative's), job number, customer name "
+                       "and/or words in the text or transcript, newest last. full=true returns "
+                       "whole transcripts; use it when a conversation is cut off.",
+                       {"type": "object", "properties": {
+                           "phone": {"type": "string"}, "job_number": {"type": "string"},
+                           "name": {"type": "string"}, "text": {"type": "string"},
+                           "days": {"type": "integer"}, "full": {"type": "boolean"}},
+                        "additionalProperties": False}),
+    providers.ToolSpec("activity_log", "Zuper's activity log: who moved, rescheduled, assigned, "
+                       "noted or DELETED what, when, and from where (office, field app). For a "
+                       "day (default today) or the last N hours; filter by job number, person "
+                       "or words. Our own scripts' lines are left out unless include_scripts.",
+                       {"type": "object", "properties": {
+                           "day": {"type": "string"}, "hours": {"type": "integer"},
+                           "job_number": {"type": "string"}, "person": {"type": "string"},
+                           "text": {"type": "string"}, "include_scripts": {"type": "boolean"}},
+                        "additionalProperties": False}),
+    providers.ToolSpec("job_notes", "The text of a job's notes in Zuper (a technician's on-site "
+                       "dictation, the office's notes), oldest first.",
+                       {"type": "object", "properties": {"job_number": {"type": "string"}},
+                        "required": ["job_number"], "additionalProperties": False}),
+    providers.ToolSpec("tech_day", "One technician's day (default today): booked visits and a "
+                       "timeline of their stage moves, notes, own calls and field-app actions, "
+                       "with the last place there is evidence for. Zuper has no GPS.",
+                       {"type": "object", "properties": {
+                           "technician": {"type": "string"}, "day": {"type": "string"}},
+                        "required": ["technician"], "additionalProperties": False}),
     providers.ToolSpec("suggest_change", "Record a change Zuper needs on a job, for the office to "
                        "approve (it is NOT applied). field: an exact job field label, 'Job "
                        "address' or 'Note'.", {"type": "object", "properties": {
@@ -387,7 +499,7 @@ def slots_for(db: Session, j: DispatchJob, now: datetime, kind: str | None = Non
 
 def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str],
              made: list[DispatchSuggestion], files: dict | None = None,
-             downloads: list | None = None) -> str:
+             downloads: list | None = None, user_id: int | None = None) -> str:
     if name in ("read_file", "compare_file"):
         f = (files or {}).get(int(args.get("file_id") or 0))
         if f is None:
@@ -416,6 +528,33 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
                            "more": max(0, len(notable) - 80),
                            "note": "The full row-by-row comparison is in the download."},
                           default=str)
+    if name == "compare_schedule":
+        f = (files or {}).get(int(args.get("file_id") or 0))
+        if f is None:
+            return json.dumps({"error": "no such file in this chat"})
+        return json.dumps(lookups.compare_schedule(db, now, hidden, f.sheets,
+                                                   date_from=args.get("date_from"),
+                                                   date_to=args.get("date_to")), default=str)
+    if name == "day_schedule":
+        return json.dumps(lookups.day_schedule(db, now, hidden, date_from=args.get("date_from"),
+                                               date_to=args.get("date_to"),
+                                               technician=args.get("technician")), default=str)
+    if name == "search_comms":
+        return json.dumps(lookups.search_comms(
+            db, now, hidden, phone=args.get("phone"), text=args.get("text"),
+            name=args.get("name"), job_number=args.get("job_number"),
+            days=args.get("days") or 14, full=bool(args.get("full"))), default=str)
+    if name == "activity_log":
+        return json.dumps(lookups.activity_log(
+            db, now, hidden, day=args.get("day"), hours=args.get("hours"),
+            job_number=args.get("job_number"), person=args.get("person"),
+            text=args.get("text"), include_scripts=bool(args.get("include_scripts"))),
+            default=str)
+    if name == "job_notes":
+        return json.dumps(lookups.job_notes(db, hidden, args.get("job_number", "")), default=str)
+    if name == "tech_day":
+        return json.dumps(lookups.tech_day(db, now, hidden, technician=args.get("technician", ""),
+                                           day=args.get("day")), default=str)
     if name == "list_items":
         q = select(DispatchItem).where(DispatchItem.state == "open")
         if args.get("queue"):
@@ -440,9 +579,22 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
                             "board": j.board, "stage": j.status, "city": j.city,
                             "visit": _local(j.scheduled_start)} for j in rows[:30]])
     if name == "plan_schedule":
-        out = build_plan(db, now, days=int(args.get("days") or 6),
-                         kind=str(args.get("kind") or "all"), hidden=hidden)
-        return json.dumps(plan_for_model(out))
+        from . import scheduling
+        kind = str(args.get("kind") or "all")
+        out = scheduling.make_plan(
+            db, now, days=int(args.get("days") or 6),
+            kind=kind if kind in ("all", "inspection", "repair") else "all",
+            mode=str(args.get("mode") or "most_jobs"), boards=str(args.get("boards") or "ahs"),
+            include_unreached=args.get("include_unreached") is not False,
+            limits=args.get("limits") if isinstance(args.get("limits"), list) else None,
+            hidden=hidden, user_id=user_id, source="chat")
+        if downloads is not None and out.get("id"):
+            for link in ({"label": "Schedule plan #%d (Excel)" % out["id"],
+                          "url": "/api/dispatch/plans/%d/schedule.xlsx" % out["id"]},
+                         {"label": "Open plan #%d on the calendar" % out["id"],
+                          "url": "/dispatch?tab=book&plan=%d" % out["id"]}):
+                downloads.append(link)
+        return json.dumps(scheduling.for_model(db, out, now), default=str)
     j = _visible_job(db, args.get("job_number", ""), hidden)
     if j is None:
         return json.dumps({"error": "no such job"})
@@ -491,6 +643,7 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
                                 today=_local(now))
     convo = [{"role": m["role"], "content": m["content"]} if m["role"] == "user" else
              {"role": "assistant", "text": m["content"]} for m in messages]
+    read = 0
     for step in range(CHAT_STEPS):
         if step:
             # Every round is a request: the cap and "Pause all AI agents" are asked again
@@ -516,13 +669,18 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
         results = []
         for call in turn.tool_calls:
             out = run_tool(db, call.name, call.arguments or {}, now, hidden, made,
-                           files, downloads) \
+                           files, downloads, user_id) \
                 if call.arguments is not None else json.dumps({"error": "bad arguments"})
+            if len(out) > TOOL_RESULT_MAX:
+                out = out[:TOOL_RESULT_MAX] + "... [cut: ask more narrowly for the rest]"
+            read += len(out)
             steps.append({"tool": call.name, "args": call.arguments or {},
                           "result": out[:STEP_RESULT_MAX]})
             results.append({"id": call.id, "name": call.name, "content": out,
                             "is_error": False})
         convo.append({"role": "tool_results", "results": results})
+        if read > CHAT_READ_BUDGET:
+            break                       # enough read for one answer: answer with it
     # Out of look-ups: one last request WITHOUT more look-ups, answering with what it found
     # (the owner's chat on 2026-10-01 ended in "I could not finish" instead).
     try:
@@ -567,58 +725,11 @@ def _plan_kind(j: DispatchJob) -> str:
 
 
 def build_plan(db: Session, now: datetime, *, days: int = 6, kind: str = "all",
-               hidden: set[str] | None = None) -> dict:
-    """The draft schedule for every job waiting for a visit (planner.plan), with its
-    assumptions. Read only."""
-    from ..zuper import config as zuper_config
-    from . import planner
-    hidden = hidden or set()
-    days = max(1, min(int(days), 18))
-    today = c.local(now).date()
-    template = zuper_config.job_url_template()
-    jobs = []
-    for j in db.scalars(select(DispatchJob).where(DispatchJob.is_open.is_(True))):
-        if (j.board or "") in hidden or j.board not in (*c.BOARDS, *c.OTHER_PIPELINES) or \
-                j.status not in c.BOOK:
-            continue
-        start = c.aware(j.scheduled_start)
-        if start and c.local(start).date() >= today:
-            continue                                   # already has a visit
-        k = _plan_kind(j)
-        if kind in ("inspection", "repair") and k != kind:
-            continue
-        jobs.append(planner.PlanJob(
-            uid=j.job_uid, number=j.job_number, customer=j.customer_name, city=j.city,
-            lat=j.lat, lng=j.lng, kind=k, waiting_since=j.status_since,
-            zuper_url=template.format(uid=j.job_uid) if template else None))
-    techs = settings(db).technicians or booking.DEFAULT_TECHNICIANS
-    learned = learned_minutes(db)
-    minutes: dict[str, dict[str, int]] = {}
-    sources: dict[str, dict] = {}
-    for t in techs:
-        mine = {}
-        src = "default"
-        for k in ("inspection", "repair"):
-            set_by_admin = (t.get("minutes") or {}).get(k)
-            if set_by_admin:
-                mine[k], src = int(set_by_admin), "settings"
-            elif learned.get(t["name"], {}).get(k):
-                mine[k] = learned[t["name"]][k]
-                src = "history" if src == "default" else src
-            else:
-                mine[k] = planner.DEFAULT_MINUTES[k]
-        minutes[t["name"]] = mine
-        sources[t["name"]] = {**mine, "source": src}
-    out = planner.plan(jobs=jobs, booked=visits_for_booking(db, now, hidden),
-                       technicians=techs, minutes=minutes, now=now, days=days)
-    out["generated_at"] = now.isoformat()
-    out["assumptions"] = {
-        "minutes": sources,
-        "hours": {t["name"]: {"start": t["start"], "end": t["end"], "days": t.get("days", []),
-                              "max": t.get("max", 5)} for t in techs},
-        "note": "Visit lengths come from how jobs were booked before; change them per "
-                "technician in Dispatch → Settings. Driving is a straight-line estimate."}
-    return out
+               hidden: set[str] | None = None, **kw) -> dict:
+    """The draft schedule (scheduling.make_plan): every job that needs a visit, fitted with the
+    least driving. Read only; kept as a DispatchPlan so the Excel and calendar match."""
+    from . import scheduling
+    return scheduling.make_plan(db, now, days=days, kind=kind, hidden=hidden, **kw)
 
 
 def plan_for_model(out: dict) -> dict:

@@ -768,6 +768,23 @@ in `DECISIONS.md`.
   row with text), `dispatch/compare.py` matches each row to a Zuper job (job # → phone → name →
   address) and names every difference; the chat's `read_file` / `compare_file` tools, and
   `GET /api/dispatch/chats/files/{id}/comparison.xlsx`. Only the parsed rows are stored.
+- **It reads like the office** (2026-10-08, `dispatch/lookups.py`): `day_schedule`,
+  `compare_schedule` (an Excel's dated visits vs Zuper and the calls), `search_comms` (any
+  number, full transcripts on ask), `activity_log`, `job_notes`, `tech_day`. The reader keeps
+  note TEXT (`dispatch_notes`) and Zuper's activity log (`dispatch_activity`); a line with
+  source `API_KEY` is OUR script, shown in Zuper under Owen's name — never say Owen did it.
+  Zuper has no live location. A visit is confirmed only by a call or text. Runs on a
+  **DeepSeek** connection (provider `deepseek`) — customer data goes to DeepSeek; see the
+  2026-10-08 amendment in `DECISIONS.md`.
+- **Remaking the schedule** (2026-10-08, `dispatch/scheduling.py` + `planner.py`): every job that
+  needs a visit (to book, rescheduled, or a visit that passed / has no time), AHS boards by
+  default, unreached customers as CALL FIRST, the customers' limits from the calls; the most
+  jobs with the least driving (multi-start + local search). Kept in `dispatch_plans`; the
+  Excel (`/api/dispatch/plans/{id}/schedule.xlsx`) and the week calendar show the same plan.
+  Driving is an estimate (the owner's choice). See the second 2026-10-08 amendment.
+  **What each customer said about WHEN** (`dispatch/availability.py`, `dispatch_availability`):
+  the AI reads all their calls and texts (21 days, whole transcripts) once per change, saves
+  limits + quotes, and every plan applies them; the office can correct one (it stands).
 - **Phase 3 — the agent applies a confirmed change in Zuper** (`dispatch/writes.py`, routes in
   `dispatch/act.py`): BUILT AND OFF. Needs `DISPATCH_ZUPER_WRITES=true` AND an ADMIN's master +
   per-action switch (typed "TURN ON", every flip in `dispatch_write_log`); writes only through

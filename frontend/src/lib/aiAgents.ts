@@ -483,7 +483,7 @@ const PRICE = /^\d+(\.\d{1,6})?$/
 export function connectionProblems(f: ConnectionForm, editing: boolean): string[] {
   const out: string[] = []
   if (!f.name.trim()) out.push('Give the connection a name.')
-  if (!['anthropic', 'openai', 'openai_compatible'].includes(f.provider)) out.push('Choose a provider.')
+  if (!['anthropic', 'openai', 'deepseek', 'openai_compatible'].includes(f.provider)) out.push('Choose a provider.')
   if (f.provider === 'openai_compatible') {
     if (!f.base_url.trim()) out.push('An OpenAI-compatible connection needs its base URL.')
     else if (!/^https?:\/\//.test(f.base_url.trim())) out.push('The base URL must start with https://.')
@@ -512,7 +512,7 @@ export function connectionBody(f: ConnectionForm, editing: boolean): Record<stri
 }
 
 export const DEFAULT_MODEL: Record<string, string> = {
-  anthropic: 'claude-sonnet-5', openai: 'gpt-5-mini', openai_compatible: '',
+  anthropic: 'claude-sonnet-5', openai: 'gpt-5-mini', deepseek: 'deepseek-chat', openai_compatible: '',
 }
 
 /** Prices to prefill when the model is known; null when it is not (leave what is typed). */
