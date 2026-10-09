@@ -466,6 +466,22 @@ def test_one_customer_with_many_jobs_does_not_make_their_relative_look_like_our_
     assert all("9547018639" in reach["j" + n] for n in ("721", "418", "467", "311"))
 
 
+def test_a_number_we_texted_the_customer_is_ours_not_theirs(db):
+    """Live 2026-10-09: Owen texted Chani Gansburg "please call me back at 561-690-5516"; his own
+    phone became hers, and texts to Owen showed up as her conversation."""
+    db.add(DispatchJob(job_uid="chani", job_number="716", board=c.INSPECTION_BOARD,
+                       status="Scheduled", phones=["7862089222"], is_open=True))
+    conv = _thread(db, "7862089222", "Chani")
+    db.add(ConversationEvent(conversation_id=conv.id, type=EventType.SMS,
+                             direction=Direction.OUTBOUND, occurred_at=NOW - timedelta(days=3),
+                             body="Hi Chani this is Owen please call me back at 561-690-5516"))
+    db.add(ConversationEvent(conversation_id=conv.id, type=EventType.SMS,
+                             direction=Direction.INBOUND, occurred_at=NOW - timedelta(days=2),
+                             body="Or text my husband 305-555-0144"))
+    db.commit()
+    assert lookups.customer_phones(db, NOW)["chani"] == {"7862089222", "3055550144"}
+
+
 def test_an_answer_lost_to_thinking_is_asked_for_again_never_shown_empty(db, deepseek_on, script):
     """Live 2026-10-09: deepseek-v4-pro spent its whole limit thinking on the final answer and
     the chat showed "(no answer)"."""

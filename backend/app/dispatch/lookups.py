@@ -225,8 +225,8 @@ SHARED = 3          # a number in this many customers' conversations is one of O
 def customer_phones(db: Session, now: datetime, events: list[dict] | None = None,
                     days: int = 30) -> dict[str, set[str]]:
     """Every number each job's customer can be reached on: the Zuper customer's, plus a number
-    given in their OWN calls or texts (live 2026-10-08: Janeth Palacio's son confirmed on a
-    number she gave on 10/02; Gladys Barona's daughter texted her mother's). Our own lines are
+    given in their calls or in a text THEY sent (live 2026-10-08: Janeth Palacio's son confirmed
+    on a number she gave on 10/02; Gladys Barona's daughter texted her mother's). Our own lines are
     in every conversation (transcript speaker labels), so a number in SHARED or more
     customers' conversations is ours and never added. A number that is ANOTHER job's customer
     IS added: live, Janeth Palacio's son is himself the customer on his own AHS job."""
@@ -245,6 +245,10 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
         found = set()
         for p in j.phones or []:
             for e in by_phone.get(p, []):
+                # A number in a text WE sent is one of ours (live 2026-10-09: "this is Owen,
+                # call me back at 561-..." put Owen's own phone on Chani Gansburg's job).
+                if e["kind"] == "text" and e["who"] == "us":
+                    continue
                 for m in PHONE_IN_TEXT.finditer(" ".join((e["text"] or "", e["transcript"] or ""))):
                     found.add(m[1] + m[2] + m[3])
         mentioned[j.job_uid] = found
