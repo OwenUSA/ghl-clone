@@ -89,6 +89,21 @@ export type Block =
   | { kind: 'ul' | 'ol'; items: Inline[][] }
   | { kind: 'table'; head: Inline[][]; rows: Inline[][][] }
 
+/** A table cell that holds a list ("#283 Barbara, 11:45 AM; #355 Anita, 2:30 PM") as one line
+    per item (2026-10-09: a whole day's jobs in one cell was unreadable). */
+export function cellLines(parts: Inline[]): Inline[][] {
+  const lines: Inline[][] = [[]]
+  for (const p of parts) {
+    const pieces = p.text.split(/;\s+/)
+    pieces.forEach((text, i) => {
+      if (i > 0) lines.push([])
+      if (text) lines[lines.length - 1].push({ text, bold: p.bold })
+    })
+  }
+  const out = lines.filter((l) => l.length)
+  return out.length ? out : [parts]
+}
+
 /** The "|---|---|" line under a table's header. */
 const SEPARATOR = /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$/
 

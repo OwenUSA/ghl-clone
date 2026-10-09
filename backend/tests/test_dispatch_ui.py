@@ -106,3 +106,15 @@ def test_a_table_in_an_answer_is_a_table_even_when_its_rows_ran_together():
     one = got["one"][0]
     assert one["kind"] == "table" and [r[0][0]["text"] for r in one["rows"]] == ["#728", "#690"]
     assert got["notTable"][0]["kind"] == "p"
+
+
+@node
+def test_a_cell_holding_a_list_shows_one_item_a_line():
+    """2026-10-09: the assistant put a whole day's jobs in one cell."""
+    got = run_js("dispatch.ts", r"""
+        out(m.cellLines([{ text: '#283 Barbara, 11:45 AM; #355 Anita, 2:30 PM; ', bold: false },
+                         { text: 'call first', bold: true }]))
+    """)
+    assert [[p["text"] for p in line] for line in got] == [
+        ["#283 Barbara, 11:45 AM"], ["#355 Anita, 2:30 PM"], ["call first"]]
+    assert got[2][0]["bold"] is True

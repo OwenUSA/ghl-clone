@@ -8,7 +8,7 @@ import {
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  blocks, clip, DEFAULT_FILE_QUESTION, fileSummary, greeting, groupChats, isSpreadsheetName,
+  blocks, cellLines, clip, DEFAULT_FILE_QUESTION, fileSummary, greeting, groupChats, isSpreadsheetName,
   MAX_CHAT_FILES, stepArgs, stepLabel, SUGGESTED_QUESTIONS, type Inline,
 } from '../../lib/dispatch'
 
@@ -777,7 +777,9 @@ function Answer({ text }: { text: string }) {
                 <tr key={j}>{b.head.map((_, k) => (
                   <td key={k} style={{ padding: '6px 8px', borderBottom: `1px solid ${LINE}`,
                     verticalAlign: 'top', minWidth: k === 0 ? 120 : 140 }}>
-                    <Parts parts={r[k] ?? []} /></td>
+                    {cellLines(r[k] ?? []).map((line, n) => (
+                      <div key={n} style={n ? { marginTop: 2 } : undefined}><Parts parts={line} /></div>
+                    ))}</td>
                 ))}</tr>
               ))}
             </tbody>

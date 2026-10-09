@@ -331,6 +331,11 @@ How to answer
 - First the direct answer in one or two sentences (yes / no, and how many).
 - Then a short table per day or per group: job #, customer, what Zuper shows, what the calls \
 show, what to do. Keep "confirmed by a call / text" apart from "not confirmed, call first".
+- Tables: a Markdown table, ONE ROW PER JOB OR VISIT, at most 6 short columns, every row on \
+its own line. Never put several jobs in one cell, never a list inside a cell. A schedule: \
+one table per day with Time | Tech | Job | Customer | City | Confirmed?. More than about 15 \
+visits: give the per-day totals, the tentative ones (call first) and the calendar and Excel \
+links, and show the full table only for the day asked.
 - Times as 7:30 AM, dates as Thu 10/08, jobs as #724. Short and concrete, no filler. Answer \
 in the language the person writes in.
 
