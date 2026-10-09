@@ -228,7 +228,8 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
     given in their OWN calls or texts (live 2026-10-08: Janeth Palacio's son confirmed on a
     number she gave on 10/02; Gladys Barona's daughter texted her mother's). Our own lines are
     in every conversation (transcript speaker labels), so a number in SHARED or more
-    customers' conversations is ours and never added; neither is another customer's number."""
+    customers' conversations is ours and never added. A number that is ANOTHER job's customer
+    IS added: live, Janeth Palacio's son is himself the customer on his own AHS job."""
     from .. import crmlink
     evs = events if events is not None else list(_events(db, now - timedelta(days=days)))
     by_phone: dict[str, list[dict]] = {}
@@ -236,7 +237,6 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
         if e["phone"]:
             by_phone.setdefault(e["phone"], []).append(e)
     jobs = list(db.scalars(select(DispatchJob)))
-    own = {p for j in jobs for p in (j.phones or [])}
     mentioned: dict[str, set[str]] = {}
     count: dict[str, int] = {}
     for j in jobs:
@@ -249,9 +249,7 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
         for n in found:
             count[n] = count.get(n, 0) + 1
     ours = {digits(crmlink.DEFAULT_FROM_NUMBER)} | {n for n, k in count.items() if k >= SHARED}
-    return {j.job_uid: set(j.phones or []) | {n for n in mentioned[j.job_uid]
-                                              if n not in ours and n not in own}
-            for j in jobs}
+    return {j.job_uid: set(j.phones or []) | (mentioned[j.job_uid] - ours) for j in jobs}
 
 
 def _comm_out(ev: dict, full: bool, jobs: list[DispatchJob]) -> dict:
