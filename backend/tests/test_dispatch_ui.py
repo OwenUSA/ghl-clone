@@ -85,3 +85,36 @@ def test_an_answer_becomes_paragraphs_lists_and_bold_never_markup():
     assert got[1]["kind"] == "ul" and len(got[1]["items"]) == 2
     assert got[2]["kind"] == "ol" and got[2]["items"][1] == [{"text": "Move it", "bold": False}]
     assert got[3] == {"kind": "p", "parts": [{"text": "<b>not html</b>", "bold": False}]}
+
+
+@node
+def test_a_table_in_an_answer_is_a_table_even_when_its_rows_ran_together():
+    """2026-10-09: the assistant's first real answer was a table, shown as one long line."""
+    got = run_js("dispatch.ts", r"""
+        const multi = m.blocks('Not all match.\n\n| Job | Zuper | Do |\n|---|---|---|\n'
+          + '| #721 | **7:30** Fri | Call first |\n| #725 | 7:30 | ok |\n\nThen call.')
+        const one = m.blocks('| Job | Do | |---|---| | #728 | Remove Friday | | #690 | Saturday |')
+        const notTable = m.blocks('A | B is not a table')
+        out({ multi, one, notTable })
+    """)
+    multi = got["multi"]
+    assert [b["kind"] for b in multi] == ["p", "table", "p"]
+    t = multi[1]
+    assert [h[0]["text"] for h in t["head"]] == ["Job", "Zuper", "Do"]
+    assert t["rows"][0][1][0] == {"text": "7:30", "bold": True}
+    assert len(t["rows"]) == 2
+    one = got["one"][0]
+    assert one["kind"] == "table" and [r[0][0]["text"] for r in one["rows"]] == ["#728", "#690"]
+    assert got["notTable"][0]["kind"] == "p"
+
+
+@node
+def test_a_cell_holding_a_list_shows_one_item_a_line():
+    """2026-10-09: the assistant put a whole day's jobs in one cell."""
+    got = run_js("dispatch.ts", r"""
+        out(m.cellLines([{ text: '#283 Barbara, 11:45 AM; #355 Anita, 2:30 PM; ', bold: false },
+                         { text: 'call first', bold: true }]))
+    """)
+    assert [[p["text"] for p in line] for line in got] == [
+        ["#283 Barbara, 11:45 AM"], ["#355 Anita, 2:30 PM"], ["call first"]]
+    assert got[2][0]["bold"] is True

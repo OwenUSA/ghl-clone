@@ -240,7 +240,9 @@ def for_model(db: Session, out: dict, now: datetime) -> dict:
     """The plan, compact, for the chat model — with each NEW visit's last calls and texts, so
     the assistant can see a customer's limits and plan again with them."""
     talk = comms.load(db, now - timedelta(days=14))
-    phones = {j.job_number: j.phones or [] for j in db.scalars(select(DispatchJob))}
+    reach = lookups.customer_phones(db, now, days=14)
+    phones = {j.job_number: sorted(reach.get(j.job_uid, set(j.phones or [])))
+              for j in db.scalars(select(DispatchJob))}
 
     def last_words(number):
         items = sorted((x for p in phones.get(number, []) for x in talk.get(p, [])),

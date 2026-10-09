@@ -164,15 +164,15 @@ def _ampm(hhmm: str) -> str:
     return "%d:%02d %s" % ((h - 1) % 12 + 1, m, "AM" if h < 12 else "PM")
 
 
-def read_one(db: Session, j: DispatchJob, evs: list[dict], now: datetime, prov, model: str
-             ) -> DispatchAvailability:
+def read_one(db: Session, j: DispatchJob, evs: list[dict], now: datetime, prov, model: str,
+             fingerprint: str | None = None) -> DispatchAvailability:
     from . import ai
     row = db.scalar(select(DispatchAvailability).where(DispatchAvailability.job_uid == j.job_uid))
     if row is None:
         row = DispatchAvailability(job_uid=j.job_uid)
         db.add(row)
     row.job_number = j.job_number
-    row.fingerprint = _fingerprint(j.phones or [], evs)
+    row.fingerprint = fingerprint or _fingerprint(j.phones or [], evs)
     row.read_at = now
     if not evs:
         row.limits, row.summary, row.evidence, row.confidence = {}, None, None, None
@@ -217,14 +217,16 @@ def refresh(db: Session, now: datetime, *, limit: int = PER_TICK,
     if not waiting:
         return counts
     talk = _events_by_phone(db, now)
+    reach = lookups.customer_phones(db, now, [e for evs in talk.values() for e in evs])
     # Fresh from the database: an office correction cleared on another session must count.
     rows = {r.job_uid: r for r in db.scalars(select(DispatchAvailability).where(
         DispatchAvailability.job_uid.in_(waiting)).execution_options(populate_existing=True))}
     todo = []
     for j in db.scalars(select(DispatchJob).where(DispatchJob.job_uid.in_(waiting))):
-        evs = [e for p in j.phones or [] for e in talk.get(p, [])]
+        phones = sorted(reach.get(j.job_uid, set(j.phones or [])))
+        evs = [e for p in phones for e in talk.get(p, [])]
         evs.sort(key=lambda e: e["at"] or now)
-        fp = _fingerprint(j.phones or [], evs)
+        fp = _fingerprint(phones, evs)
         row = rows.get(j.job_uid)
         if row is not None and row.source == "office":
             if fp != row.fingerprint and not row.newer_messages:
@@ -235,12 +237,12 @@ def refresh(db: Session, now: datetime, *, limit: int = PER_TICK,
             counts["unchanged"] += 1
             continue
         last = max((e["at"] for e in evs if e["at"]), default=None)
-        todo.append((last or datetime.min.replace(tzinfo=now.tzinfo), j, evs))
+        todo.append((last or datetime.min.replace(tzinfo=now.tzinfo), j, evs, fp))
     todo.sort(key=lambda x: x[0], reverse=True)
     prov = model = None
-    for _, j, evs in todo[:limit]:
+    for _, j, evs, fp in todo[:limit]:
         if not evs:
-            read_one(db, j, evs, now, None, "")
+            read_one(db, j, evs, now, None, "", fp)
             counts["no_messages"] += 1
             continue
         try:
@@ -248,7 +250,7 @@ def refresh(db: Session, now: datetime, *, limit: int = PER_TICK,
         except ai.Unavailable as e:
             counts["skipped"] = str(e)
             break
-        read_one(db, j, evs, now, prov, model)
+        read_one(db, j, evs, now, prov, model, fp)
         counts["read"] += 1
         db.commit()
     counts["waiting_to_read"] = max(0, len(todo) - limit)

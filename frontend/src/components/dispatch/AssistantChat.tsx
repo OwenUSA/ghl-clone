@@ -8,7 +8,7 @@ import {
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
 import {
-  blocks, clip, DEFAULT_FILE_QUESTION, fileSummary, greeting, groupChats, isSpreadsheetName,
+  blocks, cellLines, clip, DEFAULT_FILE_QUESTION, fileSummary, greeting, groupChats, isSpreadsheetName,
   MAX_CHAT_FILES, stepArgs, stepLabel, SUGGESTED_QUESTIONS, type Inline,
 } from '../../lib/dispatch'
 
@@ -760,6 +760,31 @@ function Answer({ text }: { text: string }) {
         <p key={i} style={{ margin: '0 0 10px' }}><Parts parts={b.parts} /></p>
       ) : b.kind === 'h' ? (
         <div key={i} style={{ fontWeight: 600, margin: '12px 0 6px' }}><Parts parts={b.parts} /></div>
+      ) : b.kind === 'table' ? (
+        <div key={i} style={{ overflowX: 'auto', margin: '0 0 12px' }} role="region"
+          aria-label="Table">
+          <table style={{ borderCollapse: 'collapse', fontSize: 13, lineHeight: '18px',
+            minWidth: '100%' }}>
+            <thead>
+              <tr>{b.head.map((c, k) => (
+                <th key={k} style={{ textAlign: 'left', fontWeight: 600, padding: '6px 8px',
+                  borderBottom: `2px solid ${LINE}`, background: 'rgb(249,250,251)',
+                  verticalAlign: 'bottom' }}><Parts parts={c} /></th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {b.rows.map((r, j) => (
+                <tr key={j}>{b.head.map((_, k) => (
+                  <td key={k} style={{ padding: '6px 8px', borderBottom: `1px solid ${LINE}`,
+                    verticalAlign: 'top', minWidth: k === 0 ? 120 : 140 }}>
+                    {cellLines(r[k] ?? []).map((line, n) => (
+                      <div key={n} style={n ? { marginTop: 2 } : undefined}><Parts parts={line} /></div>
+                    ))}</td>
+                ))}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <div key={i} style={{ margin: '0 0 10px' }}>
           {b.items.map((it, j) => (

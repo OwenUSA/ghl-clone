@@ -171,9 +171,12 @@ def test_search_comms_finds_any_number_and_cuts_transcripts_unless_asked(db):
     short = lookups.search_comms(db, NOW, set(), phone="(954) 701-8639")
     item = short["items_oldest_first"][0]
     assert item["source"] == "Quo" and item["from"] == "customer"
-    assert len(item["transcript"]) < 500 and "after 3 PM" not in item["transcript"]
+    # Cut: the start AND the end — a call's agreement is at its end (live 2026-10-08).
+    short_tr = item["transcript"]
+    assert len(short_tr) < 1000 and " … " in short_tr
+    assert short_tr.startswith("+19549147244: Hello.") and short_tr.endswith("after 3 PM works.")
     full = lookups.search_comms(db, NOW, set(), phone="9547018639", full=True)
-    assert "after 3 PM works" in full["items_oldest_first"][0]["transcript"]
+    assert len(full["items_oldest_first"][0]["transcript"]) > 1500
     words = lookups.search_comms(db, NOW, set(), text="reschedule")
     assert [i["text"] for i in words["items_oldest_first"]] == ["Can I reschedule please?"]
     both = lookups.search_comms(db, NOW, set(), phone="3055550123")
@@ -380,3 +383,54 @@ def test_the_chat_stops_looking_once_it_has_read_enough(db, deepseek_on, script,
     assert out["reply"] == "Here is what I read."
     last = script.requests[-1]["body"]["messages"][-1]
     assert last["role"] == "user" and "no more look-ups" in last["content"]
+
+
+# ---- 2026-10-09: what the first real answer got wrong ------------------------------------------
+
+def test_a_number_the_customer_gave_in_a_call_is_theirs_and_our_lines_never_are(db):
+    """Janeth Palacio gave her son's number on a call; he confirmed on THAT number. The office
+    line is a speaker in every transcript — it must never become a customer's number."""
+    office = "+19549147244"
+    for n, phone in (("721", "9549931801"), ("722", "3055550201"), ("723", "3055550202")):
+        db.add(DispatchJob(job_uid="j" + n, job_number=n, board=c.INSPECTION_BOARD,
+                           status="Scheduled", phones=[phone], is_open=True))
+        conv = _thread(db, phone, "C" + n)
+        db.add(ConversationEvent(conversation_id=conv.id, type=EventType.CALL,
+                                 direction=Direction.OUTBOUND, occurred_at=NOW - timedelta(days=2),
+                                 call_status="completed", duration_seconds=90, body="call",
+                                 source_system="OpenPhone",
+                                 transcript="%s: Hello. +1%s: Hi." % (office, phone) + (
+                                     " Call my son, his number is 954-701-8639." if n == "721"
+                                     else "")))
+    son = _thread(db, "9547018639", "Sebastian")
+    db.add(ConversationEvent(conversation_id=son.id, type=EventType.SMS,
+                             direction=Direction.INBOUND, occurred_at=NOW - timedelta(hours=3),
+                             body="Yes, Friday 7:30 works"))
+    db.commit()
+    reach = lookups.customer_phones(db, NOW)
+    assert reach["j721"] == {"9549931801", "9547018639"}
+    assert "9549147244" not in reach["j722"] | reach["j723"]
+    words = lookups.search_comms(db, NOW, set(), job_number="721")
+    assert any(i.get("text") == "Yes, Friday 7:30 works" for i in words["items_oldest_first"])
+
+
+def test_the_excel_disagreeing_with_itself_is_said_and_a_match_says_it_matches(db):
+    db.add_all([visit("v", 680, 9, 14, name="Quentin Rushin"),
+                visit("d", 690, 10, 9, name="Diana Reyes")])
+    db.commit()
+    sheets = [{"name": "Schedule", "columns": ["Day", "Tech", "Window", "Customer"], "rows": [
+                  {"row": 2, "values": {"Day": "Fri 10/09", "Tech": "Owen",
+                                        "Window": "2:00\u20134:00 PM",
+                                        "Customer": "Quentin Rushin"}},
+                  {"row": 3, "values": {"Day": "Sat 10/10", "Tech": "Owen",
+                                        "Window": "9:00\u201311:00 AM",
+                                        "Customer": "Diana Reyes"}}]},
+              {"name": "By City", "columns": ["City", "Customer", "Booked for"], "rows": [
+                  {"row": 63, "values": {"Customer": "Diana Reyes",
+                                         "Booked for": "Fri 10/09 7:30\u201310:00 AM (Owen)"}}]}]
+    out = lookups.compare_schedule(db, NOW, set(), sheets, date_from="tomorrow")
+    assert [v["file"]["customer"] for v in out["visits"]] == ["Quentin Rushin"]
+    assert out["visits"][0]["matches"].startswith("day, time, technician")
+    assert out["file_disagrees_with_itself"] == [{
+        "customer": "Diana Reyes", "this_sheet": "By City", "row": 63, "says": "Fri 10/09",
+        "day_plan_says": "Sat 10/10"}]
