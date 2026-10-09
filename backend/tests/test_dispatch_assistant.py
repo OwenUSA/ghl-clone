@@ -449,3 +449,18 @@ def test_a_relative_who_is_also_a_customer_still_counts(db):
                              body="Please call my son Sebastian at (954) 701-8639"))
     db.commit()
     assert lookups.customer_phones(db, NOW)["mom"] == {"9549931801", "9547018639"}
+
+
+def test_one_customer_with_many_jobs_does_not_make_their_relative_look_like_our_line(db):
+    """Live 2026-10-09: Janeth Palacio has six jobs on one number; counting JOBS made her son's
+    number look like one of ours (in 3+ conversations). It is counted per customer."""
+    for n in ("721", "418", "467", "311"):
+        db.add(DispatchJob(job_uid="j" + n, job_number=n, board=c.INSPECTION_BOARD,
+                           status="Scheduled", phones=["9549931801"], is_open=True))
+    conv = _thread(db, "9549931801", "Janeth")
+    db.add(ConversationEvent(conversation_id=conv.id, type=EventType.SMS,
+                             direction=Direction.INBOUND, occurred_at=NOW - timedelta(days=5),
+                             body="My son is at 954-701-8639"))
+    db.commit()
+    reach = lookups.customer_phones(db, NOW)
+    assert all("9547018639" in reach["j" + n] for n in ("721", "418", "467", "311"))

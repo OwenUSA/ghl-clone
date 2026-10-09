@@ -238,7 +238,9 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
             by_phone.setdefault(e["phone"], []).append(e)
     jobs = list(db.scalars(select(DispatchJob)))
     mentioned: dict[str, set[str]] = {}
-    count: dict[str, int] = {}
+    # Counted per CUSTOMER (their set of numbers), not per job: live, Janeth Palacio has six
+    # jobs on one number, and counting jobs made her son's number look like one of ours.
+    seen_by: dict[str, set[frozenset]] = {}
     for j in jobs:
         found = set()
         for p in j.phones or []:
@@ -246,8 +248,10 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
                 for m in PHONE_IN_TEXT.finditer(" ".join((e["text"] or "", e["transcript"] or ""))):
                     found.add(m[1] + m[2] + m[3])
         mentioned[j.job_uid] = found
-        for n in found:
-            count[n] = count.get(n, 0) + 1
+        who = frozenset(j.phones or [j.job_uid])
+        for n in found - set(j.phones or []):
+            seen_by.setdefault(n, set()).add(who)
+    count = {n: len(customers) for n, customers in seen_by.items()}
     ours = {digits(crmlink.DEFAULT_FROM_NUMBER)} | {n for n, k in count.items() if k >= SHARED}
     return {j.job_uid: set(j.phones or []) | (mentioned[j.job_uid] - ours) for j in jobs}
 
