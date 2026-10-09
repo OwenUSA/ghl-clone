@@ -491,3 +491,47 @@ def test_when_the_retry_is_empty_too_the_chat_says_so_in_a_sentence(db, deepseek
     out = ai.chat(db, [{"role": "user", "content": "What is booked today?"}], user_id=None,
                   hidden=set(), now=NOW)
     assert out["error"] and "ran out of room" in out["reply"]
+
+
+# ---- 2026-10-09: calls first, no invented jobs, the day plan wins ------------------------------
+
+def test_a_job_number_nothing_looked_up_is_flagged_under_the_answer():
+    seen = ['{"job_number": "725", "customer": "Joe Melita"}', "what about job 680?"]
+    ok = ai.flag_unseen_jobs("#725 is done; #680 moved.", seen)
+    assert ok == "#725 is done; #680 moved."
+    bad = ai.flag_unseen_jobs("#725 is done; #7251 and #999 need a visit.", seen)
+    assert bad.endswith("**Check:** #999, #7251 did not appear in anything I looked up — "
+                        "verify it in Zuper before acting on it.")
+
+
+def test_a_customer_only_on_the_callbacks_sheet_is_not_a_visit_on_a_planned_day(db):
+    db.add(visit("v", 713, 9, 12, name="Enrique Ortega", who=("Antonio Brown",)))
+    db.add(DispatchJob(job_uid="r", job_number="279", board=c.REPAIR_BOARD, status="Call Back",
+                       customer_name="Javier Rivera", is_open=True))
+    db.commit()
+    sheets = [{"name": "Schedule", "columns": ["Day", "Tech", "Window", "Customer"], "rows": [
+                  {"row": 2, "values": {"Day": "Fri 10/09", "Tech": "Antonio",
+                                        "Window": "12:00\u20132:00 PM",
+                                        "Customer": "Enrique Ortega"}}]},
+              {"name": "Callbacks", "columns": ["Customer", "Booked for"], "rows": [
+                  {"row": 9, "values": {"Customer": "Javier Rivera",
+                                        "Booked for": "Fri 10/09 12:00\u20132:00 PM (Antonio)"}}]}]
+    out = lookups.compare_schedule(db, NOW, set(), sheets, date_from="tomorrow")
+    assert [v["file"]["customer"] for v in out["visits"]] == ["Enrique Ortega"]
+    assert out["file_disagrees_with_itself"] == [{
+        "customer": "Javier Rivera", "this_sheet": "Callbacks", "row": 9, "says": "Fri 10/09",
+        "day_plan_says": "not on the day plan that day"}]
+
+
+def test_the_newest_word_from_the_customer_is_spelled_out(db):
+    db.add(visit("g", 716, 11, 7, name="Chani Gansburg", phones=["7862089222"]))
+    conv = _thread(db, "7862089222", "Chani")
+    db.add(ConversationEvent(conversation_id=conv.id, type=EventType.SMS,
+                             direction=Direction.INBOUND, occurred_at=NOW - timedelta(hours=1),
+                             body="Hi Yes Today will work. Thank you"))
+    db.commit()
+    sheets = [{"name": "Schedule", "columns": ["Day", "Tech", "Window", "Customer"], "rows": [
+        {"row": 2, "values": {"Day": "Sun 10/11", "Tech": "Owen", "Window": "7:00\u20139:00 AM",
+                              "Customer": "Chani Gansburg"}}]}]
+    out = lookups.compare_schedule(db, NOW, set(), sheets, date_from="10/11")
+    assert out["visits"][0]["newest_from_customer"].endswith("Hi Yes Today will work. Thank you")

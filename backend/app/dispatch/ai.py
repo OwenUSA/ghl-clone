@@ -305,10 +305,26 @@ has read everything before answering.
 Today is {today} (New York). "Today", "tomorrow" and "this week" (to Saturday) are New York \
 dates.
 
+The order of truth (the owner's rule, 2026-10-09). When they disagree, the higher one wins:
+1. The customer's calls and texts (Quo, Zuper Connect, every number they gave), NEWEST first.
+2. What happened in Zuper: the activity log and the technicians' notes (a visit done, a move).
+3. The Zuper job as it stands now (stage, visit, technician).
+4. The office's spreadsheet, last. A row saying "confirmed" with no call or text behind it is \
+NOT confirmed.
+
 How to work
 - Look everything up; never answer from memory. Use as many look-ups as the question needs. \
 A question about a day or a week usually needs day_schedule, compare_schedule when a file is \
 attached, then search_comms for each customer whose visit is not clearly confirmed.
+- Every "confirmed", "moved", "cancelled", "done" or "not reached" you write names its \
+evidence: the call or text with its day and time, or the Zuper log line. Never say "no call or \
+text on record" without having looked (compare_schedule's recent_calls_and_texts or \
+search_comms for that job). With no evidence, write "not checked", never a guess.
+- A customer's answer from TODAY beats the date in Zuper and the spreadsheet: "Yes, today \
+works" at 9:11 AM means the visit is today, whatever Zuper still says.
+- A customer only on a summary sheet (Callbacks, By City) for a day the day plan covers is not \
+a visit that day (compare_schedule lists it under file_disagrees_with_itself).
+- Never invent a job number, a time or a customer: only what a look-up returned.
 - A visit is CONFIRMED only when a call or text shows the customer agreeing to that day (and \
 time). A spreadsheet saying "confirmed" is not proof. If a transcript has only our side, say \
 the customer's answer is not on record.
@@ -624,6 +640,20 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
 
 
 STEP_RESULT_MAX = 4000
+JOB_REF = re.compile(r"#(\d{3,5})(?!\d)")
+
+
+def flag_unseen_jobs(reply: str, seen: list[str]) -> str:
+    """A job number in the answer that no look-up returned (and the person did not write) is
+    flagged under the answer — the model may have invented it (the owner, 2026-10-09:
+    "prevent it from hallucinating")."""
+    text = "\n".join(seen)
+    unseen = sorted({n for n in JOB_REF.findall(reply or "")
+                     if not re.search(r"(?<!\d)%s(?!\d)" % n, text)}, key=int)
+    if not unseen:
+        return reply
+    return reply + ("\n\n**Check:** %s did not appear in anything I looked up — verify it in "
+                    "Zuper before acting on it." % ", ".join("#" + n for n in unseen))
 
 
 def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[str],
@@ -638,9 +668,12 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
     steps: list[dict] = []
     downloads: list[dict] = []
     usage = {"input_tokens": 0, "output_tokens": 0}
+    seen: list[str] = [m.get("content") or "" for m in messages]   # what the answer may cite
 
     def result(reply: str, *, error: bool = False, model: str | None = None) -> dict:
         db.commit()
+        if not error:
+            reply = flag_unseen_jobs(reply, seen)
         return {"reply": reply, "error": error, "suggestions": [x.id for x in made],
                 "steps": steps, "model": model, "downloads": downloads, **usage}
 
@@ -692,6 +725,7 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
             if len(out) > TOOL_RESULT_MAX:
                 out = out[:TOOL_RESULT_MAX] + "... [cut: ask more narrowly for the rest]"
             read += len(out)
+            seen.append(out)
             steps.append({"tool": call.name, "args": call.arguments or {},
                           "result": out[:STEP_RESULT_MAX]})
             results.append({"id": call.id, "name": call.name, "content": out,
