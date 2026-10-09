@@ -118,7 +118,7 @@ def fresh(db: Session, now: datetime) -> bool:
 def candidates(db: Session, now: datetime) -> list[tuple[DispatchJob, rules.Due]]:
     jobs = db.scalars(select(DispatchJob).where(
         DispatchJob.is_open.is_(True),
-        DispatchJob.board.in_(list(c.COLUMNS)),
+        DispatchJob.board.in_(c.boards()),
         DispatchJob.scheduled_start > now - timedelta(minutes=1),
         DispatchJob.scheduled_start <= now + timedelta(days=2)))
     out = []
@@ -262,7 +262,7 @@ def plan(db: Session, now: datetime | None = None) -> list[dict]:
         DispatchJob.scheduled_start))
     for j in jobs:
         counts = c.column_counts(j.board, j.status)
-        if not counts and j.board not in c.COLUMNS:
+        if not counts and j.board not in c.boards():
             continue
         phone = recipient(j)
         row = {"job_uid": j.job_uid, "job_number": j.job_number, "board": j.board,

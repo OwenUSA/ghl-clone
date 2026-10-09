@@ -18,6 +18,14 @@ COLUMNS: dict[str, tuple[str, ...]] = {
     "Retail": ("Scheduled",),
     "AHS - Inspection": ("Scheduled", "Inspection: Day-Before", "Inspection: Same-Day"),
 }
+# Boards that hold only the owner's TEST jobs (the test customer): any open job with a time
+# counts, whatever its column, so a reminder can be tried end to end without touching a live
+# board (2026-10-09).
+TEST_BOARDS: tuple[str, ...] = ("AHS - TEST",)
+
+
+def boards() -> list[str]:
+    return [*COLUMNS, *TEST_BOARDS]
 
 DAY_BEFORE = "day_before"
 FOUR_HOUR = "four_hour"
@@ -77,6 +85,8 @@ def enabled() -> bool:
 
 
 def column_counts(board: str | None, status: str | None) -> bool:
+    if board in TEST_BOARDS:
+        return True
     prefixes = COLUMNS.get(board or "")
     if not prefixes or not status:
         return False
