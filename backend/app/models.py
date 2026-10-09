@@ -1868,6 +1868,9 @@ class DispatchJob(Base):
     customer_name: Mapped[str | None] = mapped_column(String(200))
     # Last ten digits of every number on the Zuper customer: the join to calls and texts.
     phones: Mapped[list | None] = mapped_column(NullableJSONType)
+    # The Zuper customer's MOBILE number (last ten digits), the one a reminder text goes to
+    # (app/reminders, 2026-10-08). `phones` lost which number was which.
+    mobile: Mapped[str | None] = mapped_column(String(10))
     address: Mapped[str | None] = mapped_column(String(300))
     city: Mapped[str | None] = mapped_column(String(120))
     lat: Mapped[float | None] = mapped_column(Float)
@@ -2213,3 +2216,78 @@ class DispatchChatFile(Base):
     sheets: Mapped[list] = mapped_column(JSONType)          # [{name, columns, rows: [...]}]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class ReminderSettings(Base):
+    """Appointment reminder texts from Zuper's job status (app/reminders, 2026-10-08): the
+    ADMIN's switch and the heartbeat (one row). `mode` is off | test | on; nothing is sent
+    unless ZUPER_REMINDERS_ENABLED is also set on the server."""
+    __tablename__ = "reminder_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mode: Mapped[str] = mapped_column(String(10), default="off", server_default="off")
+    # Test mode texts only these numbers (last ten digits); the rest are recorded "would send".
+    test_numbers: Mapped[list | None] = mapped_column(NullableJSONType)
+    # {"day_before": {"en": ..., "es": ...}, "four_hour": {...}} — a missing one is the default.
+    templates: Mapped[dict | None] = mapped_column(NullableJSONType)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by: Mapped[int | None] = mapped_column(Integer)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_counts: Mapped[dict | None] = mapped_column(NullableJSONType)
+
+
+class AppointmentReminder(Base):
+    """One reminder decision, written BEFORE the text is handed over and never retried: its
+    unique `key` (job + visit start + kind) is what makes a reminder go out at most once, and a
+    rescheduled visit is a new key. Never deleted."""
+    __tablename__ = "appointment_reminders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str | None] = mapped_column(String(120))     # the Zuper column at the time
+    kind: Mapped[str] = mapped_column(String(20))               # day_before | four_hour
+    visit_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    phone: Mapped[str | None] = mapped_column(String(10))
+    language: Mapped[str | None] = mapped_column(String(2))
+    # sending | sent | refused | failed | suppressed | skipped | would_send
+    state: Mapped[str] = mapped_column(String(20), index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    body: Mapped[str | None] = mapped_column(Text)
+    contact_id: Mapped[int | None] = mapped_column(Integer)
+    number_thread_id: Mapped[int | None] = mapped_column(Integer)
+    event_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CustomerLanguage(Base):
+    """The language a customer is texted in, per phone number (last ten digits): worked out from
+    what they wrote and said to us (`source` auto), or set by a person (`manual`, never
+    overwritten). No row = English."""
+    __tablename__ = "customer_languages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone_key: Mapped[str] = mapped_column(String(10), unique=True, index=True)
+    language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+    source: Mapped[str] = mapped_column(String(10), default="auto", server_default="auto")
+    # {"es": n, "en": n} — how many texts / calls read as each language.
+    evidence: Mapped[dict | None] = mapped_column(NullableJSONType)
+    set_by: Mapped[int | None] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class ReminderSwitchLog(Base):
+    """Every change to the reminder settings: who, when, what, old -> new. Never deleted."""
+    __tablename__ = "reminder_switch_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    field: Mapped[str] = mapped_column(String(40))
+    old_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
