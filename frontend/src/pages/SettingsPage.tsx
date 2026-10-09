@@ -82,7 +82,7 @@ export function SettingsPage({ user }: { user: Me }) {
         : section === 'zuper' && user.role === 'ADMIN' ? <ZuperSettings />
         : section === 'my-staff' && user.role === 'ADMIN' ? <MyStaffPanel user={user} />
         : section === 'ai-connections' && user.role === 'ADMIN' ? <AiConnectionsSettings />
-        : section === 'automations' ? <AutomationsSettings />
+        : section === 'automations' ? <AutomationsSettings user={user} />
         : <AccountSettings />}
     </div>
   )

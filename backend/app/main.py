@@ -82,6 +82,7 @@ from .models import (
     User,
 )
 from .phones import format_phone, phone_warning, store_phone
+from .reminders import api as reminders_api
 from .transport import get_transport
 from .zuper import api as zuper_api
 from .zuper import locks as zuper_locks
@@ -148,6 +149,9 @@ app.include_router(dispatch_api.router)
 app.include_router(dispatch_assist.router)
 app.include_router(dispatch_chats.router)
 app.include_router(dispatch_act.router)
+# Appointment reminder texts from Zuper's job status (2026-10-08, app/reminders): OFF by
+# default — the server gate ZUPER_REMINDERS_ENABLED and the mode in Settings → Automations.
+app.include_router(reminders_api.router)
 
 # AHS authorized a repair (2026-10-01): owen-main relays the note email; a Dispatch item
 # and the bell, nothing to Zuper. The feed's machine token. See app/ahs_authorizations.py.

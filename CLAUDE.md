@@ -33,6 +33,10 @@ deliberately out.
   `rule_3_armed` / `rule_4_armed` by name. **No test reaches owen-main**:
   `tests/owen_guard.py` strips `CRM_LINK_*` / `OWEN_*` and refuses any connection to an
   owen-main host or whatever the link is pointed at, failing the test that tried.
+  **ONE lift (2026-10-08, Owen):** appointment reminder texts from Zuper's job status —
+  the day before (from 10 AM) and 4 h before a visit in a confirmed column — `app/reminders/`.
+  Off unless `ZUPER_REMINDERS_ENABLED=true` AND an ADMIN sets Settings → Automations →
+  Test / On (typed "TURN ON"). Nothing else became automatic. See the section below.
 - **Never run `python -m app.seed` against the working database.** It calls
   `drop_all()`. It is in the `deny` list in `.claude/settings.json`.
 - **No AI agent acts by itself, and no test reaches a model provider.** Every agent is
@@ -318,6 +322,35 @@ provisioned gets a 403 saying so — we never invent an operator.
   owen-main exposes nothing the CRM key can drive (DECISIONS.md lists what it would need).
   `uv run python -m tests.browser_dialer` (from `backend/`) drives it in headless Chromium with
   the SIP user faked (`frontend/e2e/`) and owen-main replaced; it is not collected by pytest.
+
+## Appointment reminder texts from Zuper (2026-10-08) — built OFF
+
+`backend/app/reminders/` (read `__init__.py` first). While Zuper's own texting waits for its
+10DLC approval, the CRM texts a customer **the day before** a visit (10 AM–8 PM) and **4 hours
+before** it (only 8 AM–8 PM; a visit before noon gets no 4-hour text), when the Zuper job sits in
+a confirmed column (`reminders/config.COLUMNS`: Retail "Scheduled"; AHS - Inspection "Scheduled",
+"Inspection: Day-Before…", "Inspection: Same-Day…" — prefix match; the repair board is not on it).
+
+- **Reads `dispatch_jobs`**, the Dispatch pass's copy, so it sends no request to Zuper; runs on
+  the worker's Zuper thread after that pass. A copy older than 10 min = nothing sent.
+- **Exactly once:** the `appointment_reminders` row (key = job + visit start + kind) is
+  COMMITTED before the text is handed over and never retried. A reschedule is a new key.
+  More than 40 due in one pass = nothing sent (a person looks first).
+- **Sends like a staff text:** the Zuper customer's MOBILE (`dispatch_jobs.mobile`); a contact
+  holding it gets it on their thread (DND honoured), else a number-only thread. STOP is
+  owen-main's refusal, recorded.
+- **Language:** `reminders/language.py` reads the customer's own texts and Quo/CRM call
+  transcripts, saves `customer_languages` per number; a person's choice (contact panel →
+  "Reminder language") always wins; English when unknown.
+- **Off three ways:** `ZUPER_REMINDERS_ENABLED` unset; mode Off (the default; Test texts only
+  the test numbers and records the rest as "would send"); the Dispatch reader off. Switch it
+  Off when Zuper's workflows take over. `uv run python -m app.reminders.service` is a dry run.
+
+## Everything that runs against Zuper by itself (2026-10-08)
+
+`docs/ZUPER-AUTOMATIONS.md` lists every cron, container and worker thread on dispatch and
+owen-main that reads or writes Zuper, its state, and how to pause it. `bash
+ops/zuper-automations-status.sh` checks all of them read-only. Add a row there when you add one.
 
 ## Zuper's history, kept for the KPI reports (2026-09-30)
 

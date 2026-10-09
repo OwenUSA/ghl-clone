@@ -1985,6 +1985,58 @@ export type AutomationRule = {
 export const listAutomations = () => get<{ rules: AutomationRule[] }>('/api/automations')
 
 // ---------------------------------------------------------------------------
+// Appointment reminder texts from Zuper's job status (2026-10-08, backend/app/reminders).
+// Off unless the server gate is set AND an ADMIN picks Test or On (typed "TURN ON").
+// ---------------------------------------------------------------------------
+export type ReminderKind = 'day_before' | 'four_hour'
+export type ReminderLang = 'en' | 'es'
+export type ReminderStatus = {
+  server_gate: boolean
+  mode: 'off' | 'test' | 'on'
+  sending: boolean
+  sentence: string
+  test_numbers: string[]
+  templates: Record<ReminderKind, Record<ReminderLang, string>>
+  default_templates: Record<ReminderKind, Record<ReminderLang, string>>
+  columns: Record<string, string[]>
+  times: { day_before_from: string; quiet_from: string; quiet_until: string;
+    four_hour: number; four_hour_latest: number }
+  heartbeat: { last_run_at: string | null; last_success_at: string | null;
+    last_error: string | null; last_error_at: string | null;
+    last_counts: Record<string, number | string> | null }
+  changes: { at: string; user_id: number | null; field: string; old: string | null;
+    new: string | null }[]
+}
+export type ReminderRow = {
+  id: number; job_uid: string; job_number: string | null; board: string | null
+  status: string | null; kind: ReminderKind; visit_start: string; phone: string | null
+  language: ReminderLang | null; state: string; reason: string | null; body: string | null
+  contact_id: number | null; created_at: string
+}
+export type ReminderVisit = {
+  job_uid: string; job_number: string | null; board: string | null; status: string | null
+  visit_start: string; counts: boolean; has_mobile: boolean; language: ReminderLang | null
+  reminders: { kind: ReminderKind; from: string | null; until: string | null; state: string }[]
+}
+export type ReminderLanguage = {
+  phone: string; language: ReminderLang; source: 'auto' | 'manual'
+  evidence: Record<string, number> | null; saved: boolean
+}
+export const reminderStatus = () => get<ReminderStatus>('/api/reminders')
+export const reminderLog = () => get<{ reminders: ReminderRow[] }>('/api/reminders/log')
+export const reminderUpcoming = () => get<{ visits: ReminderVisit[] }>('/api/reminders/upcoming')
+/** ADMIN. Test or On needs `confirm: "TURN ON"`; Off never does. */
+export const saveReminderSettings = (body: {
+  mode?: 'off' | 'test' | 'on'; confirm?: string; test_numbers?: string[]
+  templates?: Partial<Record<ReminderKind, Partial<Record<ReminderLang, string>>>>
+}) => send<ReminderStatus>('/api/reminders/settings', 'PUT', body)
+export const reminderLanguage = (phone: string) =>
+  get<ReminderLanguage>(`/api/reminders/language?phone=${encodeURIComponent(phone)}`)
+/** A person's choice wins; `null` goes back to working it out from the customer's messages. */
+export const setReminderLanguage = (phone: string, language: ReminderLang | null) =>
+  send<ReminderLanguage>('/api/reminders/language', 'PUT', { phone, language })
+
+// ---------------------------------------------------------------------------
 // Pictures on a text message (2026-09-16).
 //
 // The bytes never travel as JSON. A picture is uploaded as a multipart form the moment the
