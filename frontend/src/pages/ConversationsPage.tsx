@@ -602,8 +602,9 @@ export function ConversationsPage({ user, focus }: { user: Me; focus?: Focus | n
   // record and a clicked row on exactly the same path.
   useEffect(() => {
     if (!focus) return
-    // The palette names a CONVERSATION id; its row key is "c<id>".
-    setSelected(`c${focus.id}`)
+    // The palette names a CONVERSATION id; its row key is "c<id>". The deep link
+    // (/conversations?thread=) names the row key itself, which may be a number thread's "n<id>".
+    setSelected(focus.key ?? `c${focus.id}`)
     // The palette searches the whole account, so the thread it just asked for
     // can easily sit outside the scope or the search the inbox is narrowed to.
     // Widen back to the team inbox rather than open a thread the list cannot

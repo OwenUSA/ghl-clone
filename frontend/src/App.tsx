@@ -76,16 +76,17 @@ export default function App() {
   // in a row reopens the panel the user just closed instead of doing nothing.
   const [focus, setFocus] = useState<(Focus & { view: string }) | null>(null)
   const seq = useRef(0)
-  const openRecord = useCallback((view: string, id: number) => {
+  const openRecord = useCallback((view: string, id: number, key?: string) => {
     seq.current += 1
     setActive(view)
-    setFocus({ view, id, n: seq.current })
+    setFocus({ view, id, n: seq.current, ...(key ? { key } : {}) })
   }, [])
   const focusFor = (view: string) => (focus?.view === view ? focus : null)
   useEffect(() => registerOpenRecord(openRecord), [openRecord])
 
   // The "CRM Link" the Zuper sync writes into Zuper (2026-09-16): /opportunities?opportunity=<id>
-  // and /contacts?contact=<id> open that record, through the palette's own path. Read once at
+  // and /contacts?contact=<id> open that record, through the palette's own path; so does
+  // /conversations?thread=<c12|n3>, the office's text after an AI call (2026-10-08). Read once at
   // boot; the parameter is then dropped so a reload after closing the record does not reopen
   // it. Signing in first is fine: the request waits in `focus` for the page to mount.
   useEffect(() => {
@@ -93,7 +94,7 @@ export default function App() {
     if (!link) return
     window.history.replaceState(null, '',
       withoutRecordParam(window.location.pathname, window.location.search))
-    openRecord(link.view, link.id)
+    openRecord(link.view, link.id, link.key)
   }, [openRecord])
 
   // ctrl+K, and cmd+K on a Mac. Bound on the window so it works from anywhere,

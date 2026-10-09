@@ -452,9 +452,14 @@ export function loadSummary(report: ZuperLoadReport | null | undefined) {
  * The "CRM Link" the sync writes into Zuper (`mapping.crm_link`):
  * /opportunities?opportunity=<id> and /contacts?contact=<id>. Which record a fresh page load
  * should open, or null. Only a positive whole number is an id.
+ *
+ * Also /conversations?thread=<key> (2026-10-08), the link in the office's text after an AI
+ * call (backend `ai_call_notify.thread_link`): `key` is the inbox row key, "c<conversation
+ * id>" or "n<number thread id>", and `id` its number. A thread the reader cannot see is simply
+ * not in the inbox, and the page falls back to its first row.
  */
 export function recordFromLocation(pathname: string, search: string):
-  { view: 'opportunities' | 'contacts'; id: number } | null {
+  { view: 'opportunities' | 'contacts' | 'conversations'; id: number; key?: string } | null {
   const path = String(pathname ?? '').replace(/\/+$/, '').toLowerCase()
   const params = new URLSearchParams(search ?? '')
   const idOf = (raw: string | null) => (raw && /^\d+$/.test(raw) && Number(raw) > 0
@@ -467,6 +472,11 @@ export function recordFromLocation(pathname: string, search: string):
     const id = idOf(params.get('contact'))
     return id ? { view: 'contacts', id } : null
   }
+  if (path === '/conversations') {
+    const m = /^([cn])(\d+)$/.exec(params.get('thread') ?? '')
+    const id = m ? idOf(m[2]) : null
+    return m && id ? { view: 'conversations', id, key: m[1] + id } : null
+  }
   return null
 }
 
@@ -476,6 +486,7 @@ export function withoutRecordParam(pathname: string, search: string): string {
   const params = new URLSearchParams(search ?? '')
   params.delete('opportunity')
   params.delete('contact')
+  params.delete('thread')
   const rest = params.toString()
   return (pathname || '/') + (rest ? '?' + rest : '')
 }

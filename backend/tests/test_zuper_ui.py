@@ -265,12 +265,55 @@ def test_the_crm_link_the_sync_writes_opens_that_record():
                    "/opportunities?pipeline=2", "/contacts"]
 
 
+@node
+def test_the_ai_call_text_link_opens_that_conversation_thread(monkeypatch):
+    # The link the office's text after an AI call carries (app/ai_call_notify.py).
+    from app import ai_call_notify
+    from app.models import ConversationEvent, NumberThreadEvent
+
+    monkeypatch.setenv(ai_call_notify.PUBLIC_URL_ENV, "https://crm.example.test/")
+    links = [ai_call_notify.thread_link(ConversationEvent(conversation_id=12)),
+             ai_call_notify.thread_link(NumberThreadEvent(number_thread_id=3))]
+    assert links == ["https://crm.example.test/conversations?thread=c12",
+                     "https://crm.example.test/conversations?thread=n3"]
+    got = run_js("""
+        const parse = (href) => {
+          const u = new URL(href)
+          return z.recordFromLocation(u.pathname, u.search)
+        }
+        out([parse(%s), parse(%s),
+             z.recordFromLocation('/conversations/', '?thread=c7&event=9'),
+             z.recordFromLocation('/conversations', '?thread=12'),
+             z.recordFromLocation('/conversations', '?thread=x12'),
+             z.recordFromLocation('/conversations', '?thread=c0'),
+             z.recordFromLocation('/conversations', '?thread=n-3'),
+             z.recordFromLocation('/conversations', ''),
+             z.recordFromLocation('/contacts', '?thread=c5'),
+             z.recordFromLocation('/contacts', '?contact=7'),
+             z.withoutRecordParam('/conversations', '?thread=c12'),
+             z.withoutRecordParam('/conversations', '?thread=n3&x=1')])
+    """ % (json.dumps(links[0]), json.dumps(links[1])))
+    assert got == [{"view": "conversations", "id": 12, "key": "c12"},
+                   {"view": "conversations", "id": 3, "key": "n3"},
+                   {"view": "conversations", "id": 7, "key": "c7"},
+                   None, None, None, None, None, None,
+                   {"view": "contacts", "id": 7},
+                   "/conversations", "/conversations?x=1"]
+
+
+def test_the_conversations_page_selects_the_linked_row_key():
+    page = _read("pages", "ConversationsPage.tsx")
+    assert "setSelected(focus.key ?? `c${focus.id}`)" in page
+    # A thread the reader cannot see is dropped back to the first row, never an error.
+    assert "if (!convs.data.some((c) => c.key === selected)) setSelected(null)" in page
+
+
 def test_the_app_opens_a_deep_linked_record_once_through_the_palette_path():
     app = _read("App.tsx")
     effect = app.split("recordFromLocation(window.location.pathname", 1)
     assert len(effect) == 2, "App.tsx no longer reads the CRM Link on load"
     body = effect[1].split("}, [openRecord])", 1)[0]
-    assert "withoutRecordParam(" in body and "openRecord(link.view, link.id)" in body
+    assert "withoutRecordParam(" in body and "openRecord(link.view, link.id, link.key)" in body
     # Before the early returns: a hook after `if (session.isLoading) return` would break React.
     assert app.index("recordFromLocation(window.location") < app.index("if (session.isLoading)")
 
