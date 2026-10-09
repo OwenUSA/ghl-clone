@@ -225,8 +225,8 @@ SHARED = 3          # a number in this many customers' conversations is one of O
 def customer_phones(db: Session, now: datetime, events: list[dict] | None = None,
                     days: int = 30) -> dict[str, set[str]]:
     """Every number each job's customer can be reached on: the Zuper customer's, plus a number
-    given in their OWN calls or texts (live 2026-10-08: Janeth Palacio's son confirmed on a
-    number she gave on 10/02; Gladys Barona's daughter texted her mother's). Our own lines are
+    given in their calls or in a text THEY sent (live 2026-10-08: Janeth Palacio's son confirmed
+    on a number she gave on 10/02; Gladys Barona's daughter texted her mother's). Our own lines are
     in every conversation (transcript speaker labels), so a number in SHARED or more
     customers' conversations is ours and never added. A number that is ANOTHER job's customer
     IS added: live, Janeth Palacio's son is himself the customer on his own AHS job."""
@@ -245,6 +245,10 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
         found = set()
         for p in j.phones or []:
             for e in by_phone.get(p, []):
+                # A number in a text WE sent is one of ours (live 2026-10-09: "this is Owen,
+                # call me back at 561-..." put Owen's own phone on Chani Gansburg's job).
+                if e["kind"] == "text" and e["who"] == "us":
+                    continue
                 for m in PHONE_IN_TEXT.finditer(" ".join((e["text"] or "", e["transcript"] or ""))):
                     found.add(m[1] + m[2] + m[3])
         mentioned[j.job_uid] = found
@@ -545,8 +549,19 @@ def _file_visits(sheets: list[dict], start: date, end: date, now: datetime
         if have is None or (row["window"] and not have["window"]):
             found[key] = row
     visits, disagree = [], []
+    plan_days = {d for days in planned.values() for d in days}
     for (who, d), row in found.items():
         days = planned.get(who, set())
+        if not row["planned"] and d in plan_days and d not in days:
+            # The day plan (a sheet with times) covers this day and does not have this
+            # customer: a Callbacks / By City row is not a visit (live 2026-10-09: Byfield and
+            # Rivera were "booked today" from the Callbacks sheet only).
+            disagree.append({"customer": row["customer"], "this_sheet": row["sheet"],
+                             "row": row["row"], "says": d.strftime("%a %m/%d"),
+                             "day_plan_says": ", ".join(x.strftime("%a %m/%d")
+                                                        for x in sorted(days))
+                             or "not on the day plan that day"})
+            continue
         if not row["planned"] and days and d not in days:
             disagree.append({"customer": row["customer"], "this_sheet": row["sheet"],
                              "row": row["row"], "says": d.strftime("%a %m/%d"),
@@ -642,6 +657,12 @@ def compare_schedule(db: Session, now: datetime, hidden: set[str], sheets: list[
                 diff.append("Zuper stage “%s” is not a booked-visit stage" % j.status)
             phones = reach.get(j.job_uid, set(j.phones or []))
             talk = [e for e in recent if e["phone"] in phones][-8:]
+            theirs = [e for e in talk if e["who"] == "customer"]
+            if theirs:
+                last = theirs[-1]
+                item["newest_from_customer"] = "%s %s %s: %s" % (
+                    _when(last["at"]), last["source"], last["kind"],
+                    " ".join((last["text"] or last["transcript"] or "").split())[-300:])
             extra = sorted(phones - set(j.phones or []))
             if extra:
                 item["also_reached_on"] = extra          # numbers given in their own calls
