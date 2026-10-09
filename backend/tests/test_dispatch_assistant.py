@@ -434,3 +434,18 @@ def test_the_excel_disagreeing_with_itself_is_said_and_a_match_says_it_matches(d
     assert out["file_disagrees_with_itself"] == [{
         "customer": "Diana Reyes", "this_sheet": "By City", "row": 63, "says": "Fri 10/09",
         "day_plan_says": "Sat 10/10"}]
+
+
+def test_a_relative_who_is_also_a_customer_still_counts(db):
+    """Live 2026-10-09: Janeth Palacio's son confirmed her visit; he is the customer on his own
+    AHS job, and the first rule (never another customer's number) hid his confirmation."""
+    db.add(DispatchJob(job_uid="mom", job_number="721", board=c.INSPECTION_BOARD,
+                       status="Scheduled", phones=["9549931801"], is_open=True))
+    db.add(DispatchJob(job_uid="son", job_number="731", board=c.INSPECTION_BOARD,
+                       status="Scheduled", phones=["9547018639"], is_open=True))
+    conv = _thread(db, "9549931801", "Janeth")
+    db.add(ConversationEvent(conversation_id=conv.id, type=EventType.SMS,
+                             direction=Direction.INBOUND, occurred_at=NOW - timedelta(days=5),
+                             body="Please call my son Sebastian at (954) 701-8639"))
+    db.commit()
+    assert lookups.customer_phones(db, NOW)["mom"] == {"9549931801", "9547018639"}
