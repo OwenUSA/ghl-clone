@@ -122,3 +122,10 @@ def test_short_or_mixed_messages_say_nothing():
     assert language.classify("👍") is None
     assert language.classify("la casa") == "es"
     assert language.classify("the roof") == "en"
+
+
+def test_the_test_board_counts_in_any_column_and_no_live_board_changes():
+    at = ny(2026, 10, 8, 11, 0)
+    assert due(at, VISIT, board="AHS - TEST", status="Intake") == {"day_before"}
+    assert due(at, VISIT, board="AHS - TEST", status="Intake", is_open=False) == set()
+    assert due(at, VISIT, board="AHS - Inspection", status="Intake") == set()
