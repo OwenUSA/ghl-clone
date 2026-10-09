@@ -82,6 +82,9 @@ export function ZuperRemindersCard({ isAdmin }: { isAdmin: boolean }) {
         before it, never between {s.times.quiet_from} and {s.times.quiet_until} · texts the customer
       </div>
       <div style={{ fontSize: 13, color: TEXT, marginTop: 6 }}>{s.sentence}</div>
+      <div data-testid="reminders-from" style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>
+        Sent from {s.from_number ?? 'the CRM line'} — every automatic text on this card.
+      </div>
       <div style={{ fontSize: 13, color: FAINT, marginTop: 6 }}>
         Only jobs in these Zuper columns: {Object.entries(s.columns).map(([b, cols]) =>
           `${b} → ${cols.join(', ')}`).join(' · ')}. Owen lifted the “no automatic texts” rule

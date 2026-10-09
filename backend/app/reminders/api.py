@@ -64,6 +64,7 @@ def _status(db: Session) -> dict:
         "server_gate": gate, "mode": s.mode, "sending": gate and s.mode in ("test", "on"),
         "sentence": why,
         "stage_texts": stage,
+        "from_number": c.from_number(),
         "test_numbers": s.test_numbers or [], "templates": templates,
         "default_templates": c.DEFAULT_TEMPLATES,
         "columns": {b: list(cols) for b, cols in c.COLUMNS.items()},

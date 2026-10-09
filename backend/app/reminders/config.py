@@ -134,6 +134,17 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
 LANGUAGES = ("en", "es")
 
 
+def from_number() -> str | None:
+    """The line the automatic texts go out from (2026-10-09: +17869200331, the user's choice;
+    owen-main must list it on CRM_LINK_SEND_ONLY_NUMBERS). Unset = the CRM line, like every
+    other text. Staff texts never use this."""
+    raw = os.getenv("ZUPER_REMINDERS_FROM_NUMBER", "").strip()
+    if not raw:
+        return None
+    from ..phones import store_phone
+    return store_phone(raw) or None
+
+
 def enabled() -> bool:
     """The deployment's gate. Unset = nothing is ever sent, whatever Settings says."""
     return os.getenv("ZUPER_REMINDERS_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
