@@ -35,6 +35,11 @@ def _quiet(local: datetime) -> bool:
     return not (c.QUIET_UNTIL <= local.time() < c.QUIET_FROM)
 
 
+def quiet(now: datetime) -> bool:
+    """Outside 8 AM-8 PM New York — no text goes out."""
+    return _quiet(aware(now).astimezone(c.TZ))
+
+
 def windows(start: datetime) -> dict[str, tuple[datetime, datetime] | None]:
     """When each reminder may go out, as (from, until) in UTC; None = never for this visit."""
     start = aware(start)

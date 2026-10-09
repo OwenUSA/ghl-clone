@@ -7047,3 +7047,39 @@ reminders.
 burst, DND, number threads, language, routes). No real text has been sent by it. To go live:
 deploy with migrations, `ZUPER_REMINDERS_ENABLED=true`, mode Test with your own number on a test
 job scheduled for tomorrow, read the "would send" rows for real jobs for a day or two, then On.
+
+## AMENDMENT (2026-10-09): the "inspection report submitted to AHS" text — a second narrow lift of 2026-09-15 ("no automatic texts")
+
+**The lift, exactly.** Owen approved (asked through the developer, 2026-10-09) ONE more automatic
+text: when a job on **AHS - Inspection** is moved into **"Submit To AHS For Approval"** — or
+straight into **"Awaiting AHS Decision"**, which the office treats as the same step — the customer
+is texted once: "Hi Maria, this is Dream Team Roofing. We submitted your inspection report to
+American Home Shield and are waiting for their approval. We'll contact you as soon as we hear
+back. Questions? Text or call (954) 914-7244. Reply STOP to opt out." (Spanish for customers who
+write in Spanish, `reminders/language.py`). Nothing else became automatic.
+
+**How a move is seen** (`app/reminders/stage_texts.py`). `dispatch_jobs` holds each job's column
+now; the new `reminder_stage_watch` holds the column at the previous pass. A job that went from
+any other column into either one — or is seen for the first time already there (created into it,
+or moved over from another board) — has moved in. No request to Zuper: it reads the Dispatch
+copy, on the same pass as the reminders.
+
+**The user's rules, as built.**
+* **Only new moves.** Switching it on (or a gap of more than 30 minutes in the watch) makes the
+  next pass only RECORD where every job is: a job already sitting in the column is never texted.
+* **Never twice.** The key is the job alone (`ahs_submitted:<job_uid>`): Submit -> Awaiting,
+  skipping Submit, or going back and forth sends one text in the job's life.
+* **Night.** A move outside 8 AM-8 PM is held (`waiting`) and goes at the first pass from 8 AM only
+  if the job is still in those columns or further along (AHS Approved, Proposal Made, or the
+  Repair & Review board) and still open; otherwise `cancelled` with the reason. A held text older
+  than 14 hours is cancelled, never sent late.
+* Everything else is the reminders' machinery: the Zuper mobile, the contact's thread (DND) or a
+  number-only thread, recorded before it leaves and never retried, the 40-per-pass brake, the
+  stale-copy refusal, owen-main's STOP refusal.
+
+**Its own switch.** `reminder_settings.ahs_submitted_mode` (off | test | on, default off), next to
+the reminders' mode and independent of it; the same server gate `ZUPER_REMINDERS_ENABLED`, the
+same test numbers, ADMIN + "TURN ON" to switch on, Off in one press, every flip logged. Settings →
+Automations shows it inside the reminders card; its wording is editable there (no `{time}` needed).
+Migration `d3a7b9e2f415` (one table, two columns on `reminder_settings`), on `c8d2f4a6b1e9`.
+`tests/test_ahs_submitted_text.py` pins all of the above.

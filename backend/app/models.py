@@ -2225,6 +2225,11 @@ class ReminderSettings(Base):
     __tablename__ = "reminder_settings"
     id: Mapped[int] = mapped_column(primary_key=True)
     mode: Mapped[str] = mapped_column(String(10), default="off", server_default="off")
+    # The "inspection report submitted to AHS" text (2026-10-09): its own off | test | on.
+    ahs_submitted_mode: Mapped[str] = mapped_column(String(10), default="off",
+                                                    server_default="off")
+    # When the remembered columns (reminder_stage_watch) were last brought up to date.
+    stage_watch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Test mode texts only these numbers (last ten digits); the rest are recorded "would send".
     test_numbers: Mapped[list | None] = mapped_column(NullableJSONType)
     # {"day_before": {"en": ..., "es": ...}, "four_hour": {...}} — a missing one is the default.
@@ -2263,6 +2268,18 @@ class AppointmentReminder(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ReminderStageWatch(Base):
+    """The column each AHS - Inspection job was in at the last pass, so a MOVE into "Submit To
+    AHS…" / "Awaiting AHS Decision" can be told from a job that was already there."""
+    __tablename__ = "reminder_stage_watch"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    board: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str | None] = mapped_column(String(120))
+    seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
 
 
 class CustomerLanguage(Base):

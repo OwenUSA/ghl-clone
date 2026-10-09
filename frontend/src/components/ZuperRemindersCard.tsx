@@ -22,10 +22,12 @@ import {
  */
 const KIND_LABEL: Record<ReminderKind, string> = {
   day_before: 'Day before (from 10 AM)', four_hour: '4 hours before',
+  ahs_submitted: 'Report submitted to AHS',
 }
 const LANG_LABEL: Record<ReminderLang, string> = { en: 'English', es: 'Spanish' }
 const STATE_LABEL: Record<string, string> = {
   sent: 'Sent', refused: 'Refused', failed: 'Failed', suppressed: 'Not sent (DND)',
+  waiting: 'Held until 8 AM', cancelled: 'Not sent',
   skipped: 'Skipped', would_send: 'Would send (test)', sending: 'Sending',
 }
 
@@ -44,7 +46,9 @@ export function ZuperRemindersCard({ isAdmin }: { isAdmin: boolean }) {
   const status = useQuery({ queryKey: ['reminders'], queryFn: reminderStatus })
   const log = useQuery({ queryKey: ['reminders', 'log'], queryFn: reminderLog })
   const upcoming = useQuery({ queryKey: ['reminders', 'upcoming'], queryFn: reminderUpcoming })
-  const [asking, setAsking] = useState<'test' | 'on' | null>(null)
+  // Which switch is being turned on, and to what — the reminders or the AHS text.
+  const [asking, setAsking] = useState<{ field: 'mode' | 'ahs_submitted_mode';
+    to: 'test' | 'on' } | null>(null)
   const [phrase, setPhrase] = useState('')
   const save = useMutation({
     mutationFn: saveReminderSettings,
@@ -95,25 +99,59 @@ export function ZuperRemindersCard({ isAdmin }: { isAdmin: boolean }) {
           {(['off', 'test', 'on'] as const).map((m) => (
             <button key={m} type="button" aria-pressed={s.mode === m}
               disabled={save.isPending || s.mode === m}
-              onClick={() => (m === 'off' ? save.mutate({ mode: 'off' }) : setAsking(m))}
+              onClick={() => (m === 'off' ? save.mutate({ mode: 'off' })
+                : setAsking({ field: 'mode', to: m }))}
               style={s.mode === m ? PRIMARY_BUTTON : BUTTON}>{MODE_TEXT[m]}</button>
           ))}
         </div>
       )}
+
+      <div data-rule="ahs_submitted" data-enabled={s.ahs_submitted.sending}
+        style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid ' + DIVIDER }}>
+        <div className="flex items-center gap-3">
+          <div style={{ fontSize: 14, fontWeight: 600, color: TEXT }}>
+            Inspection report submitted to AHS
+          </div>
+          <span data-testid="ahs-state" style={{
+            marginLeft: 'auto', padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 500,
+            color: s.ahs_submitted.sending ? 'rgb(2,122,72)' : 'rgb(71,84,103)',
+            backgroundColor: s.ahs_submitted.sending ? 'rgb(236,253,243)' : 'rgb(242,244,247)',
+          }}>{s.ahs_submitted.sending ? MODE_TEXT[s.ahs_submitted.mode] : 'Off'}</span>
+        </div>
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>
+          When: a job on {s.ahs_submitted.board} is moved to {s.ahs_submitted.columns.join(' or ')}
+          {' '}— once per job; moves at night go at 8 AM · texts the customer
+        </div>
+        <div style={{ fontSize: 13, color: TEXT, marginTop: 6 }}>{s.ahs_submitted.sentence}</div>
+        {isAdmin && (
+          <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 8 }}>
+            {(['off', 'test', 'on'] as const).map((m) => (
+              <button key={m} type="button" aria-pressed={s.ahs_submitted.mode === m}
+                disabled={save.isPending || s.ahs_submitted.mode === m}
+                onClick={() => (m === 'off' ? save.mutate({ ahs_submitted_mode: 'off' })
+                  : setAsking({ field: 'ahs_submitted_mode', to: m }))}
+                style={s.ahs_submitted.mode === m ? PRIMARY_BUTTON : BUTTON}>{MODE_TEXT[m]}</button>
+            ))}
+          </div>
+        )}
+      </div>
       {asking && (
         <div role="dialog" aria-label="Turn reminders on" style={{ marginTop: 10, padding: 12,
           border: '1px solid ' + BORDER, borderRadius: 8 }}>
           <div style={{ fontSize: 13, color: TEXT }}>
-            {asking === 'test'
-              ? 'Test: only the test numbers below are texted; every other reminder is recorded as “would send”.'
-              : 'On: real customers are texted the day before and 4 hours before their visit.'}
+            {asking.to === 'test'
+              ? 'Test: only the test numbers below are texted; every other text is recorded as “would send”.'
+              : asking.field === 'mode'
+                ? 'On: real customers are texted the day before and 4 hours before their visit.'
+                : 'On: real customers are texted when their job moves to Submit To AHS / Awaiting AHS Decision.'}
             {' '}Type <b>TURN ON</b> to confirm.
           </div>
           <div className="flex items-center gap-2" style={{ marginTop: 8 }}>
             <input aria-label="Type TURN ON" value={phrase} onChange={(e) => setPhrase(e.target.value)}
               style={{ ...INPUT, width: 160 }} />
             <button type="button" style={PRIMARY_BUTTON} disabled={phrase !== 'TURN ON' || save.isPending}
-              onClick={() => save.mutate({ mode: asking, confirm: phrase })}>Confirm</button>
+              onClick={() => save.mutate({ [asking.field]: asking.to, confirm: phrase })}>
+              Confirm</button>
             <button type="button" style={BUTTON} onClick={() => { setAsking(null); setPhrase('') }}>
               Cancel</button>
           </div>
@@ -207,6 +245,7 @@ function Wording({ s, isAdmin, onSave }: {
           onChange={(e) => { setKind(e.target.value as ReminderKind); setDraft(null) }}>
           <option value="day_before">Day before</option>
           <option value="four_hour">4 hours before</option>
+          <option value="ahs_submitted">Report submitted to AHS</option>
         </select>
         <select aria-label="Language" value={lang} style={{ ...INPUT, width: 'auto', height: 30 }}
           onChange={(e) => { setLang(e.target.value as ReminderLang); setDraft(null) }}>

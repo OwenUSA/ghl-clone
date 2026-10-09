@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from .. import automations, number_threads
 from ..models import AppointmentReminder, DispatchJob, DispatchState, ReminderSettings
 from . import config as c
-from . import language, rules
+from . import language, rules, stage_texts
 
 log = logging.getLogger("reminders")
 
@@ -165,13 +165,18 @@ def _send(db: Session, row: AppointmentReminder, contact) -> None:
     row.event_id = getattr(ev, "id", None)
 
 
+def _active(mode: str | None) -> bool:
+    return mode in ("test", "on")
+
+
 def run(db: Session, now: datetime | None = None) -> dict:
-    """One pass. Returns its counts; every failure is the heartbeat's error, never raised."""
+    """One pass: the appointment reminders and the "submitted to AHS" text, each under its own
+    mode. Returns its counts; every failure is the heartbeat's error, never raised."""
     now = rules.aware(now or datetime.now(UTC))
     if not c.enabled():
         return {"off": "ZUPER_REMINDERS_ENABLED is not set"}
     s = read_settings(db)
-    if s.mode not in ("test", "on"):
+    if not _active(s.mode) and not _active(s.ahs_submitted_mode):
         return {"off": "mode is off"}
     last = rules.aware(s.last_run_at)
     if last is not None and now - last < timedelta(seconds=c.EVERY_SECONDS):
@@ -179,31 +184,58 @@ def run(db: Session, now: datetime | None = None) -> dict:
     s = settings(db)
     s.last_run_at = now
     counts = {"due": 0, "sent": 0, "would_send": 0, "skipped": 0, "refused": 0,
-              "suppressed": 0, "failed": 0}
+              "suppressed": 0, "failed": 0, "waiting": 0, "cancelled": 0}
     try:
         if not fresh(db, now):
             raise RuntimeError("Zuper's jobs have not been read for over %d minutes, so no "
                                "reminder was sent (is the Dispatch reader running?)."
                                % c.STALE_MINUTES)
         tests = {x for x in (s.test_numbers or []) if x}
-        found = candidates(db, now)
-        keys = [d.key for _, d in found] + [PREVIEW + d.key for _, d in found]
-        used = _used(db, keys)
+        # (job, Due, mode, a held row or None)
+        work: list[tuple[DispatchJob, rules.Due, str, AppointmentReminder | None]] = []
+        if _active(s.mode):
+            work += [(j, d, s.mode, None) for j, d in candidates(db, now)]
+        if _active(s.ahs_submitted_mode):
+            for j in stage_texts.moves(db, s, now):
+                work.append((j, rules.Due(c.AHS_SUBMITTED, stage_texts.key_for(j.job_uid), now),
+                             s.ahs_submitted_mode, None))
+            if not rules.quiet(now):
+                for row in stage_texts.held(db):
+                    j = stage_texts.job_of(db, row.job_uid)
+                    moved_at = rules.aware(row.visit_start)      # for this text: when it moved
+                    if now - moved_at > timedelta(hours=c.HELD_MAX_HOURS):
+                        row.state, row.finished_at = "cancelled", now
+                        row.reason = ("Held longer than %d hours (the text was switched off "
+                                      "meanwhile), so it was not sent." % c.HELD_MAX_HOURS)
+                        counts["cancelled"] += 1
+                        continue
+                    if j is None or not c.ahs_submitted_still_true(j.board, j.status, j.is_open):
+                        row.state, row.finished_at = "cancelled", now
+                        row.reason = ("Held overnight; by 8 AM the job was no longer waiting on "
+                                      "AHS (now %s / %s), so it was not sent." % (
+                                          j.board if j else "gone", j.status if j else "-"))
+                        counts["cancelled"] += 1
+                        continue
+                    work.append((j, rules.Due(row.kind, row.key, rules.aware(row.visit_start)),
+                                 s.ahs_submitted_mode, row))
+            db.commit()
+        keys = [d.key for _, d, _, r in work if r is None]
+        used = _used(db, keys + [PREVIEW + k for k in keys])
         todo = []
-        for job, d in found:
-            phone = recipient(job)
-            preview = s.mode == "test" and phone not in tests
+        for job, d, mode, row in work:
+            phone = recipient(job) if row is None else row.phone
+            preview = row is None and mode == "test" and phone not in tests
             key = PREVIEW + d.key if preview else d.key
-            if key in used or d.key in used:
+            if row is None and (key in used or d.key in used):
                 continue
-            todo.append((job, d, phone, key, preview))
+            todo.append((job, d, phone, key, preview, row))
         counts["due"] = len(todo)
         real = [t for t in todo if not t[4]]
         if len(real) > c.MAX_PER_PASS:
-            raise RuntimeError("%d reminders were due at once (more than %d), so none was sent. "
+            raise RuntimeError("%d texts were due at once (more than %d), so none was sent. "
                                "Check the boards in Zuper, then send or switch off."
                                % (len(real), c.MAX_PER_PASS))
-        for job, d, phone, key, preview in todo:
+        for job, d, phone, key, preview, row in todo:
             if phone is None:
                 db.add(_row(job, d, key, state="skipped", finished_at=now,
                             reason="The Zuper customer has no mobile number."))
@@ -221,8 +253,17 @@ def run(db: Session, now: datetime | None = None) -> dict:
                 db.commit()
                 counts["would_send"] += 1
                 continue
-            row = _row(job, d, key, state="sending", phone=phone, language=lang, body=body)
-            db.add(row)
+            if row is None and d.kind == c.AHS_SUBMITTED and rules.quiet(now):
+                db.add(_row(job, d, key, state="waiting", phone=phone, language=lang, body=body,
+                            reason="Moved outside 8 AM-8 PM: held until 8 AM."))
+                db.commit()
+                counts["waiting"] += 1
+                continue
+            if row is None:
+                row = _row(job, d, key, state="sending", phone=phone, language=lang, body=body)
+                db.add(row)
+            else:
+                row.state, row.language, row.body = "sending", lang, body
             db.commit()                 # recorded BEFORE the text leaves; never retried
             try:
                 _send(db, row, contact)
@@ -230,7 +271,7 @@ def run(db: Session, now: datetime | None = None) -> dict:
                 db.rollback()
                 row = db.get(AppointmentReminder, row.id)
                 row.state, row.reason = "failed", "Not retried: %s" % exc
-                log.exception("reminder %s failed", key)
+                log.exception("text %s failed", key)
             row.finished_at = now
             db.commit()
             counts[row.state] = counts.get(row.state, 0) + 1

@@ -36,7 +36,9 @@ deliberately out.
   **ONE lift (2026-10-08, Owen):** appointment reminder texts from Zuper's job status —
   the day before (from 10 AM) and 4 h before a visit in a confirmed column — `app/reminders/`.
   Off unless `ZUPER_REMINDERS_ENABLED=true` AND an ADMIN sets Settings → Automations →
-  Test / On (typed "TURN ON"). Nothing else became automatic. See the section below.
+  Test / On (typed "TURN ON"). **A second lift (2026-10-09, Owen):** one text when an AHS -
+  Inspection job MOVES to "Submit To AHS For Approval" / "Awaiting AHS Decision" (once per job,
+  its own Off / Test / On, `reminders/stage_texts.py`). Nothing else became automatic.
 - **Never run `python -m app.seed` against the working database.** It calls
   `drop_all()`. It is in the `deny` list in `.claude/settings.json`.
 - **No AI agent acts by itself, and no test reaches a model provider.** Every agent is
