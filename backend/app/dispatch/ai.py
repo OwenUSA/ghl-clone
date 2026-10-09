@@ -52,7 +52,11 @@ TOOL_RESULT_MAX = 40_000
 # Reasoning models (gpt-6-luna) spend part of this on thinking before they answer: 900 cut a
 # third of the live answers short (2026-10-01), so the room is generous; cost stays cents.
 EXPLAIN_MAX_TOKENS = 4000
-CHAT_MAX_TOKENS = 8000
+# deepseek-v4-pro thinks by default and spent ALL of 8,000 on thinking in its final answer
+# (live 2026-10-09: 11 look-ups, then "(no answer)"). 16,000 a request; an empty answer cut by
+# the limit is asked once more with ANSWER_RETRY_TOKENS and "write the answer now".
+CHAT_MAX_TOKENS = 16000
+ANSWER_RETRY_TOKENS = 32000
 ADDRESS = "Job address"
 NOTE = "Note"
 
@@ -667,6 +671,15 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
         usage["input_tokens"] += turn.usage.input_tokens
         usage["output_tokens"] += turn.usage.output_tokens
         model = turn.model or model
+        if not turn.tool_calls and not turn.text.strip():
+            # No answer and no look-up: a thinking model spent its whole room thinking. Ask
+            # once more, with more room, for the answer itself — never show an empty reply.
+            again = _answer_now(db, prov, system, convo, model, user_id, usage)
+            if again:
+                return result(again, model=model)
+            return result("I ran out of room while working this out and could not write the "
+                          "answer. Please ask again, or ask about fewer jobs at a time.",
+                          error=True, model=model)
         if not turn.tool_calls:
             return result(turn.text, model=model)
         convo.append({"role": "assistant", "text": turn.text, "tool_calls": turn.tool_calls,
@@ -699,10 +712,31 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
         usage["output_tokens"] += turn.usage.output_tokens
         if turn.text.strip():
             return result(turn.text, model=turn.model or model)
+        again = _answer_now(db, prov, system, convo, model, user_id, usage)
+        if again:
+            return result(again, model=model)
     except (Unavailable, providers.ProviderError):
         pass
     return result("I could not finish that in a few steps — please ask more narrowly.",
                   error=True, model=model)
+
+
+def _answer_now(db: Session, prov, system: str, convo: list[dict], model: str,
+                user_id: int | None, usage: dict) -> str | None:
+    """One more request for the ANSWER, with more room, after a reply that came back empty
+    (a thinking model that used its whole limit thinking). None when that fails too."""
+    try:
+        turn = prov.complete(system=system, messages=[*convo, {
+            "role": "user", "content": "Write your answer to my question now, from what you "
+                                       "found. Keep it short. Do not look anything else up."}],
+            tools=TOOLS, model=model, max_tokens=ANSWER_RETRY_TOKENS)
+    except providers.ProviderError as e:
+        _record(db, "chat", model, None, user_id=user_id, error=str(e))
+        return None
+    _record(db, "chat", model, turn, user_id=user_id)
+    usage["input_tokens"] += turn.usage.input_tokens
+    usage["output_tokens"] += turn.usage.output_tokens
+    return turn.text.strip() or None
 
 
 
