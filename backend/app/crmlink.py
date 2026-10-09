@@ -235,7 +235,8 @@ def _post(path: str, body: dict) -> LinkResult:
 
 
 def send_sms(to_number: str, body: str,
-             media_ids: list[str] | None = None) -> LinkResult:
+             media_ids: list[str] | None = None,
+             from_number: str | None = None) -> LinkResult:
     """`POST /api/crm-link/messages`. Shape from owen-main's `SendMessageIn`.
 
     On success owen-main answers `{"ok": true, "message_id": "...", "status":
@@ -250,7 +251,10 @@ def send_sms(to_number: str, body: str,
     the request it was before this existed.
     """
     payload = {
-        "from_number": current().from_number,
+        # `from_number`: only the automatic texts set one (their own line, 2026-10-09; owen-main
+        # accepts it only when listed on its CRM_LINK_SEND_ONLY_NUMBERS). Everything else is
+        # sent from the CRM line.
+        "from_number": from_number or current().from_number,
         "to_number": to_number,
         "body": body,
     }

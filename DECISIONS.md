@@ -7105,3 +7105,26 @@ wording. Each text has its own off | test | on and its own "last ran" time in
 `reminder_settings.stage_watch_kinds`, so switching one on makes only THAT text record first —
 the others keep texting through the same pass. Migration `e6c1f8a4d290` (two columns), on
 `d3a7b9e2f415`. Tests: `tests/test_ahs_submitted_text.py`.
+
+## AMENDMENT (2026-10-09): the automatic texts go out from their own line, +1 786-920-0331
+
+The user: "786-920-0331 this is the number that should send the messages." Decided with them:
+**only the automatic texts** (the two appointment reminders, "submitted to AHS", "AHS authorized")
+come from it; a person's text from Conversations or New message stays on the CRM line
+(954-775-8492), and no API route takes a sender — `from_number` is passed only by
+`app/reminders/service.py`, from `ZUPER_REMINDERS_FROM_NUMBER` (unset = the CRM line). The event
+records the line it actually went from (`source_number`).
+
+* The number is ours in BulkVS ("Dream Team Roofing - AI Agent"), on the same approved 10DLC
+  campaign (CYZHJBQ), SMS on in owen-main. **Its calls are answered by the Retell agent Brian**
+  and stay so (the user: keep Brian on calls); the texts still say "Text or call (954) 914-7244".
+* **owen-main** only sends for numbers BOUND to the CRM, and binding one re-routes its calls to
+  the CRM ring group — which would have taken Brian off it. So owen-main gained
+  `CRM_LINK_SEND_ONLY_NUMBERS` (branch `feature/crm-send-only-numbers`): a listed number may SEND
+  the CRM's texts, riding the one enabled binding, and its delivery receipts are relayed; the
+  call path and inbound texts never see it as bound.
+* **Replies** to 786-920-0331 stay on owen-main as before (the user's choice: "nowhere special") —
+  they do NOT reach the CRM inbox. A customer who replies to a reminder there is seen in owen-main
+  only; the text tells them to call or text (954) 914-7244.
+* Opt-outs are per number on owen-main: a STOP sent to 786-920-0331 stops texts from it, not from
+  the CRM line, and vice versa.

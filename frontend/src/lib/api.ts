@@ -1999,6 +1999,8 @@ export type ReminderStatus = {
   stage_texts: { kind: 'ahs_submitted' | 'ahs_approved'; title: string
     mode: 'off' | 'test' | 'on'; sending: boolean; sentence: string; board: string
     columns: string[] }[]
+  /** The line these automatic texts go out from; null = the CRM line (2026-10-09). */
+  from_number: string | null
   test_numbers: string[]
   templates: Record<ReminderKind, Record<ReminderLang, string>>
   default_templates: Record<ReminderKind, Record<ReminderLang, string>>

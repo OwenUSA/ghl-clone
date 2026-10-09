@@ -217,7 +217,8 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
                   type_: EventType = EventType.SMS,
                   subject: str | None = None,
                   ai_agent_id: int | None = None,
-                  pictures: list | None = None
+                  pictures: list | None = None,
+                  from_number: str | None = None
                   ) -> tuple[ConversationEvent | None, str]:
     """One send path shared by the API and the four rules.
 
@@ -259,7 +260,7 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
             # NOTHING is written. A picture that never reached the phone system must not
             # become a text that arrives without it: the picture is usually the message.
             return None, "suppressed: " + problem
-        ref = _send_sms(sms_number(contact.phone), body, media_ids)
+        ref = _send_sms(sms_number(contact.phone), body, media_ids, from_number)
 
     conv = thread_for(db, contact.id)
     ev = ConversationEvent(
@@ -268,7 +269,8 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
         delivery_status=ref.status,
         delivery_detail=ref.detail or None,
         provider_ref=ref.provider_ref or None,
-        source_system=SENT_SOURCE_SYSTEM, source_number=_sent_source_number())
+        source_system=SENT_SOURCE_SYSTEM,
+        source_number=from_number or _sent_source_number())
     db.add(ev)
     conv.last_event_at = ev.occurred_at
     db.flush()
@@ -282,7 +284,7 @@ def send_outbound(db: Session, contact: Contact, body: str, *,
     return ev, _outcome_reason(ref)
 
 
-def _send_sms(to: str, body: str, media_ids: list[str]):
+def _send_sms(to: str, body: str, media_ids: list[str], from_number: str | None = None):
     """Hand one text to the transport, passing `media_ids` ONLY when there is a picture.
 
     `MessageTransport` is a documented seam with stand-ins all over the tests, the browser
@@ -293,9 +295,13 @@ def _send_sms(to: str, body: str, media_ids: list[str]):
     reason, as `CrmLinkTransport.send_sms` one layer down.
     """
     transport = get_transport()
+    # `from_number` is set ONLY by the automatic texts (app/reminders, 2026-10-09: they go out
+    # from their own line). No API route takes a sender: a person's text always uses the CRM
+    # line, and "" here means exactly that.
+    sender = from_number or ""
     if media_ids:
-        return transport.send_sms(to=to, body=body, from_number="", media_ids=media_ids)
-    return transport.send_sms(to=to, body=body, from_number="")
+        return transport.send_sms(to=to, body=body, from_number=sender, media_ids=media_ids)
+    return transport.send_sms(to=to, body=body, from_number=sender)
 
 
 def _publish_pictures(pictures: list | None) -> tuple[list[str], str]:
@@ -315,7 +321,8 @@ def _publish_pictures(pictures: list | None) -> tuple[list[str], str]:
 
 def send_outbound_to_number(db: Session, thread, body: str, *,
                             type_: EventType = EventType.SMS,
-                            pictures: list | None = None
+                            pictures: list | None = None,
+                            from_number: str | None = None
                             ) -> tuple[object | None, str]:
     """`send_outbound`, for a number-only thread (app/number_threads.py).
 
@@ -344,13 +351,14 @@ def send_outbound_to_number(db: Session, thread, body: str, *,
     media_ids, problem = _publish_pictures(pictures)
     if problem:
         return None, "suppressed: " + problem
-    ref = _send_sms(sms_number(thread.phone), body, media_ids)
+    ref = _send_sms(sms_number(thread.phone), body, media_ids, from_number)
     ev = NumberThreadEvent(
         number_thread_id=thread.id, type=type_, direction=Direction.OUTBOUND,
         occurred_at=_utcnow(), body=body,
         delivery_status=ref.status, delivery_detail=ref.detail or None,
         provider_ref=ref.provider_ref or None,
-        source_system=SENT_SOURCE_SYSTEM, source_number=_sent_source_number())
+        source_system=SENT_SOURCE_SYSTEM,
+        source_number=from_number or _sent_source_number())
     db.add(ev)
     thread.last_event_at = ev.occurred_at
     db.flush()

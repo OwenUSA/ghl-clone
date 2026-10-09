@@ -153,12 +153,14 @@ def _outcome(reason: str) -> str:
 
 
 def _send(db: Session, row: AppointmentReminder, contact) -> None:
+    sender = c.from_number()            # the automatic texts' own line, when one is set
     if contact is not None:
-        ev, reason = automations.send_outbound(db, contact, row.body or "")
+        ev, reason = automations.send_outbound(db, contact, row.body or "", from_number=sender)
         row.contact_id = contact.id
     else:
         thread, _ = number_threads.thread_for_number(db, row.phone or "")
-        ev, reason = automations.send_outbound_to_number(db, thread, row.body or "")
+        ev, reason = automations.send_outbound_to_number(db, thread, row.body or "",
+                                                         from_number=sender)
         row.number_thread_id = thread.id
     row.state = _outcome(reason)
     row.reason = None if row.state == "sent" else reason

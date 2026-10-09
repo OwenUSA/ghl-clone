@@ -113,8 +113,11 @@ class CrmLinkTransport:
         # byte-for-byte the call it has always been — which matters beyond tidiness: the
         # browser check and several tests replace `crmlink.send_sms` with a double, and a
         # new keyword on every send would make them fail for a feature they never used.
-        result = (crmlink.send_sms(to_number=to, body=body, media_ids=list(media_ids))
-                  if media_ids else crmlink.send_sms(to_number=to, body=body))
+        # A sender other than the CRM line (the automatic texts' own number, 2026-10-09) is
+        # passed only when one is set, for the same reason as `media_ids`.
+        kw = {"from_number": from_number} if from_number else {}
+        result = (crmlink.send_sms(to_number=to, body=body, media_ids=list(media_ids), **kw)
+                  if media_ids else crmlink.send_sms(to_number=to, body=body, **kw))
         if result.ok:
             data = result.data or {}
             return MessageRef(provider_ref=str(data.get("message_id") or ""),
