@@ -62,9 +62,10 @@ def job(db, uid="j1", status="Inspection Completed", board="AHS - Inspection", m
     return j
 
 
-def settings(db, ahs="on", reminders="off", tests=None):
+def settings(db, ahs="on", reminders="off", tests=None, approved="off"):
     s = db.get(ReminderSettings, 1) or ReminderSettings(id=1)
     s.mode, s.ahs_submitted_mode, s.test_numbers = reminders, ahs, tests
+    s.ahs_approved_mode = approved
     db.add(s)
     db.commit()
 
@@ -224,7 +225,8 @@ def test_switching_it_on_through_the_api_needs_the_phrase_and_restarts_the_watch
     db.flush()
     plain, tok = mint_api_token(u, name="a")
     db.add(tok)
-    s = ReminderSettings(id=1, mode="off", stage_watch_at=T0)
+    s = ReminderSettings(id=1, mode="off", stage_watch_at=T0,
+                         stage_watch_kinds={"ahs_approved": T0.isoformat()})
     db.add(s)
     db.commit()
     h = {"Authorization": "Bearer " + plain}
@@ -233,11 +235,91 @@ def test_switching_it_on_through_the_api_needs_the_phrase_and_restarts_the_watch
     assert r.status_code == 400 and "TURN ON" in r.text
     r = cl.put("/api/reminders/settings", json={"ahs_submitted_mode": "test", "confirm": "TURN ON"},
                headers=h)
-    assert r.status_code == 200 and r.json()["ahs_submitted"]["mode"] == "test"
+    by = {t["kind"]: t for t in r.json()["stage_texts"]}
+    assert r.status_code == 200 and by["ahs_submitted"]["mode"] == "test"
+    assert by["ahs_approved"]["mode"] == "off"
     assert r.json()["mode"] == "off"                     # the reminders are untouched
     db.expire_all()
-    assert db.get(ReminderSettings, 1).stage_watch_at is None
+    kinds = db.get(ReminderSettings, 1).stage_watch_kinds
+    assert "ahs_submitted" not in kinds and "ahs_approved" in kinds   # only this text restarts
     ok = cl.put("/api/reminders/settings",
                 json={"templates": {"ahs_submitted": {"en": "Hi {first_name}, sent to AHS."}}},
                 headers=h)
     assert ok.status_code == 200                         # no {time} needed for this one
+
+
+# --- "AHS authorized the repair" -----------------------------------------------------------
+
+APPROVED = "AHS Approved"
+
+
+def approved_rows(db):
+    db.expire_all()
+    return list(db.scalars(select(AppointmentReminder).where(
+        AppointmentReminder.kind == c.AHS_APPROVED).order_by(AppointmentReminder.id)))
+
+
+def test_a_move_into_ahs_approved_texts_once_with_the_careful_wording(db, rec):
+    j = job(db, status=AWAIT)
+    settings(db, ahs="off", approved="on")
+    tick(db, T0)
+    move(db, j, APPROVED)
+    tick(db, T0 + timedelta(minutes=2))
+    move(db, j, "Proposal Made")
+    tick(db, T0 + timedelta(minutes=4))
+    move(db, j, APPROVED)
+    tick(db, T0 + timedelta(minutes=6))
+    assert len(rec.sent) == 1
+    assert rec.sent[0]["body"] == (
+        "Hi Maria, this is Dream Team Roofing. Good news: American Home Shield has authorized "
+        "the repair on your roof. Someone from our team will reach out shortly to go over the "
+        "details and schedule it. Questions? Text or call (954) 914-7244. Reply STOP to opt out.")
+    assert [r.key for r in approved_rows(db)] == ["ahs_approved:j1"]
+
+
+def test_submitted_then_approved_are_two_different_texts(db, rec):
+    j = job(db)
+    settings(db, ahs="on", approved="on")
+    tick(db, T0)
+    move(db, j, SUBMIT)
+    tick(db, T0 + timedelta(minutes=2))
+    move(db, j, APPROVED)
+    tick(db, T0 + timedelta(minutes=4))
+    assert len(rec.sent) == 2
+    assert "submitted your inspection report" in rec.sent[0]["body"]
+    assert "has authorized the repair" in rec.sent[1]["body"]
+
+
+def test_jobs_already_approved_when_it_is_switched_on_are_never_texted(db, rec):
+    job(db, "a", APPROVED, number="1")
+    j = job(db, "b", "Inspection Completed", mobile="9415550101", number="2")
+    settings(db, ahs="on")
+    tick(db, T0)
+    settings(db, ahs="on", approved="on")             # switched on later, while running
+    db.get(ReminderSettings, 1).stage_watch_kinds = {
+        k: v for k, v in db.get(ReminderSettings, 1).stage_watch_kinds.items()
+        if k != "ahs_approved"}
+    db.commit()
+    move(db, j, SUBMIT)                                 # the submitted text keeps working...
+    tick(db, T0 + timedelta(minutes=2))
+    assert [x["to"][-10:] for x in rec.sent] == ["9415550101"]
+    tick(db, T0 + timedelta(minutes=4))                 # ...and nobody already approved is texted
+    assert approved_rows(db) == [] and len(rec.sent) == 1
+
+
+def test_an_approval_held_overnight_goes_only_if_still_approved_or_further(db, rec):
+    a = job(db, "a", AWAIT, number="1")
+    b = job(db, "b", AWAIT, mobile="9415550101", number="2")
+    settings(db, ahs="off", approved="on")
+    night = ny(2026, 10, 9, 22, 0)
+    tick(db, night)
+    move(db, a, APPROVED)
+    move(db, b, APPROVED)
+    tick(db, night + timedelta(minutes=2))
+    move(db, a, "Repair Scheduling Call", board="AHS - Repair & Review")   # further along
+    move(db, b, "Estimate Declined")
+    for m in range(0, 10 * 60, 20):
+        tick(db, night + timedelta(minutes=4 + m))
+    tick(db, ny(2026, 10, 10, 8, 0))
+    by = {r.job_uid: r.state for r in approved_rows(db)}
+    assert by == {"a": "sent", "b": "cancelled"}

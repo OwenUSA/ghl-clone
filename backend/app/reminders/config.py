@@ -7,6 +7,7 @@ A column not listed here never texts, whatever time the job has.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import time
 from zoneinfo import ZoneInfo
 
@@ -31,22 +32,39 @@ DAY_BEFORE = "day_before"
 FOUR_HOUR = "four_hour"
 REMINDER_KINDS = (DAY_BEFORE, FOUR_HOUR)
 
-# "Your inspection report was submitted to AHS" (2026-10-09, Owen's second lift): ONE text per
-# job, when an AHS - Inspection job is moved into either column below (the office sometimes
-# skips the first and goes straight to the second — it is the same news). Prefix match.
-AHS_SUBMITTED = "ahs_submitted"
-AHS_SUBMITTED_BOARD = "AHS - Inspection"
-AHS_SUBMITTED_COLUMNS = ("Submit To AHS", "Awaiting AHS Decision")
-# A text held overnight still goes at 8 AM if the job is in those columns or further along.
-AHS_SUBMITTED_LATER = ("AHS Approved", "Proposal Made")
-AHS_SUBMITTED_LATER_BOARDS = ("AHS - Repair & Review",)
+# Texts sent once per job when it MOVES into a column (reminders/stage_texts.py). Each was lifted
+# by Owen one at a time; each has its own off | test | on (`reminder_settings.<kind>_mode`).
+AHS_SUBMITTED = "ahs_submitted"     # 2026-10-09: the inspection report went to AHS
+AHS_APPROVED = "ahs_approved"       # 2026-10-09: AHS authorized the repair
+
+
+@dataclass(frozen=True)
+class StageText:
+    kind: str
+    title: str
+    board: str
+    columns: tuple[str, ...]          # moving into any of these (prefix match) is the news
+    later: tuple[str, ...]            # held overnight: still true at 8 AM in these columns...
+    later_boards: tuple[str, ...]     # ...or on these boards
+
+
+STAGE_TEXTS: dict[str, StageText] = {t.kind: t for t in (
+    # The office sometimes skips "Submit To AHS…" and goes straight to "Awaiting AHS Decision":
+    # it is the same news, one text.
+    StageText(AHS_SUBMITTED, "Inspection report submitted to AHS", "AHS - Inspection",
+              ("Submit To AHS", "Awaiting AHS Decision"), ("AHS Approved", "Proposal Made"),
+              ("AHS - Repair & Review",)),
+    StageText(AHS_APPROVED, "AHS authorized the repair", "AHS - Inspection",
+              ("AHS Approved",), ("Proposal Made",), ("AHS - Repair & Review",)),
+)}
+STAGE_KINDS = tuple(STAGE_TEXTS)
 # The column each job was in is remembered between passes; after a gap this long nothing is
 # known about the moves in between, so the next pass only records where every job is.
 STAGE_WATCH_STALE_MINUTES = 30
 # A text held overnight that has still not gone after this long is cancelled, never sent late.
 HELD_MAX_HOURS = 14
 
-KINDS = (*REMINDER_KINDS, AHS_SUBMITTED)
+KINDS = (*REMINDER_KINDS, *STAGE_KINDS)
 
 # The day-before text: from 10:00 until 20:00 on the day before the visit.
 DAY_BEFORE_FROM = time(10, 0)
@@ -94,6 +112,16 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
               "tengamos respuesta. ¿Preguntas? Escriba o llame al " + RESCHEDULE_NUMBER + ". "
               "Responda STOP para no recibir más mensajes.",
     },
+    AHS_APPROVED: {
+        "en": "Hi {first_name}, this is Dream Team Roofing. Good news: American Home Shield has "
+              "authorized the repair on your roof. Someone from our team will reach out shortly "
+              "to go over the details and schedule it. Questions? Text or call "
+              + RESCHEDULE_NUMBER + ". Reply STOP to opt out.",
+        "es": "Hola {first_name}, le saluda Dream Team Roofing. Buenas noticias: American Home "
+              "Shield autorizó la reparación de su techo. Alguien de nuestro equipo se comunicará "
+              "con usted en breve para revisar los detalles y programarla. ¿Preguntas? Escriba o "
+              "llame al " + RESCHEDULE_NUMBER + ". Responda STOP para no recibir más mensajes.",
+    },
     FOUR_HOUR: {
         "en": "Hi {first_name}, this is Dream Team Roofing. Reminder: our visit is today "
               "{window}. Text or call " + RESCHEDULE_NUMBER + " if you need to reschedule. "
@@ -126,15 +154,16 @@ def _starts(status: str | None, prefixes: tuple[str, ...]) -> bool:
     return bool(s) and any(s.startswith(p.lower()) for p in prefixes)
 
 
-def ahs_submitted_column(board: str | None, status: str | None) -> bool:
-    return board == AHS_SUBMITTED_BOARD and _starts(status, AHS_SUBMITTED_COLUMNS)
+def in_columns(kind: str, board: str | None, status: str | None) -> bool:
+    t = STAGE_TEXTS[kind]
+    return board == t.board and _starts(status, t.columns)
 
 
-def ahs_submitted_still_true(board: str | None, status: str | None, is_open: bool) -> bool:
-    """At 8 AM, does a held "submitted to AHS" text still say something true?"""
+def still_true(kind: str, board: str | None, status: str | None, is_open: bool) -> bool:
+    """At 8 AM, does a text held overnight still say something true?"""
+    t = STAGE_TEXTS[kind]
     if not is_open:
         return False
-    if board in AHS_SUBMITTED_LATER_BOARDS:
+    if board in t.later_boards:
         return True
-    return board == AHS_SUBMITTED_BOARD and _starts(
-        status, AHS_SUBMITTED_COLUMNS + AHS_SUBMITTED_LATER)
+    return board == t.board and _starts(status, t.columns + t.later)
