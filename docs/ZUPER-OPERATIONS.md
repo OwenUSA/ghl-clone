@@ -186,29 +186,71 @@ other field of every column after each write). Backup:
 | Board / stage | Questions | Notes |
 |---|---|---|
 | AHS - Inspection / **Welcome Call!** | 18 (intake) | the intake moved here when the team rebuilt the board ("Contact Attempted" is gone); 17 copy to job fields ("Checklist" group); one is required |
-| AHS - Inspection / **Inspection Completed** | 12 (9 written + 3 photo sets) | moved here from "Inspection" 2026-09-25 (owner: pop up after the inspection); the 9 written ones copy to job fields; none required |
+| AHS - Inspection / **Inspection Completed** | 18 (13 written + 3 photo sets + video + voice note) | moved here from "Inspection" 2026-09-25 (owner: pop up after the inspection). 2026-10-12: + the inspection questions (section 3.3a); Basic / Expanded / Comprehensive option made required. 13 written ones copy to job fields |
 | AHS - Inspection / AHS Approved | 1 (KPI) | `AHS authorized ($)`, required |
 | AHS - Repair & Review / Repair In Process | 1 (Photos - before) | |
-| AHS - Repair & Review / Repair Complete | 2 (Photos - during / after) | |
+| AHS - Repair & Review / Repair Complete | 3 (Photos - during / after, `Video - finished repair`) | the video is required (2026-10-12) |
 | AHS - Repair & Review / Invoice Submitted to AHS | 3 (KPI), all required | `Customer chose`, `Customer paid ($)`, and `Line items added (AHS amount + any customer upgrade)?` (the third is not in `ZUPER-KPI-SETUP.md`) |
 | Retail / Contact Attempted | 15 (intake, no AHS-only questions) | copy to job fields; one required |
-| Retail / Inspection / Estimate | 12 | 9 written copy to job fields |
+| Retail / Inspection / Estimate | 12 | 9 written copy to job fields; none required (it pops up when the job ENTERS the column, before the visit) |
+| Retail / **Proposal Made** | 6 (2026-10-12) | the inspection questions (section 3.3a) — the first move after the visit |
 | Retail / Scheduled | 2 (KPI), required | `Option chosen`, `Sold price ($)` |
 | Retail / Repair In Process, Repair Complete | 1, 2 photo questions | |
 | Cancelled, on AHS - Inspection, AHS - Repair & Review and Retail | 2 (KPI) | `Cancel reason` (required), `Cancel note` |
 | 6 regional boards | Retail's intake, inspection and photo checklists, **not** the KPI ones | **inspection questions NOT linked to job fields** (0 of 12, checked 2026-10-12) |
 
-Field types in use across all checklists: Yes/No (`SINGLE_ITEM`), single choice (`RADIO`),
-multi choice (`MULTI_ITEM`), short and long text, date, lookup, header, signature, `IMAGE` and
-`MULTI_IMAGE`. No checklist asks for a video or an audio note yet.
+Field types Zuper's builder offers (new UI `field-form-builder` component): short / long text,
+date, time, date-time, single choice (`RADIO`, component `radio`), multi choice (`MULTI_ITEM`,
+`checkbox`), dropdown (`SINGLE_ITEM`, `select`), upload (`FILE`, `file`), `IMAGE`, `MULTI_IMAGE`
+(`multi_image`), **`VIDEO` (`video`)**, `MULTI_MEDIA` ("walkthrough"), barcode, lookup, table,
+signature, header. **There is no audio type** — a voice memo goes in a `FILE` question.
+
+### 3.3a The inspection questions (2026-10-12, owner OK)
+
+What the office needs from every inspection, asked when the technician finishes it:
+
+| Question | Type | Required | Job field (group Checklist) |
+|---|---|---|---|
+| Roof type | single choice: Shingle · Tile · Metal · Flat · Other | yes | `Roof type` |
+| Roof age (years) | short text | yes | `Roof age (years)` |
+| Leak location | long text | yes | `Leak location` |
+| Possible add-ons | multi choice: None · Gutters · Flashing · Skylight · Ventilation · Other | yes | `Possible add-ons` (text) |
+| Video - roof condition | video | yes | — |
+| Voice note (optional) | file upload | no | — |
+
+On **AHS - Inspection / Inspection Completed** (added after the 12 that were there; the existing
+Basic / Expanded / Comprehensive option questions — the Good / Better / Best suggestions — became
+required) and on **Retail / Proposal Made**. AHS - Repair & Review got only `Video - finished
+repair` (required) at Repair Complete: the inspection answers are already on the job, and the
+Checklist field group shows on all three boards.
+
+- **The technician can see and fill them before moving the job:** the answers are linked job
+  fields with pre-fill on, so typing them on the job page during the visit pre-fills the pop-up.
+  On AHS jobs the "2. Inspection" task lists every question too.
+- **Not verified on a phone yet:** that the technician's app records the video straight from the
+  camera, and how the task shows a video (the task job counts any link as "photos"). Test on #701.
+- The optional voice note is a to-do in the "2. Inspection" task, so a finished inspection without
+  one reads 17 of 18 (In progress) there.
+- How it was done: `/home/qa/zbrowser/insp_checklist_v2.py` on dispatch (dry run by default; the
+  `test` step tried every question type on the empty AHS - TEST board and removed them). Backup:
+  `/root/backups/zuper_checklists_fields_before_insp_v2_20261012_201200.json`. `zuper_tasks` was
+  paused during the change; a simulated full run showed no task status change, only the new
+  to-do lines.
+- **Proof nothing was lost:** `job_snapshot.py` (every job: fields, checklist answers, status) and
+  `photo_snapshot.py` (every attachment id in the account) before and after:
+  462 jobs, 2,913 filled fields, 771 checklist answers and 1,767 photos / files, identical.
+  Snapshots in `/root/backups/zuper_jobs_*_inspection_checklist_20261012*` and
+  `zuper_photos_*_inspection_checklist_20261012.json`. Use the same two scripts around any
+  future settings change (`--compare <before> <after>`).
 
 Deleting a checklist question keeps the answers already saved on jobs (tested). Answers live in
 each job's status history (`job_status[].checklist`), and linked ones also in job fields.
 
 ### 3.4 Job fields (custom fields)
 
-- 75 JOB fields on 2026-10-12 (40 on 2026-09-25). 16 groups: **Checklist** (17 intake + 9
-  inspection, shown on AHS - Inspection, AHS - Repair & Review and Retail), **AHS** (Authorization
+- 79 JOB fields on 2026-10-12 (40 on 2026-09-25; +4 inspection fields that day). 16 groups:
+  **Checklist** (17 intake + 9 inspection + Roof type, Roof age (years), Leak location,
+  Possible add-ons, shown on AHS - Inspection, AHS - Repair & Review and Retail), **AHS** (Authorization
   Amount, Customer Responsibility, Estimate Amount…), **CRM** (Callback Status…), **KPI** (one per
   KPI question, 2026-09-30), seven **AHS TEST - …** groups for the test board, and Zuper's empty
   Insurance, Warranty, Trades, Source Attribution, Drip Campaign State. Workiz Job #, Job Type,
