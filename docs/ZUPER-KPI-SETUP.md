@@ -7,6 +7,9 @@
 > ignore these columns (`NO_TASK_STAGES`), so they never become tasks on jobs. The steps below
 > stay as the record, and as the way to re-create them by hand.
 >
+> **Re-checked 2026-10-12 (read-only):** every label, type and "required" in A–D is in Zuper as
+> written. The 6 regional boards do **not** have the Scheduled / Cancelled questions.
+>
 > **Also linked (same day, owner's OK):** a job-field section **KPI** on the three boards holds a
 > field for each question (same label), and every question copies its answer there and shows
 > the field's value pre-filled. A wrong answer is corrected in the field on the job page; the
@@ -47,6 +50,10 @@ Text** and type digits only (e.g. `1100`, no `$`).
 |---|---|---|---|
 | `Customer chose` | Single Selection | AHS only · Good · Better · Best · Custom | Yes |
 | `Customer paid ($)` | Number / Single Line Text | — (0 when AHS only) | Yes |
+
+> Checked 2026-10-12: Zuper also has a third required question on this column,
+> `Line items added (AHS amount + any customer upgrade)?` (single choice). It was added after
+> this list; the report does not read it.
 
 ## C. Retail → column **Scheduled**
 
