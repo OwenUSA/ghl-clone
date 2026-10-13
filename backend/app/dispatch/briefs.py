@@ -470,6 +470,8 @@ AFTER_VISIT = set(c.AFTER_INSPECTION_STAGES) | set(c.WAITING_ON_AHS) | set(
                               "Review Received", "Estimate Sent"}
 INVOICED = {"Invoice Submitted to AHS", "Awaiting AHS Payment", "Paid", "Review Requested",
             "Review Received", "Invoice"}
+# Stages named for ONE technician: never offered for anyone else's job (2026-10-13).
+NAMED_STAGES = {c.INSPECTION_BOARD: ("Antonio On the Way",)}
 # The one stage a fix may name, per board and event; anything else is "do it in Zuper".
 ON_THE_WAY_STAGE = {c.REPAIR_BOARD: "On the Way to Repair"}
 DONE_STAGE = {c.INSPECTION_BOARD: "Inspection Completed", c.REPAIR_BOARD: "Repair Complete"}
@@ -496,7 +498,13 @@ def _finding(b: Brief, kind: str, severity: str, what: str, do: str,
             "job_uid": j.job_uid, "customer": j.customer_name, "board": j.board,
             "stage": j.status, "visit_day": c.local(start).date().isoformat() if start else None,
             "visit": visit_text(j),
-            "assigned": ", ".join(j.assigned or []) or None, "what": what, "do": do,
+            "assigned": ", ".join(j.assigned or []) or None,
+            # What Zuper shows now, ready to copy: the AI writes it from here, never from
+            # another row (live 2026-10-13: #711's stage was written on #695's row).
+            "zuper_now": " · ".join(x for x in (
+                "%s / %s" % (j.board, j.status) if j.board else j.status, visit_text(j) or
+                "no visit", ", ".join(j.assigned or []) or "nobody assigned") if x),
+            "what": what, "do": do,
             "evidence": [x.out() if isinstance(x, Signal) else x for x in evidence or []],
             "fix": fix}
 
@@ -660,10 +668,17 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
         if today_visit and otw and c.local(otw.at).date() == today and not _in_visit(j) \
                 and not _after(j):
             st = ON_THE_WAY_STAGE.get(board)
+            named = next((s for s in NAMED_STAGES.get(board, ()) if not any(
+                s.split()[0] in (a or "") for a in j.assigned or [])), None)
+            who = ", ".join(j.assigned or []) or "nobody"
             findings.append(_finding(
                 b, "on_the_way_not_moved", "medium",
                 "We told the customer the technician is on the way; Zuper still shows “%s”."
-                % j.status, "Move it to the on-the-way stage (the technician does it in the app).",
+                % j.status, ("Move it to the on-the-way stage (the technician does it in the "
+                             "app)." if not named else
+                             "Move it to the on-the-way stage. This board's is named “%s” and %s "
+                             "is assigned: ask the office which stage to use; never “%s” for "
+                             "%s's job." % (named, who, named, who)),
                 [otw], {"action": "stage", "to": st} if st else None))
         done = b.newest("done")
         field_done = (j.photos_today or 0) > 0 or bool(b.field_today)
