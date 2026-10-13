@@ -340,6 +340,8 @@ its time and words).
 from today to Saturday (it judges every visit on the file: book / call first / the Excel is \
 wrong / on hold / matches) and report EVERY group of its `by_verdict`; then zuper_check for \
 the rest. compare_file only for row-by-row differences.
+  * "Who still needs a booking / missing appointments / new jobs": to_book, and report \
+EVERY group with each job's sentence, in order — do not re-judge a verdict.
   * Fitting a customer in: customers for that job, then find_slots. Remaking the schedule: \
 plan_schedule.
   * search_comms (full=true) ONLY to read one conversation a brief does not settle. Never call \
@@ -456,6 +458,14 @@ TOOLS = [
                        {"type": "object", "properties": {
                            "date_from": {"type": "string"}, "date_to": {"type": "string"}},
                         "additionalProperties": False}),
+    providers.ToolSpec("to_book", "Every job that still needs a visit booked (new inspections, "
+                       "AHS-approved repairs, reschedules, call-backs, visits that did not "
+                       "happen), each judged by script from 60 days of calls and texts: book "
+                       "(agreed), already on the customer's other job, the visit happened "
+                       "(update the stage), confirm a time, new date, on hold, keep calling, "
+                       "call and book, stale. Use it for 'who is missing a booking', 'new "
+                       "jobs', 'who do we still need to schedule'.",
+                       {"type": "object", "properties": {}, "additionalProperties": False}),
     providers.ToolSpec("customers", "A compact brief per job, already read from all their calls "
                        "and texts: stage, visit, technician, the job's important fields (roof, "
                        "leak, AHS numbers...), availability, last contact, a question waiting "
@@ -663,6 +673,9 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
                 # reading went wrong (and most of the tokens).
                 v.pop("recent_calls_and_texts", None)
         return json.dumps(out, default=str)
+    if name == "to_book":
+        from . import briefs
+        return json.dumps(briefs.to_book(db, now, hidden), default=str)
     if name in ("zuper_check", "customers"):
         return _prepared(db, name, args, now, hidden)
     if name == "day_schedule":

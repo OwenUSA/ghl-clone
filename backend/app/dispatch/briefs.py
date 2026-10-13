@@ -104,7 +104,7 @@ GREETING = re.compile(r"^\W*(hi|hello|hey|hola|good (morning|afternoon|evening)|
 # A text that asks for something is not a "yes" to our proposal, even if it starts with "Ok".
 ASKS = re.compile(r"\?|\b(call me|ll[aá]m\w*|whats ?app|text me|can you|could you|"
                   r"please|por favor|c favor)\b", re.IGNORECASE)
-ON_THE_WAY = re.compile(r"\b(on (his|her|their|the|my|our) way|en camino|"
+ON_THE_WAY = re.compile(r"\b(on (his|her|their|the|our) way|en camino|"
                         r"(llega|llegar[aá]|arrive|arriving|be there)\b.{0,30}\b\d+\s*(min|minutes|"
                         r"minutos)|\d+\s*(minutes|minutos) away)", re.IGNORECASE)
 DONE = re.compile(r"\b(we (have )?(just )?finished|(has|have) finished|already finished|"
@@ -463,10 +463,10 @@ def _schedule_changes(db: Session, since: datetime) -> dict[str, datetime]:
 
 
 def load(db: Session, now: datetime, hidden: set[str] | None = None, *,
-         jobs: list[DispatchJob] | None = None) -> list[Brief]:
+         jobs: list[DispatchJob] | None = None, days: int = COMMS_DAYS) -> list[Brief]:
     """A brief for every open job (or the ones given), reading the database once."""
     hidden = hidden or set()
-    since = now - timedelta(days=COMMS_DAYS)
+    since = now - timedelta(days=days)
     # Never past `now`: a check of an earlier moment reads what was known then.
     evs = [e for e in lookups._events(db, since) if e["at"] and e["at"] <= now]
     reach = lookups.customer_phones(db, now, evs)
@@ -809,6 +809,151 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
     return {"from": d0.isoformat(), "to": d1.isoformat(), "checked_at": _when(now),
             "visits_checked": len(in_range), "jobs_checked": len(bs),
             "findings": findings, "counts": counts, "skipped_test_jobs": len(every) - len(bs)}
+
+
+# --------------------------------------------------------------- who still needs a booking
+
+# Every job that needs a visit (the planner's own list, scheduling.waiting_jobs), judged by
+# script from 60 days of calls and texts (2026-10-13): the AI's answer to "what jobs are missing
+# to book" put a return visit on the wrong one of a customer's three jobs, said "book" for
+# visits that had happened, and called leads imported in September "nobody has called" because
+# its summaries read 14 days. Each job now comes with ONE verdict; the model only reports them.
+BOOK_DAYS = 60
+STALE_DAYS = 30
+TO_BOOK = (
+    ("book", "Agreed with the customer, not in Zuper — book it"),
+    ("on_other_job", "Already booked on the customer's other job — nothing to book here"),
+    ("visit_happened", "The visit looks like it happened — update the stage, don't rebook"),
+    ("confirm_time", "The customer offered days — call to pick one and a time"),
+    ("new_date", "The customer asked to move or can't make it — call for a new date"),
+    ("on_hold", "The customer put it on hold — do not book"),
+    ("keep_calling", "We reached out, the customer has not answered — keep calling"),
+    ("call_and_book", "Call the customer and book"),
+    ("stale", "No call or text in %d days — check it is still a job" % STALE_DAYS),
+)
+
+
+def to_book(db: Session, now: datetime, hidden: set[str] | None = None) -> dict:
+    """Who still needs a booking, each with its verdict and evidence. Reads only."""
+    from . import scheduling
+    waiting = {pj.uid: pj for pj in scheduling.waiting_jobs(
+        db, now, hidden=hidden or set(), boards="all", use_saved=False)}
+    every = load(db, now, hidden, days=BOOK_DAYS)
+    by_uid = {b.job.job_uid: b for b in every}
+    by_phone: dict[str, list[Brief]] = {}
+    for b in every:
+        for ph in b.job.phones or []:
+            by_phone.setdefault(ph, []).append(b)
+    today = c.local(now).date()
+    groups: dict[str, list[dict]] = {k: [] for k, _ in TO_BOOK}
+    skipped_tests = 0
+    for uid, pj in waiting.items():
+        b = by_uid.get(uid)
+        if b is None:
+            continue
+        if b.test:
+            skipped_tests += 1
+            continue
+        j = b.job
+        start = c.aware(j.scheduled_start)
+        vday = c.local(start).date() if start else None
+        sibs = {o.job.job_uid: o for ph in j.phones or [] for o in by_phone.get(ph, [])
+                if o is not b and o.job.is_open}
+        upcoming = next((o for o in sibs.values() if c.aware(o.job.scheduled_start) and c.local(
+            c.aware(o.job.scheduled_start)).date() >= today and lookups.booked_stage(
+                o.job.status)), None)
+        recent = b.sigs
+        # A signal on a day a sibling job had its visit belongs to that job (#323 / #721).
+        sib_days = {c.local(c.aware(o.job.scheduled_start)).date() for o in sibs.values()
+                    if c.aware(o.job.scheduled_start)}
+        agreed = [s for s in recent if s.kind == "confirmed" and s.day and s.day >= today]
+        opts = next((s for s in reversed(recent) if s.kind == "options"
+                     and any(d >= today for d in s.days or [])), None)
+        # A cancel from before the job entered its stage is history (live: #677's 9/23).
+        stop = next((s for s in reversed(recent) if s.kind in ("cancel", "hold") and (
+            c.aware(j.status_since) is None or s.at >= c.aware(j.status_since) - timedelta(
+                hours=12)) and c.local(s.at).date() not in sib_days), None)
+        newest_yes = max([x.at for x in agreed] + ([opts.at] if opts else []), default=None)
+        # The visit happened: on the way / arrived / done / pictures on or after the visit day
+        # AND after the job entered its stage — for a job waiting on its NEXT visit (AHS
+        # Approved, Call Back) the inspection that happened before is not it (live: #677).
+        entered = c.aware(j.status_since)
+        # "On my way" a little before the technician moves the stage still counts.
+        after = (entered - timedelta(hours=12)) if entered else None
+        happened = None
+        if vday and vday < today:
+            # A customer with several jobs (Janeth Palacio has six on one number): only a
+            # signal ON this job's visit day is this job's.
+            happened = next((s for s in reversed(recent) if s.kind in ("on_the_way", "done")
+                             and (c.local(s.at).date() == vday if sibs else
+                                  c.local(s.at).date() >= vday)
+                             and (after is None or s.at >= after)
+                             and c.local(s.at).date() not in sib_days), None)
+            photo = c.aware(j.visit_photo_at) or c.aware(j.last_photo_at)
+            if happened is None and photo and c.local(photo).date() >= vday and (
+                    entered is None or photo >= entered):
+                happened = {"at": _when(photo), "said": "pictures in Zuper (%s)" % (
+                    j.visit_photo_by or j.last_photo_by or "the field")}
+        last = b.evs[-1] if b.evs else None
+        theirs = [e for e in b.evs if e["who"] == "customer"]
+        since = c.aware(j.status_since) or c.aware(j.zuper_created_at)
+        row = {"job_number": j.job_number, "customer": j.customer_name, "board": j.board,
+               "stage": j.status, "visit": visit_text(j), "why_waiting": pj.why,
+               "assigned": ", ".join(j.assigned or []) or None,
+               "last_contact": "%s %s by %s (%s)" % (
+                   _when(last["at"]), last["kind"], "the customer" if last["who"] ==
+                   "customer" else "us", last["source"]) if last else None,
+               "availability": b.availability.summary if b.availability else None}
+        if upcoming is not None:
+            kind, say, ev = "on_other_job", "The visit is booked on #%s (%s, %s)." % (
+                upcoming.job.job_number, visit_text(upcoming.job), upcoming.job.status), None
+        elif happened is not None:
+            ev = happened.out() if isinstance(happened, Signal) else happened
+            kind, say = "visit_happened", "Visit %s: %s %s — check with %s and set the stage." % (
+                vday.strftime("%a %m/%d"), ev.get("at"), ev.get("said", "")[:90],
+                ", ".join(j.assigned or []) or "the technician")
+        elif stop and (newest_yes is None or stop.at > newest_yes):
+            ev = stop.out()
+            kind = "on_hold" if stop.kind == "hold" else "new_date"
+            say = "%s %s." % ("On hold since" if stop.kind == "hold" else
+                              "Asked to move / can't make it on", _when(stop.at))
+        elif agreed:
+            s = agreed[-1]
+            ev = s.out()
+            kind, say = "book", "Agreed %s for %s%s." % (
+                _when(s.at), s.day.strftime("%a %m/%d"),
+                " " + _win(s.window) if s.window else " (no time said — ask)")
+        elif opts:
+            ev = opts.out()
+            kind, say = "confirm_time", "Offered %s on %s." % (", ".join(
+                d.strftime("%a %m/%d") for d in opts.days if d >= today), _when(opts.at))
+        elif last is None or (now - last["at"] > timedelta(days=STALE_DAYS) and (
+                since is None or now - since > timedelta(days=STALE_DAYS))):
+            kind, say, ev = "stale", "No call or text in %d days (last: %s); in “%s” since %s." % (
+                STALE_DAYS, _when(last["at"]) if last else "none in %d days" % BOOK_DAYS,
+                j.status, _when(since)), None
+        elif last is not None and last["who"] == "us" and (
+                not theirs or last["at"] - theirs[-1]["at"] > timedelta(hours=24)):
+            # The customer has not answered for over a day since we last reached out (a reply
+            # two minutes before our "thank you" is an answer — live: #279).
+            heard = _when(theirs[-1]["at"]) if theirs else "never in %d days" % BOOK_DAYS
+            kind, say, ev = "keep_calling", "We reached out %s; the customer last answered %s." % (
+                _when(last["at"]), heard), None
+        else:
+            kind, say, ev = "call_and_book", "Last contact %s." % (
+                row["last_contact"] or "none in %d days" % BOOK_DAYS), None
+        row.update(verdict=kind, say=say, evidence=[ev] if ev else [])
+        groups[kind].append(row)
+    out = []
+    for k, title in TO_BOOK:
+        if groups[k]:
+            out.append({"verdict": k, "title": title, "count": len(groups[k]),
+                        "jobs": sorted(groups[k], key=lambda r: int(r["job_number"] or 0))})
+    return {"checked_at": _when(now), "jobs_waiting": sum(len(v) for v in groups.values()),
+            "skipped_test_jobs": skipped_tests, "groups": out,
+            "how_to_judge": "Each job's verdict is worked out by script from 60 days of calls "
+                            "and texts and Zuper. Report EVERY group, in order, each job with "
+                            "its sentence; do not re-judge. Only `book` is ready for Zuper."}
 
 
 # ------------------------------------------------------------- the office's day plan, judged

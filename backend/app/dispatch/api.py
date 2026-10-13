@@ -229,6 +229,20 @@ def dispatch_check(date_from: str | None = None, date_to: str | None = None,
     return out
 
 
+@router.get("/to-book")
+def dispatch_to_book(principal: auth.Principal = VIEW, db: Session = Depends(get_db)):
+    """Who still needs a booking (briefs.to_book): every waiting job with its verdict from the
+    calls and texts — no AI, nothing written."""
+    from . import briefs
+    out = briefs.to_book(db, datetime.now(UTC), _hidden(db, principal))
+    for g in out["groups"]:
+        for r in g["jobs"]:
+            uid = db.scalar(select(DispatchJob.job_uid).where(
+                DispatchJob.job_number == r["job_number"]))
+            r["zuper_url"] = _zuper_url(uid)
+    return out
+
+
 @router.get("/jobs/{job_uid}")
 def dispatch_job(job_uid: str, principal: auth.Principal = VIEW,
                  db: Session = Depends(get_db)):

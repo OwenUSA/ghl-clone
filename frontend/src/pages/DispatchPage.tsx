@@ -4,6 +4,7 @@ import { PageTabs } from '../components/PageTabs'
 import { AssistantChat } from '../components/dispatch/AssistantChat'
 import { WeekPlan } from '../components/dispatch/WeekPlan'
 import { ZuperCheck } from '../components/dispatch/ZuperCheck'
+import { ToBook } from '../components/dispatch/ToBook'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
 import {
   applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion,
@@ -26,6 +27,7 @@ const ASK = 'ask'
 const SETTINGS = 'settings'
 const BOOK = 'book'
 const CHECK = 'check'
+const TOBOOK = 'tobook'
 const BOOKABLE = new Set(['book_visit', 'new_not_called', 'needs_date'])
 
 const card: React.CSSProperties = { background: '#fff', border: `1px solid ${LINE}`,
@@ -53,7 +55,7 @@ export function DispatchPage({ user }: { user: Me }) {
   // A link can open a tab: the assistant's "Open plan on the calendar" is ?tab=book&plan=N.
   const [tab, setTab] = useState<string>(() => {
     const t = new URLSearchParams(window.location.search).get('tab')
-    return t === BOOK || t === CHECK ? t : ASK
+    return t === BOOK || t === CHECK || t === TOBOOK ? t : ASK
   })
   const [activeChatId, setActiveChatId] = useState<number | null>(readActiveChat)
   useEffect(() => { writeActiveChat(activeChatId) }, [activeChatId])
@@ -61,7 +63,7 @@ export function DispatchPage({ user }: { user: Me }) {
     enabled: allowed, refetchInterval: 60000, refetchOnWindowFocus: true })
   const sugs = useQuery({ queryKey: ['dispatch-suggestions'], queryFn: () => dispatchSuggestions(),
     enabled: allowed, refetchInterval: 60000 })
-  const isQueue = ![SUGGESTIONS, ASK, SETTINGS, CHECK].includes(tab)
+  const isQueue = ![SUGGESTIONS, ASK, SETTINGS, CHECK, TOBOOK].includes(tab)
   const items = useQuery({ queryKey: ['dispatch-items', tab],
     queryFn: () => dispatchItems(tab === URGENT ? null : tab), enabled: allowed && isQueue,
     refetchInterval: 60000, refetchOnWindowFocus: true })
@@ -72,6 +74,7 @@ export function DispatchPage({ user }: { user: Me }) {
   const tabs = [
     { key: ASK, label: 'Assistant' },
     { key: CHECK, label: 'Check Zuper' },
+    { key: TOBOOK, label: 'To book' },
     { key: URGENT, label: s ? `Urgent${s.urgent ? ` ${s.urgent}` : ''}` : 'Urgent' },
     ...(s?.queues ?? []).map((q) => ({ key: q.key, label: queueLabel(q) })),
     { key: SUGGESTIONS, label: openSugs ? `Suggestions ${openSugs}` : 'Suggestions' },
@@ -103,6 +106,7 @@ export function DispatchPage({ user }: { user: Me }) {
       <div style={{ overflowY: 'auto', padding: '16px 24px', flex: 1 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 980 }}>
           {tab === CHECK ? <ZuperCheck />
+            : tab === TOBOOK ? <ToBook />
             : tab === SUGGESTIONS ? <SuggestionsTab list={sugs.data?.suggestions ?? []} />
             : tab === SETTINGS ? <SettingsTab admin={isAiAdmin(user)} />
             : (
