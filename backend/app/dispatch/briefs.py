@@ -111,6 +111,16 @@ AHS_SENT = re.compile(r"((submitted|sent|uploaded|subimos|enviamos|subieron|lo s
                       r"subido)\b.{0,80}\b(american home shield|ahs)\b|"
                       r"\b(american home shield|ahs)\b.{0,40}\b(submitted|received the report))",
                       re.IGNORECASE)
+# The customer offering several days: "available Friday, Monday, or possibly late Thursday".
+OPTIONS = re.compile(r"\b(available|either|or|options?|can (do|make)|works?|prefer\w*|"
+                     r"disponible|puede)\b", re.IGNORECASE)
+# In a call summary, the CUSTOMER offering days ("Frederick is out of town but available
+# Friday, Monday…", "the caller requested … either Wednesday or …"), never "Owen offered".
+OFFERED = re.compile(r"\b(?!owen\b|luis\b|antonio\b|marian\w*\b)[A-Z]\w+ (is|was|would be|will "
+                     r"be|are) (out of town but )?(available|free)|"
+                     r"\b(customer|caller|client|she|he|they) (is |are |would be )?"
+                     r"(available|requested|prefers?|can do|asked)",
+                     re.IGNORECASE)
 QUESTION = re.compile(r"\?|\b(when|what time|have you|did you|can you|could you|cu[aá]ndo|"
                       r"qu[eé] hora|pueden|podr[ií]an)\b", re.IGNORECASE)
 
@@ -124,6 +134,7 @@ class Signal:
     how: str      # text | call
     quote: str
     day: date | None = None   # promise / confirmed: the day it is for
+    days: list | None = None  # options: the days the customer offered
     window: tuple[int, int] | None = None   # minutes after midnight
 
     def out(self) -> dict:
@@ -132,6 +143,8 @@ class Signal:
         if self.day:
             d["for"] = self.day.strftime("%a %m/%d") + (" " + _win(self.window)
                                                         if self.window else "")
+        if self.days:
+            d["days_offered"] = ", ".join(x.strftime("%a %m/%d") for x in self.days)
         return d
 
 
@@ -226,6 +239,11 @@ CONFIRM_NOT_YET = re.compile(r"\b(to|will|would|needs?|pending|awaiting|waiting|
 def _confirm_happened(src: str, m: re.Match) -> bool:
     if re.match(r"confirmation", m.group(0), re.IGNORECASE):
         return False
+    # "call back with confirmed appointment date and time" (a to-do, live 2026-10-13, #687)
+    if re.match(r"confirmed\b", m.group(0), re.IGNORECASE) and re.search(
+            r"\b(with|a|an|the|any|no|for|of|her|his|their|your|our)\s+$",
+            src[max(0, m.start() - 12):m.start()], re.IGNORECASE):
+        return False
     # "before her scheduled appointment" describes it; "Owen scheduled a visit" did it.
     if re.match(r"(scheduled|booked|set up)\b", m.group(0), re.IGNORECASE) and re.search(
             r"\b(her|his|their|the|your|our|my|a|an|already|previously)\s+$",
@@ -308,6 +326,12 @@ def signals(evs: list[dict]) -> list[Signal]:
             m = rx.search(text)
             if m and _happened(text, m):
                 add(kind, m, text)
+        if (how == "text" and who == "customer") or (how == "call" and OFFERED.search(text)):
+            days = sorted({d for d in (day_in(x.group(0), e["at"]) for x in
+                                       DAY_WORD.finditer(text)) if d})
+            if len(days) >= 2 and OPTIONS.search(text) and not any(
+                    s.kind == "confirmed" and s.at == e["at"] for s in out):
+                add("options", OPTIONS.search(text), text, days=days)
         if who == "us" and how == "text":
             prev_us = e
     return out
@@ -595,12 +619,26 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
                         "" if p.window else " (no time was said: ask the customer)"),
                     [p], fix))
 
+        # 2b. The customer offered several days and none is booked: call to pick one.
+        op = b.newest("options")
+        ahead = [d for d in (op.days if op else []) if d >= today]
+        if op and len(ahead) >= 2 and now - op.at <= timedelta(days=PROMISE_DAYS) and \
+                (p is None or op.at > p.at) and (moved is None or op.at > moved) and \
+                not _after(j) and vday not in ahead and \
+                not any(sibling_has(b, d) for d in ahead):
+            findings.append(_finding(
+                b, "customer_options", "medium",
+                "The customer offered %s; nothing is booked on those days." % ", ".join(
+                    d.strftime("%a %m/%d") for d in op.days if d >= today),
+                "Call them to pick one of those days and a time, then set the visit.", [op]))
+
         # 3. The customer asked to cancel or move after the last agreement — also when the
         # visit's day has passed and the job still sits in a visit stage (live 2026-10-13:
         # #287 cancelled on Sunday's call, still "On the Way to Repair" on Tuesday).
         cx = b.newest("cancel")
         cancelled = False
         if cx and now - cx.at <= timedelta(days=PROMISE_DAYS) and (p is None or cx.at > p.at) \
+                and (op is None or cx.at > op.at) \
                 and (moved is None or cx.at > moved) and not _after(j) and \
                 lookups.booked_stage(j.status):
             cancelled = True
@@ -634,10 +672,23 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
             since = c.aware(j.status_since)
             if _in_visit(j) and since and c.local(since).date() < today and \
                     now - since <= timedelta(days=14) and not cancelled:
-                findings.append(_finding(
-                    b, "stale_on_the_way", "low", "Stage “%s” since %s and no visit today."
-                    % (j.status, _when(j.status_since)),
-                    "Put it back to the stage it is really in."))
+                noted = c.aware(j.last_note_at)
+                done_st = DONE_STAGE.get(board)
+                if noted and noted >= since and done_st:
+                    # Notes written after it went in progress (live 2026-10-13: Owen's notes on
+                    # #736 at 4:31 / 4:49 PM, "send the report to AHS"): the visit looks done.
+                    findings.append(_finding(
+                        b, "stale_on_the_way", "low",
+                        "Stage “%s” since %s; notes were added after it (last %s), so the "
+                        "visit looks done." % (j.status, _when(j.status_since), _when(noted)),
+                        "Check with %s, then move it to %s." % (
+                            ", ".join(j.assigned or []) or "the technician", done_st)))
+                else:
+                    findings.append(_finding(
+                        b, "stale_on_the_way", "low", "Stage “%s” since %s and no visit today."
+                        % (j.status, _when(j.status_since)),
+                        "Ask %s where the job really is and set that stage." % (
+                            ", ".join(j.assigned or []) or "the technician")))
             continue
 
         # ---- visits in the range
@@ -682,6 +733,16 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
                 [otw], {"action": "stage", "to": st} if st else None))
         done = b.newest("done")
         field_done = (j.photos_today or 0) > 0 or bool(b.field_today)
+        # Under way without the app: moved into an in-progress stage today (by anyone), or a
+        # call about the work after the visit began (live 2026-10-13: #711, truck trouble,
+        # the office moved it to "Repair In Process", calls about the plywood and a deposit).
+        since = c.aware(j.status_since)
+        # Our own "he's on his way" text is not the work happening; an answered call or the
+        # customer's text after the visit began is.
+        talk_today = [e for e in b.evs if start and e["at"] >= start and (
+            (e["kind"] == "call" and (e.get("seconds") or 0) >= 30) or
+            (e["kind"] == "text" and e["who"] == "customer"))]
+        active = (_in_visit(j) and since and c.local(since).date() == today) or bool(talk_today)
         if today_visit and end and now > end + timedelta(minutes=30) and not _after(j):
             if done and c.local(done.at).date() == today:
                 st = DONE_STAGE.get(board)
@@ -691,7 +752,20 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
                         done.quote[:60], j.status),
                     "Move it to %s." % (st or "the done stage"), [done],
                     {"action": "stage", "to": st} if st else None))
-            elif not field_done:
+            elif active and _in_visit(j):
+                last = talk_today[-1] if talk_today else None
+                findings.append(_finding(
+                    b, "running_late", "low",
+                    "Still “%s” after its %s window%s." % (
+                        j.status, _hm(_mins(end)), "; the last call or text about it was %s"
+                        % _when(last["at"]) if last else ""),
+                    "When %s finishes, have the job moved on (Repair Complete / Inspection "
+                    "Completed)." % (", ".join(j.assigned or []) or "the technician"),
+                    [{"at": _when(last["at"]), "line": last["source"], "how": last["kind"],
+                      "from": last["who"], "said": _quote(summary_of(last["text"] or "") or
+                                                           last["text"] or "", None)}]
+                    if last else None))
+            elif not field_done and not active:
                 findings.append(_finding(
                     b, "no_field_update", "high",
                     "The visit was until %s; nothing from the field in Zuper today (no "

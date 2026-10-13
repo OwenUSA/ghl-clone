@@ -25,6 +25,8 @@ const KIND_LABEL: Record<string, string> = {
   no_field_update: 'Nothing from the field', ahs_sent_not_moved: 'Sent to AHS, column behind',
   technician_field: 'Technician field', unanswered: 'Customer waiting for an answer',
   booked_no_time: 'Booked stage, no time', stale_on_the_way: 'Stage left behind',
+  visit_on_closed_job: 'Visit on an invoiced / paid job', running_late: 'Running past its window',
+  customer_options: 'Customer offered days — pick one',
 }
 
 function plusDays(n: number): string {
