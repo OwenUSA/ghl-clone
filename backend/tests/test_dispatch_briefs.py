@@ -291,3 +291,61 @@ def test_the_chat_reads_the_same_briefs_in_one_look_up(db):
     hidden = json.loads(ai.run_tool(db, "customers", {"job_numbers": ["713"]}, FRI,
                                     {c.REPAIR_BOARD}, []))
     assert hidden["briefs"] == []
+
+
+# ---- 2026-10-13, from the first answer on deepseek-flash ---------------------------------------
+
+def test_a_confirmation_still_to_come_is_not_a_confirmation(db):
+    """#703: the call ended "needs to call back or text to confirm the appointment"."""
+    db.add(visit("f", 703, 9, 16, who=("Antonio Brown",), phones=["3055550123"]))
+    zcall(db, "3055550123", ny(9, 11, 37), "Owen offered today between 2 and 4 PM. Next step: "
+          "[\"Jacqueline needs to call back or text at earliest convenience to confirm "
+          "appointment\"]")
+    zcall(db, "3055550123", ny(9, 11, 50), "The visit is pending confirmation for today.",
+          uid="z2")
+    db.commit()
+    assert "confirmed" not in [k for k, _, _ in _sigs(db, "3055550123")]
+    assert found(briefs.check(db, FRI), "not_confirmed", 703)
+
+
+def test_a_cancel_after_the_visit_day_still_says_reschedule(db):
+    """#287 cancelled on Sunday's call and still sat in "On the Way to Repair" on Tuesday."""
+    db.add(visit("a", 287, 7, 13, status="On the Way to Repair", status_type="ON_MY_WAY",
+                 phones=["3055550150"]))
+    zcall(db, "3055550150", ny(7, 9, 52), "Anna has an appointment scheduled today from 3 to "
+          "5 PM but cannot make it and wants to reschedule.")
+    db.commit()
+    out = briefs.check(db, FRI)
+    [f] = found(out, "customer_cancelled", 287)
+    assert f["fix"] == {"action": "stage", "to": "Reschedule Required"}
+    assert not found(out, "stale_on_the_way", 287)     # said once, as the cancel
+
+
+def test_a_visit_on_an_invoiced_or_paid_job_is_flagged(db):
+    db.add(visit("h1", 410, 10, 9, who=("Antonio Brown",), status="Invoice Submitted to AHS",
+                 status_type="INVOICING", phones=["3055550199"]))
+    db.add(visit("h2", 720, 10, 9, who=("Antonio Brown",), status="Call Back",
+                 status_type="FOLLOW_UP", phones=["3055550199"]))
+    db.commit()
+    out = briefs.check(db, FRI)
+    assert [f["job_number"] for f in found(out, "visit_on_closed_job")] == ["410"]
+
+
+def test_a_visit_scheduled_on_a_call_is_agreed_even_with_the_time_to_come(db):
+    """#735: "Owen scheduled a visit for the roof inspection on Wednesday of next week and will
+    confirm the time one day before." The day is agreed; the time is not."""
+    db.add(visit("b", 735, None, 0, board=c.RETAIL_BOARD, status="New Lead",
+                 status_type="LEAD", phones=["9418077719"]))
+    zcall(db, "9418077719", ny(9, 10, 46), "Owen scheduled a visit for the roof inspection on "
+          "Wednesday of next week and will confirm the time one day before.")
+    db.commit()
+    [f] = found(briefs.check(db, FRI), "agreed_other_time", 735)
+    assert "Wed 10/14" in f["what"] and f["fix"] is None       # no time said: no booking
+
+
+def test_her_scheduled_appointment_is_a_description_not_an_agreement(db):
+    db.add(visit("f", 703, 9, 16, who=("Antonio Brown",), phones=["3055550123"]))
+    zcall(db, "3055550123", ny(9, 9, 54), "Luis asked her to say a good time to call back before "
+          "her scheduled appointment to finalize the service details.")
+    db.commit()
+    assert found(briefs.check(db, FRI), "not_confirmed", 703)

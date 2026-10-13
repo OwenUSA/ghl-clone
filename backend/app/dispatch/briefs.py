@@ -75,7 +75,10 @@ CONFIRM_IN_CALL = re.compile(
     r"\b(customer|caller|client|homeowner) (acknowledged|agreed|accepted|was fine with|"
     r"is fine with|said (yes|ok|okay|that works|it works))\b|"
     r"\b(accepted|agreed to (the |this |an |that )?(appointment|visit|time|schedul\w*|slot|"
-    r"date|it))\b|which \w+ accepted|ultimately agreed)", re.IGNORECASE)
+    r"date|it))\b|which \w+ accepted|ultimately agreed|"
+    # "Owen scheduled a visit for the roof inspection on Wednesday" (live 2026-10-09, #735)
+    r"\b(scheduled|booked|set up)\s+(?:[\w-]+\s+){0,4}?(appointment|visit|inspection|repair)\b)",
+    re.IGNORECASE)
 # A customer asking, in a call, to cancel or move: never "we could reschedule".
 CANCEL_IN_CALL = re.compile(
     r"\b(wants?|wanted|asked|requested|would like|needs?|needed|prefers?) to (cancel|"
@@ -214,6 +217,23 @@ def _happened(src: str, m: re.Match) -> bool:
     return not NOT_YET.search(src[max(0, m.start() - 60):m.start()])
 
 
+# "needs to call back or text to confirm", "asked her to confirm", "will confirm the time",
+# "pending confirmation": a confirmation still to come.
+CONFIRM_NOT_YET = re.compile(r"\b(to|will|would|needs?|pending|awaiting|waiting|asked|ask|"
+                             r"until|wants?|should|must|can)\s+(\w+\s+){0,2}$", re.IGNORECASE)
+
+
+def _confirm_happened(src: str, m: re.Match) -> bool:
+    if re.match(r"confirmation", m.group(0), re.IGNORECASE):
+        return False
+    # "before her scheduled appointment" describes it; "Owen scheduled a visit" did it.
+    if re.match(r"(scheduled|booked|set up)\b", m.group(0), re.IGNORECASE) and re.search(
+            r"\b(her|his|their|the|your|our|my|a|an|already|previously)\s+$",
+            src[max(0, m.start() - 20):m.start()], re.IGNORECASE):
+        return False
+    return not CONFIRM_NOT_YET.search(src[max(0, m.start() - 40):m.start()])
+
+
 def _quote(text: str, m: re.Match | None) -> str:
     text = " ".join((text or "").split())
     if not m or len(text) <= QUOTE:
@@ -266,14 +286,17 @@ def signals(evs: list[dict]) -> list[Signal]:
                                          re.IGNORECASE):
                     add("confirmed", CONFIRM_WORDS.search(text), text, day=pd, window=pw)
         if how == "call":
-            m = CONFIRM_IN_CALL.search(text)
+            # Only a confirmation that HAPPENED: never "needs to call back to confirm the
+            # appointment", "pending confirmation" (live 2026-10-13, #703).
+            m = next((x for x in CONFIRM_IN_CALL.finditer(text) if _confirm_happened(text, x)),
+                     None)
             talked = (e.get("seconds") or 0) >= 30
             if not m and talked and day:
                 # "Owen confirmed that they will fix the leak today between 2 and 4": a
                 # conversation that ended on a day.
-                m = re.search(r"\bconfirm\w*\b[^.]{0,120}", text, re.IGNORECASE)
-                if m and not DAY_WORD.search(m.group(0)):
-                    m = None
+                m = next((x for x in re.finditer(r"\bconfirm(ed|s)?\b[^.]{0,120}", text,
+                                                 re.IGNORECASE)
+                          if _confirm_happened(text, x) and DAY_WORD.search(x.group(0))), None)
             cancel = CANCEL_IN_CALL.search(text)
             if cancel:
                 add("cancel", cancel, text)    # never also "confirmed" in the same call
@@ -445,6 +468,8 @@ AFTER_VISIT = set(c.AFTER_INSPECTION_STAGES) | set(c.WAITING_ON_AHS) | set(
     c.AFTER_REPAIR_STAGES) | {"AHS Approved", "Proposal Made", "Invoice Submitted to AHS",
                               "Awaiting AHS Payment", "Paid", "Review Requested",
                               "Review Received", "Estimate Sent"}
+INVOICED = {"Invoice Submitted to AHS", "Awaiting AHS Payment", "Paid", "Review Requested",
+            "Review Received", "Invoice"}
 # The one stage a fix may name, per board and event; anything else is "do it in Zuper".
 ON_THE_WAY_STAGE = {c.REPAIR_BOARD: "On the Way to Repair"}
 DONE_STAGE = {c.INSPECTION_BOARD: "Inspection Completed", c.REPAIR_BOARD: "Repair Complete"}
@@ -562,11 +587,15 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
                         "" if p.window else " (no time was said: ask the customer)"),
                     [p], fix))
 
-        # 3. The customer asked to cancel or move after the last agreement.
+        # 3. The customer asked to cancel or move after the last agreement — also when the
+        # visit's day has passed and the job still sits in a visit stage (live 2026-10-13:
+        # #287 cancelled on Sunday's call, still "On the Way to Repair" on Tuesday).
         cx = b.newest("cancel")
+        cancelled = False
         if cx and now - cx.at <= timedelta(days=PROMISE_DAYS) and (p is None or cx.at > p.at) \
                 and (moved is None or cx.at > moved) and not _after(j) and \
-                (start is None or vday >= today) and lookups.booked_stage(j.status):
+                lookups.booked_stage(j.status):
+            cancelled = True
             st = RESCHEDULE_STAGE.get(board)
             findings.append(_finding(
                 b, "customer_cancelled", "high",
@@ -596,7 +625,7 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
                     % j.status, "Give the visit a time, or move it to Reschedule Required."))
             since = c.aware(j.status_since)
             if _in_visit(j) and since and c.local(since).date() < today and \
-                    now - since <= timedelta(days=14):
+                    now - since <= timedelta(days=14) and not cancelled:
                 findings.append(_finding(
                     b, "stale_on_the_way", "low", "Stage “%s” since %s and no visit today."
                     % (j.status, _when(j.status_since)),
@@ -604,6 +633,15 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
             continue
 
         # ---- visits in the range
+        # A visit still on a job that is already invoiced or paid (live 2026-10-13: #410's
+        # Wednesday visit was the return visit booked on #720; #691 paid, still on the route).
+        if (j.status or "") in INVOICED or (j.status_type or "") in {"INVOICING", "PAID"}:
+            findings.append(_finding(
+                b, "visit_on_closed_job", "medium",
+                "A visit is still booked on this job, which is at “%s”." % j.status,
+                "Take the visit off this job (if it is a return visit, it belongs on the job "
+                "the visit is for)."))
+            continue
         today_visit = vday == today
         # Confirmed for THIS visit: a "yes" naming its day, or one with no day said after the
         # visit was last set and within two days of it.
