@@ -2338,6 +2338,19 @@ export type DispatchCheck = {
   from: string; to: string; checked_at: string; visits_checked: number; jobs_checked: number
   skipped_test_jobs: number; counts: Record<string, number>; findings: DispatchCheckFinding[]
 }
+/** Who still needs a booking (2026-10-13, briefs.to_book): every waiting job with one verdict
+ * from 60 days of calls and texts. No AI. */
+export type DispatchToBookJob = {
+  job_number: string | null; customer: string | null; board: string | null
+  stage: string | null; visit: string | null; why_waiting: string | null
+  assigned: string | null; last_contact: string | null; availability: string | null
+  verdict: string; say: string; evidence: DispatchCheckEvidence[]; zuper_url: string | null
+}
+export type DispatchToBook = {
+  checked_at: string; jobs_waiting: number; skipped_test_jobs: number
+  groups: { verdict: string; title: string; count: number; jobs: DispatchToBookJob[] }[]
+}
+export const dispatchToBook = () => get<DispatchToBook>('/api/dispatch/to-book')
 export const dispatchCheck = (dateFrom: string, dateTo: string) =>
   get<DispatchCheck>(`/api/dispatch/check?date_from=${encodeURIComponent(dateFrom)}` +
     `&date_to=${encodeURIComponent(dateTo)}`)

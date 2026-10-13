@@ -479,3 +479,41 @@ def test_each_visit_on_the_day_plan_gets_its_verdict_from_the_calls(db):
     assert "Owen" in tech and "Antonio" in tech
     assert out["by_verdict"][0]["verdict"].startswith("Agreed, not in Zuper")
     assert "Report EVERY group" in out["how_to_judge"]
+
+
+# ---- who still needs a booking, judged by script (2026-10-13) ----------------------------------
+
+def test_to_book_judges_every_waiting_job_from_its_calls(db):
+    """The AI's answer put Haeems' return visit on the wrong one of his three jobs, said "book"
+    for visits that had happened, and called September imports "nobody has called"."""
+    db.add_all([
+        # agreed on a call, no visit in Zuper -> book
+        visit("b", 735, None, 0, board=c.RETAIL_BOARD, status="New Lead", status_type="LEAD",
+              phones=["3055550301"], name="Robert Burwell"),
+        # the customer's other job holds the visit -> nothing to book here
+        visit("h1", 321, 3, 10, status="Call Back", status_type="FOLLOW_UP",
+              phones=["3055550302"], name="Nathaniel Haeems"),
+        visit("h2", 720, 14, 9, status="Call Back", status_type="FOLLOW_UP",
+              phones=["3055550302"], name="Nathaniel Haeems"),
+        # its visit passed, and the technician was on the way that day -> it happened
+        visit("l", 683, 8, 14, status="Call Back", status_type="FOLLOW_UP",
+              phones=["3055550303"], name="Thompson Laguerre"),
+        # nothing at all in 60 days -> check it is still a job
+        visit("o", 334, None, 0, board=c.RETAIL_BOARD, status="New Lead", status_type="LEAD",
+              name="David Jackson"),
+    ])
+    for j in db.query(DispatchJob).filter(DispatchJob.job_uid.in_(("l", "o"))):
+        j.status_since = ny(8, 10) if j.job_uid == "l" else ny(9, 9) - timedelta(days=40)
+    zcall(db, "3055550301", ny(9, 10, 46), "Owen scheduled a visit for the roof inspection on "
+          "Wednesday of next week and will confirm the time one day before.")
+    zcall(db, "3055550303", ny(8, 13, 17), "Antonio Brown called Thompson to inform him he's on "
+          "his way to inspect the roof.")
+    db.commit()
+    out = briefs.to_book(db, FRI)
+    verdicts = {r["job_number"]: g["verdict"] for g in out["groups"] for r in g["jobs"]}
+    assert verdicts["735"] == "book"
+    assert verdicts["321"] == "on_other_job"
+    assert verdicts["683"] == "visit_happened"
+    assert verdicts["334"] == "stale"
+    assert "720" not in verdicts                       # it has its visit: not waiting
+    assert out["groups"][0]["verdict"] == "book"
