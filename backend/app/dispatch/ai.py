@@ -60,6 +60,16 @@ CHAT_MAX_TOKENS = 16000
 ANSWER_RETRY_TOKENS = 32000
 ADDRESS = "Job address"
 NOTE = "Note"
+# The chat may also suggest a stage on the job's OWN board, or a visit (2026-10-13): a person
+# approves each one, and only then — and only while the write switches are on — is it made.
+STAGE = "Stage"
+VISIT = "Visit"
+
+
+def _visit_now(j: DispatchJob) -> str:
+    from .briefs import visit_text
+    return "%s · %s" % (visit_text(j) or "no visit", j.technician or ", ".join(
+        j.assigned or []) or "no technician")
 
 
 class Unavailable(Exception):
@@ -197,7 +207,11 @@ def _clean_changes(raw, j: DispatchJob) -> list[dict]:
         proposed = str(ch.get("proposed") or "").strip()
         if not name or not proposed:
             continue
-        if name == ADDRESS:
+        if name == STAGE:
+            kind, current = "stage", j.status
+        elif name == VISIT:
+            kind, current = "booking", _visit_now(j)
+        elif name == ADDRESS:
             kind, current = "address", ", ".join(x for x in (j.address, j.city) if x)
         elif name == NOTE:
             kind, current = "note", None
@@ -365,9 +379,14 @@ board only when its history shows a real "AHS Approved" (not set the same minute
 created), and a person does that in Zuper: say "ask the owner before moving it to <board>", \
 never "move it". An agreed time is a booking, not a stage. Test \
 jobs (TEST in the name or address) are never touched.
-- You cannot change Zuper or contact anyone. When Zuper needs a change, say exactly which job, \
-which stage / time / technician / field, to what, and the evidence. You may record a field, \
-address or note change with suggest_change for the office to approve.
+- Suggesting changes: when the person asks you to prepare or make the changes, record each \
+one with suggest_change (field 'Stage', 'Visit', a job field, 'Job address' or 'Note') and say \
+they are waiting in Suggestions for approval. Only what has its evidence: a 'book' verdict or \
+a confirmed day and time → 'Visit'; a stage fix the check gives → 'Stage'. Never a board \
+move, never a closing stage, never a technician the file and Zuper disagree on without asking. \
+Never say a change was made: a person approves it, then it is made and read back.
+- You cannot change Zuper or contact anyone yourself. When Zuper needs a change, say \
+exactly which job, which stage / time / technician / field, to what, and the evidence.
 
 How to answer
 - First the direct answer in one or two sentences (yes / no, and how many).
@@ -523,11 +542,18 @@ TOOLS = [
                        {"type": "object", "properties": {
                            "technician": {"type": "string"}, "day": {"type": "string"}},
                         "required": ["technician"], "additionalProperties": False}),
-    providers.ToolSpec("suggest_change", "Record a change Zuper needs on a job, for the office to "
-                       "approve (it is NOT applied). field: an exact job field label, 'Job "
-                       "address' or 'Note'.", {"type": "object", "properties": {
+    providers.ToolSpec("suggest_change", "Record ONE change Zuper needs on a job, for a "
+                       "person to approve in Suggestions — it is NOT made. Only a person's "
+                       "approval makes it (and only while the write switches are on). field: "
+                       "an exact job "
+                       "field label, 'Job address', 'Note', 'Stage' (proposed = a stage on the "
+                       "job's OWN board, never a closing one) or 'Visit' (give date, start, end "
+                       "and technician; proposed may be empty). evidence: the call / text with "
+                       "its day and time.", {"type": "object", "properties": {
                            "job_number": {"type": "string"}, "field": {"type": "string"},
-                           "proposed": {"type": "string"}, "evidence": {"type": "string"}},
+                           "proposed": {"type": "string"}, "evidence": {"type": "string"},
+                           "date": {"type": "string"}, "start": {"type": "string"},
+                           "end": {"type": "string"}, "technician": {"type": "string"}},
                         "required": ["job_number", "field", "proposed", "evidence"],
                         "additionalProperties": False}),
 ]
@@ -687,10 +713,28 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
         return json.dumps(slots_for(db, j, now, args.get("kind"), args.get("technician"),
                                     hidden))
     if name == "suggest_change":
+        from . import writes
+        args = dict(args)
+        field = str(args.get("field") or "").strip()
+        if field == STAGE:
+            try:
+                writes.stage_target(j, str(args.get("proposed") or "").strip())
+            except writes.Invalid as e:
+                return json.dumps({"error": "not recorded: %s" % e})
+        elif field == VISIT:
+            from .briefs import window_in
+            d = lookups.parse_day(args.get("date"), now) if args.get("date") else None
+            win = window_in("from %s to %s" % (args.get("start") or "", args.get("end") or ""))
+            tech = str(args.get("technician") or "").strip()
+            if d is None or win is None or not tech:
+                return json.dumps({"error": "not recorded: a Visit needs date (2026-10-14), "
+                                            "start and end (7:30 AM, 11:30 AM) and technician"})
+            args["proposed"] = writes.visit_text(d, win[0], win[1], tech)
         changes = _clean_changes([args], j)
         if not changes:
             return json.dumps({"error": "not recorded: the field must be one of the job's own "
-                                        "field labels, 'Job address' or 'Note'"})
+                                        "field labels, 'Job address', 'Note', 'Stage' or "
+                                        "'Visit'"})
         made.extend(add_suggestions(db, j, changes, item_id=None, source="chat"))
         return json.dumps({"recorded": True, "note": "the office will approve or reject it"})
     return json.dumps({"error": "unknown tool"})

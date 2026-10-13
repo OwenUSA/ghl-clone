@@ -7195,3 +7195,27 @@ days, against the 77k the assistant read for the same question.
 
 The DeepSeek key: the CRM keeps AI keys encrypted on the AI connection, not in `.env`; the
 "Deepseek" connection's key was replaced on 2026-10-13 (last four 14f2) after a one-request test.
+
+## AMENDMENT (2026-10-13): the chat suggests a stage or a visit; a person approves; then it is made
+
+The user: "I want it to be able to make changes only when I want to, after it suggests the
+change and I accept." Built on the phase-3 path (still OFF):
+
+* `suggest_change` takes field **Stage** (a stage on the job's OWN board; a closing stage is
+  refused at once) and **Visit** (date, start, end, technician → stored as
+  `2026-10-14 07:30-11:30 | Owen Buzaglo`, New York time). Each is a `dispatch_suggestions` row
+  (kind `stage` / `booking`); Suggestions → "Approve and let the agent do it" applies it through
+  `writes.write_stage` / `writes.write_booking`, reads it back and logs it. The chat never makes
+  a change and is told never to say one was made.
+* **Found before anything was switched on:** `writes._put_field` sent ONE custom field, and
+  Zuper's `PUT /jobs` REPLACES the job's whole field list with what is sent (measured 2026-10-06
+  on test job #701: 33 fields wiped). Every field change (and the Technician field of a booking)
+  now sends the job's whole list with only that value changed, and the read-back fails —
+  `apply_failed`, never retried — if any OTHER field reads differently. The test fake now
+  replaces the list as Zuper does; it used to merge, which is why this was never caught.
+* Unchanged limits: never another board, never a closing stage, never a stage that asks
+  checklist questions (Inspection Completed asks 12 — a person moves it in Zuper), no way to
+  take a visit off a job or change who is assigned, no delete.
+* Still OFF: `DISPATCH_ZUPER_WRITES` (server) + the master switch + one switch per action
+  (typed "TURN ON"). The owner's add-only rule stands: switching on is his decision, and
+  `zsafety.py` (no Zuper workflow or customer notification active) is checked first.

@@ -75,7 +75,7 @@ def dispatch_suggestion_apply(sid: int, body: ApplyIn | None = None,
     s = db.get(DispatchSuggestion, sid, with_for_update=True)
     if s is None or (s.board and s.board in _hidden(db, principal)):
         raise HTTPException(404, "no such suggestion")
-    if s.kind not in ("field", "address", "note"):
+    if s.kind not in ("field", "address", "note", "stage", "booking"):
         raise HTTPException(400, "the agent cannot apply this kind of suggestion")
     if s.state == "open" and not body.approve:
         raise HTTPException(409, "approve this suggestion first")
@@ -88,7 +88,11 @@ def dispatch_suggestion_apply(sid: int, body: ApplyIn | None = None,
     j = _visible_job(db, principal, s.job_uid)
     if s.state == "open":
         s.state, s.decided_at, s.decided_by_id = "approved", datetime.now(UTC), principal.user_id
-    ok, sentence = writes.apply_suggestion(db, s, j, principal.user_id)
+    try:
+        ok, sentence = writes.apply_suggestion(db, s, j, principal.user_id)
+    except writes.Invalid as e:
+        db.rollback()
+        raise HTTPException(400, str(e)) from None
     db.commit()
     return {**_done(ok, sentence), "suggestion": _suggestion(s)}
 

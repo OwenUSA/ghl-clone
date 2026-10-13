@@ -214,9 +214,26 @@ class _Unsent(Exception):
     """Found out before anything was sent: the change cannot be made as asked."""
 
 
-def _put_field(job_uid: str, definition: dict, value: Any) -> None:
+def _put_field(job_uid: str, record: dict, label: str, value: Any) -> None:
+    """Change ONE field. Zuper's `PUT /jobs` REPLACES the job's whole custom-field list with
+    the one sent (measured 2026-10-06 on test job #701: sending one field wiped the other 33),
+    so the job's every field is sent, each with its own value, and only `label` changed."""
     client.request("PUT", client.path("jobs"), body={"job": {
-        "job_uid": job_uid, "custom_fields": [field_body(definition, value)]}})
+        "job_uid": job_uid, "custom_fields": [
+            field_body(f, value if f.get("label") == label else f.get("value"))
+            for f in _fields(record)]}})
+
+
+def _others(record: dict, label: str) -> list[tuple]:
+    return [(f.get("label"), _norm(f.get("value"))) for f in _fields(record)
+            if f.get("label") != label]
+
+
+def _kept(before: dict, after: dict, label: str) -> str | None:
+    """None when every OTHER field reads as before; else what was lost (never retried)."""
+    lost = [lab for lab, v in _others(before, label) if (lab, v) not in _others(after, label)]
+    return ("other fields changed: %s — check the job in Zuper now" % ", ".join(
+        str(x) for x in lost[:6])) if lost else None
 
 
 def _run(write, read_back, *, what: str) -> tuple[bool, str]:
@@ -244,6 +261,8 @@ def _run(write, read_back, *, what: str) -> tuple[bool, str]:
 # ------------------------------------------------------------------------------- actions
 
 def write_field(j: DispatchJob, label: str, value: str) -> tuple[bool, str]:
+    before: dict = {}
+
     def write():
         record = zapi.job(j.job_uid)
         f = _field(record, label)
@@ -251,13 +270,16 @@ def write_field(j: DispatchJob, label: str, value: str) -> tuple[bool, str]:
             raise _Unsent("the job has no field called “%s” any more." % label)
         if _read_only(f):
             raise _Unsent("Zuper marks “%s” read-only." % label)
-        _put_field(j.job_uid, f, value)
+        before.update(record)
+        _put_field(j.job_uid, record, label, value)
 
     def read_back():
-        f = _field(zapi.job(j.job_uid), label)
-        if f is not None and _norm(f.get("value")) == _norm(value):
+        after = zapi.job(j.job_uid)
+        f = _field(after, label)
+        lost = _kept(before, after, label)
+        if f is not None and _norm(f.get("value")) == _norm(value) and not lost:
             return True
-        return "“%s” reads “%s”" % (label, "" if f is None else f.get("value"))
+        return lost or "“%s” reads “%s”" % (label, "" if f is None else f.get("value"))
 
     return _run(write, read_back, what="“%s” is now “%s”" % (label, value))
 
@@ -322,6 +344,7 @@ def write_note(j: DispatchJob, text: str) -> tuple[bool, str]:
 def write_booking(j: DispatchJob, start: datetime, end: datetime,
                   technician: str) -> tuple[bool, str]:
     start, end = start.astimezone(UTC), end.astimezone(UTC)
+    before: dict = {}
 
     def write():
         record = zapi.job(j.job_uid)
@@ -330,10 +353,12 @@ def write_booking(j: DispatchJob, start: datetime, end: datetime,
             raise _Unsent("the job has no Technician field.")
         if _read_only(tech):
             raise _Unsent("Zuper marks the Technician field read-only.")
+        before.update(record)
         client.request("PUT", client.path("job_update", uid=j.job_uid), body={"job": [{
             "scheduled_start_time": start.strftime(ZUPER_TIME),
             "scheduled_end_time": end.strftime(ZUPER_TIME), "type": "SCHEDULE"}]})
-        _put_field(j.job_uid, tech, technician)
+        if _norm(tech.get("value")) != _norm(technician):
+            _put_field(j.job_uid, record, TECHNICIAN_FIELD, technician)
 
     def read_back():
         record = zapi.job(j.job_uid)
@@ -346,6 +371,9 @@ def write_booking(j: DispatchJob, start: datetime, end: datetime,
             wrong.append("the visit reads %s" % (record.get("scheduled_start_time") or "empty"))
         if tech is None or _norm(tech.get("value")) != _norm(technician):
             wrong.append("Technician reads “%s”" % ("" if tech is None else tech.get("value")))
+        lost = _kept(before, record, TECHNICIAN_FIELD)
+        if lost:
+            wrong.append(lost)
         return True if not wrong else "; ".join(wrong)
 
     when = c.local(start).strftime("%a %b %d, %I:%M %p")
@@ -422,6 +450,28 @@ def write_stage(j: DispatchJob, status_name: str, remarks: str) -> tuple[bool, s
     return _run(write, read_back, what="#%s moved to “%s”" % (j.job_number, status_name))
 
 
+VISIT_RX = re.compile(r"^(\d{4}-\d{2}-\d{2}) (\d{1,2}):(\d{2})-(\d{1,2}):(\d{2}) \| (.+)$")
+
+
+def visit_text(day, start_min: int, end_min: int, technician: str) -> str:
+    """A suggested visit as it is stored and shown: "2026-10-14 07:30-11:30 | Owen Buzaglo"
+    (New York time)."""
+    return "%s %02d:%02d-%02d:%02d | %s" % (day.isoformat(), start_min // 60, start_min % 60,
+                                            end_min // 60, end_min % 60, technician.strip())
+
+
+def parse_visit(text: str) -> tuple[datetime, datetime, str]:
+    m = VISIT_RX.match((text or "").strip())
+    if not m:
+        raise Invalid("A visit must read like “2026-10-14 07:30-11:30 | Owen Buzaglo”.")
+    y, mo, d = (int(x) for x in m[1].split("-"))
+    start = datetime(y, mo, d, int(m[2]), int(m[3]), tzinfo=c.TZ)
+    end = datetime(y, mo, d, int(m[4]), int(m[5]), tzinfo=c.TZ)
+    if end <= start:
+        raise Invalid("The visit ends before it starts.")
+    return start, end, m[6].strip()
+
+
 # ------------------------------------------------------------------------------- entry points
 
 def apply_suggestion(db: Session, s: DispatchSuggestion, j: DispatchJob,
@@ -433,6 +483,13 @@ def apply_suggestion(db: Session, s: DispatchSuggestion, j: DispatchJob,
         ok, sentence = write_address(j, s.proposed)
     elif s.kind == "note":
         ok, sentence = write_note(j, s.proposed)
+    elif s.kind == "stage":
+        stage_target(j, s.proposed)
+        ok, sentence = write_stage(j, s.proposed, "Moved from the CRM's Dispatch page after "
+                                                   "a person approved the suggestion.")
+    elif s.kind == "booking":
+        start, end, tech = parse_visit(s.proposed)
+        ok, sentence = write_booking(j, start, end, tech)
     else:
         raise Invalid("The agent cannot apply a “%s” suggestion." % s.kind)
     now = datetime.now(UTC)
