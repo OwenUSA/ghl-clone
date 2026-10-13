@@ -266,7 +266,7 @@ def test_the_chat_reads_through_tools_and_only_records_suggestions(db, office, p
             openai_call("suggest_change", json.dumps({
                 "job_number": "678", "field": "Note", "proposed": "Prefers mornings",
                 "evidence": "said on the Sep 30 call"}), "call_2")]),
-        openai_completion(content="#678 Marina Reyes is AHS Approved; I noted her preference."),
+        openai_completion(content="#678 Marina Reyes is AHS Approved; add her preference."),
     ]
     r = TestClient(app).post("/api/dispatch/chats/messages", json={
         "chat_id": None, "content": "What is open and what should I note?"},
@@ -274,7 +274,13 @@ def test_the_chat_reads_through_tools_and_only_records_suggestions(db, office, p
     assert r.status_code == 200, r.text
     answer = r.json()["assistant_message"]
     assert answer["content"].startswith("#678") and answer["error"] is False
-    assert [s["proposed"] for s in answer["suggestions"]] == ["Prefers mornings"]
+    # The writes are off (2026-10-13, the user: "the agent should not suggest to do it
+    # himself"): the chat is not offered suggest_change, and a call that slips through
+    # records nothing.
+    assert answer["suggestions"] == []
+    offered = [t["function"]["name"] for t in script.requests[0]["body"]["tools"]]
+    assert "suggest_change" not in offered and "zuper_check" in offered
+    assert "Never offer to make, record" in script.requests[0]["body"]["messages"][0]["content"]
     # Saved with what it looked up (the owner's ask, 2026-10-01).
     assert [st["tool"] for st in answer["steps"]] == ["find_jobs", "suggest_change"]
     saved = TestClient(app).get("/api/dispatch/chats/%d" % r.json()["chat"]["id"],
@@ -358,3 +364,26 @@ def test_out_of_look_ups_the_chat_still_answers_with_what_it_found(db, office, p
         "chat_id": None, "content": "Plan everything"}, headers=people["dispatcher"][1])
     answer = r.json()["assistant_message"]
     assert answer["content"] == "Here is what I found so far." and answer["error"] is False
+
+
+
+def test_with_the_writes_on_the_chat_records_a_suggestion_for_a_person(db, office, people, script,
+                                                                       monkeypatch):
+    switch_on(db, office)
+    monkeypatch.setenv("DISPATCH_ZUPER_WRITES", "true")
+    s = ai.settings(db, for_update=True)
+    s.writes_enabled = True
+    db.commit()
+    script.responses = [
+        openai_completion(content=None, finish="tool_calls", tool_calls=[
+            openai_call("suggest_change", json.dumps({
+                "job_number": "678", "field": "Note", "proposed": "Prefers mornings",
+                "evidence": "said on the Sep 30 call"}), "call_1")]),
+        openai_completion(content="Recorded for your approval in Suggestions."),
+    ]
+    r = TestClient(app).post("/api/dispatch/chats/messages", json={
+        "chat_id": None, "content": "Prepare the note"}, headers=people["dispatcher"][1])
+    answer = r.json()["assistant_message"]
+    assert [x["proposed"] for x in answer["suggestions"]] == ["Prefers mornings"]
+    offered = [t["function"]["name"] for t in script.requests[0]["body"]["tools"]]
+    assert "suggest_change" in offered
