@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..ai import providers
@@ -32,7 +32,16 @@ log = logging.getLogger("dispatch.availability")
 DAYS_BACK = 21
 PER_TICK = 6
 TEXT_MAX = 24000              # characters of conversation sent for one customer
-MAX_TOKENS = 2000
+# A thinking model (deepseek-v4-pro) spent all of 2,000 thinking: the answer came back empty,
+# "could not be read", and was read again on the next pass, forever (live 2026-10-13).
+MAX_TOKENS = 8000
+# A failed reading (provider error, unreadable answer) is tried again only when the customer's
+# messages change, or after this long — never on every pass (live 2026-10-10..13: thousands of
+# requests a day while DeepSeek refused with 402, the chat's daily limit used up by them).
+RETRY_HOURS = 6
+# The reader's own share of the day: it can never use up the office's chat (kind "availability"
+# runs per New York day; the chat and explanations keep the rest of `daily_cap`).
+DAILY_READS = 150
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 SYSTEM = """You read a roofing company's calls and texts with ONE customer and write down what \
@@ -203,6 +212,14 @@ def read_one(db: Session, j: DispatchJob, evs: list[dict], now: datetime, prov, 
     return row
 
 
+def reads_today(db: Session, now: datetime) -> int:
+    from ..models import DispatchAiRun
+    start = c.local(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    return db.scalar(select(func.count()).select_from(DispatchAiRun).where(
+        DispatchAiRun.kind == "availability",
+        DispatchAiRun.created_at >= start.astimezone(UTC))) or 0
+
+
 def refresh(db: Session, now: datetime, *, limit: int = PER_TICK,
             job_uids: set[str] | None = None) -> dict:
     """Read the customers whose calls and texts changed since their last reading — the jobs
@@ -233,18 +250,26 @@ def refresh(db: Session, now: datetime, *, limit: int = PER_TICK,
                 row.newer_messages = True
             counts["office_kept"] += 1
             continue
-        if row is not None and row.fingerprint == fp and not row.error:
-            counts["unchanged"] += 1
+        if row is not None and row.fingerprint == fp and (
+                not row.error or (row.read_at and now - c.aware(row.read_at) < timedelta(
+                    hours=RETRY_HOURS))):
+            counts["unchanged" if not row.error else "failed_waiting"] = counts.get(
+                "unchanged" if not row.error else "failed_waiting", 0) + 1
             continue
         last = max((e["at"] for e in evs if e["at"]), default=None)
         todo.append((last or datetime.min.replace(tzinfo=now.tzinfo), j, evs, fp))
     todo.sort(key=lambda x: x[0], reverse=True)
     prov = model = None
+    used = reads_today(db, now)
     for _, j, evs, fp in todo[:limit]:
         if not evs:
             read_one(db, j, evs, now, None, "", fp)
             counts["no_messages"] += 1
             continue
+        if used >= DAILY_READS:
+            counts["skipped"] = "today's %d availability readings are done" % DAILY_READS
+            break
+        used += 1
         try:
             prov, model = ai.provider_for(db, now)
         except ai.Unavailable as e:

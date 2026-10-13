@@ -209,6 +209,26 @@ def dispatch_item_wrong(item_id: int, body: CloseIn | None = None,
     return _close(db, principal, item_id, "wrong", body or CloseIn())
 
 
+@router.get("/check")
+def dispatch_check(date_from: str | None = None, date_to: str | None = None,
+                   principal: auth.Principal = VIEW, db: Session = Depends(get_db)):
+    """The Zuper check (briefs.check): what Zuper needs, by fixed rules over every call and
+    text — no AI, nothing written. Default: today and tomorrow (New York); up to 14 days."""
+    from . import briefs, lookups
+    now = datetime.now(UTC)
+    d0 = lookups.parse_day(date_from, now) if date_from else None
+    d1 = lookups.parse_day(date_to, now) if date_to else None
+    if (date_from and d0 is None) or (date_to and d1 is None):
+        raise HTTPException(400, "dates are today, tomorrow, 2026-10-13 or 10/13")
+    if d0 and d1 and (d1 < d0 or (d1 - d0).days > 14):
+        raise HTTPException(400, "choose up to 14 days, the first one first")
+    out = briefs.check(db, now, _hidden(db, principal), date_from=d0,
+                       date_to=d1 or (d0 + timedelta(days=1) if d0 else None))
+    for f in out["findings"]:
+        f["zuper_url"] = _zuper_url(f["job_uid"])
+    return out
+
+
 @router.get("/jobs/{job_uid}")
 def dispatch_job(job_uid: str, principal: auth.Principal = VIEW,
                  db: Session = Depends(get_db)):

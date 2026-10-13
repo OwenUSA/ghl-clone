@@ -118,6 +118,31 @@ def test_a_new_message_is_read_again_and_a_past_range_is_dropped(db, on, script)
     assert db.query(DispatchAvailability).one().limits == {"after": "15:00"}
 
 
+def test_a_failed_reading_is_not_asked_again_every_pass_and_has_its_own_daily_share(
+        db, on, script, monkeypatch):
+    """Live 2026-10-10..13: DeepSeek answered 402 (or the answer was cut by its thinking) and
+    every pass asked again — thousands of requests a day, the chat's daily limit used up."""
+    customer(db, 505, "3055550116", "next week is bad for me")
+    script.responses = [openai_completion(content="", model="deepseek-chat")]   # unreadable
+    assert availability.refresh(db, NOW)["read"] == 1
+    assert db.query(DispatchAvailability).one().error
+    # Nothing new said: not asked again on the next passes...
+    for minutes in (2, 30, 300):
+        assert availability.refresh(db, NOW + timedelta(minutes=minutes)).get("read") == 0
+    assert script.calls == 1
+    # ...but tried again after RETRY_HOURS.
+    script.responses = [answer({"blocked": [{"from": "2026-10-12", "to": "2026-10-17"}]})]
+    later = NOW + timedelta(hours=availability.RETRY_HOURS, minutes=1)
+    assert availability.refresh(db, later)["read"] == 1 and script.calls == 2
+    assert db.query(DispatchAvailability).one().error is None
+    # The reader's own share of the day: past it, nothing is asked, the chat keeps the rest.
+    customer(db, 506, "3055550117", "only mornings please")
+    monkeypatch.setattr(availability, "DAILY_READS", 2)
+    counts = availability.refresh(db, later + timedelta(minutes=5))
+    assert counts["read"] == 0 and "availability readings" in counts["skipped"]
+    assert script.calls == 2
+
+
 def test_nothing_is_read_while_the_ai_is_paused_and_saved_readings_still_apply(db, on, script):
     customer(db, 502, "3055550113", "away next week")
     db.add(DispatchAvailability(job_uid="j502", job_number="502", source="ai",

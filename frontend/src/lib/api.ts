@@ -2318,6 +2318,30 @@ export const moveDispatchStage = (jobUid: string, statusName: string) =>
   send<DispatchWriteResult>(`/api/dispatch/jobs/${encodeURIComponent(jobUid)}/stage`, 'POST',
     { status_name: statusName })
 
+/** The Zuper check (2026-10-13, app/dispatch/briefs.py): fixed rules over every call and text,
+ * no AI. A finding names its evidence; `fix` is set only where the change is unambiguous. */
+export type DispatchCheckFix =
+  | { action: 'stage'; to: string }
+  | { action: 'booking'; day: string; start: string; end: string; label: string;
+      technician: string }
+  | { action: 'field'; field: string; to: string }
+export type DispatchCheckEvidence = { signal?: string; at: string | null; from?: string;
+  line?: string; how?: string; said: string; for?: string }
+export type DispatchCheckFinding = {
+  kind: string; severity: 'high' | 'medium' | 'low'; job_number: string | null
+  job_uid: string; customer: string | null; board: string | null; stage: string | null
+  visit_day: string | null; visit: string | null; assigned: string | null
+  what: string; do: string; evidence: DispatchCheckEvidence[]; fix: DispatchCheckFix | null
+  zuper_url: string | null
+}
+export type DispatchCheck = {
+  from: string; to: string; checked_at: string; visits_checked: number; jobs_checked: number
+  skipped_test_jobs: number; counts: Record<string, number>; findings: DispatchCheckFinding[]
+}
+export const dispatchCheck = (dateFrom: string, dateTo: string) =>
+  get<DispatchCheck>(`/api/dispatch/check?date_from=${encodeURIComponent(dateFrom)}` +
+    `&date_to=${encodeURIComponent(dateTo)}`)
+
 export type DispatchQueue = { key: string; label: string; open: number; urgent: number }
 
 export type DispatchSummary = {

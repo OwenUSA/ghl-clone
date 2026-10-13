@@ -7128,3 +7128,70 @@ records the line it actually went from (`source_number`).
   only; the text tells them to call or text (954) 914-7244.
 * Opt-outs are per number on owen-main: a STOP sent to 786-920-0331 stops texts from it, not from
   the CRM line, and vice versa.
+
+## AMENDMENT (2026-10-13): scripts first, the AI last — "Check Zuper" and the customer briefs
+
+The owner's ask: "everything that doesn't need an agent we won't spend tokens on", and the
+assistant "should check the calls and messages as the source of truth always … prevent it from
+hallucinating". Two live facts drove it:
+
+* **The chat guessed.** On Fri 10/09 the CRM's assistant answered "what needs updating today"
+  with 20 look-ups (14 of them one customer's calls at a time) and moved jobs "On the Way" from an
+  agreed TIME, moved #725 to "Submit To AHS" with no evidence, and proposed board moves from a
+  Workiz "Job Type" field.
+* **The tokens went somewhere else.** `dispatch_ai_runs`: on 10/09 the availability reader made
+  1,733 requests (679k output tokens) against the chat's 56k; on 10/10-10/13 it made 3,700-5,300 a
+  day, almost all failing with DeepSeek's 402 (no balance) — a failed reading was asked again on
+  EVERY pass, and with the new key `deepseek-v4-pro` spent all 2,000 tokens thinking, the answer
+  was "could not be read", and it was asked again. Those requests also used up the chat's daily
+  limit ("Today's AI limit (300) is used up" at 2:47 PM on 10/09; the office then raised it to
+  4,000).
+
+Decided and built:
+
+1. **`app/dispatch/briefs.py`** — no AI, no network, nothing written. `brief(job)`: stage, visit,
+   technician, the job's important fields by label (roof, leak, AHS numbers, gate…), the saved
+   availability, last contact, a question waiting for us, and SIGNALS from every call and text by
+   fixed English / Spanish patterns, each with its time, line and words: `confirmed`, `cancel`,
+   `on_the_way`, `done`, `ahs_sent`, `promise`. The rules learned from the live week: a "yes" is
+   for the day the customer names, else the day WE proposed; "cannot be present tomorrow" agrees
+   to nothing; "a heads-up WHEN he is on his way" / "after the repair is done" have not happened;
+   "if HE can't make it in time" is not the customer cancelling; "Ok, please call me" is a
+   request; a call is read from its summary (Quo's or Zuper's), and a call where the customer asks
+   to move is never also a confirmation; "Luis agreed" is staff, not the customer.
+2. **`check()` / `GET /api/dispatch/check` / Dispatch → "Check Zuper"** (free, same answer every
+   time): double-booked = two visits STARTING within an hour for one person (arrival windows in a
+   row are a route; one customer's two jobs at once are one visit); `agreed_other_time` = a day the
+   customer AGREED to (never an unanswered proposal), newer than Zuper's last schedule change, that
+   Zuper does not show — and not when a SIBLING job of the same customer has that visit (Janeth
+   Palacio has four jobs on one number); `customer_cancelled`; `not_confirmed`;
+   `on_the_way_not_moved`; `done_not_moved` / `no_field_update` (a visit past its time with no
+   picture, note or app action); `ahs_sent_not_moved`; `technician_field`; `unanswered` (a question
+   or request only — "Perfect 👌" is not); `booked_no_time`; `stale_on_the_way` (last 14 days).
+   **Test jobs (the word "test" in the customer, title or address) are never checked.**
+3. **A fix only where it is unambiguous**, handed to the EXISTING phase-3 write path (all OFF):
+   R&R "On the Way to Repair", "Inspection Completed" / "Repair Complete" on a done signal,
+   "Awaiting AHS Decision" on a sent-to-AHS signal, "Reschedule Required" on a cancel, a booking
+   when day, window and one technician are known, the Technician field. The inspection board's
+   on-the-way stage is a technician's name ("Antonio On the Way"), so it gets a sentence, not a
+   fix. **No board move is ever a fix.** "Do it in Zuper" shows only when `GET
+   /api/dispatch/writes` allows that action; otherwise the row says what to change by hand.
+4. **The chat starts from the scripts' reading**: two tools, `zuper_check` and `customers`
+   (compact briefs for job numbers, a day range, a board or a stage); `search_comms` only to read
+   one conversation a brief does not settle, never once per customer. The prompt states what each
+   stage needs as evidence and that a board move is a person's, in Zuper. CHAT_STEPS 30 → 15,
+   CHAT_READ_BUDGET 300k → 120k characters, TOOL_RESULT_MAX 40k → 30k.
+5. **The availability reader can no longer burn the day**: a failed reading is retried only when
+   the customer's messages change or after `RETRY_HOURS` (6); `MAX_TOKENS` 2,000 → 8,000 so a
+   thinking model can answer; and its own share, `DAILY_READS` (150 per New York day), so the chat
+   keeps the rest of `daily_cap`.
+
+Measured on production before shipping (replaying Fri 10/09 2:48 PM with only what was known
+then): the check found what a person found by hand that afternoon — #713 "llegará en unos 28
+minutos" with the stage at Day-Before Call, #721's report sent to AHS with the column behind, #716
+with nothing from Owen in Zuper after his 9-11 visit, #690's Technician field, #735's Wednesday
+not in Zuper — with no double-booking noise and no test job. Its JSON is ~8k characters for two
+days, against the 77k the assistant read for the same question.
+
+The DeepSeek key: the CRM keeps AI keys encrypted on the AI connection, not in `.env`; the
+"Deepseek" connection's key was replaced on 2026-10-13 (last four 14f2) after a one-request test.
