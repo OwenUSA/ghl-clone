@@ -358,7 +358,8 @@ only after an on-the-way text or call (or the technician's move); "Inspection Co
 "Repair Complete" only after a done signal, pictures or a note from the field; "Awaiting AHS \
 Decision" only after we told the customer the report went to AHS. A job moves to another \
 board only when its history shows a real "AHS Approved" (not set the same minute the job was \
-created), and a person does that in Zuper. An agreed time is a booking, not a stage. Test \
+created), and a person does that in Zuper: say "ask the owner before moving it to <board>", \
+never "move it". An agreed time is a booking, not a stage. Test \
 jobs (TEST in the name or address) are never touched.
 - You cannot change Zuper or contact anyone. When Zuper needs a change, say exactly which job, \
 which stage / time / technician / field, to what, and the evidence. You may record a field, \
