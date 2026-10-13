@@ -322,6 +322,10 @@ It is the fixed rules' answer with the evidence of each finding; explain it, do 
 technician, the job's important fields, availability, and the signals found in their calls \
 and texts — confirmed, cancel, on the way, done, report sent to AHS, a day agreed — each with \
 its time and words).
+  * A spreadsheet attached and "what is missing / needs updating in Zuper": compare_schedule \
+from today to Saturday (it judges every visit on the file: book / call first / the Excel is \
+wrong / on hold / matches) and report EVERY group of its `by_verdict`; then zuper_check for \
+the rest. compare_file only for row-by-row differences.
   * Fitting a customer in: customers for that job, then find_slots. Remaking the schedule: \
 plan_schedule.
   * search_comms (full=true) ONLY to read one conversation a brief does not settle. Never call \
@@ -597,12 +601,20 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
                            "note": "The full row-by-row comparison is in the download."},
                           default=str)
     if name == "compare_schedule":
+        from . import briefs
         f = (files or {}).get(int(args.get("file_id") or 0))
         if f is None:
             return json.dumps({"error": "no such file in this chat"})
-        return json.dumps(lookups.compare_schedule(db, now, hidden, f.sheets,
-                                                   date_from=args.get("date_from"),
-                                                   date_to=args.get("date_to")), default=str)
+        out = lookups.compare_schedule(db, now, hidden, f.sheets,
+                                       date_from=args.get("date_from"),
+                                       date_to=args.get("date_to"))
+        if "error" not in out:
+            out = briefs.day_plan_verdicts(db, now, out, hidden)
+            for v in out.get("visits") or []:
+                # The verdict carries its evidence; the raw calls were where the model's
+                # reading went wrong (and most of the tokens).
+                v.pop("recent_calls_and_texts", None)
+        return json.dumps(out, default=str)
     if name in ("zuper_check", "customers"):
         return _prepared(db, name, args, now, hidden)
     if name == "day_schedule":

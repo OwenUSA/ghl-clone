@@ -433,3 +433,49 @@ def test_a_stage_left_in_progress_with_notes_after_it_looks_done(db):
     db.commit()
     [f] = found(briefs.check(db, FRI), "stale_on_the_way", 736)
     assert "looks done" in f["what"] and "Inspection Completed" in f["do"]
+
+
+# ---- the office's day plan, judged by script (2026-10-13) ---------------------------------------
+
+def test_each_visit_on_the_day_plan_gets_its_verdict_from_the_calls(db):
+    """Customer_List (12): the AI left out the visits Zuper did not have. Each now comes judged:
+    agreed → book; nothing said → call first; the calls say another day Zuper has → the Excel
+    is wrong; on hold → do not book; the same visit → matches."""
+    from app.dispatch import lookups
+    db.add_all([
+        visit("w", 656, None, 0, who=("Antonio Brown",), status="Reschedule Required",
+              status_type="ON_HOLD", phones=["3055550201"], name="Elisha Wright"),
+        visit("m", 704, None, 0, status="AHS Approved", status_type="SOLD",
+              phones=["3055550202"], name="Rose Marie McLean"),
+        visit("k1", 707, None, 0, status="Awaiting AHS Decision", status_type="ESTIMATING",
+              phones=["3055550203"], name="Pankaj Kasabwala"),
+        visit("k2", 627, 16, 14, minute=30, phones=["3055550203"], name="Pankaj Kasabwala"),
+        visit("h", 727, None, 0, status="Awaiting AHS Decision", status_type="ESTIMATING",
+              phones=["3055550204"], name="Henrietta Harrison"),
+        visit("z", 695, 10, 9, phones=["3055550205"], name="Ross Zelnick"),
+    ])
+    zcall(db, "3055550201", ny(9, 11, 57), "They confirmed a Wednesday morning appointment "
+          "between 7:30-11:30 AM.")
+    zcall(db, "3055550203", ny(9, 13, 36), "Owen confirmed that they are good for next Friday.")
+    zcall(db, "3055550204", ny(9, 12, 49), "Next step: [\"Put a hold on the roofing service\", "
+          "\"Wait for insurance company inspection results before proceeding\"]")
+    db.commit()
+    rows = [("Wed 10/14", "Owen", "7:30–11:30 AM", "Elisha Wright"),  # noqa: RUF001
+            ("Wed 10/14", "Antonio", "12:00–4:00 PM", "Rose Marie McLean"),  # noqa: RUF001
+            ("Wed 10/14", "Owen", "2:30–6:30 PM", "Pankaj Kasabwala"),  # noqa: RUF001
+            ("Fri 10/16", "Owen", "7:30–9:30 AM", "Henrietta Harrison"),  # noqa: RUF001
+            ("Sat 10/10", "Owen", "9:00–11:00 AM", "Ross Zelnick")]  # noqa: RUF001
+    sheets = [{"name": "Schedule", "columns": ["Day", "Tech", "Window", "Customer"], "rows": [
+        {"row": i + 2, "values": dict(zip(("Day", "Tech", "Window", "Customer"), r,
+                                          strict=True))} for i, r in enumerate(rows)]}]
+    out = briefs.day_plan_verdicts(db, FRI, lookups.compare_schedule(
+        db, FRI, set(), sheets, date_from="today", date_to="2026-10-17"))
+    kinds = {v["file"]["customer"]: v["verdict"]["kind"] for v in out["visits"]}
+    assert kinds == {"Elisha Wright": "book", "Rose Marie McLean": "call_first",
+                     "Pankaj Kasabwala": "file_wrong", "Henrietta Harrison": "on_hold",
+                     "Ross Zelnick": "matches"}
+    wright = next(v for v in out["visits"] if v["file"]["customer"] == "Elisha Wright")
+    tech = wright["verdict"]["technician"]
+    assert "Owen" in tech and "Antonio" in tech
+    assert out["by_verdict"][0]["verdict"].startswith("Agreed, not in Zuper")
+    assert "Report EVERY group" in out["how_to_judge"]

@@ -91,6 +91,10 @@ CANCEL = re.compile(r"\b(cancel\w*|reschedul\w*|postpone\w*|push (it|this) back|
                     r"are not|not) (make it|be (home|there|available|able))|"
                     r"no puedo|no podr[eé]|cancelar|reprogramar|cambiar la cita|"
                     r"no voy a estar|no estar[eé]mos|no estar[eé])\b", re.IGNORECASE)
+# The customer pausing the work (live 2026-10-12, #727: "put a hold on the roofing service",
+# "wait for insurance company inspection results before proceeding").
+HOLD = re.compile(r"\b(put (a |on )?hold|on hold|hold off|wait(ing)? for (the |their |her |his )?"
+                  r"(insurance|adjuster)\w*|pausar|en espera)\b", re.IGNORECASE)
 # "Mary cannot be present tomorrow": a day named to say it does NOT work.
 NEGATED = re.compile(r"\b(can'?t|cannot|won'?t|will not|not be|not available|unable|"
                      r"no (puede|puedo|podr\w*|va a estar|voy a estar|estar\w*))\b[^.!?]{0,50}$",
@@ -316,9 +320,12 @@ def signals(evs: list[dict]) -> list[Signal]:
                                                  re.IGNORECASE)
                           if _confirm_happened(text, x) and DAY_WORD.search(x.group(0))), None)
             cancel = CANCEL_IN_CALL.search(text)
+            hold = HOLD.search(text)
+            if hold and not cancel:
+                add("hold", hold, text)        # "put a hold … wait for the insurance"
             if cancel:
                 add("cancel", cancel, text)    # never also "confirmed" in the same call
-            elif m:
+            elif m and not hold:
                 add("confirmed", m, text, day=day, window=win)
         for kind, rx in (("on_the_way", ON_THE_WAY), ("done", DONE), ("ahs_sent", AHS_SENT)):
             if who == "customer" and how == "text":
@@ -802,3 +809,119 @@ def check(db: Session, now: datetime, hidden: set[str] | None = None, *,
     return {"from": d0.isoformat(), "to": d1.isoformat(), "checked_at": _when(now),
             "visits_checked": len(in_range), "jobs_checked": len(bs),
             "findings": findings, "counts": counts, "skipped_test_jobs": len(every) - len(bs)}
+
+
+# ------------------------------------------------------------- the office's day plan, judged
+
+# What to do about each visit on the office's spreadsheet, worked out by script from the calls
+# and texts and Zuper (2026-10-13): the AI's answer to "what is missing in Zuper from this
+# Excel" left out the Wednesday-Saturday visits Zuper did not have, which it had been handed
+# raw; now each comes with its verdict and the model only reports them.
+VERDICTS = (
+    ("book", "Agreed, not in Zuper — book it"),
+    ("fix_details", "Agreed — fix the time / technician in Zuper"),
+    ("fits_options", "The customer offered this day — confirm the time, then book"),
+    ("call_first", "Not agreed — call the customer before booking"),
+    ("file_wrong", "The calls say another day — fix the Excel, not Zuper"),
+    ("calls_say_other_day", "The calls agreed another day that neither Zuper nor the Excel has"),
+    ("on_hold", "The customer cancelled or put it on hold — do not book"),
+    ("not_in_zuper", "No Zuper job matches the row"),
+    ("matches", "Matches Zuper"),
+)
+
+
+def day_plan_verdicts(db: Session, now: datetime, out: dict,
+                      hidden: set[str] | None = None) -> dict:
+    """Add a verdict to every visit `lookups.compare_schedule` returned, and the visits by
+    verdict. Reads only."""
+    visits = out.get("visits") or []
+    if not visits:
+        return out
+    every = load(db, now, hidden)
+    by_num = {b.job.job_number: b for b in every}
+    by_phone: dict[str, list[Brief]] = {}
+    for b in every:
+        for ph in b.job.phones or []:
+            by_phone.setdefault(ph, []).append(b)
+    today = c.local(now).date()
+    groups: dict[str, list[str]] = {k: [] for k, _ in VERDICTS}
+    for v in visits:
+        f = v["file"]
+        fday = lookups.parse_day(f["day"], now)
+        label = "%s %s %s" % (f["day"], f.get("window") or "", f["customer"])
+        z = v.get("zuper")
+        b = by_num.get(z["job_number"]) if z else None
+        verdict: dict = {}
+        if b is None:
+            verdict = {"kind": "not_in_zuper", "say": "No Zuper job matches this row: find or "
+                                                       "create the job first."}
+        else:
+            j = b.job
+            sibs = [o for ph in j.phones or [] for o in by_phone.get(ph, []) if o is not b]
+            on_sib = next((o for o in sibs if c.aware(o.job.scheduled_start) and c.local(
+                c.aware(o.job.scheduled_start)).date() == fday), None)
+            recent = [s for s in b.sigs if now - s.at <= timedelta(days=PROMISE_DAYS)]
+            agreed = [s for s in recent if s.kind == "confirmed" and s.day and s.day >= today]
+            stop = next((s for s in reversed(recent) if s.kind in ("cancel", "hold")), None)
+            last_agreed = agreed[-1] if agreed else None
+            opts = next((s for s in reversed(recent) if s.kind == "options"), None)
+            tech_diff = next((d for d in v.get("differences") or [] if "technician" in d), None)
+            same_slot = not any(("Zuper has" in d or "time differs" in d or "technician" in d
+                                 or "not in Zuper" in d or "closed" in d)
+                                for d in v.get("differences") or [])
+            if v.get("matches"):
+                verdict = {"kind": "matches", "say": "Zuper has the same day, time and "
+                                                     "technician."}
+            elif same_slot:
+                verdict = {"kind": "matches", "say": "Zuper has the same day and time; its "
+                           "stage is “%s” — see Check Zuper." % j.status}
+            elif on_sib is not None:
+                verdict = {"kind": "matches", "say": "Zuper has this visit on #%s (%s)." % (
+                    on_sib.job.job_number, visit_text(on_sib.job))}
+            elif stop and (last_agreed is None or stop.at > last_agreed.at) and (
+                    opts is None or stop.at > opts.at):
+                verdict = {"kind": "on_hold", "say": "The customer %s on %s — do not book it." % (
+                    "put it on hold" if stop.kind == "hold" else "asked to cancel or move it",
+                    _when(stop.at)), "evidence": [stop.out()]}
+            elif any(s.day == fday for s in agreed):
+                s = [x for x in agreed if x.day == fday][-1]
+                vday = c.local(c.aware(j.scheduled_start)).date() \
+                    if c.aware(j.scheduled_start) else None
+                verdict = {"kind": "fix_details" if vday == fday else "book",
+                           "say": "Agreed on %s for %s%s; Zuper shows %s." % (
+                               _when(s.at), s.day.strftime("%a %m/%d"),
+                               " " + _win(s.window) if s.window else " (no time said)",
+                               visit_text(j) or "no visit"), "evidence": [s.out()]}
+            elif last_agreed is not None:
+                other = last_agreed.day
+                in_zuper = any(c.aware(x.job.scheduled_start) and c.local(c.aware(
+                    x.job.scheduled_start)).date() == other for x in [b, *sibs])
+                verdict = {"kind": "file_wrong" if in_zuper else "calls_say_other_day",
+                           "say": "The calls agreed %s (%s), not %s%s." % (
+                               other.strftime("%a %m/%d"), _when(last_agreed.at), f["day"],
+                               "; Zuper already has it" if in_zuper else ""),
+                           "evidence": [last_agreed.out()]}
+            elif opts and fday in (opts.days or []):
+                verdict = {"kind": "fits_options", "say": "The customer offered %s on %s; %s "
+                           "fits. Confirm the time with them, then book." % (
+                               ", ".join(d.strftime("%a %m/%d") for d in opts.days),
+                               _when(opts.at), f["day"]), "evidence": [opts.out()]}
+            else:
+                last = b.out(now).get("last_contact")
+                verdict = {"kind": "call_first", "say": "No call or text shows the customer "
+                           "agreeing to %s. Last contact: %s." % (f["day"], last or "none in "
+                                                                  "the last %d days" % COMMS_DAYS)}
+            if tech_diff and verdict["kind"] != "matches":
+                verdict["technician"] = tech_diff + " — ask the office which."
+        v["verdict"] = verdict
+        groups[verdict["kind"]].append("%s → %s" % (label.strip(), (
+            "#%s " % z["job_number"] if z else "") + verdict["say"] + (
+            " Technician: " + verdict["technician"] if verdict.get("technician") else "")))
+    out["by_verdict"] = [{"verdict": title, "visits": groups[k]} for k, title in VERDICTS
+                         if groups[k]]
+    out["how_to_judge"] = ("Each visit's `verdict` is worked out by script from every call and "
+                           "text and Zuper. Report EVERY group in `by_verdict`, in that order, "
+                           "with each visit's sentence; do not re-judge a verdict. Only `book` "
+                           "and `fix_details` are ready for Zuper; `call_first` needs a call "
+                           "first; `file_wrong` means the Excel is wrong.")
+    return out
