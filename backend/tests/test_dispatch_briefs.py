@@ -390,3 +390,46 @@ def test_every_look_up_is_kept_whole_and_the_zuper_link_is_the_new_app(monkeypat
     assert ai.STEP_RESULT_MAX == ai.TOOL_RESULT_MAX
     monkeypatch.delenv("ZUPER_JOB_URL_TEMPLATE", raising=False)
     assert zc.job_url_template() == "https://next.zuperpro.com/jobs/{uid}/details"
+
+
+# ---- 2026-10-13, checked against live Zuper -------------------------------------------------
+
+def test_a_visit_under_way_past_its_window_is_running_late_not_silent(db):
+    """#711: truck trouble, the office moved it to Repair In Process at 12:56 PM, calls about
+    the plywood and a $441 deposit — nothing from Antonio's app, but not silent."""
+    j = visit("s", 711, 9, 9, who=("Antonio Brown",), status="Repair In Process",
+              status_type="STARTED", phones=["3055550160"])
+    j.status_since = ny(9, 12, 56)
+    db.add(j)
+    zcall(db, "3055550160", ny(9, 13, 17), "Luis called Robert to offer a discounted price; "
+          "Robert to pay $441 upfront deposit.")
+    db.commit()
+    out = briefs.check(db, FRI)
+    assert not found(out, "no_field_update", 711)
+    [f] = found(out, "running_late", 711)
+    assert "1:17 PM" in f["what"] and "deposit" in f["evidence"][0]["said"]
+
+
+def test_days_the_customer_offered_are_options_not_an_agreement(db):
+    """#687: "out of town but available Friday, Monday, or possibly late Thursday" and "call
+    back with confirmed appointment date and time" — nothing agreed."""
+    db.add(visit("r", 687, None, 0, board=c.INSPECTION_BOARD, status="Scheduled",
+                 status_type="ESTIMATING", phones=["3055550170"]))
+    zcall(db, "3055550170", ny(9, 12, 36), "Frederick is out of town but available Friday, "
+          "Monday, or possibly late Thursday afternoon. Next step: [\"Call back with confirmed "
+          "appointment date and time\"]")
+    db.commit()
+    out = briefs.check(db, FRI)
+    assert not found(out, "agreed_other_time", 687)
+    [f] = found(out, "customer_options", 687)
+    assert "Mon 10/12" in f["what"] and "Thu 10/15" in f["what"]
+
+
+def test_a_stage_left_in_progress_with_notes_after_it_looks_done(db):
+    j = visit("f", 736, 8, 14, minute=30, board=c.INSPECTION_BOARD,
+              status="Inspection In Progress", status_type="STARTED")
+    j.status_since, j.last_note_at = ny(8, 16, 23), ny(8, 16, 49)
+    db.add(j)
+    db.commit()
+    [f] = found(briefs.check(db, FRI), "stale_on_the_way", 736)
+    assert "looks done" in f["what"] and "Inspection Completed" in f["do"]
