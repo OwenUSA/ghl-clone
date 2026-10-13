@@ -374,6 +374,10 @@ its own line. Never put several jobs in one cell, never a list inside a cell. A 
 one table per day with Time | Tech | Job | Customer | City | Confirmed?. More than about 15 \
 visits: give the per-day totals, the tentative ones (call first) and the calendar and Excel \
 links, and show the full table only for the day asked.
+- What Zuper shows now: copy each finding's `zuper_now` (or the brief's stage, visit and \
+assigned) for THAT job, word for word. Never take a stage, time or technician from another \
+row. A stage named for a technician ("Antonio On the Way") is never suggested for someone \
+else's job.
 - Times as 7:30 AM, dates as Thu 10/08, jobs as #724. Short and concrete, no filler. Answer \
 in the language the person writes in.
 
@@ -717,7 +721,9 @@ def _prepared(db: Session, name: str, args: dict, now: datetime, hidden: set[str
     return json.dumps({"briefs": out, "more": None}, default=str)
 
 
-STEP_RESULT_MAX = 4000
+# Every look-up's result is kept WHOLE with the answer (it was cut at 4,000 characters, so
+# nobody could see what the AI had read — 2026-10-13): "What the AI saw" shows it.
+STEP_RESULT_MAX = TOOL_RESULT_MAX
 JOB_REF = re.compile(r"#(\d{3,5})(?!\d)")
 
 
@@ -732,6 +738,105 @@ def flag_unseen_jobs(reply: str, seen: list[str]) -> str:
         return reply
     return reply + ("\n\n**Check:** %s did not appear in anything I looked up — verify it in "
                     "Zuper before acting on it." % ", ".join("#" + n for n in unseen))
+
+
+# ------------------------------------------------------------------- checking the answer
+
+MOVE_WORDS = re.compile(r"(move|moved|moving|set|put|back|to|into|→|->|then)\W{0,3}"
+                        r"(it\W+)?(to\W+)?(the\W+)?[“\"']?$", re.IGNORECASE)
+
+
+def _facts(seen: list[str]) -> dict[str, dict]:
+    """Per job number, what the look-ups said Zuper shows now: stage and assigned."""
+    out: dict[str, dict] = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            n = x.get("job_number") or (str(x.get("job") or "").lstrip("#") or None)
+            if n and isinstance(n, (str, int)) and str(n).isdigit() and x.get("stage"):
+                f = out.setdefault(str(n), {})
+                f.setdefault("stage", str(x["stage"]))
+                a = x.get("assigned")
+                if a and "assigned" not in f:
+                    f["assigned"] = ", ".join(a) if isinstance(a, list) else str(a)
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    for s in seen:
+        try:
+            walk(json.loads(s))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+def flag_contradictions(db: Session, reply: str, seen: list[str]) -> str:
+    """Compare the answer with what its look-ups returned, by script (no AI): a job's stage
+    written as something Zuper does not show, or a technician's own stage suggested for
+    another person's job, is flagged under the answer (live 2026-10-13: #695 written as
+    "Repair In Process" — that was #711's; "Antonio On the Way" proposed for Owen's #739)."""
+    from .briefs import NAMED_STAGES
+    facts = _facts(seen)
+    if not facts:
+        return reply
+    named = {s for v in NAMED_STAGES.values() for s in v}
+    stages = sorted({s for s in db.scalars(select(DispatchJob.status).distinct()) if s} |
+                    {f["stage"] for f in facts.values()} | named, key=len, reverse=True)
+    notes: list[str] = []
+
+    def found(text: str, names) -> list[tuple[str, int]]:
+        """Stage names in a text, exact case (a stage is Title Case; "paid" in a sentence is
+        not the stage "Paid"), the longest first, never one inside another."""
+        out, taken = [], []
+        for s in names:
+            for m in re.finditer(r"(?<![\w-])%s(?![\w-])" % re.escape(s), text):
+                if not any(a <= m.start() < b for a, b in taken):
+                    taken.append((m.start(), m.end()))
+                    out.append((s, m.start()))
+        return out
+
+    header: list[str] | None = None
+    for line in (reply or "").splitlines():
+        refs = list(JOB_REF.finditer(line))
+        # A technician's own stage suggested for another person's job: anywhere in a line.
+        for i, ref in enumerate(refs):
+            fact = facts.get(ref.group(1))
+            part = line[ref.end():refs[i + 1].start() if i + 1 < len(refs) else len(line)]
+            for s, at in found(part, named) if fact else []:
+                if MOVE_WORDS.search(part[max(0, at - 30):at]) and \
+                        s.split()[0] not in fact.get("assigned", ""):
+                    notes.append("#%s is %s's job; “%s” is %s's own stage — ask the office "
+                                 "which stage to use." % (ref.group(1), fact.get("assigned") or
+                                                          "nobody", s, s.split()[0]))
+        # What Zuper shows NOW: only a table's "Zuper now" / "Stage" column is a claim about
+        # the present (a sentence may name the stage history, or the stage to move to).
+        if not line.lstrip().startswith("|"):
+            header = None
+            continue
+        cells = [x.strip() for x in line.strip().strip("|").split("|")]
+        if all(re.fullmatch(r":?-{2,}:?", x) for x in cells if x):
+            continue
+        if not refs:
+            header = [x.lower() for x in cells]
+            continue
+        now_cols = [k for k, h in enumerate(header or [])
+                    if re.search(r"zuper now|stage now|current stage|^stage$|^zuper$", h)]
+        fact = facts.get(refs[0].group(1))
+        if not fact or len({r.group(1) for r in refs}) > 1:
+            continue                         # one job per row, or nothing to say
+        for k in now_cols:
+            cell = cells[k] if k < len(cells) else ""
+            for s, at in found(cell, stages):
+                if not MOVE_WORDS.search(cell[max(0, at - 30):at]) and s != fact["stage"]:
+                    notes.append("#%s: the answer says Zuper shows “%s”; Zuper shows “%s”."
+                                 % (refs[0].group(1), s, fact["stage"]))
+    notes = list(dict.fromkeys(notes))
+    if not notes:
+        return reply
+    return reply + "\n\n**Check (compared with what Zuper returned):**\n" + "\n".join(
+        "- " + x for x in notes)
 
 
 def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[str],
@@ -752,6 +857,7 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
         db.commit()
         if not error:
             reply = flag_unseen_jobs(reply, seen)
+            reply = flag_contradictions(db, reply, seen)
         return {"reply": reply, "error": error, "suggestions": [x.id for x in made],
                 "steps": steps, "model": model, "downloads": downloads, **usage}
 

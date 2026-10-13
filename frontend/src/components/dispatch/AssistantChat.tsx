@@ -541,7 +541,8 @@ function AssistantMessage({ chatId, m, canRate, onOpenSuggestions }: {
               <button type="button" onClick={() => setShowSteps(!showSteps)} aria-expanded={showSteps}
                 style={{ fontSize: 12, color: MUTED, textDecoration: 'underline',
                   textUnderlineOffset: 2 }}>
-                {showSteps ? 'Hide what it looked up' : `Show what it looked up (${steps.length})`}
+                {showSteps ? 'Hide what the AI saw' : `What the AI saw (${steps.length} look-up${
+                  steps.length === 1 ? '' : 's'})`}
               </button>
             )}
           </div>
@@ -552,7 +553,11 @@ function AssistantMessage({ chatId, m, canRate, onOpenSuggestions }: {
   )
 }
 
+/** Every look-up the AI made and EXACTLY what came back (kept whole since 2026-10-13), so a
+ * wrong answer can be traced: did the scripts send the wrong facts, or did the AI misread
+ * them? */
 function Steps({ steps }: { steps: DispatchChatStep[] }) {
+  const [open, setOpen] = useState<number | null>(null)
   return (
     <ol style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'flex',
       flexDirection: 'column', gap: 8 }}>
@@ -562,19 +567,29 @@ function Steps({ steps }: { steps: DispatchChatStep[] }) {
           <li key={i} style={{ fontSize: 12, lineHeight: '18px', color: INK }}>
             <div><span style={{ color: MUTED }}>{i + 1}.</span>{' '}
               <span style={{ fontWeight: 500 }}>{stepLabel(s.tool)}</span>
-              {args && <span style={{ color: MUTED }}> — {args}</span>}</div>
+              {args && <span style={{ color: MUTED }}> — {args}</span>}
+              {s.result && <span style={{ color: MUTED }}>
+                {' '}· {s.result.length.toLocaleString()} characters{' '}
+                <button type="button" onClick={() => setOpen(open === i ? null : i)}
+                  style={{ color: BLUE, textDecoration: 'underline', textUnderlineOffset: 2 }}>
+                  {open === i ? 'show less' : 'show all'}</button></span>}</div>
             {s.result && (
               <pre style={{ margin: '4px 0 0', padding: '6px 8px', background: 'rgb(243,244,246)',
+                maxHeight: 480, overflowY: 'auto',
                 border: `1px solid ${LINE}`, borderRadius: 6, color: 'rgb(71,84,103)', fontSize: 11,
                 lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
-                {clip(s.result, 300)}</pre>
+                {open === i ? prettyResult(s.result) : clip(s.result, 300)}</pre>
             )}
           </li>
         )
       })}
     </ol>
   )
+}
+
+function prettyResult(text: string): string {
+  try { return JSON.stringify(JSON.parse(text), null, 2) } catch { return text }
 }
 
 function Feedback({ chatId, m, canRate }: { chatId: number; m: DispatchChatMessage; canRate: boolean }) {

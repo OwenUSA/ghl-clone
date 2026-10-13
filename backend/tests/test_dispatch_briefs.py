@@ -349,3 +349,44 @@ def test_her_scheduled_appointment_is_a_description_not_an_agreement(db):
           "her scheduled appointment to finalize the service details.")
     db.commit()
     assert found(briefs.check(db, FRI), "not_confirmed", 703)
+
+
+# ---- checking the answer against what the look-ups returned (2026-10-13) ----------------------
+
+CHECK_SAID = json.dumps({"findings": [
+    {"job_number": "695", "stage": "Day-Before Call", "assigned": "Owen Buzaglo"},
+    {"job_number": "711", "stage": "Repair In Process", "assigned": "Antonio Brown"},
+    {"job_number": "739", "stage": "Inspection: Same-Day Confi", "assigned": "Owen Buzaglo"},
+    {"job_number": "691", "stage": "Awaiting AHS Payment", "assigned": "Antonio Brown"}]})
+
+
+def test_a_stage_copied_from_another_row_and_a_technicians_stage_are_flagged(db):
+    """The live answer: #695 written as "Repair In Process" (#711's) and "Antonio On the Way"
+    proposed for Owen's #739."""
+    reply = "\n".join([
+        "| Job | Customer | Zuper now | What to do |",
+        "|---|---|---|---|",
+        "| #695 | Ross Zelnick | Repair In Process, Owen | Ask Owen |",
+        "| #711 | Robert Spray | Repair In Process, Antonio | Ask Antonio |",
+        ("| #739 | Anissa Holmes | Inspection: Same-Day Confirm, Owen | move to Antonio On "
+         "the Way |"),
+        "| #691 | Katrina Phillip | Awaiting AHS Payment | Job done — paid; take the visit off |",
+        "",
+        ("#737 went from Welcome Call! straight to the repair board; move it to Inspection "
+         "Completed once the report is in.")])
+    out = ai.flag_contradictions(db, reply, [CHECK_SAID])
+    notes = out[len(reply):]
+    assert "#695: the answer says Zuper shows “Repair In Process”; Zuper shows “Day-Before Call”" \
+        in notes
+    assert "#739 is Owen Buzaglo's job; “Antonio On the Way” is Antonio's own stage" in notes
+    # a right row, a word like "paid", a stage to move to, the stage history: never flagged
+    assert "#711" not in notes and "#691" not in notes and "#737" not in notes
+    assert ai.flag_contradictions(db, "| Job | Zuper now |\n|---|---|\n| #711 | Repair In "
+                                  "Process |", [CHECK_SAID]).endswith("Process |")
+
+
+def test_every_look_up_is_kept_whole_and_the_zuper_link_is_the_new_app(monkeypatch):
+    from app.zuper import config as zc
+    assert ai.STEP_RESULT_MAX == ai.TOOL_RESULT_MAX
+    monkeypatch.delenv("ZUPER_JOB_URL_TEMPLATE", raising=False)
+    assert zc.job_url_template() == "https://next.zuperpro.com/jobs/{uid}/details"

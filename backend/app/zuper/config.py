@@ -129,10 +129,12 @@ def company_name() -> str:
 
 
 def job_url_template() -> str:
-    """How to link a Zuper job from the CRM. UNVERIFIED default; empty = no link drawn."""
+    """How to link a Zuper job from the CRM; empty = no link drawn. The office works in Zuper's
+    new app (next.zuperpro.com, mapped 2026-10-05: a job is /jobs/<job_uid>/details); the old
+    app.zuperpro.com link opened the wrong place (the user, 2026-10-13)."""
     raw = os.getenv("ZUPER_JOB_URL_TEMPLATE")
     if raw is None:
-        return "https://app.zuperpro.com/jobs/{uid}/details"
+        return "https://next.zuperpro.com/jobs/{uid}/details"
     return raw.strip()
 
 
