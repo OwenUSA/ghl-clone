@@ -379,12 +379,7 @@ board only when its history shows a real "AHS Approved" (not set the same minute
 created), and a person does that in Zuper: say "ask the owner before moving it to <board>", \
 never "move it". An agreed time is a booking, not a stage. Test \
 jobs (TEST in the name or address) are never touched.
-- Suggesting changes: when the person asks you to prepare or make the changes, record each \
-one with suggest_change (field 'Stage', 'Visit', a job field, 'Job address' or 'Note') and say \
-they are waiting in Suggestions for approval. Only what has its evidence: a 'book' verdict or \
-a confirmed day and time → 'Visit'; a stage fix the check gives → 'Stage'. Never a board \
-move, never a closing stage, never a technician the file and Zuper disagree on without asking. \
-Never say a change was made: a person approves it, then it is made and read back.
+{changes}
 - You cannot change Zuper or contact anyone yourself. When Zuper needs a change, say \
 exactly which job, which stage / time / technician / field, to what, and the evidence.
 
@@ -407,6 +402,33 @@ in the language the person writes in.
 {rules}
 The boards:
 {boards}"""
+
+# How the chat speaks about changes (2026-10-13). The approve-then-apply path is built and
+# kept OFF (the user, same day: "I need this logic made but not activated, and the agent
+# should not suggest to do it himself"). While the writes are off the chat is not even given
+# suggest_change, and never offers to make, record or prepare a change.
+CHANGES_OFF = """- Changes in Zuper are made by the office, by hand. Never offer to make, record, \
+prepare or apply a change yourself, and do not mention Suggestions: say which job, what to \
+change to what, and the evidence, for a person to do in Zuper."""
+CHANGES_ON = """- Suggesting changes: when the person asks you to prepare or make the changes, \
+record each one with suggest_change (field 'Stage', 'Visit', a job field, 'Job address' or \
+'Note') and say they are waiting in Suggestions for approval. Only what has its evidence: a \
+'book' verdict or a confirmed day and time → 'Visit'; a stage fix the check gives → 'Stage'. \
+Never a board move, never a closing stage, never a technician the file and Zuper disagree on \
+without asking. Never say a change was made: a person approves it, then it is made and read \
+back."""
+
+
+def writes_on(db: Session) -> bool:
+    """The server gate AND the master switch: only then may the chat suggest changes."""
+    from ..zuper import config as zconfig
+    return zconfig.dispatch_writes_enabled() and bool(getattr(settings(db), "writes_enabled",
+                                                              False))
+
+
+def chat_tools(db: Session) -> list:
+    return TOOLS if writes_on(db) else [t for t in TOOLS if t.name != "suggest_change"]
+
 
 TOOLS = [
     providers.ToolSpec("list_items", "The open Dispatch items (what the office must do), "
@@ -712,6 +734,9 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
     if name == "find_slots":
         return json.dumps(slots_for(db, j, now, args.get("kind"), args.get("technician"),
                                     hidden))
+    if name == "suggest_change" and not writes_on(db):
+        return json.dumps({"error": "not recorded: changes are made by the office in Zuper. "
+                                    "Say what to change; do not offer to do it."})
     if name == "suggest_change":
         from . import writes
         args = dict(args)
@@ -921,8 +946,10 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
         prov, model = provider_for(db, now)
     except Unavailable as e:
         return result(str(e), error=True)
+    tools = chat_tools(db)
     system = CHAT_SYSTEM.format(rules=playbook.HOUSE_RULES, boards=playbook.board_text(),
-                                today=_local(now))
+                                today=_local(now),
+                                changes=CHANGES_ON if writes_on(db) else CHANGES_OFF)
     convo = [{"role": m["role"], "content": m["content"]} if m["role"] == "user" else
              {"role": "assistant", "text": m["content"]} for m in messages]
     read = 0
@@ -935,7 +962,7 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
             except Unavailable as e:
                 return result("I stopped before finishing: %s" % e, error=True, model=model)
         try:
-            turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
+            turn = prov.complete(system=system, messages=convo, tools=tools, model=model,
                                  max_tokens=CHAT_MAX_TOKENS)
         except providers.ProviderError as e:
             _record(db, "chat", model, None, user_id=user_id, error=str(e))
@@ -947,7 +974,7 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
         if not turn.tool_calls and not turn.text.strip():
             # No answer and no look-up: a thinking model spent its whole room thinking. Ask
             # once more, with more room, for the answer itself — never show an empty reply.
-            again = _answer_now(db, prov, system, convo, model, user_id, usage)
+            again = _answer_now(db, prov, system, convo, model, user_id, usage, tools)
             if again:
                 return result(again, model=model)
             return result("I ran out of room while working this out and could not write the "
@@ -979,14 +1006,14 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
         prov, model = provider_for(db, now)
         convo.append({"role": "user", "content": "You have no more look-ups. Answer now with "
                       "what you found, and say briefly what you could not check."})
-        turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
+        turn = prov.complete(system=system, messages=convo, tools=tools, model=model,
                              max_tokens=CHAT_MAX_TOKENS)
         _record(db, "chat", model, turn, user_id=user_id)
         usage["input_tokens"] += turn.usage.input_tokens
         usage["output_tokens"] += turn.usage.output_tokens
         if turn.text.strip():
             return result(turn.text, model=turn.model or model)
-        again = _answer_now(db, prov, system, convo, model, user_id, usage)
+        again = _answer_now(db, prov, system, convo, model, user_id, usage, tools)
         if again:
             return result(again, model=model)
     except (Unavailable, providers.ProviderError):
@@ -996,14 +1023,15 @@ def chat(db: Session, messages: list[dict], *, user_id: int | None, hidden: set[
 
 
 def _answer_now(db: Session, prov, system: str, convo: list[dict], model: str,
-                user_id: int | None, usage: dict) -> str | None:
+                user_id: int | None, usage: dict, tools: list | None = None) -> str | None:
     """One more request for the ANSWER, with more room, after a reply that came back empty
     (a thinking model that used its whole limit thinking). None when that fails too."""
     try:
         turn = prov.complete(system=system, messages=[*convo, {
             "role": "user", "content": "Write your answer to my question now, from what you "
                                        "found. Keep it short. Do not look anything else up."}],
-            tools=TOOLS, model=model, max_tokens=ANSWER_RETRY_TOKENS)
+            tools=tools if tools is not None else TOOLS, model=model,
+            max_tokens=ANSWER_RETRY_TOKENS)
     except providers.ProviderError as e:
         _record(db, "chat", model, None, user_id=user_id, error=str(e))
         return None

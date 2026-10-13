@@ -7219,3 +7219,9 @@ change and I accept." Built on the phase-3 path (still OFF):
 * Still OFF: `DISPATCH_ZUPER_WRITES` (server) + the master switch + one switch per action
   (typed "TURN ON"). The owner's add-only rule stands: switching on is his decision, and
   `zsafety.py` (no Zuper workflow or customer notification active) is checked first.
+* **Same day, reversed by the user: built, kept OFF.** "I need this logic made but not activated,
+  and the agent should not suggest to do it himself." `DISPATCH_ZUPER_WRITES=false` again in
+  `.env.prod`; every switch off. While the server gate or the master switch is off the chat is
+  not given `suggest_change` at all, its prompt says the office makes changes in Zuper by hand
+  and never to offer to make, record or prepare one, and a `suggest_change` call that slips
+  through records nothing. Turning it on later needs both, nothing else.
