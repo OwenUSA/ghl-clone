@@ -42,13 +42,14 @@ PER_PASS = 8                 # explanations per reader pass (the rest wait for t
 EXPLAIN_KINDS = {"new_not_called", "after_inspection", "after_repair", "talked_not_updated",
                  "book_visit", "needs_date", "missed_call", "missed_text", "visit_unconfirmed",
                  "off_board", "no_photos"}
-# A question about a day or a week takes many look-ups: the schedule, the file, then the calls of
-# every customer whose visit is not clearly confirmed (the 2026-10-08 session took 15-30).
-CHAT_STEPS = 30
+# Since 2026-10-13 the scripts read every call and text first (briefs.py): `zuper_check` and
+# `customers` answer in one look-up what took 14 one-customer searches (live 2026-10-09: 20
+# look-ups, the account's DeepSeek balance gone). Fewer rounds, and less read per answer.
+CHAT_STEPS = 15
 # What the look-ups of ONE answer may add to the conversation before it must answer: a
 # model's context is finite, and a provider that is not Claude may have far less than 1M.
-CHAT_READ_BUDGET = 300_000
-TOOL_RESULT_MAX = 40_000
+CHAT_READ_BUDGET = 120_000
+TOOL_RESULT_MAX = 30_000
 # Reasoning models (gpt-6-luna) spend part of this on thinking before they answer: 900 cut a
 # third of the live answers short (2026-10-01), so the room is generous; cost stays cents.
 EXPLAIN_MAX_TOKENS = 4000
@@ -313,9 +314,18 @@ The order of truth (the owner's rule, 2026-10-09). When they disagree, the highe
 NOT confirmed.
 
 How to work
-- Look everything up; never answer from memory. Use as many look-ups as the question needs. \
-A question about a day or a week usually needs day_schedule, compare_schedule when a file is \
-attached, then search_comms for each customer whose visit is not clearly confirmed.
+- Look everything up; never answer from memory. The scripts have ALREADY read every call and \
+text: start from their look-ups and use few.
+  * "Is Zuper updated / what needs updating / what is wrong today or this week": zuper_check. \
+It is the fixed rules' answer with the evidence of each finding; explain it, do not redo it.
+  * One customer, a few, or a day's visits: customers (a compact brief per job: stage, visit, \
+technician, the job's important fields, availability, and the signals found in their calls \
+and texts — confirmed, cancel, on the way, done, report sent to AHS, a day agreed — each with \
+its time and words).
+  * Fitting a customer in: customers for that job, then find_slots. Remaking the schedule: \
+plan_schedule.
+  * search_comms (full=true) ONLY to read one conversation a brief does not settle. Never call \
+it once per customer.
 - Every "confirmed", "moved", "cancelled", "done" or "not reached" you write names its \
 evidence: the call or text with its day and time, or the Zuper log line. Never say "no call or \
 text on record" without having looked (compare_schedule's recent_calls_and_texts or \
@@ -343,6 +353,13 @@ next week", a technician), call plan_schedule again with those limits and their 
 Then give the summary (visits placed, not placed, \
 driving), a table per day and technician, the tentative ones (call first) and the links. \
 Nothing is booked: the office books each visit in Zuper.
+- A stage changes only on its evidence, never on a plan or an agreed time: "On the way" \
+only after an on-the-way text or call (or the technician's move); "Inspection Completed" / \
+"Repair Complete" only after a done signal, pictures or a note from the field; "Awaiting AHS \
+Decision" only after we told the customer the report went to AHS. A job moves to another \
+board only when its history shows a real "AHS Approved" (not set the same minute the job was \
+created), and a person does that in Zuper. An agreed time is a booking, not a stage. Test \
+jobs (TEST in the name or address) are never touched.
 - You cannot change Zuper or contact anyone. When Zuper needs a change, say exactly which job, \
 which stage / time / technician / field, to what, and the evidence. You may record a field, \
 address or note change with suggest_change for the office to approve.
@@ -379,6 +396,27 @@ TOOLS = [
                        "calls and texts with summaries.", {"type": "object", "properties": {
                            "job_number": {"type": "string"}}, "required": ["job_number"],
                            "additionalProperties": False}),
+    providers.ToolSpec("zuper_check", "What Zuper needs for a range of days (default today and "
+                       "tomorrow), found by fixed rules over every call and text: double-booked, "
+                       "a day or time the customer agreed that Zuper does not show, a cancel, "
+                       "on the way but the stage not moved, a visit past its time with nothing "
+                       "from the field, a report sent to AHS but the column behind, not "
+                       "confirmed, the Technician field wrong, a question nobody answered. Each "
+                       "finding has its evidence and the unambiguous fix, if any.",
+                       {"type": "object", "properties": {
+                           "date_from": {"type": "string"}, "date_to": {"type": "string"}},
+                        "additionalProperties": False}),
+    providers.ToolSpec("customers", "A compact brief per job, already read from all their calls "
+                       "and texts: stage, visit, technician, the job's important fields (roof, "
+                       "leak, AHS numbers...), availability, last contact, a question waiting "
+                       "for us, and signals (confirmed / cancel / on the way / done / report "
+                       "sent to AHS / day agreed) with time and words. Give job_numbers, or a "
+                       "day range for its visits, or a board / stage.",
+                       {"type": "object", "properties": {
+                           "job_numbers": {"type": "array", "items": {"type": "string"}},
+                           "date_from": {"type": "string"}, "date_to": {"type": "string"},
+                           "board": {"type": "string"}, "stage": {"type": "string"}},
+                        "additionalProperties": False}),
     providers.ToolSpec("find_slots", "Three visit slots for a job, closest to what is already "
                        "booked. kind: inspection or repair (default from the job).",
                        {"type": "object", "properties": {
@@ -560,6 +598,8 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
         return json.dumps(lookups.compare_schedule(db, now, hidden, f.sheets,
                                                    date_from=args.get("date_from"),
                                                    date_to=args.get("date_to")), default=str)
+    if name in ("zuper_check", "customers"):
+        return _prepared(db, name, args, now, hidden)
     if name == "day_schedule":
         return json.dumps(lookups.day_schedule(db, now, hidden, date_from=args.get("date_from"),
                                                date_to=args.get("date_to"),
@@ -637,6 +677,43 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
         made.extend(add_suggestions(db, j, changes, item_id=None, source="chat"))
         return json.dumps({"recorded": True, "note": "the office will approve or reject it"})
     return json.dumps({"error": "unknown tool"})
+
+
+CUSTOMERS_MAX = 40
+
+
+def _prepared(db: Session, name: str, args: dict, now: datetime, hidden: set[str]) -> str:
+    """zuper_check and customers: the scripts' reading (briefs.py), compact for the model."""
+    from . import briefs
+    d0 = lookups.parse_day(args.get("date_from"), now) if args.get("date_from") else None
+    d1 = lookups.parse_day(args.get("date_to"), now) if args.get("date_to") else None
+    if name == "zuper_check":
+        out = briefs.check(db, now, hidden, date_from=d0, date_to=d1 or (
+            d0 + timedelta(days=1) if d0 else None))
+        for f in out["findings"]:
+            f.pop("job_uid", None)
+        return json.dumps(out, default=str)
+    wanted = {str(n).lstrip("#") for n in args.get("job_numbers") or []}
+    rows = []
+    for j in db.scalars(select(DispatchJob).where(DispatchJob.is_open.is_(True))):
+        start = c.aware(j.scheduled_start)
+        day = c.local(start).date() if start else None
+        if wanted and j.job_number not in wanted:
+            continue
+        if d0 and not (day and d0 <= day <= (d1 or d0)):
+            continue
+        if args.get("board") and j.board != args["board"]:
+            continue
+        if args.get("stage") and j.status != args["stage"]:
+            continue
+        if not (wanted or d0 or args.get("board") or args.get("stage")):
+            continue
+        rows.append(j)
+    if not rows:
+        return json.dumps({"briefs": [], "note": "no open job matches"})
+    rows = rows[:CUSTOMERS_MAX]
+    out = [b.out(now, full=len(rows) <= 3) for b in briefs.load(db, now, hidden, jobs=rows)]
+    return json.dumps({"briefs": out, "more": None}, default=str)
 
 
 STEP_RESULT_MAX = 4000

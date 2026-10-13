@@ -803,6 +803,13 @@ in `DECISIONS.md`.
   model, tokens, error and the person's thumbs up / down + note — for reviewing and improving it.
   The server keeps the history (the browser sends only the new question). Own chats only; an
   ADMIN reads everyone's, read-only. "Delete" only archives.
+- **Check Zuper, no AI** (2026-10-13, `dispatch/briefs.py`, `GET /api/dispatch/check`, the
+  "Check Zuper" tab): fixed English/Spanish patterns read every call and text into signals
+  (confirmed, cancel, on the way, done, sent to AHS, a day agreed) and fixed rules say what Zuper
+  needs, each with its evidence; a fix only where unambiguous, through the OFF write switches,
+  never a board move; test jobs skipped. The chat's `zuper_check` / `customers` tools read the same
+  briefs — start there, `search_comms` only for one conversation. The availability reader retries
+  a failure only on new messages or after 6 h, with its own 150 a day. See DECISIONS.md.
 - **Spreadsheets in the chat** (2026-10-01): "Attach Excel" (`POST /api/dispatch/chats/files`,
   .xlsx/.xlsm/.csv, 10 MB) — `dispatch/sheets.py` reads every sheet top to bottom (header = first
   row with text), `dispatch/compare.py` matches each row to a Zuper job (job # → phone → name →
