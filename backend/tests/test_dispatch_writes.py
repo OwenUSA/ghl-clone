@@ -84,6 +84,7 @@ class Zuper:
         self.notes: list[dict] = []
         self.requests: list[tuple[str, str, object]] = []
         self.ignore_writes = False
+        self.keep_only_first_field = False          # a Zuper that loses fields on a PUT
 
     def writes(self):
         return [r for r in self.requests if r[0] != "GET"]
@@ -105,10 +106,12 @@ class Zuper:
         if m == "PUT" and path == "/api/jobs":
             job = body["job"]
             if not self.ignore_writes:
-                for f in job.get("custom_fields") or []:
-                    for mine in self.job["custom_fields"]:
-                        if mine["label"] == f["label"]:
-                            mine["value"] = f["value"]
+                if "custom_fields" in job:
+                    # Zuper REPLACES the job's whole field list with the one sent (measured
+                    # 2026-10-06 on #701: one field sent, the other 33 gone).
+                    self.job["custom_fields"] = [dict(f) for f in job["custom_fields"]]
+                    if self.keep_only_first_field:
+                        self.job["custom_fields"] = self.job["custom_fields"][:1]
                 if "customer_address" in job:
                     self.job["customer_address"] = job["customer_address"]
             return ok({"job_uid": "j1"})
@@ -302,9 +305,14 @@ def test_a_field_is_written_with_its_group_metadata_and_read_back(armed, db, zup
     assert r.status_code == 200 and r.json()["ok"] is True, r.text
     assert [(m, p) for m, p, _ in zuper.requests] == [
         ("GET", "/api/jobs/j1"), ("PUT", "/api/jobs"), ("GET", "/api/jobs/j1")]
-    assert zuper.requests[1][2] == {"job": {"job_uid": "j1", "custom_fields": [{
-        "label": "Policy Number", "value": "AHS-778812", "group_name": "AHS Details",
-        "group_uid": "g-ahs", "type": "SINGLE_LINE", "hide_to_fe": False}]}}
+    # The job's EVERY field is sent, only the one changed: Zuper replaces the whole list.
+    assert zuper.requests[1][2] == {"job": {"job_uid": "j1", "custom_fields": [
+        {"label": "Policy Number", "value": "AHS-778812", "group_name": "AHS Details",
+         "group_uid": "g-ahs", "type": "SINGLE_LINE", "hide_to_fe": False},
+        {"label": "Technician", "value": "", "group_name": "Visit", "group_uid": "g-visit",
+         "type": "DROPDOWN", "read_only": False},
+        {"label": "Locked", "value": "x", "group_name": "AHS Details", "group_uid": "g-ahs",
+         "type": "SINGLE_LINE", "read_only": True}]}}
     db.expire_all()
     s = db.get(DispatchSuggestion, sid)
     assert (s.state, s.decided_by_id, s.applied_by_id) == (
@@ -405,9 +413,13 @@ def test_booking_sends_utc_times_and_the_technician_field(armed, db, zuper):
         ("PUT", "/api/jobs/j1/update", {"job": [{
             "scheduled_start_time": start.strftime(fmt), "scheduled_end_time": end.strftime(fmt),
             "type": "SCHEDULE"}]}),
-        ("PUT", "/api/jobs", {"job": {"job_uid": "j1", "custom_fields": [{
-            "label": "Technician", "value": "Antonio Brown", "group_name": "Visit",
-            "group_uid": "g-visit", "type": "DROPDOWN", "read_only": False}]}}),
+        ("PUT", "/api/jobs", {"job": {"job_uid": "j1", "custom_fields": [
+            {"label": "Policy Number", "value": "", "group_name": "AHS Details",
+             "group_uid": "g-ahs", "type": "SINGLE_LINE", "hide_to_fe": False},
+            {"label": "Technician", "value": "Antonio Brown", "group_name": "Visit",
+             "group_uid": "g-visit", "type": "DROPDOWN", "read_only": False},
+            {"label": "Locked", "value": "x", "group_name": "AHS Details",
+             "group_uid": "g-ahs", "type": "SINGLE_LINE", "read_only": True}]}}),
     ]
     log = db.query(DispatchWriteLog).filter(DispatchWriteLog.action == "booking").one()
     assert log.result == "ok"
@@ -528,3 +540,95 @@ def test_writes_module_lists_exactly_four_requests():
 
 def teardown_module():
     SessionLocal().close()
+
+
+
+# ---- 2026-10-13: the chat suggests a stage or a visit; a person approves; then it is made ----
+
+def test_one_field_changed_leaves_every_other_field_as_it_was(armed, db, zuper):
+    """The bug found before switching anything on: one field was sent alone, and Zuper keeps
+    only what is sent — every other field of the job would have been wiped."""
+    c, as_, _ = armed
+    zuper.job["custom_fields"][0]["value"] = "OLD"
+    zuper.job["custom_fields"].append({"label": "Roof Type", "value": "Tile",
+                                       "group_name": "Checklist", "group_uid": "g-c",
+                                       "type": "DROPDOWN"})
+    sid = suggestion(db, field="Technician", proposed="Owen Buzaglo")
+    r = c.post("/api/dispatch/suggestions/%d/apply" % sid, json={"approve": True},
+               headers=as_("dispatcher"))
+    assert r.json()["ok"] is True, r.text
+    after = {f["label"]: f["value"] for f in zuper.job["custom_fields"]}
+    assert after == {"Policy Number": "OLD", "Technician": "Owen Buzaglo", "Locked": "x",
+                     "Roof Type": "Tile"}
+
+
+def test_a_lost_field_is_reported_never_hidden(armed, db, zuper):
+    c, as_, _ = armed
+    zuper.keep_only_first_field = True
+    sid = suggestion(db)
+    r = c.post("/api/dispatch/suggestions/%d/apply" % sid, json={"approve": True},
+               headers=as_("dispatcher"))
+    assert r.json()["ok"] is False and "other fields changed" in r.json()["sentence"]
+    assert db.get(DispatchSuggestion, sid).state == "apply_failed"
+
+
+def test_a_suggested_stage_is_made_only_after_approval(armed, db, zuper):
+    c, as_, _ = armed
+    sid = suggestion(db, kind="stage", field="Stage", proposed="Scheduled")
+    assert c.post("/api/dispatch/suggestions/%d/apply" % sid,
+                  headers=as_("dispatcher")).status_code == 409        # not approved yet
+    assert zuper.writes() == []
+    r = c.post("/api/dispatch/suggestions/%d/apply" % sid, json={"approve": True},
+               headers=as_("dispatcher"))
+    assert r.json()["ok"] is True, r.text
+    assert zuper.job["current_job_status"]["status_name"] == "Scheduled"
+    # a closing stage is refused, whoever approves it, and nothing is sent
+    before = len(zuper.writes())
+    bad = suggestion(db, kind="stage", field="Stage", proposed="Cancelled")
+    r = c.post("/api/dispatch/suggestions/%d/apply" % bad, json={"approve": True},
+               headers=as_("dispatcher"))
+    assert r.status_code == 400 and len(zuper.writes()) == before
+
+
+def test_a_suggested_visit_books_the_time_and_the_technician(armed, db, zuper):
+    c, as_, _ = armed
+    sid = suggestion(db, kind="booking", field="Visit",
+                     proposed="2026-10-14 07:30-11:30 | Owen Buzaglo")
+    r = c.post("/api/dispatch/suggestions/%d/apply" % sid, json={"approve": True},
+               headers=as_("dispatcher"))
+    assert r.json()["ok"] is True, r.text
+    assert zuper.job["scheduled_start_time"] == "2026-10-14 11:30:00"     # 7:30 AM New York
+    assert zuper.job["scheduled_end_time"] == "2026-10-14 15:30:00"
+    tech = next(f for f in zuper.job["custom_fields"] if f["label"] == "Technician")
+    assert tech["value"] == "Owen Buzaglo" and len(zuper.job["custom_fields"]) == 3
+
+
+def test_with_the_server_gate_off_an_approved_suggestion_sends_nothing(world, db, zuper):
+    c, as_, _ = world
+    sid = suggestion(db, kind="booking", field="Visit",
+                     proposed="2026-10-14 07:30-11:30 | Owen Buzaglo")
+    r = c.post("/api/dispatch/suggestions/%d/apply" % sid, json={"approve": True},
+               headers=as_("dispatcher"))
+    assert r.status_code == 409 and zuper.writes() == []
+
+
+def test_the_chat_records_a_stage_or_a_visit_and_never_makes_it(armed, db, zuper):
+    from app.dispatch import ai
+    from app.models import DispatchJob
+    j = db.query(DispatchJob).filter(DispatchJob.job_uid == "j1").one()
+    j.status, j.assigned = "Welcome Call!", ["Owen Buzaglo"]
+    db.commit()
+    now = datetime.now(UTC)
+    made = []
+    out = json.loads(ai.run_tool(db, "suggest_change", {
+        "job_number": "701", "field": "Visit", "proposed": "", "date": "2026-10-14",
+        "start": "7:30 AM", "end": "11:30 AM", "technician": "Owen Buzaglo",
+        "evidence": "Tue 10/13 2:57 PM call: confirmed Wednesday 7:30-11:30"}, now, set(), made))
+    assert out["recorded"] is True
+    assert made[0].kind == "booking"
+    assert made[0].proposed == "2026-10-14 07:30-11:30 | Owen Buzaglo"
+    out = json.loads(ai.run_tool(db, "suggest_change", {
+        "job_number": "701", "field": "Stage", "proposed": "Paid", "evidence": "x"},
+        now, set(), made))
+    assert "not recorded" in out["error"]
+    assert zuper.writes() == []                                           # nothing was made
