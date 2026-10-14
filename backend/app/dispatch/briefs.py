@@ -1070,3 +1070,201 @@ def day_plan_verdicts(db: Session, now: datetime, out: dict,
                            "and `fix_details` are ready for Zuper; `call_first` needs a call "
                            "first; `file_wrong` means the Excel is wrong.")
     return out
+
+
+# ------------------------------------------------------------------- the whole pipeline, mapped
+
+# Every open job on a board, one row each: where it is, what it needs, where it should go and
+# why (2026-10-14, the user: "make sure it truly maps all the jobs in the AHS pipelines and tells
+# me for each job what we need to update — where it is, where it should be, for what reason —
+# organized"). The AI's answer counted 59 of the 129 jobs and missed every job stuck AFTER its
+# visit; this reads every job and uses every rule above, plus how long a job has sat in a stage.
+
+# A job left this many days in a stage after its visit is stuck; where it goes next.
+STUCK_AFTER = {
+    "Inspection Completed": (2, "Submit To AHS For Approval",
+                             "the report has not gone to AHS"),
+    "Submit To AHS For Approval": (2, "Awaiting AHS Decision",
+                                   "submitted? then it is waiting on AHS"),
+    "Awaiting AHS Decision": (10, None, "AHS has not answered — follow up with AHS"),
+    "Repair Complete": (3, "Call Satisfaction Check",
+                        "the repair is done — the satisfaction call is next"),
+    "Call Satisfaction Check": (7, "Invoice Submitted to AHS",
+                                "call the customer, then invoice AHS"),
+    "Invoice Submitted to AHS": (30, None, "AHS has not paid in a month — follow up with AHS"),
+    "Awaiting AHS Payment": (30, None, "still unpaid — follow up with AHS"),
+    "Review Requested": (7, None, "no review yet — remind the customer once, or close it"),
+    "Waiting for Customer": (7, None, "follow up with the customer"),
+    "Proposal Made": (7, None, "follow up on the proposal"),
+}
+# The board's stages after "Awaiting AHS Decision": a report the customer was told went to AHS
+# can no longer be "behind" there.
+AFTER_AHS = {"Awaiting AHS Decision", "AHS Approved", "Proposal Made", "Waiting for Customer",
+             "Estimate Declined", "Cancelled"}
+STATES = (
+    ("update", "Update Zuper"),
+    ("call", "Call first, then update"),
+    ("waiting", "Waiting — nothing to change now"),
+    ("ok", "Up to date"),
+)
+# What each finding / verdict asks for: (state, where it should be or the action).
+KIND = {
+    "ahs_sent_not_moved": ("update", "Awaiting AHS Decision"),
+    "done_not_moved": ("update", None), "visit_happened": ("update", "the stage after the visit"),
+    "customer_cancelled": ("update", "Reschedule Required"),
+    "visit_on_closed_job": ("update", "take the visit off this job"),
+    "technician_field": ("update", None), "agreed_other_time": ("update", "book the agreed day"),
+    "book": ("update", "book the agreed day"), "on_the_way_not_moved": ("update", None),
+    "booked_no_time": ("update", "give the visit a time, or Reschedule Required"),
+    "stuck": ("update", None), "ahs_sent_check": ("update", "Awaiting AHS Decision"),
+    "follow_up": ("call", None),
+    "stale_on_the_way": ("update", None),
+    "not_confirmed": ("call", "confirm the visit"),
+    "customer_options": ("call", "pick one of the days the customer offered, then book"),
+    "confirm_time": ("call", "pick one of the days the customer offered, then book"),
+    "new_date": ("call", "a new date"),
+    "keep_calling": ("call", "keep calling"), "call_and_book": ("call", "book a visit"),
+    "unanswered": ("call", "answer the customer"), "no_field_update": ("call", None),
+    "stale": ("call", "check it is still a job"), "fits_options": ("call", None),
+    "running_late": ("waiting", None), "on_hold": ("waiting", "leave it"),
+    "on_other_job": ("waiting", "nothing — the visit is on the other job"),
+}
+STATE_RANK = {s: i for i, (s, _) in enumerate(STATES)}
+
+
+def _stage_key(board: str, stage: str | None) -> int:
+    """Zuper's column order (playbook.BOARDS); Zuper cuts long names ("Inspection: Same-Day
+    Confi"), so a prefix matches."""
+    from . import playbook
+    names = [n for n, _ in playbook.BOARDS.get(board, [])]
+    s = (stage or "").lower()
+    for i, n in enumerate(names):
+        if n.lower() == s or n.lower().startswith(s) or s.startswith(n.lower()):
+            return i
+    return len(names)
+
+
+def pipeline_map(db: Session, now: datetime, hidden: set[str] | None = None, *,
+                 boards: tuple[str, ...] = (c.INSPECTION_BOARD, c.REPAIR_BOARD)) -> dict:
+    """Every open job on `boards`, each with ONE state (update / call / waiting / ok), where it
+    is, where it should be and why, with the evidence. Reads only."""
+    hidden = hidden or set()
+    boards = tuple(b for b in boards if b not in hidden)
+    today = c.local(now).date()
+    every = load(db, now, hidden, days=BOOK_DAYS)
+    on_boards = [b for b in every if b.job.board in boards]
+    issues: dict[str, list[dict]] = {}
+
+    def add(uid: str, kind: str, why: str, *, to: str | None = None, ev=None) -> None:
+        state, default_to = KIND.get(kind, ("update", None))
+        issues.setdefault(uid, []).append({
+            "kind": kind, "state": state, "should": to or default_to, "why": why,
+            "evidence": [e for e in (ev or []) if e]})
+
+    chk = check(db, now, hidden, date_from=today, date_to=today + timedelta(days=6),
+                briefs=every)
+    for f in chk["findings"]:
+        if f["board"] not in boards:
+            continue
+        fix = f.get("fix") or {}
+        to = fix.get("to") if fix.get("action") == "stage" else (
+            "Technician field → %s" % fix["to"] if fix.get("action") == "field" else (
+                "book %s, %s" % (fix["label"], fix["technician"])
+                if fix.get("action") == "booking" else None))
+        if f["kind"] == "stale_on_the_way":
+            fj = next((b.job for b in every if b.job.job_uid == f["job_uid"]), None)
+            vstart = c.aware(fj.scheduled_start) if fj else None
+            done_to = DONE_STAGE.get(f["board"] or "")
+            if "move it to " in f["do"]:
+                to = f["do"].split("move it to ")[-1].rstrip(".")
+            elif done_to and vstart and c.local(vstart).date() < today:
+                # Its visit day has passed and it still says in progress: most likely done.
+                to = "%s — check with %s first" % (done_to, f["assigned"] or "the technician")
+            else:
+                to = "the stage it is really in"
+        add(f["job_uid"], f["kind"], "%s %s" % (f["what"], f["do"]), to=to, ev=f["evidence"])
+    for g in to_book(db, now, hidden)["groups"]:
+        for r in g["jobs"]:
+            b = next((x for x in on_boards if x.job.job_number == r["job_number"]), None)
+            if b is not None:
+                add(b.job.job_uid, g["verdict"], r["say"], ev=r["evidence"])
+    for b in on_boards:
+        j = b.job
+        if b.test:
+            continue
+        since = c.aware(j.status_since)
+        days = (now - since).days if since else None
+        rule = STUCK_AFTER.get(j.status or "")
+        if rule and days is not None and days >= rule[0] and not any(
+                x["state"] == "update" for x in issues.get(j.job_uid, [])):
+            # A next stage = a Zuper change; no next stage = a person follows up, the job stays.
+            add(j.job_uid, "stuck" if rule[1] else "follow_up",
+                "%d days in “%s” — %s." % (days, j.status, rule[2]),
+                to=rule[1] or "follow up; it stays in “%s”" % j.status)
+        sent = b.newest("ahs_sent")
+        if sent and j.board == c.INSPECTION_BOARD and (j.status or "") not in AFTER_AHS and \
+                (j.status or "") not in c.WAITING_ON_AHS and since and sent.at >= since - \
+                timedelta(days=7) and not any(x["kind"] == "ahs_sent_not_moved"
+                                              for x in issues.get(j.job_uid, [])):
+            add(j.job_uid, "ahs_sent_check", "We told the customer the report went to AHS (%s), "
+                "but the job is in “%s”. Check the stage." % (_when(sent.at), j.status),
+                ev=[sent.out()])
+
+    out_boards = []
+    for board in boards:
+        rows = []
+        for b in on_boards:
+            j = b.job
+            if j.board != board:
+                continue
+            since = c.aware(j.status_since)
+            mine = sorted(issues.get(j.job_uid, []), key=lambda x: STATE_RANK[x["state"]])
+            state = "test" if b.test else (mine[0]["state"] if mine else (
+                "waiting" if (j.status or "") in c.WAITING_ON_AHS
+                or j.status == "Waiting for Customer" else "ok"))
+            top = mine[0] if mine else None
+            rows.append({
+                "job_number": j.job_number, "job_uid": j.job_uid, "customer": j.customer_name,
+                "stage": j.status, "days_in_stage": (now - since).days if since else None,
+                "visit": visit_text(j), "assigned": ", ".join(j.assigned or []) or None,
+                "state": state, "should": top["should"] if top else None,
+                "why": top["why"] if top else (
+                    "A test job — never touched." if b.test else
+                    "Waiting on AHS." if (j.status or "") in c.WAITING_ON_AHS else
+                    "Nothing found in Zuper or the calls that needs a change."),
+                "evidence": top["evidence"] if top else [],
+                "also": [x["why"] for x in mine[1:4]] or None})
+        cols = []
+        for stage in sorted({r["stage"] for r in rows}, key=lambda s: (_stage_key(board, s), s)):
+            these = sorted((r for r in rows if r["stage"] == stage),
+                           key=lambda r: (STATE_RANK.get(r["state"], 9), int(r["job_number"] or 0)))
+            cols.append({"stage": stage, "count": len(these), "jobs": these})
+        counts = {s: sum(1 for r in rows if r["state"] == s) for s, _ in (*STATES, ("test", ""))}
+        out_boards.append({"board": board, "total": len(rows), "by_state": counts,
+                           "columns": cols})
+    return {"checked_at": _when(now), "boards": out_boards,
+            "states": [{"state": s, "title": t} for s, t in STATES],
+            "how_to_read": "Every open job on the board, by column in Zuper's order. `state`: "
+                           "update = change Zuper now (`should` says to what); call = call the "
+                           "customer first; waiting = nothing to change now; ok = up to date. "
+                           "Report the totals per board and EVERY update and call row, "
+                           "grouped by column; do not re-judge."}
+
+
+def pipeline_for_model(out: dict) -> dict:
+    """The map, compact: every update / call row in full, waiting / ok as job numbers."""
+    boards = []
+    for b in out["boards"]:
+        cols = []
+        for col in b["columns"]:
+            act = [{k: r[k] for k in ("job_number", "customer", "days_in_stage", "visit",
+                                      "assigned", "state", "should", "why") if r.get(k)}
+                   | ({"evidence": r["evidence"][:1]} if r["evidence"] else {})
+                   for r in col["jobs"] if r["state"] in ("update", "call")]
+            rest = {s: ["#%s" % r["job_number"] for r in col["jobs"] if r["state"] == s]
+                    for s in ("waiting", "ok", "test")}
+            cols.append({"stage": col["stage"], "count": col["count"], "act": act,
+                         **{k: v for k, v in rest.items() if v}})
+        boards.append({"board": b["board"], "total": b["total"], "by_state": b["by_state"],
+                       "columns": cols})
+    return {"checked_at": out["checked_at"], "boards": boards, "how_to_read": out["how_to_read"]}

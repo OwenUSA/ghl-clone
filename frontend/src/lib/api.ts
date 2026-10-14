@@ -2351,6 +2351,20 @@ export type DispatchToBook = {
   groups: { verdict: string; title: string; count: number; jobs: DispatchToBookJob[] }[]
 }
 export const dispatchToBook = () => get<DispatchToBook>('/api/dispatch/to-book')
+/** Every open job on the AHS boards, one row each (2026-10-14, briefs.pipeline_map). No AI. */
+export type DispatchPipelineJob = {
+  job_number: string | null; job_uid: string; customer: string | null; stage: string | null
+  days_in_stage: number | null; visit: string | null; assigned: string | null
+  state: 'update' | 'call' | 'waiting' | 'ok' | 'test'; should: string | null; why: string
+  evidence: DispatchCheckEvidence[]; also: string[] | null; zuper_url: string | null
+}
+export type DispatchPipeline = {
+  checked_at: string
+  states: { state: string; title: string }[]
+  boards: { board: string; total: number; by_state: Record<string, number>
+    columns: { stage: string; count: number; jobs: DispatchPipelineJob[] }[] }[]
+}
+export const dispatchPipeline = () => get<DispatchPipeline>('/api/dispatch/pipeline')
 export const dispatchCheck = (dateFrom: string, dateTo: string) =>
   get<DispatchCheck>(`/api/dispatch/check?date_from=${encodeURIComponent(dateFrom)}` +
     `&date_to=${encodeURIComponent(dateTo)}`)

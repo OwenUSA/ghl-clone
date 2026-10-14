@@ -1205,6 +1205,7 @@ AUDITED = {
     # pinned by tests/test_dispatch_api.py. It reads Zuper's copy, never a CRM customer record.
     **dict.fromkeys(("dispatch_summary", "dispatch_items", "dispatch_item_done",
                      "dispatch_item_wrong", "dispatch_job", "dispatch_check", "dispatch_to_book",
+                     "dispatch_pipeline",
                      # phase 2 (app/dispatch/assist.py): the same gate; PUT settings is ADMIN
                      "dispatch_suggestions", "dispatch_suggestion_approve",
                      "dispatch_suggestion_wrong", "dispatch_job_slots",
