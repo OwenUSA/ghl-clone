@@ -1,4 +1,4 @@
-# Everything that runs against Zuper by itself — inventory (verified 2026-10-08, re-checked 2026-10-12)
+# Everything that runs against Zuper by itself — inventory (verified 2026-10-08, re-checked 2026-10-12; K added 2026-10-13)
 
 One page listing every scheduled job, container and background thread that reads or writes
 Dream Team Roofing's Zuper account, where it lives, whether it works, and how to pause it.
@@ -28,6 +28,7 @@ bash ops/zuper-automations-status.sh
 | G | **Dispatch page pass** (`app/dispatch/service.py`) | owen-main | `ghl_clone_worker`, Zuper thread (`DISPATCH_ENABLED=true`) | 150 s | none; phase-3 writes OFF (`DISPATCH_ZUPER_WRITES` unset) | **Working.** Last pass 19:29 UTC, no error. Reports one stage it does not know: `AHS - TEST / Intake` |
 | H | **KPI history + nightly Excel** (`app/zuper/history.py`, `app/kpi_report.py`) | owen-main | `ghl_clone_worker`, after 02:00 ET | daily | none | **Working.** `KPI-2026-10-08.xlsx` written |
 | J | **Appointment reminder texts** (`app/reminders/`) | owen-main | `ghl_clone_worker`, after each Dispatch pass (`ZUPER_REMINDERS_ENABLED` + Settings → Automations mode) | 60 s | none — reads the Dispatch copy; texts customers through owen-main | **OFF since 2026-10-12** (user: "i dont want them anymore"): `ZUPER_REMINDERS_ENABLED=false` and every mode Off. Built 2026-10-08; also the "report submitted to AHS" and "AHS authorized" texts (2026-10-09, `stage_texts.py`). Code and tables kept |
+| K | **Six customer-text workflows** (Zuper Workflow Builder) | inside Zuper | Zuper runs them; incoming texts arrive by Zuper webhook `sms.new_sms` | per schedule / column move / incoming text | none (no job writes) | **LIVE since 2026-10-13 16:41 ET** (user: "ok activate"). Text AHS customers from (954) 420-7373: day-before and 2-hour reminders, Inspection Completed / Awaiting AHS Decision / AHS Approved texts, thank-yous. Bell alerts in them fail on Zuper's side. Everything: `ZUPER-CUSTOMER-TEXT-WORKFLOWS.md` |
 | I | **Daily activity digest** (`app/zuper/digest.py`) | owen-main | `ghl_clone_worker`, after 01:00 ET | daily | would add a private note | **Runs, writes nothing**: pull-only refuses the note. 156 attempts, 0 notes (2026-10-12). Harmless, but dead code under the mirror |
 
 Nothing else touches Zuper. Checked and **not** a Zuper automation: every other cron on both
@@ -42,8 +43,8 @@ no Zuper process running).
 | AHS - TEST column tasks (`ahstest/column_tasks.sh`) | dispatch cron | 2026-09-27 | `/root/backups/cron.d-zuper-ahstest-tasks.disabled-20260927` |
 | Proposal PDFs on dispatch (old home of C) | dispatch cron `zuper-compare` | 2026-09-24 (moved to owen-main) | `/root/backups/cron.d-zuper-compare.disabled-20260924` |
 | Approved → Repair & Review hand-off (inside B) | `tasks_sync.py` | 2026-09-30, owner: keep it off | `app/tasks_sync.py.bak-20260930` |
-| Appointment reminder workflows (Zuper Workflow Builder) | inside Zuper, INACTIVE | built inactive 2026-09-21 | — |
-| All 41 Zuper workflows + 21 customer notification rules | inside Zuper | 2026-09-17 | checked every minute by the gate |
+| The two September "DTR - Appointment reminder" workflow drafts | inside Zuper, INACTIVE | built inactive 2026-09-21; replaced by K | — |
+| The other 41 Zuper workflows (not K) + 21 customer notification rules | inside Zuper | 2026-09-17 | checked every minute by the gate (it allows only K's six uids) |
 
 ## 3. How to pause each one
 
@@ -57,6 +58,7 @@ no Zuper process running).
 | F | `ZUPER_PROPOSAL_LINES=false` | |
 | G | `DISPATCH_ENABLED=false` | |
 | J | Settings → Automations → Appointment reminders → **Off** (one press), or `ZUPER_REMINDERS_ENABLED=false` | Test / On with the typed "TURN ON" |
+| K | Zuper → Workflows → switch each of the six off (`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md` section 8) | switch them on again; the gate allows only these six |
 
 After changing a container's code: `docker compose stop` → `build` → `up -d --force-recreate`,
 then `docker exec <name> grep …` to prove the new code is inside. `docker start` runs the OLD

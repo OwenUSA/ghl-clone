@@ -23,6 +23,10 @@ organised summary.
    Zuper's template workflows and 231 customers got a mistaken email/SMS. Since then all 41
    workflows and all 21 customer-notification rules are **inactive**, and the owner re-enables
    automations himself, one at a time. (Still 0 of 41 and 0 of 21 active on 2026-10-12.)
+   **Exception since 2026-10-13 16:41 New York:** six DTR workflows that text AHS customers
+   (reminders, three column texts, thank-yous) are LIVE at the user's request — the only
+   automatic customer messaging in the account. Section 4.5 and `ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`.
+   The other 41 workflows and all 21 notification rules are still off.
    The CRM's own automatic texts read from Zuper columns (appointment reminders, "report
    submitted to AHS", "AHS authorized", 2026-10-08/09) were **switched off completely on
    2026-10-12** at the user's request: `ZUPER_REMINDERS_ENABLED=false` and every mode Off. The
@@ -40,7 +44,10 @@ organised summary.
    thing we can do is read from Zuper." Nothing new may write to Zuper without the owner lifting
    the rule for that one thing. Lifts granted so far: AHS work-order emails create their job
    (2026-09-28, section 4), `messaging.notify_users` set to Owen + Luis (2026-09-28), two saved
-   board views (2026-09-30). The jobs in section 4 that write (`zuper_tasks`, `zuper_proposals`,
+   board views (2026-09-30), the KPI questions and their job fields (2026-09-30,
+   `ZUPER-KPI-SETUP.md`), the inspection questions (2026-10-12, 3.3a), the AHS - Inspection
+   column order (2026-10-12), and the six customer-text workflows plus the System Notification
+   Number 19544207373 (2026-10-13, 4.5). Each lift covers that one thing only. The jobs in section 4 that write (`zuper_tasks`, `zuper_proposals`,
    routes) predate the rule; the owner said "ok leave that" on 2026-09-28.
 
 ---
@@ -299,7 +306,8 @@ yet (owner: "AHS first").
 ### 3.8 Company config that matters
 
 `jobs.enforce_sequential_execution = false` (techs may close route jobs in any order) · all
-customer notification rules and workflows inactive · `jobs.public_link = false` · invoice public /
+customer notification rules inactive, and every workflow inactive except the six in 4.5 ·
+System Notification Number 19544207373 with system notifications ON (2026-10-13) · `jobs.public_link = false` · invoice public /
 payment links off · `jobs.notify_user_on_assignment` on (staff only; `assign_sync.py` switches it
 off while it runs) · `messaging.notify_users` = 2 users (Owen, Luis) · company timezone
 America/New_York · vendor auto-emails on purchase/service orders are on (vendors, not customers).
@@ -322,7 +330,8 @@ since 09-22).
 
 ## 4. What runs on its own
 
-Verified on the servers 2026-09-30. Four jobs, on two servers. **The routes job is on dispatch,
+Verified on the servers 2026-09-30. Four jobs on two servers, plus the six customer-text
+workflows that run inside Zuper itself (4.5). **The routes job is on dispatch,
 not owen-main** — it was never moved (checked: no cron, timer, container or file for it on
 owen-main).
 
@@ -332,6 +341,7 @@ owen-main).
 | 4.2 | `zuper_tasks` container — checklist tasks (hand-off OFF since 2026-09-30) | owen-main | 120 s | yes (tasks only) |
 | 4.3 | `zuper-routes` cron — technician routes | **dispatch** | 1 min (full run every 5) | yes (routes; toggles a staff setting) |
 | 4.4 | CRM mirror (`ghl_clone_api` / `ghl_clone_worker`) | owen-main | 15-min sweep (no webhook has ever arrived) | only the AHS-email create, and signed-proposal line items |
+| 4.5 | **Six Zuper workflows that TEXT AHS CUSTOMERS** (reminders, column texts, thank-yous) | inside Zuper | on schedule / column move / incoming text | no job writes; **sends customer texts** from (954) 420-7373 |
 
 All four were running on 2026-10-12. The three safety-gate failures in the recent routes log and
 the two in the proposals log were Zuper 502s (the gate could not read Zuper, so nothing was
@@ -339,6 +349,10 @@ written); the tasks log shows the same occasional 502s, retried on the next loop
 
 All three scripts that write run `zsafety.py` first and write nothing when it fails (the log
 says `SAFETY GATE FAILED`). None of them sends a customer anything.
+
+**4.5 is LIVE since 2026-10-13** — the only automatic customer messaging in the account. Everything
+about it (wording, rules, uids, the zsafety allow-list `APPROVED_WORKFLOWS`, how to stop it, test
+customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted for exactly those six.
 
 ### 4.1 `zuper_proposals` (owen-main)
 
@@ -429,8 +443,8 @@ says `SAFETY GATE FAILED`). None of them sends a customer anything.
 - **The one write:** an AHS work-order email that owen-main relays creates the customer, the job
   (lands in AHS - Inspection / Work Order Received — no status is named) and the work order as a
   note. Three POSTs, nothing else (DECISIONS.md, 2026-09-28).
-- The bell alerts admins and dispatchers when a card appears on the AHS board
-  (`app/job_alerts.py`).
+- The bell alerts admins and dispatchers about a new job (and the other Dispatch events) —
+  `app/dispatch/alerts.py`, rung by the Dispatch pass.
 - **A new stage in Zuper is unknown to the CRM** until `python -m app.zuper.mirror --phase boards`
   is run (dry run first); until then a job moved into it does not move in the CRM. See the point
   above: on 2026-10-12 that is most of the AHS columns.
@@ -629,7 +643,7 @@ that the Zuper customer record does not have is not shown.
 
 ## 10. Open items
 
-- [x] ~~Deploy the CRM branch (section 9)~~ — deployed (production at `b332d53`).
+- [x] ~~Deploy the CRM branch (section 9)~~ — deployed (`b332d53` on 2026-09-28; see section 9 for today's).
 - [ ] **Run `mirror --phase boards --phase backfill`** (dry run first, show the owner): the CRM
       still has the old "Dream Team Roofing AHS" pipeline and no AHS - Repair & Review or regional
       pipelines (section 4.4, checked 2026-10-12).
