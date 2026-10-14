@@ -7,6 +7,9 @@ import {
   type DispatchChatMessage, type DispatchChatScope, type DispatchChatStep, type DispatchChatSummary,
 } from '../../lib/api'
 import type { Me } from '../../lib/auth'
+import type { DispatchBookingOptions } from '../../lib/api'
+import { BookingOptionsCard } from './BookingOptionsCard'
+import { PlanCard } from './PlanCard'
 import {
   blocks, cellLines, clip, DEFAULT_FILE_QUESTION, fileSummary, greeting, groupChats, isSpreadsheetName,
   MAX_CHAT_FILES, stepArgs, stepLabel, SUGGESTED_QUESTIONS, type Inline,
@@ -198,7 +201,8 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
     body = (
       <div className="flex min-h-0 flex-1 flex-col">
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          <div style={{ maxWidth: 760, margin: '0 auto', padding: '24px 16px 8px' }}>
+          {/* Wide (2026-10-14): schedules and tables need the room; 8px from the edge. */}
+          <div style={{ maxWidth: 1240, margin: '0 auto', padding: '20px 8px 8px' }}>
             {!canWrite && (
               <div style={{ fontSize: 12, color: MUTED, border: `1px solid ${LINE}`, background: '#fff',
                 borderRadius: 8, padding: '6px 10px', marginBottom: 8 }}>
@@ -235,8 +239,8 @@ export function AssistantChat({ user, activeChatId, setActiveChatId, onOpenSugge
           </div>
         </div>
         {canWrite && (
-          <div style={{ padding: '8px 16px 18px', background: 'linear-gradient(transparent, rgb(249,250,251) 30%)' }}>
-            <div style={{ maxWidth: 760, margin: '0 auto' }}>
+          <div style={{ padding: '8px 8px 18px', background: 'linear-gradient(transparent, rgb(249,250,251) 30%)' }}>
+            <div style={{ maxWidth: 980, margin: '0 auto' }}>
               {composer}
               <div style={{ textAlign: 'center', fontSize: 11, color: MUTED, marginTop: 6 }}>
                 Written by AI — check it against the job in Zuper.</div>
@@ -526,6 +530,7 @@ function AssistantMessage({ chatId, m, canRate, onOpenSuggestions }: {
       <div style={{ flex: 1, minWidth: 0, fontSize: 15, lineHeight: '24px',
         color: m.error ? RED : INK }}>
         <Answer text={m.content} />
+        {!m.error && <Cards steps={steps} downloads={m.downloads ?? []} />}
         {!!m.downloads?.length && <Downloads items={m.downloads} />}
         {!!m.suggestions?.length && (
           <button type="button" onClick={onOpenSuggestions} style={{ marginTop: 8, fontSize: 13,
@@ -556,6 +561,33 @@ function AssistantMessage({ chatId, m, canRate, onOpenSuggestions }: {
 /** Every look-up the AI made and EXACTLY what came back (kept whole since 2026-10-13), so a
  * wrong answer can be traced: did the scripts send the wrong facts, or did the AI misread
  * them? */
+/** Cards under an answer (2026-10-14), from the tools the assistant used: the 3 booking
+ * options for one job, and the suggested schedule (the plan it made). Only the last of each. */
+function Cards({ steps, downloads }: { steps: DispatchChatStep[]; downloads: { url: string }[] }) {
+  let options: DispatchBookingOptions | null = null
+  let planId: number | null = null
+  for (const s of steps) {
+    try {
+      const r = JSON.parse(s.result)
+      if ((s.tool === 'booking_options' || s.tool === 'find_slots') && r && Array.isArray(r.options)) {
+        options = r as DispatchBookingOptions
+      }
+      if (s.tool === 'plan_schedule' && r && Number.isInteger(r.plan_id)) planId = r.plan_id
+    } catch { /* a result cut short or not JSON: no card from it */ }
+  }
+  if (planId === null) {
+    // A long plan's saved result can be cut; its Excel link always names the plan.
+    const hit = downloads.map((d) => /\/plans\/(\d+)\//.exec(d.url)).find(Boolean)
+    if (hit) planId = Number(hit[1])
+  }
+  return (
+    <>
+      {options && <BookingOptionsCard data={options} />}
+      {planId !== null && <PlanCard planId={planId} />}
+    </>
+  )
+}
+
 function Steps({ steps }: { steps: DispatchChatStep[] }) {
   const [open, setOpen] = useState<number | null>(null)
   return (

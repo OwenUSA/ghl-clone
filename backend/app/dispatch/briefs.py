@@ -93,8 +93,12 @@ CANCEL = re.compile(r"\b(cancel\w*|reschedul\w*|postpone\w*|push (it|this) back|
                     r"no voy a estar|no estar[eé]mos|no estar[eé])\b", re.IGNORECASE)
 # The customer pausing the work (live 2026-10-12, #727: "put a hold on the roofing service",
 # "wait for insurance company inspection results before proceeding").
-HOLD = re.compile(r"\b(put (a |on )?hold|on hold|hold off|wait(ing)? for (the |their |her |his )?"
-                  r"(insurance|adjuster)\w*|pausar|en espera)\b", re.IGNORECASE)
+# Only a hold on the WORK: "Luis was placed on hold" is the phone line (live 2026-10-14,
+# #299 Kalach read as "on hold").
+HOLD = re.compile(r"\b(put (a )?hold on (the |this |her |his |their |our )?(\w+ ){0,2}"
+                  r"(roof\w*|repair|work|job|service|visit|appointment|project)|hold off on|"
+                  r"wait(ing)? for (the |their |her |his )?(insurance|adjuster)\w*|"
+                  r"pausar (el|la) (trabajo|reparaci\w+))", re.IGNORECASE)
 # "Mary cannot be present tomorrow": a day named to say it does NOT work.
 NEGATED = re.compile(r"\b(can'?t|cannot|won'?t|will not|not be|not available|unable|"
                      r"no (puede|puedo|podr\w*|va a estar|voy a estar|estar\w*))\b[^.!?]{0,50}$",
@@ -1268,3 +1272,60 @@ def pipeline_for_model(out: dict) -> dict:
         boards.append({"board": b["board"], "total": b["total"], "by_state": b["by_state"],
                        "columns": cols})
     return {"checked_at": out["checked_at"], "boards": boards, "how_to_read": out["how_to_read"]}
+
+
+# --------------------------------------------------------- what the calls say about WHEN
+
+def booking_limits(b: Brief, now: datetime) -> tuple[dict | None, Signal | None]:
+    """The scheduling limits a customer's own calls and texts set (2026-10-14, the user: "check
+    the calls, flag what times they cannot be there"), in `scheduling.apply_limits`' shape:
+
+      * a day they AGREED to (a "yes" to our proposal, a call that set it) -> only that day,
+        in its window when one was said;
+      * the days they OFFERED ("Friday, Monday or late Thursday") -> only those days;
+      * a cancel / hold newer than any yes -> no limits, and that signal (second): a HOLD
+        means do not book; a cancel / "can't make it" means find a new date.
+
+    The saved availability (availability.py) is applied separately; these narrow it."""
+    today = c.local(now).date()
+    entered = c.aware(b.job.status_since)
+
+    def current(s: Signal) -> bool:
+        return now - s.at <= timedelta(days=PROMISE_DAYS) and (
+            entered is None or s.at >= entered - timedelta(hours=12))
+    yes = next((s for s in reversed(b.sigs) if s.kind == "confirmed" and s.day
+                and s.day >= today and current(s)), None)
+    offer = next((s for s in reversed(b.sigs) if s.kind == "options" and current(s)
+                  and any(d >= today for d in s.days or [])), None)
+    stop = next((s for s in reversed(b.sigs) if s.kind in ("cancel", "hold") and current(s)),
+                None)
+    newest_ok = max([x.at for x in (yes, offer) if x], default=None)
+    if stop and (newest_ok is None or stop.at > newest_ok):
+        return None, stop
+    far = today + timedelta(days=120)
+    if yes and (offer is None or yes.at >= offer.at):
+        lim = {"not_before": yes.day.isoformat(),
+               "blocked": [{"from": (yes.day + timedelta(days=1)).isoformat(),
+                            "to": far.isoformat()}],
+               "summary": "only %s%s (agreed %s: “%s”)" % (
+                   yes.day.strftime("%a %m/%d"), " " + _win(yes.window) if yes.window else "",
+                   _when(yes.at), yes.quote[:120]),
+               "agreed_day": yes.day.isoformat()}
+        if yes.window:
+            lim["after"] = "%02d:%02d" % divmod(max(0, yes.window[0] - 30), 60)
+            lim["before"] = "%02d:%02d" % divmod(min(24 * 60 - 1, yes.window[1] + 30), 60)
+        return lim, None
+    if offer:
+        days = sorted(d for d in offer.days if d >= today)
+        blocked, prev = [], days[0]
+        for d in days[1:]:
+            if (d - prev).days > 1:
+                blocked.append({"from": (prev + timedelta(days=1)).isoformat(),
+                                "to": (d - timedelta(days=1)).isoformat()})
+            prev = d
+        blocked.append({"from": (days[-1] + timedelta(days=1)).isoformat(), "to": far.isoformat()})
+        return {"not_before": days[0].isoformat(), "blocked": blocked,
+                "summary": "only %s (offered %s: “%s”)" % (
+                    ", ".join(d.strftime("%a %m/%d") for d in days), _when(offer.at),
+                    offer.quote[:120])}, None
+    return None, None
