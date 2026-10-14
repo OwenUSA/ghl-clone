@@ -196,7 +196,7 @@ other field of every column after each write). Backup:
 | AHS - Inspection / **Inspection Completed** | 18 (13 written + 3 photo sets + video + voice note) | moved here from "Inspection" 2026-09-25 (owner: pop up after the inspection). 2026-10-12: + the inspection questions (section 3.3a); Basic / Expanded / Comprehensive option made required. 13 written ones copy to job fields |
 | AHS - Inspection / AHS Approved | 1 (KPI) | `AHS authorized ($)`, required |
 | AHS - Repair & Review / Repair In Process | 1 (Photos - before) | |
-| AHS - Repair & Review / Repair Complete | 3 (Photos - during / after, `Video - finished repair`) | the video is required (2026-10-12) |
+| AHS - Repair & Review / Repair Complete | 3 (Photos - during / after, `Video - finished repair`) | the video was required 2026-10-12 and is **optional since 2026-10-14** (user's request; `repair_video_optional.py` on dispatch, backup `/root/backups/rr_repair_complete_checklist_before_video_optional_*.json`; 463 jobs and 1,969 photos identical before / after) |
 | AHS - Repair & Review / Invoice Submitted to AHS | 3 (KPI), all required | `Customer chose`, `Customer paid ($)`, and `Line items added (AHS amount + any customer upgrade)?` (the third is not in `ZUPER-KPI-SETUP.md`) |
 | Retail / Contact Attempted | 15 (intake, no AHS-only questions) | copy to job fields; one required |
 | Retail / Inspection / Estimate | 12 | 9 written copy to job fields; none required (it pops up when the job ENTERS the column, before the visit) |
@@ -228,7 +228,7 @@ What the office needs from every inspection, asked when the technician finishes 
 On **AHS - Inspection / Inspection Completed** (added after the 12 that were there; the existing
 Basic / Expanded / Comprehensive option questions — the Good / Better / Best suggestions — became
 required) and on **Retail / Proposal Made**. AHS - Repair & Review got only `Video - finished
-repair` (required) at Repair Complete: the inspection answers are already on the job, and the
+repair` at Repair Complete (required 2026-10-12, optional since 2026-10-14): the inspection answers are already on the job, and the
 Checklist field group shows on all three boards.
 
 - **The technician can see and fill them before moving the job:** the answers are linked job
