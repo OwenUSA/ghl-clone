@@ -229,6 +229,25 @@ def dispatch_check(date_from: str | None = None, date_to: str | None = None,
     return out
 
 
+@router.get("/pipeline")
+def dispatch_pipeline(board: str | None = None, principal: auth.Principal = VIEW,
+                      db: Session = Depends(get_db)):
+    """Every open job on the AHS boards (or one board), each with where it is, what it needs,
+    where it should go and why (briefs.pipeline_map) — no AI, nothing written."""
+    from . import briefs
+    boards = (c.INSPECTION_BOARD, c.REPAIR_BOARD)
+    if board:
+        if board not in (*boards, c.RETAIL_BOARD):
+            raise HTTPException(400, "unknown board")
+        boards = (board,)
+    out = briefs.pipeline_map(db, datetime.now(UTC), _hidden(db, principal), boards=boards)
+    for b in out["boards"]:
+        for col in b["columns"]:
+            for r in col["jobs"]:
+                r["zuper_url"] = _zuper_url(r["job_uid"])
+    return out
+
+
 @router.get("/to-book")
 def dispatch_to_book(principal: auth.Principal = VIEW, db: Session = Depends(get_db)):
     """Who still needs a booking (briefs.to_book): every waiting job with its verdict from the

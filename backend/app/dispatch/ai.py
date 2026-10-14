@@ -340,6 +340,10 @@ its time and words).
 from today to Saturday (it judges every visit on the file: book / call first / the Excel is \
 wrong / on hold / matches) and report EVERY group of its `by_verdict`; then zuper_check for \
 the rest. compare_file only for row-by-row differences.
+  * "Check all the jobs / the whole pipeline / which jobs are missing an update": \
+pipeline_map. Give the true totals per board, then EVERY job it marks update or call, by \
+column, each with where it is, where it should be and why, in tables; the jobs waiting or up \
+to date as a count per column. Never call a partial list complete.
   * "Who still needs a booking / missing appointments / new jobs": to_book, and report \
 EVERY group with each job's sentence, in order — do not re-judge a verdict.
   * Fitting a customer in: customers for that job, then find_slots. Remaking the schedule: \
@@ -457,6 +461,14 @@ TOOLS = [
                        "finding has its evidence and the unambiguous fix, if any.",
                        {"type": "object", "properties": {
                            "date_from": {"type": "string"}, "date_to": {"type": "string"}},
+                        "additionalProperties": False}),
+    providers.ToolSpec("pipeline_map", "EVERY open job on the AHS boards (or one board: 'AHS - "
+                       "Inspection', 'AHS - Repair & Review', 'Retail'), column by column in "
+                       "Zuper's order, with the true count per column and per state, and for "
+                       "each job that needs something: where it is, how many days, where it "
+                       "should go and why, with the evidence. Use it for 'check all the jobs', "
+                       "'what is missing to update in the pipeline'.",
+                       {"type": "object", "properties": {"board": {"type": "string"}},
                         "additionalProperties": False}),
     providers.ToolSpec("to_book", "Every job that still needs a visit booked (new inspections, "
                        "AHS-approved repairs, reschedules, call-backs, visits that did not "
@@ -673,6 +685,13 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
                 # reading went wrong (and most of the tokens).
                 v.pop("recent_calls_and_texts", None)
         return json.dumps(out, default=str)
+    if name == "pipeline_map":
+        from . import briefs
+        board = str(args.get("board") or "").strip()
+        boards = (c.INSPECTION_BOARD, c.REPAIR_BOARD) if board in ("", "ahs", "AHS") else (
+            board,)
+        return json.dumps(briefs.pipeline_for_model(briefs.pipeline_map(
+            db, now, hidden, boards=boards)), default=str)
     if name == "to_book":
         from . import briefs
         return json.dumps(briefs.to_book(db, now, hidden), default=str)

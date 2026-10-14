@@ -517,3 +517,42 @@ def test_to_book_judges_every_waiting_job_from_its_calls(db):
     assert verdicts["334"] == "stale"
     assert "720" not in verdicts                       # it has its visit: not waiting
     assert out["groups"][0]["verdict"] == "book"
+
+
+# ---- the whole pipeline, mapped (2026-10-14) ----------------------------------------------------
+
+def test_the_pipeline_map_lists_every_job_with_where_it_should_go(db):
+    """The AI's answer counted 59 of 129 AHS jobs and missed every job stuck after its visit.
+    Every job is a row; a job stuck after its visit says where it goes next; follow-ups are a
+    person's call, not a Zuper change; waiting jobs are counted, not hidden."""
+    stuck = visit("rc", 288, 1, 10, status="Repair Complete", status_type="COMPLETED",
+                  phones=["3055550401"], name="Gustavo Marquez")
+    stuck.status_since = FRI - timedelta(days=14)
+    waiting = visit("wc", 413, None, 0, board=c.INSPECTION_BOARD, status="Waiting for Customer",
+                    status_type="ON_HOLD", phones=["3055550402"], name="Joseph Pomerantz")
+    waiting.status_since = FRI - timedelta(days=16)
+    paid = visit("iv", 291, None, 0, status="Invoice Submitted to AHS", status_type="INVOICING",
+                 phones=["3055550403"], name="Miguel Alvarado")
+    paid.status_since = FRI - timedelta(days=5)
+    sent = visit("p", 721, 9, 7, minute=30, board=c.INSPECTION_BOARD,
+                 status="Reschedule Required", status_type="ON_HOLD", phones=["9549931801"])
+    sent.status_since = FRI - timedelta(hours=2)
+    db.add_all([stuck, waiting, paid, sent])
+    text(db, "9549931801", ny(9, 8, 44), "lo subimos a American Home Shield", out=True)
+    db.commit()
+    out = briefs.pipeline_map(db, FRI)
+    rows = {r["job_number"]: r for b in out["boards"] for col in b["columns"]
+            for r in col["jobs"]}
+    assert set(rows) == {"288", "413", "291", "721"}                  # every job, a row each
+    assert rows["288"]["state"] == "update"
+    assert rows["288"]["should"] == "Call Satisfaction Check"
+    assert rows["413"]["state"] == "call" and "follow up" in rows["413"]["should"]
+    assert rows["291"]["state"] == "waiting"
+    assert rows["721"]["state"] == "update" and rows["721"]["should"] == "Awaiting AHS Decision"
+    repair = next(b for b in out["boards"] if b["board"] == c.REPAIR_BOARD)
+    assert repair["total"] == 2 and repair["by_state"]["update"] == 1
+    # the chat's copy: every update / call row in full, the rest as job numbers
+    small = briefs.pipeline_for_model(out)
+    cols = {col["stage"]: col for b in small["boards"] for col in b["columns"]}
+    assert cols["Invoice Submitted to AHS"]["waiting"] == ["#291"]
+    assert cols["Repair Complete"]["act"][0]["should"] == "Call Satisfaction Check"
