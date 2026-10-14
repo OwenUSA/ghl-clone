@@ -226,6 +226,9 @@ export function groupChats<T extends { updated_at: string }>(chats: T[],
 export const STEP_LABELS: Record<string, string> = {
   list_items: 'Listed open items', find_jobs: 'Searched jobs', get_job: 'Opened job',
   find_slots: 'Looked for visit slots', suggest_change: 'Recorded a suggestion',
+  booking_options: 'Found the best times to book', plan_schedule: 'Made a schedule',
+  zuper_check: 'Checked Zuper', customers: 'Read customers', to_book: 'Listed who needs a booking',
+  pipeline_map: 'Mapped the pipeline',
 }
 export function stepLabel(tool: string): string {
   return STEP_LABELS[tool] ?? tool.replace(/_/g, ' ')

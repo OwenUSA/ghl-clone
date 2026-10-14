@@ -2430,7 +2430,20 @@ export type DispatchPlan = {
     include_unreached: boolean; limits: unknown[] | null }
   availability?: { jobs: number; read: number; with_limits: number; office: number
     not_read_yet: number; note: string }
+  // 2026-10-14: read from the calls — who was left out and why, who has times they cannot do
+  left_out?: { job_number: string | null; customer: string | null; city: string | null
+    reason: string; said: string | null }[]
+  flags?: { job_number: string | null; customer: string | null; city: string | null
+    limits: string[] }[]
 }
+/** The 3 best times to book one job (2026-10-14, the chat's booking_options tool). */
+export type DispatchBookingOption = { tech: string; start: string; end: string
+  extra_drive_minutes: number; next_to: string | null; fit: string; why: string
+  day_count: number; day_ends: string | null }
+export type DispatchBookingOptions = { job_number: string | null; job_uid: string
+  customer: string | null; city: string | null; board: string | null; stage: string | null
+  kind: string; visit_now: string | null; limits: string[] | null
+  options: DispatchBookingOption[]; note: string | null }
 export type DispatchPlanRequest = { days: number; kind: 'all' | DispatchPlanKind
   mode: DispatchPlanMode; boards: 'ahs' | 'all'; include_unreached: boolean }
 /** Remake the schedule (2026-10-08): a DRAFT, kept so the calendar and the Excel match. */

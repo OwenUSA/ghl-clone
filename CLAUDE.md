@@ -810,6 +810,11 @@ in `DECISIONS.md`.
   never a board move; test jobs skipped. The chat's `zuper_check` / `customers` tools read the same
   briefs — start there, `search_comms` only for one conversation. The availability reader retries
   a failure only on new messages or after 6 h, with its own 150 a day. See DECISIONS.md.
+- **Scheduling in the chat** (2026-10-14): `booking_options` (3 best times for one job, with
+  fit / why, respecting the customer's limits from calls — `briefs.booking_limits`) and
+  `plan_schedule` (week-by-week plan; leaves out holds / visits that happened / visits on the
+  customer's other job; `flags` = who cannot do which times). Shown as cards under the answer
+  (`BookingOptionsCard`, `PlanCard`, lazy Leaflet `PlanMap`); no booking buttons. See DECISIONS.md.
 - **Spreadsheets in the chat** (2026-10-01): "Attach Excel" (`POST /api/dispatch/chats/files`,
   .xlsx/.xlsm/.csv, 10 MB) — `dispatch/sheets.py` reads every sheet top to bottom (header = first
   row with text), `dispatch/compare.py` matches each row to a Zuper job (job # → phone → name →

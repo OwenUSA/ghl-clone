@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -346,8 +346,17 @@ column, each with where it is, where it should be and why, in tables; the jobs w
 to date as a count per column. Never call a partial list complete.
   * "Who still needs a booking / missing appointments / new jobs": to_book, and report \
 EVERY group with each job's sentence, in order — do not re-judge a verdict.
-  * Fitting a customer in: customers for that job, then find_slots. Remaking the schedule: \
-plan_schedule.
+  * ONE customer to book ("3 options for #687", "fit Ryerson in"): booking_options. Say \
+in 2-4 lines which option you recommend and why, and any limit the customer gave; the card \
+under your answer shows all 3 with the detail — do not repeat it as a table.
+  * Scheduling the unscheduled customers ("make the schedule", "plan next week / 2 weeks"): \
+plan_schedule (days 12 = two weeks unless asked). Write a short summary like a dispatcher: how \
+many placed per week, who needs a decision and why, the customers flagged with times they \
+cannot be there (with the call/text), the ones left out (on hold, on another job, visit \
+already happened); the calendar card under your answer shows the week grid and the map — do \
+not repeat it day by day.
+  * Nothing is booked by you or by the cards: the office sets date, time and the Technician \
+field in Zuper.
   * search_comms (full=true) ONLY to read one conversation a brief does not settle. Never call \
 it once per customer.
 - Every "confirmed", "moved", "cancelled", "done" or "not reached" you write names its \
@@ -489,6 +498,16 @@ TOOLS = [
                            "date_from": {"type": "string"}, "date_to": {"type": "string"},
                            "board": {"type": "string"}, "stage": {"type": "string"}},
                         "additionalProperties": False}),
+    providers.ToolSpec("booking_options", "The 3 best times to book ONE job: each with "
+                       "technician, day, time, how well it fits (extra driving), who is "
+                       "already booked nearby that day and why — respecting what the customer "
+                       "said in calls and texts (days they agreed or offered, when they are "
+                       "away). A customer who cancelled or is on hold gets no times, with the "
+                       "reason. The chat shows them as a card under your answer.",
+                       {"type": "object", "properties": {
+                           "job_number": {"type": "string"}, "kind": {"type": "string"},
+                           "technician": {"type": "string"}},
+                        "required": ["job_number"], "additionalProperties": False}),
     providers.ToolSpec("find_slots", "Three visit slots for a job, closest to what is already "
                        "booked. kind: inspection or repair (default from the job).",
                        {"type": "object", "properties": {
@@ -608,12 +627,18 @@ def _visible_job(db: Session, number: str, hidden: set[str]) -> DispatchJob | No
     return None if j is None or (j.board and j.board in hidden) else j
 
 
+BOOKING_HORIZON_DAYS = 28
+OPTIONS_DAYS_AHEAD = 14
+
+
 def visits_for_booking(db: Session, now: datetime,
                        hidden: set[str] | None = None) -> list[booking.Visit]:
     """Every booked visit. A visit on a board hidden from the reader still blocks the time
     (the technician is busy) but is never named (review 2026-10-01)."""
     out = []
-    horizon = now + timedelta(days=booking.DAYS_AHEAD + 2)
+    # Far enough for a three-week plan (18 business days): a booked visit in week 3 must block
+    # its technician too (found 2026-10-14: the horizon was 12 days).
+    horizon = now + timedelta(days=BOOKING_HORIZON_DAYS)
     for v in db.scalars(select(DispatchJob).where(
             DispatchJob.scheduled_start >= now - timedelta(days=1),
             DispatchJob.scheduled_start <= horizon)):
@@ -629,14 +654,67 @@ def visits_for_booking(db: Session, now: datetime,
 
 def slots_for(db: Session, j: DispatchJob, now: datetime, kind: str | None = None,
               tech: str | None = None, hidden: set[str] | None = None) -> list[dict]:
+    return booking_options(db, j, now, kind=kind, tech=tech, hidden=hidden)["options"]
+
+
+def booking_options(db: Session, j: DispatchJob, now: datetime, *, kind: str | None = None,
+                    tech: str | None = None, hidden: set[str] | None = None) -> dict:
+    """The 3 best times to book ONE job (2026-10-14): what the customer said in calls and texts
+    (saved availability + the days they agreed / offered, briefs.booking_limits) is respected,
+    each technician's real visit length is used, and each option says why it fits. A customer
+    who cancelled or put it on hold gets no options, with the reason. Reads only."""
+    from . import availability, briefs, planner, scheduling
     from .rules import visit_kind
     kind = kind if kind in booking.SLOT_MINUTES else (
         "repair" if j.board == c.INSPECTION_BOARD and j.status == "AHS Approved"
         else visit_kind(j))
-    techs = settings(db).technicians or booking.DEFAULT_TECHNICIANS
-    return [s.as_dict() for s in booking.slots(
+    techs, minutes, _ = scheduling.technicians_and_minutes(db)
+    rules = planner.PlanJob(uid=j.job_uid, number=j.job_number, customer=j.customer_name,
+                            city=j.city, lat=j.lat, lng=j.lng, kind=kind)
+    from ..models import DispatchAvailability
+    saved = db.scalar(select(DispatchAvailability).where(
+        DispatchAvailability.job_uid == j.job_uid))
+    said = availability.as_limits(saved)
+    if said:
+        scheduling.apply_limits(rules, said, now)
+    b = next(iter(briefs.load(db, now, hidden, jobs=[j], days=briefs.BOOK_DAYS)), None)
+    stop = agreed = None
+    if b is not None:
+        lim, signal = briefs.booking_limits(b, now)
+        if lim:
+            scheduling.apply_limits(rules, lim, now)
+            agreed = lim.get("agreed_day")
+        elif signal is not None and signal.kind == "hold":
+            stop = "the customer put it on hold %s: “%s”" % (briefs._when(signal.at),
+                                                             signal.quote[:140])
+        elif signal is not None:
+            rules.limits.append("asked to move %s: “%s” — these are new dates" % (
+                briefs._when(signal.at), signal.quote[:140]))
+    out = {"job_number": j.job_number, "job_uid": j.job_uid, "customer": j.customer_name,
+           "city": j.city, "board": j.board, "stage": j.status, "kind": kind,
+           "visit_now": briefs.visit_text(j), "limits": rules.limits or None,
+           "options": [], "note": None}
+    if stop:
+        out["note"] = "Not offering times: %s" % stop
+        return out
+    if j.lat is None or j.lng is None:
+        out["note"] = ("The job has no map position in Zuper, so driving cannot be compared; "
+                       "the options are only by free time.")
+    out["options"] = [s.as_dict() for s in booking.slots(
         lat=j.lat, lng=j.lng, kind=kind, visits=visits_for_booking(db, now, hidden), now=now,
-        technicians=techs, tech=tech)]
+        technicians=techs, tech=tech, rules=rules, minutes=minutes,
+        days_ahead=OPTIONS_DAYS_AHEAD)]
+    working = {d for t in techs for d in t.get("days", c.BUSINESS_DAYS)}
+    if agreed and not out["options"]:
+        day = date.fromisoformat(agreed)
+        out["note"] = ("The customer agreed %s%s. %s" % (
+            day.strftime("%a %m/%d"), "" if day.weekday() in working else
+            ", which is not a working day in Dispatch → Settings",
+            "If the technician is going, set it in Zuper by hand."))
+    if not out["options"] and not out["note"]:
+        out["note"] = ("No free time in the next %d days that fits what the customer said%s." % (
+            OPTIONS_DAYS_AHEAD, " (%s)" % "; ".join(rules.limits) if rules.limits else ""))
+    return out
 
 
 def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str],
@@ -763,9 +841,10 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
     if name == "get_job":
         return json.dumps(job_context(db, j, comms.load(db, now - timedelta(days=c.COMMS_DAYS)),
                                       now), default=str)
-    if name == "find_slots":
-        return json.dumps(slots_for(db, j, now, args.get("kind"), args.get("technician"),
-                                    hidden))
+    if name in ("find_slots", "booking_options"):
+        return json.dumps(booking_options(db, j, now, kind=args.get("kind"),
+                                          tech=args.get("technician"), hidden=hidden),
+                          default=str)
     if name == "suggest_change" and not writes_on(db):
         return json.dumps({"error": "not recorded: changes are made by the office in Zuper. "
                                     "Say what to change; do not offer to do it."})

@@ -102,6 +102,8 @@ def apply_limits(job: planner.PlanJob, lim: dict, now: datetime) -> None:
         words.append("with %s" % job.technician)
     if lim.get("evidence"):
         words.append("(%s)" % str(lim["evidence"])[:200])
+    if lim.get("summary"):
+        words = [str(lim["summary"])[:240]]    # the caller's own sentence (briefs.booking_limits)
     if words:
         job.limits.append(" ".join(words))
 
@@ -190,6 +192,48 @@ def technicians_and_minutes(db: Session) -> tuple[list[dict], dict, dict]:
     return techs, minutes, sources
 
 
+# A job the calls say not to schedule: why (briefs.to_book verdicts).
+LEAVE_OUT = {"on_hold": "the customer put it on hold",
+             "on_other_job": "the visit is already booked on the customer's other job",
+             "visit_happened": "the visit looks like it happened — update the stage instead"}
+
+
+def _from_the_calls(db: Session, now: datetime, jobs: list, hidden: set[str]
+                    ) -> tuple[list, list[dict]]:
+    """Read every waiting job's calls and texts (2026-10-14): leave out the ones that must not
+    be booked, and narrow the rest to the days the customer agreed or offered
+    (briefs.booking_limits)."""
+    from . import briefs
+    if not jobs:
+        return jobs, []
+    verdict = {r["job_number"]: (g["verdict"], r) for g in briefs.to_book(db, now, hidden)["groups"]
+               for r in g["jobs"]}
+    uids = {j.uid for j in jobs}
+    found = {b.job.job_uid: b for b in briefs.load(
+        db, now, hidden, jobs=list(db.scalars(select(DispatchJob).where(
+            DispatchJob.job_uid.in_(uids)))), days=briefs.BOOK_DAYS)}
+    keep, left = [], []
+    for j in jobs:
+        v, row = verdict.get(str(j.number), (None, None))
+        if v in LEAVE_OUT:
+            left.append({"job_number": j.number, "customer": j.customer, "city": j.city,
+                         "reason": LEAVE_OUT[v], "said": row["say"] if row else None})
+            continue
+        b = found.get(j.uid)
+        if b is not None:
+            # A hold the to-book verdict confirmed was left out above; a cancel / "can't make
+            # it" is exactly who needs a new date — planned, flagged "call first".
+            lim, stop = briefs.booking_limits(b, now)
+            if lim:
+                apply_limits(j, lim, now)
+            elif stop is not None and stop.kind == "cancel":
+                j.tentative = True
+                j.limits.append("asked to move %s: “%s”" % (briefs._when(stop.at),
+                                                             stop.quote[:120]))
+        keep.append(j)
+    return keep, left
+
+
 def make_plan(db: Session, now: datetime, *, days: int = 6, kind: str = "all",
               mode: str = "most_jobs", boards: str = "ahs", include_unreached: bool = True,
               limits: list[dict] | None = None, hidden: set[str] | None = None,
@@ -201,6 +245,7 @@ def make_plan(db: Session, now: datetime, *, days: int = 6, kind: str = "all",
                  if isinstance(x, dict) and x.get("job_number")}
     jobs = waiting_jobs(db, now, hidden=hidden, kind=kind, boards=boards,
                         include_unreached=include_unreached, limits=by_number)
+    jobs, left_out = _from_the_calls(db, now, jobs, hidden)
     techs, minutes, sources = technicians_and_minutes(db)
     out = planner.plan(jobs=jobs, booked=ai.visits_for_booking(db, now, hidden),
                        technicians=techs, minutes=minutes, now=now, days=days, mode=mode)
@@ -222,6 +267,10 @@ def make_plan(db: Session, now: datetime, *, days: int = 6, kind: str = "all",
         "note": "What each customer said about when they can have the visit is read from "
                 "their calls and texts and applied; a job not read yet has only the limits "
                 "given here."}
+    # 2026-10-14: who was left out and why, and every customer with a time they cannot do.
+    out["left_out"] = left_out
+    out["flags"] = [{"job_number": j.number, "customer": j.customer, "city": j.city,
+                     "limits": j.limits} for j in jobs if j.limits]
     out["asked"] = {"days": days, "kind": kind, "mode": out["mode"], "boards": boards,
                     "include_unreached": include_unreached,
                     "limits": list(by_number.values()) or None}
@@ -277,6 +326,8 @@ def for_model(db: Session, out: dict, now: datetime) -> dict:
                             "reason": u["reason"], "limits": u.get("limits")}
                            for u in out["unplaced"]],
             "availability": out.get("availability"),
+            "flagged_limits": out.get("flags") or None,
+            "left_out": out.get("left_out") or None,
             "how_to_use": "What each customer said about WHEN is read from ALL their calls and "
                           "texts and already applied (a visit's `limits`). Check "
                           "last_calls_and_texts only for something newer or missed; then call "

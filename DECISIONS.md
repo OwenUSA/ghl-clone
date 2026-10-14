@@ -7225,3 +7225,40 @@ change and I accept." Built on the phase-3 path (still OFF):
   not given `suggest_change` at all, its prompt says the office makes changes in Zuper by hand
   and never to offer to make, record or prepare one, and a `suggest_change` call that slips
   through records nothing. Turning it on later needs both, nothing else.
+
+## AMENDMENT (2026-10-14): scheduling inside the Dispatch chat — 3 options for one job, a week-by-week plan for all
+
+The office: "help me schedule either only 1 new customer giving me 3 best options, or any
+unscheduled customers, by checking the calls, flagging what times they cannot be there, then a
+suggested schedule by weeks — inside the same chat" (reference: an HTML prototype with a
+technicians × days week grid, grey booked / orange suggested, a "needs a decision" row, week
+navigation and a route map). Also: wider chat text.
+
+* **One job — `booking_options(job_number)`** (`ai.booking_options`; `find_slots` is kept as an
+  alias). `booking.slots` now takes the customer's limits (a `planner.PlanJob`: not before, away,
+  weekdays, after / before, technician) and each technician's real visit length, and every slot
+  says `fit` (Great ≤10 min extra driving / Good ≤20 / Detour), `why` ("Antonio is already at
+  #273 Weston that day, 4 km away · +8 min driving"), the day's load and end. The limits come
+  from the saved availability AND `briefs.booking_limits`: a day the customer AGREED to → only
+  that day (window ±30 min); the days they OFFERED → only those; a HOLD on the work → no options,
+  with the reason; "can't make it" → new dates, noted. A day agreed on a day nobody works (Carol,
+  Sunday) says so instead of "no free time". The job must exist in Zuper (its location is
+  Zuper's; there is no address lookup).
+* **"Placed on hold" is the phone line.** `HOLD` now matches only a hold on the WORK ("put a hold
+  on the roofing service", "wait for the insurance"): live, #299 / #717 Kalach read as on hold
+  from "after being placed on hold, Luis was informed…".
+* **The plan** (`scheduling.make_plan`) leaves out what the calls say not to book (to_book
+  verdicts on_hold / on_other_job / visit_happened → `left_out` with the reason), narrows the
+  rest with `booking_limits`, marks "asked to move" as call-first, and lists every customer with
+  a limit in `flags` (with the call or text). Booked visits are read 28 days ahead (they were 12:
+  an 18-business-day plan could not see week 3).
+* **Cards under the answer, no migration:** the chat derives them from its saved tool steps —
+  `booking_options` → `BookingOptionsCard`; `plan_schedule` → `PlanCard` (loads the stored
+  plan; falls back to the plan id in the Excel link when a long result was cut). The PlanCard is
+  the prototype's layout: stat tiles, week ‹ ›, technicians × Mon–Sat with booked (grey) and
+  suggested (orange) stops, the day's end and driving, "Needs a decision", "Customers with times
+  they cannot do", "Left out", Excel and full-calendar links. **The map** (`PlanMap`, Leaflet
+  1.9.4, OpenStreetMap tiles, straight lines between stops) is lazy: its code (~43 KB gzipped)
+  loads only on "Show map". **No booking buttons** — writes stay off; the cards say what to set
+  in Zuper by hand.
+* The chat column is 1240 px wide (was 760) with 8 px side padding; the composer 980.
