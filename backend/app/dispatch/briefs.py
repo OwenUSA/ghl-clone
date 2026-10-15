@@ -1368,8 +1368,26 @@ FLAG_PATTERNS = (
 )
 
 
+# A line with something flagged in it is passed whole: John Dahdouh's 10/15 Zuper Connect summary
+# was cut at 300 characters, right before "proposing to pay $450 instead of $675".
+LINE_MAX, FLAGGED_LINE_MAX, FLAG_QUOTE_MAX = 300, 900, 600
+
+
+def _flagged(text: str) -> bool:
+    return any(rx.search(text or "") for _, rx in FLAG_PATTERNS)
+
+
+def _sentences(text: str, rx: re.Pattern) -> str:
+    """Every sentence of `text` that `rx` matches, joined — so a flag carries the whole point
+    (the counter-offer after the price), not a window around the first match."""
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text or "")
+    hit = " … ".join(" ".join(s.split()) for s in parts if rx.search(s))
+    return hit[:FLAG_QUOTE_MAX] or _quote(text, rx.search(text or ""))
+
+
 def _line(e: dict) -> str:
     text = e["text"] or ""
+    cap = FLAGGED_LINE_MAX if _flagged(text) else LINE_MAX
     if e["kind"] == "call":
         said = summary_of(text) or ("" if e["source"] != "Zuper Connect" else text)
         if not said and e.get("transcript"):
@@ -1379,8 +1397,8 @@ def _line(e: dict) -> str:
         if not said:
             said = ("no answer" if status in ("no-answer", "missed", "canceled", "cancelled")
                     or secs == 0 else "%ss, nothing captured" % secs)
-        return " ".join(said.split())[:300]
-    return " ".join(text.split())[:240]
+        return " ".join(said.split())[:cap]
+    return " ".join(text.split())[:cap if cap > LINE_MAX else 240]
 
 
 def customer_profile(db: Session, now: datetime, hidden: set[str] | None = None, *,
@@ -1474,7 +1492,7 @@ def customer_profile(db: Session, now: datetime, hidden: set[str] | None = None,
             m = rx.search(text)
             if m:
                 flags.append({"flag": name, "at": _when(e["at"]), "who": e["who"],
-                              "said": _quote(text, m)})
+                              "said": _sentences(text, rx)})
     seen_flag: set[tuple] = set()
     flags = [f for f in reversed(flags) if not ((f["flag"], f["said"][:40]) in seen_flag
                                                  or seen_flag.add((f["flag"], f["said"][:40])))]
@@ -1516,5 +1534,8 @@ def customer_profile(db: Session, now: datetime, hidden: set[str] | None = None,
                         "a new AHS work order after we told the customer to call AHS about a "
                         "new leak IS that claim; a visit booked on one job may also have "
                         "covered another job's warranty fix — say so and ask the technician, "
-                        "never call it unbooked without saying that. Do not search the "
+                        "never call it unbooked without saying that. MONEY: give every figure "
+                        "said — the price, any counter-offer the customer made, who was to "
+                        "answer it — and say 'agreed' only where a call or text records the "
+                        "agreement; otherwise say it is open. Do not search the "
                         "conversation again unless a call must be read in full."}
