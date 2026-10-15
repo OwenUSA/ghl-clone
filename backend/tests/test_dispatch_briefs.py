@@ -556,3 +556,45 @@ def test_the_pipeline_map_lists_every_job_with_where_it_should_go(db):
     cols = {col["stage"]: col for b in small["boards"] for col in b["columns"]}
     assert cols["Invoice Submitted to AHS"]["waiting"] == ["#291"]
     assert cols["Repair Complete"]["act"][0]["should"] == "Call Satisfaction Check"
+
+
+# ---- one customer, everything (2026-10-15) --------------------------------------------------
+
+def test_a_customer_profile_has_every_job_every_number_and_the_flags(db):
+    """"Tell me all the info about Anita McGruder": the AI made 14 look-ups (four of them the
+    same conversation) and missed her son's line. One look-up gathers everything."""
+    db.add_all([
+        visit("a1", 355, 3, 7, status="Call Back", status_type="FOLLOW_UP",
+              phones=["3053103701"], name="ANITA MCGRUDER"),
+        visit("a2", 722, 7, 7, minute=30, status="Repair Complete", status_type="COMPLETED",
+              phones=["3053103701"], name="Anita Mcgruder"),
+    ])
+    text(db, "3053103701", ny(7, 9, 1), "What is the arrival time?", out=False)
+    zcall(db, "3053103701", ny(5, 9, 54), "Owen advised Anita to call American Home Shield "
+          "regarding the new leak. The original leak is still under warranty.")
+    zcall(db, "9413107677", ny(5, 10, 0), "Luis gave our number 941-310-7677.", uid="ours")
+    # her son, saved in Quo under her name
+    from app.models import Contact, Conversation, ConversationEvent, Direction, EventType
+    son = Contact(first_name="Basil Binns (Anita Mcgruder) SON", last_name="",
+                  phone="+13052988799")
+    db.add(son)
+    db.flush()
+    conv = Conversation(contact_id=son.id)
+    db.add(conv)
+    db.flush()
+    db.add(ConversationEvent(conversation_id=conv.id, type=EventType.SMS, occurred_at=ny(6, 7, 22),
+                             direction=Direction.INBOUND, source_system="OpenPhone",
+                             body="Yesterday's roof repair is still leaking."))
+    db.commit()
+    out = briefs.customer_profile(db, FRI, query="anita mcgruder")
+    assert {x["job"] for x in out["jobs"]} == {"#355", "#722"}
+    assert any(x.startswith("3052988799") and "SON" in x for x in out["family_or_other_numbers"])
+    kinds = {f["flag"] for f in out["flags"]}
+    assert {"new AHS claim", "warranty", "complaint"} <= kinds
+    assert any("still leaking" in t["said"] for t in out["timeline_oldest_first"])
+    assert out["last_standing"]["last_contact"].startswith("Wed 10/07 9:01 AM")
+    assert "LAST STANDING" in out["how_to_write"]
+    # the same customer by job number; our own line is never theirs
+    assert {x["job"] for x in briefs.customer_profile(db, FRI, query="#722")["jobs"]} == {
+        "#355", "#722"}
+    assert "error" in briefs.customer_profile(db, FRI, query="nobody like this")

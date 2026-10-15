@@ -340,6 +340,10 @@ its time and words).
 from today to Saturday (it judges every visit on the file: book / call first / the Excel is \
 wrong / on hold / matches) and report EVERY group of its `by_verdict`; then zuper_check for \
 the rest. compare_file only for row-by-row differences.
+  * ONE customer — "tell me about X", "a resume of the conversations with X", "what is going \
+on with X": customer_profile, once. Write it the way its how_to_write says: last standing \
+first, then the flags, the jobs, the conversation summarised by phase, what could not be \
+checked. Do not search the same conversation again (by phone, name and job it is the same).
   * "Check all the jobs / the whole pipeline / which jobs are missing an update": \
 pipeline_map. Give the true totals per board, then EVERY job it marks update or call, by \
 column, each with where it is, where it should be and why, in tables; the jobs waiting or up \
@@ -471,6 +475,16 @@ TOOLS = [
                        {"type": "object", "properties": {
                            "date_from": {"type": "string"}, "date_to": {"type": "string"}},
                         "additionalProperties": False}),
+    providers.ToolSpec("customer_profile", "EVERYTHING about one customer in one look-up: "
+                       "every job (open and closed) on their numbers or name with stage, "
+                       "history, notes, fields and what it needs now; one timeline of every "
+                       "call and text on every number they use (family too), each in one "
+                       "line; flags (money, complaints, quotes asked, how to contact, family, "
+                       "access, AHS claims, warranty); and the last standing. customer: a "
+                       "name, a job number or a phone. Use it for 'tell me about X', 'a resume "
+                       "of the conversations with X', 'what is going on with X'.",
+                       {"type": "object", "properties": {"customer": {"type": "string"}},
+                        "required": ["customer"], "additionalProperties": False}),
     providers.ToolSpec("pipeline_map", "EVERY open job on the AHS boards (or one board: 'AHS - "
                        "Inspection', 'AHS - Repair & Review', 'Retail'), column by column in "
                        "Zuper's order, with the true count per column and per state, and for "
@@ -763,6 +777,11 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
                 # reading went wrong (and most of the tokens).
                 v.pop("recent_calls_and_texts", None)
         return json.dumps(out, default=str)
+    if name == "customer_profile":
+        from . import briefs
+        return json.dumps(briefs.customer_profile(db, now, hidden,
+                                                  query=str(args.get("customer") or "")),
+                          default=str)
     if name == "pipeline_map":
         from . import briefs
         board = str(args.get("board") or "").strip()
