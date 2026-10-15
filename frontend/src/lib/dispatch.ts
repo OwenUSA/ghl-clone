@@ -228,7 +228,7 @@ export const STEP_LABELS: Record<string, string> = {
   find_slots: 'Looked for visit slots', suggest_change: 'Recorded a suggestion',
   booking_options: 'Found the best times to book', plan_schedule: 'Made a schedule',
   zuper_check: 'Checked Zuper', customers: 'Read customers', to_book: 'Listed who needs a booking',
-  pipeline_map: 'Mapped the pipeline',
+  pipeline_map: 'Mapped the pipeline', customer_profile: 'Read the whole customer file',
 }
 export function stepLabel(tool: string): string {
   return STEP_LABELS[tool] ?? tool.replace(/_/g, ' ')

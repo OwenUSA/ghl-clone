@@ -1329,3 +1329,192 @@ def booking_limits(b: Brief, now: datetime) -> tuple[dict | None, Signal | None]
                     ", ".join(d.strftime("%a %m/%d") for d in days), _when(offer.at),
                     offer.quote[:120])}, None
     return None, None
+
+
+# ---------------------------------------------------------------- one customer, everything
+
+# "Tell me all the info about Anita McGruder — a resume of the conversations on Quo and Zuper"
+# (2026-10-15). The AI answered with 14 look-ups (four of them the same conversation again,
+# ~28k characters each) and missed that the AHS work order that arrived on 10/01 was the "new
+# leak — call AHS" from the 9/28 call. The script gathers everything once; the model writes.
+PROFILE_DAYS = 120
+PROFILE_ITEMS = 90
+# Things worth a person's attention, found in the customer's calls and texts by fixed patterns.
+def _any(*alternatives: str) -> re.Pattern:
+    return re.compile("|".join(alternatives), re.IGNORECASE)
+
+
+FLAG_PATTERNS = (
+    ("money", _any(r"\$\s?\d[\d,]*", r"\b\d{3,5} (dollars|dólares)\b", r"\bzelle\b",
+                   r"\bdeductible\b", r"\bdeposit\b", r"out of pocket", r"non-?covered",
+                   r"\bpay(ing|ment)?\b")),
+    ("complaint", _any(r"still leak\w*", r"not happy|unhappy|upset|angry", r"frustrat\w*",
+                       r"disappoint\w*|complain\w*", r"no ?one (came|showed)",
+                       r"nobody (came|showed)", r"waiting (for )?(weeks|so long)",
+                       r"sigue (goteando|la gotera)")),
+    ("quote asked", _any(r"\b(quote|estimate|cotizaci\w+|presupuesto|proposal)\b",
+                         r"\b(replacement|new roof|re-?roof)\b")),
+    ("contact preference", _any(r"(by|via|prefer\w*|only) (text|texting|email|whats ?app)",
+                                r"text me|don'?t call",
+                                r"call (my|her|his) (son|daughter|husband|wife|tenant|niece)",
+                                r"(son|daughter|husband|wife|tenant)\b.{0,30}"
+                                r"\b(will be|meets?|handles?|number)")),
+    ("access", _any(r"\bgate\b|\bdog\b|\bgate code\b|lock ?box",
+                    r"can'?t (get|go) (up )?on the roof",
+                    r"(not be|won'?t be) (home|there)")),
+    ("new AHS claim", _any(r"call (american home shield|ahs)", r"new claim|another claim",
+                           r"not covered|only covers one")),
+    ("warranty", _any(r"\bwarrant\w*", r"garant\w*")),
+)
+
+
+def _line(e: dict) -> str:
+    text = e["text"] or ""
+    if e["kind"] == "call":
+        said = summary_of(text) or ("" if e["source"] != "Zuper Connect" else text)
+        if not said and e.get("transcript"):
+            said = "…" + " ".join(e["transcript"].split())[-260:]
+        status = (e.get("status") or "").lower()
+        secs = e.get("seconds") or 0
+        if not said:
+            said = ("no answer" if status in ("no-answer", "missed", "canceled", "cancelled")
+                    or secs == 0 else "%ss, nothing captured" % secs)
+        return " ".join(said.split())[:300]
+    return " ".join(text.split())[:240]
+
+
+def customer_profile(db: Session, now: datetime, hidden: set[str] | None = None, *,
+                     query: str) -> dict:
+    """Everything about ONE customer, gathered once: every job (open and closed) on their
+    numbers or name, each with stage, history, notes, fields and what it needs now; one
+    timeline of every call and text on every number they use (family included); flags; and the
+    last standing. Reads only."""
+    from ..models import DispatchNote, ZuperStatusHistory
+    hidden = hidden or set()
+    q = (query or "").strip().lstrip("#").lower()
+    if not q:
+        return {"error": "give a customer name, a job number or a phone"}
+    jobs = [j for j in db.scalars(select(DispatchJob)) if not (j.board and j.board in hidden)]
+    digits_q = re.sub(r"\D", "", q)[-10:]
+    seed = [j for j in jobs if (q.isdigit() and j.job_number == q)
+            or (len(digits_q) == 10 and digits_q in (j.phones or []))
+            or (not q.isdigit() and q in (j.customer_name or "").lower())]
+    if not seed:
+        words = [w for w in re.split(r"\W+", q) if len(w) > 2]
+        seed = [j for j in jobs if words and all(w in (j.customer_name or "").lower()
+                                                   for w in words)]
+    if not seed:
+        return {"error": "no customer matches “%s” in Zuper" % query}
+    names = {" ".join((j.customer_name or "").lower().split()) for j in seed}
+    if len(names) > 3:
+        return {"error": "“%s” matches several customers — be more specific" % query,
+                "matches": sorted({"#%s %s" % (j.job_number, j.customer_name) for j in seed})[:12]}
+    evs_all = [e for e in lookups._events(db, now - timedelta(days=PROFILE_DAYS))
+               if e["at"] and e["at"] <= now]
+    reach = lookups.customer_phones(db, now, evs_all)
+    phones = {p for j in seed for p in reach.get(j.job_uid, set(j.phones or []))}
+    # The office saves a relative in Quo under the customer's name ("Basil Binns (Anita
+    # Mcgruder) SON", live 2026-10-15): that number is the customer's too.
+    full = [n for n in names if len(n.split()) >= 2]
+    labels: dict[str, str] = {}
+    for e in evs_all:
+        label = " ".join((e["name"] or "").lower().split())
+        if e["phone"] and label and any(n in label for n in full):
+            phones.add(e["phone"])
+            labels.setdefault(e["phone"], e["name"])
+    family = phones - {p for j in seed for p in (j.phones or [])}
+    mine = [j for j in jobs if set(j.phones or []) & phones
+            or " ".join((j.customer_name or "").lower().split()) in names]
+    evs = sorted({(e["at"], e["phone"], e["kind"], (e["text"] or "")[:60]): e for e in evs_all
+                  if e["phone"] in phones}.values(), key=lambda e: e["at"])
+    open_jobs = [j for j in mine if j.is_open]
+    pmap = pipeline_map(db, now, hidden, boards=tuple(sorted({j.board for j in open_jobs
+                                                                if j.board}))) \
+        if open_jobs else {"boards": []}
+    verdict = {r["job_number"]: r for b in pmap["boards"] for col in b["columns"]
+               for r in col["jobs"]}
+    out_jobs = []
+    for j in sorted(mine, key=lambda j: (not j.is_open, -(int(j.job_number or 0)))):
+        hist = db.scalars(select(ZuperStatusHistory).where(
+            ZuperStatusHistory.job_uid == j.job_uid).order_by(
+            ZuperStatusHistory.changed_at)).all()
+        notes = db.scalars(select(DispatchNote).where(
+            DispatchNote.job_uid == j.job_uid, DispatchNote.removed.is_(False)).order_by(
+            DispatchNote.created_at)).all()
+        v = verdict.get(j.job_number)
+        out_jobs.append({
+            "job": "#%s" % j.job_number, "title": j.title, "open": j.is_open,
+            "board": j.board, "stage": j.status, "stage_since": _when(j.status_since),
+            "created": _when(j.zuper_created_at), "visit": visit_text(j),
+            "assigned": ", ".join(j.assigned or []) or None, "address": ", ".join(
+                x for x in (j.address, j.city) if x) or None,
+            "fields": {k: str(val)[:80] for k, val in (j.fields or {}).items()
+                       if val not in (None, "", [], {}) and KEY_FIELDS.search(k)} or None,
+            "stage_history": ["%s %s%s" % (_when(h.changed_at), h.status_name,
+                                           " (%s)" % h.done_by_name if h.done_by_name else "")
+                              for h in hist][-10:] or None,
+            "notes": ["%s %s: %s" % (_when(n.created_at), n.by_name or "",
+                                     " ".join((n.text or "").split())[:300] or "(no text)")
+                      for n in notes][-6:] or None,
+            "pictures": ("last %s by %s" % (_when(j.last_photo_at), j.last_photo_by)
+                         if j.last_photo_at else None),
+            "needs_now": ({"state": v["state"], "should": v.get("should"), "why": v["why"]}
+                          if v else None)})
+    timeline = [{"at": _when(e["at"]), "line": e["source"], "who": e["who"],
+                 "how": e["kind"],
+                 "number": ("%s %s" % (e["phone"], labels.get(e["phone"], ""))).strip()
+                 if e["phone"] in family else None,
+                 "said": _line(e)} for e in evs]
+    if len(timeline) > PROFILE_ITEMS:
+        timeline = timeline[-PROFILE_ITEMS:]
+    flags: list[dict] = []
+    for e in evs:
+        text = " ".join(((e["text"] or "") + " " + (e.get("transcript") or "")).split())
+        for name, rx in FLAG_PATTERNS:
+            m = rx.search(text)
+            if m:
+                flags.append({"flag": name, "at": _when(e["at"]), "who": e["who"],
+                              "said": _quote(text, m)})
+    seen_flag: set[tuple] = set()
+    flags = [f for f in reversed(flags) if not ((f["flag"], f["said"][:40]) in seen_flag
+                                                 or seen_flag.add((f["flag"], f["said"][:40])))]
+    brief = next(iter(load(db, now, hidden, jobs=open_jobs[:1], days=BOOK_DAYS)), None) \
+        if open_jobs else None
+    ua = brief.unanswered(now) if brief else None
+    last = evs[-1] if evs else None
+    theirs = [e for e in evs if e["who"] == "customer"]
+    return {
+        "customer": seed[0].customer_name, "phones": sorted(phones - family),
+        "family_or_other_numbers": ["%s %s" % (p, labels.get(p, "")) for p in sorted(family)]
+        or None,
+        "jobs": out_jobs,
+        "last_standing": {
+            "last_contact": "%s %s %s (%s): %s" % (_when(last["at"]), last["kind"],
+                                                  "from the customer" if last["who"] ==
+                                                  "customer" else "by us", last["source"],
+                                                  _line(last)) if last else None,
+            "last_from_customer": "%s: %s" % (_when(theirs[-1]["at"]), _line(theirs[-1]))
+            if theirs else None,
+            "days_since_contact": (now - last["at"]).days if last else None,
+            "waiting_for_our_answer": ua,
+            "open_jobs_need": [{"job": "#%s" % j.job_number, **(verdict[j.job_number] and {
+                "state": verdict[j.job_number]["state"],
+                "should": verdict[j.job_number].get("should"),
+                "why": verdict[j.job_number]["why"]})} for j in open_jobs
+                if j.job_number in verdict]},
+        "flags": flags[:25] or None,
+        "timeline_oldest_first": timeline,
+        "covers": "calls and texts of the last %d days on every number above (Quo, the CRM "
+                  "line, Zuper Connect summaries); Zuper's jobs, stage history and notes"
+                  % PROFILE_DAYS,
+        "how_to_write": "Write, in this order: 1) LAST STANDING — where things are now and the "
+                        "next step, 2-4 lines; 2) FLAGS — what a person must know (money, "
+                        "complaints, quotes asked, how to contact, family, access, AHS), each "
+                        "with its date; 3) JOBS — one table row per job: stage, since, visit, "
+                        "what it needs; 4) THE CONVERSATION — summarised by phase (a few lines "
+                        "each), not every message; 5) what could not be checked. Link the jobs: "
+                        "a new AHS work order after we told the customer to call AHS about a "
+                        "new leak IS that claim; a visit booked on one job may also have "
+                        "covered another job's warranty fix — say so and ask the technician, "
+                        "never call it unbooked without saying that. Do not search the "
+                        "conversation again unless a call must be read in full."}

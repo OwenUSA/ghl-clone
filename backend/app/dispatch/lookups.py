@@ -220,6 +220,9 @@ def _events(db: Session, since: datetime):
 PHONE_IN_TEXT = re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?(\d{3})\)?[\s.\-]?(\d{3})[\s.\-]?"
                            r"(\d{4})(?!\d)")
 SHARED = 3          # a number in this many customers' conversations is one of OUR lines
+# Dream Team's own numbers the office reads out on calls (the main line, the Zelle number):
+# never a customer's (live 2026-10-15: Luis gave 941-310-7677 on Ross Zelnick's call).
+OUR_NUMBERS = {"9413107677", "9413107666", "9549147244"}
 
 
 def customer_phones(db: Session, now: datetime, events: list[dict] | None = None,
@@ -256,7 +259,8 @@ def customer_phones(db: Session, now: datetime, events: list[dict] | None = None
         for n in found - set(j.phones or []):
             seen_by.setdefault(n, set()).add(who)
     count = {n: len(customers) for n, customers in seen_by.items()}
-    ours = {digits(crmlink.DEFAULT_FROM_NUMBER)} | {n for n, k in count.items() if k >= SHARED}
+    ours = {digits(crmlink.DEFAULT_FROM_NUMBER)} | OUR_NUMBERS | {n for n, k in count.items()
+                                                                if k >= SHARED}
     return {j.job_uid: set(j.phones or []) | (mentioned[j.job_uid] - ours) for j in jobs}
 
 
