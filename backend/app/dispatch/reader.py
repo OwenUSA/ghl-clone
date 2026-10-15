@@ -345,7 +345,7 @@ DETAILS_PER_PASS = 15
 DETAILS_MAX_AGE = timedelta(days=14)
 
 
-def read_calls(db: Session) -> int:
+def read_calls(db: Session, now: datetime | None = None) -> int:
     payload = client.connect_calls(page=1, limit=100)
     rows = payload.get("data") if isinstance(payload, dict) else None
     seen = 0
@@ -365,7 +365,7 @@ def read_calls(db: Session) -> int:
         if recorded(call) and not row.summary:
             wanting.append(row)
         seen += 1
-    fetch_summaries(wanting)
+    fetch_summaries(wanting, now)
     return seen
 
 

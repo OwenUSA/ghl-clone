@@ -7262,3 +7262,63 @@ navigation and a route map). Also: wider chat text.
   loads only on "Show map". **No booking buttons** — writes stay off; the cards say what to set
   in Zuper by hand.
 * The chat column is 1240 px wide (was 760) with 8 px side padding; the composer 980.
+
+## AMENDMENT (2026-10-15): speed to lead — measured in the CRM, read only; Zuper can show only a proxy
+
+The owner's question: how fast does a person on the team first answer a new lead? The most
+detailed figures go in the CRM; Zuper gets "a more basic one, or the one possible".
+
+**Measured first (production, read only, totals only, 2026-10-15).** 24 AHS - Inspection jobs
+created since 2026-09-24: median first call / text **4.7 business hours** (280 min); first real
+conversation 5 h; **5 of 24 within the 2-hour target**; 2 with no call or text we can see; first
+contact 13 Zuper Connect calls, 5 Quo calls, 4 texts. Only **2 Retail jobs** were created in
+Zuper in that time — Retail leads start as calls, so their clock must start at the call. Zuper's
+first column move came a median **2.5 business minutes after the first call** (but 1 in 4 more
+than 2 hours after), so "time in the first column" is a fair proxy, not the measure.
+
+**Built (`app/dispatch/speed.py`, `GET /api/dispatch/speed-to-lead`, Reporting → Speed to lead,
+the nightly KPI Excel's two "Speed to lead" sheets):**
+
+* **A lead** = a Zuper job on AHS - Inspection, Retail or a regional Retail board; never AHS -
+  Repair & Review (a moved / follow-on job), never a "TEST…" job.
+* **The clock starts** at the job's creation in Zuper — or at the customer's own call or text in
+  the 3 days before, when they reached out first (shown as "Customer called first").
+* **It stops at the first thing a PERSON did:** our call (answered or not), our text, or their
+  call a person answered for TALK_SECONDS. **An AI agent's answer or text does not stop it**
+  (`comms.by_ai`: `ai_agent_id`, or `ai_call` without a transfer) — otherwise the Retell
+  receptionist would make every inbound lead "instant".
+* **Business minutes**, the Dispatch clock (Mon-Sat 8-6 New York), with clock minutes beside
+  them. **Targets are the owner's Dispatch SLAs:** AHS 120, Retail 60, a missed call 30.
+* **Result per lead:** On time / Late / Not contacted (target passed, nothing yet) / Waiting
+  (still inside the target — not counted for or against the on-time rate) / No phone.
+* **Also per lead:** first conversation, unanswered calls before it, their missed calls before
+  our response, who answered first (Zuper names the person; Quo does not), and Zuper's own
+  trace — the first column move, where and by whom.
+* **Breakdowns:** board, week, when the lead arrived (morning / afternoon / after hours /
+  Sunday), who answered first, how (Zuper call, Quo call, text, answered their call), and
+  **missed calls** from any number with the callback time (several rings before a callback are
+  one wait).
+* **Access:** the Dispatch audience (ADMIN + unrestricted DISPATCHER); a board hidden by
+  pipeline permissions is left out entirely. The Excel sheets carry job numbers and staff names
+  only, like the rest of that file.
+* **It asks Zuper for nothing and writes nothing**: it reads `dispatch_jobs`,
+  `zuper_status_history`, `dispatch_calls` and the CRM's own calls and texts.
+* **Blind spots, printed under the report:** texts sent from inside Zuper Connect are not read
+  (a lead answered only that way reads "Not contacted"); personal cell phones are invisible;
+  Zuper Connect calls exist here only from the first Dispatch read (2026-09-23).
+
+**What Zuper itself can show (checked read only, 2026-10-15 — see
+`docs/ZUPER-SPEED-TO-LEAD.md`):** no screen in Zuper shows or averages time-to-first-contact
+today. Zuper does store minutes per column on each status-history entry (`time_on_status`), but
+no report, Advanced Report field or dashboard widget offers it; Advanced Reports has no
+date-difference column and averages only number fields; every job custom field is text. What a
+person can set up, each a write the owner must approve under the add-only rule: a saved jobs
+view "not contacted yet" (status = Work Order Received / New Lead, oldest first); a **delay
+alert** Work Order Received → Welcome Call! within 120 min that flags the job Delayed (a breach
+count, not a time); and — only if the owner lifts the read-only rule for it — a number job field
+"Speed to lead (min)" written by the CRM, which an Advanced Report could average by month.
+None of these was created.
+
+**Fixed on the way:** `reader.read_calls` now passes the pass's clock to `fetch_summaries`;
+`test_a_recorded_calls_summary_is_fetched_from_its_details_and_kept` had started failing on
+2026-10-14 because the 14-day limit was measured against the real clock, not the test's.

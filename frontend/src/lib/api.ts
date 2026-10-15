@@ -2153,6 +2153,77 @@ export const getLeadOutcomeReport = (p: { since: string; until: string; pipeline
   return get<import('./zuper').LeadOutcomeReport>(`/api/reports/lead-outcomes?${sp}`)
 }
 
+// ---------------- Speed to lead (2026-10-15, app/dispatch/speed.py) ----------------
+
+export type SpeedResult = 'on_time' | 'late' | 'not_contacted' | 'waiting' | 'no_phone'
+
+/** The figures for one set of leads. Minutes are BUSINESS minutes (Mon-Sat 8-6 New York). */
+export type SpeedSummary = {
+  leads: number; on_time: number; late: number; not_contacted: number; waiting: number
+  no_phone: number; on_time_pct: number | null
+  response_median: number | null; response_p75: number | null; response_p90: number | null
+  response_avg: number | null; talk_median: number | null; reached_pct: number | null
+  attempts_before_talk_avg: number | null; customer_first: number
+  zuper_move_median: number | null; zuper_move_lag_median: number | null
+  talk_avg: number | null; talk_p90: number | null
+  call_median: number | null; call_avg: number | null; call_p90: number | null
+  called_pct: number | null
+  booked_median: number | null; booked_avg: number | null; booked_pct: number | null
+}
+
+/** One column of a board: how long jobs stay in it (business minutes). */
+export type SpeedColumn = {
+  name: string; entered: number; left: number; avg_minutes: number | null
+  median_minutes: number | null; p90_minutes: number | null; now_in: number
+  longest_now_minutes: number | null; total_minutes: number; share_pct: number
+}
+
+export type SpeedLead = {
+  job_uid: string; job_number: string | null; board: string; group: 'AHS' | 'Retail'
+  customer_name: string | null; status: string | null; created_at: string
+  start_at: string; started_by: string; arrived: string; due_at: string; target_minutes: number
+  first_response_at: string | null; first_response_how: string | null
+  first_response_by: string | null; response_minutes: number | null
+  response_clock_minutes: number | null; first_talk_at: string | null
+  first_call_at: string | null; call_minutes: number | null
+  booked_at: string | null; booked_minutes: number | null
+  talk_minutes: number | null; attempts_before_talk: number; missed_their_calls: number
+  ai_handled: boolean; first_move_at: string | null; first_move_to: string | null
+  first_move_by: string | null; move_minutes: number | null
+  result: SpeedResult; result_label: string; waiting_minutes: number | null
+  zuper_url: string | null
+}
+
+export type SpeedRow = SpeedSummary & { name: string }
+
+export type SpeedReport = {
+  targets: { AHS: number; Retail: number }
+  summary: { all: SpeedSummary; AHS: SpeedSummary; Retail: SpeedSummary }
+  by_board: SpeedRow[]
+  by_first_response: SpeedRow[]
+  by_person: SpeedRow[]
+  by_arrival: SpeedRow[]
+  by_week: SpeedRow[]
+  missed_calls: {
+    target_minutes: number; missed: number; rings: number; called_back: number
+    on_time: number; late: number; never_called_back: number; waiting: number
+    on_time_pct: number | null; callback_median: number | null; callback_p90: number | null
+    by_line: { name: string; missed: number; callback_median: number | null
+      never_called_back: number }[]
+  }
+  leads: SpeedLead[]
+  columns: { board: string; jobs: number; columns: SpeedColumn[] }[]
+  coverage: { zuper_calls_from: string | null; notes: string[] }
+}
+
+/** Speed to lead for leads whose clock started on since..until (New York days, inclusive).
+ *  ADMIN + unrestricted DISPATCHER, like Dispatch. */
+export const getSpeedToLead = (p: { since: string; until: string; group?: 'AHS' | 'Retail' | '' }) => {
+  const sp = new URLSearchParams({ since: p.since, until: p.until })
+  if (p.group) sp.set('group', p.group)
+  return get<SpeedReport>(`/api/dispatch/speed-to-lead?${sp}`)
+}
+
 // ---------------- Dispatch (2026-09-30) ----------------
 
 /** One thing the office has to do, as app/dispatch/rules.py found it. */

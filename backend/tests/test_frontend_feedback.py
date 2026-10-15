@@ -163,8 +163,15 @@ def test_reporting_says_so_when_the_date_range_is_backwards():
                   "'lead-outcomes' && !inverted"):
         assert query in source, (
             f"the {query.split(' ')[0]} report still asks the server for an empty range")
-    assert source.count("<InvertedRange start={startDate} end={endDate} />") == 3, (
-        "the call, appointment and lead outcomes tabs share the range, so all must warn")
+    # Speed to lead (2026-10-15) shares the range too, and asks nothing while it is backwards:
+    # the warning REPLACES the report component.
+    assert source.count("<InvertedRange start={startDate} end={endDate} />") == 4, (
+        "the call, appointment, lead outcomes and speed to lead tabs share the range, so all "
+        "must warn")
+    speed = source.split("{tab === 'speed-to-lead'", 1)[1].split("</>", 1)[0]
+    assert "{inverted ? <InvertedRange start={startDate} end={endDate} />" in speed and \
+        ": <SpeedToLeadReport" in speed, (
+        "the speed to lead report is still requested for a backwards range")
 
 
 def test_add_opportunity_is_disabled_for_a_role_that_cannot_create():

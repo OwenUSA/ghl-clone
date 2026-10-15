@@ -133,7 +133,7 @@ def run(db: Session, now: datetime | None = None, *, commit: bool = True) -> dic
         with client.read_only() if not commit else contextlib.nullcontext():
             counts["jobs"] = reader.read_jobs(db, now)
             try:
-                counts["zuper_calls"] = reader.read_calls(db)
+                counts["zuper_calls"] = reader.read_calls(db, now)
                 s.calls_read_at = now
             except client.ZuperError as exc:
                 counts["zuper_calls_error"] = client.sentence(exc)

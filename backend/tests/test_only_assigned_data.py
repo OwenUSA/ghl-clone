@@ -1227,7 +1227,10 @@ AUDITED = {
                      # phase 3 (app/dispatch/act.py): the same gate; PUT writes is ADMIN —
                      # pinned by tests/test_dispatch_writes.py
                      "dispatch_get_writes", "dispatch_put_writes", "dispatch_suggestion_apply",
-                     "dispatch_job_book", "dispatch_job_stage"),
+                     "dispatch_job_book", "dispatch_job_stage",
+                     # speed to lead (app/dispatch/speed.py, 2026-10-15): read only, hidden
+                     # boards' leads left out
+                     "dispatch_speed_to_lead"),
                     "DISPATCH_VIEW: restricted refused 403"),
     # Appointment reminders from Zuper (app/reminders/api.py, 2026-10-08): the Dispatch gate
     # (`dispatch.api.VIEW`) refuses a TECH or any restricted user 403 before anything is read;

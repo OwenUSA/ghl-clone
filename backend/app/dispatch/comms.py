@@ -47,6 +47,15 @@ class Comm:
     name: str | None = None
     staff: str | None = None
     transcript: str = ""
+    ai: bool = False          # an AI agent wrote it or answered it alone — not a person
+
+
+def by_ai(e) -> bool:
+    """An AI agent's text, or a call an AI agent answered and did not hand to a person."""
+    if getattr(e, "ai_agent_id", None):
+        return True
+    call = getattr(e, "ai_call", None)
+    return bool(call) and (call.get("outcome") if isinstance(call, dict) else None) != "transfer"
 
 
 def digits(value) -> str:
@@ -78,7 +87,8 @@ def _from_event(e, name: str | None) -> Comm:
         talked=is_call and status == "completed" and secs >= config.TALK_SECONDS,
         missed=is_call and not out and not answered,
         seconds=secs, summary=summary_of(e.body) if is_call else (e.body or "")[:500],
-        source=source, name=name, transcript=(e.transcript or "")[:4000] if is_call else "")
+        source=source, name=name, transcript=(e.transcript or "")[:4000] if is_call else "",
+        ai=by_ai(e))
 
 
 def load(db: Session, since: datetime) -> dict[str, list[Comm]]:

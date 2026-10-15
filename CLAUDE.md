@@ -845,6 +845,21 @@ in `DECISIONS.md`.
   `zsafety.py` passes before anything is switched on — see the phase 3 amendment in `DECISIONS.md`.
 
 
+## Speed to lead (2026-10-15) — Reporting → Speed to lead, read only
+
+`backend/app/dispatch/speed.py` (docstring first), `GET /api/dispatch/speed-to-lead`, the Reporting
+tab (`components/SpeedToLeadReport.tsx`, Dispatch audience only) and two sheets in the nightly KPI
+Excel. A lead is a Zuper job on AHS - Inspection / Retail / a regional board (never Repair &
+Review, never "TEST…"). The clock starts at the job's creation — or the customer's own call / text
+in the 3 days before — and stops at the first call, text or answered call by a PERSON (an AI
+agent's answer never counts: `comms.by_ai`). **Business minutes** (the Dispatch clock), the
+owner's targets (`dispatch/config.SLA_MINUTES`: AHS 120, Retail 60, missed call 30). It reads the
+Dispatch copy, asks Zuper for nothing, writes nothing. Blind spots (Zuper Connect texts, personal
+cells, Connect calls before 2026-09-23) are printed under the report. What Zuper itself can show —
+only a queue and a breach count, each a write the owner must approve — is
+`docs/ZUPER-SPEED-TO-LEAD.md`. `uv run python -m tests.browser_speed_to_lead` (from `backend/`)
+drives the tab in headless Chromium. See DECISIONS.md.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's
