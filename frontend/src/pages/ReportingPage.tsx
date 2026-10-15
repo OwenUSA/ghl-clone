@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Donut } from '../components/Donut'
+import { SpeedToLeadReport } from '../components/SpeedToLeadReport'
 import { IconCalendar, IconFilter, IconGrid, IconSearch } from '../components/Icon'
 import {
   getAppointmentReport, getCallReport, getLeadOutcomeReport, listCalendars, listPipelines,
 } from '../lib/api'
+import { canOpenAiAgents, type AiUser } from '../lib/aiAgents'
 import { LEAD_OUTCOMES, dayAfter, outcomeTable, type LeadOutcomeReport } from '../lib/zuper'
 
 /**
@@ -45,7 +47,12 @@ const TABS: TabDef[] = [
   { key: 'appointment', label: 'Appointment report' },
   // Zuper v2 (2026-09-16): why leads closed without booking, by source and by campaign.
   { key: 'lead-outcomes', label: 'Lead outcomes' },
+  // 2026-10-15: how fast a person first answers a new lead (app/dispatch/speed.py). Only for
+  // the Dispatch audience — the same people the API answers.
+  { key: 'speed-to-lead', label: 'Speed to lead' },
 ]
+
+const DISPATCH_ONLY = new Set(['speed-to-lead'])
 
 const PALETTE = ['rgb(83,155,245)', 'rgb(93,205,235)', 'rgb(140,141,222)',
   'rgb(18,183,106)', 'rgb(247,144,9)', 'rgb(217,45,32)', 'rgb(152,162,179)']
@@ -213,7 +220,7 @@ const IconBtn = ({ title, children }: { title: string; children: React.ReactNode
   </button>
 )
 
-export function ReportingPage() {
+export function ReportingPage({ user }: { user?: AiUser | null }) {
   const [tab, setTab] = useState('call')
   const [direction, setDirection] = useState<'INBOUND' | 'OUTBOUND'>('INBOUND')
   const [startDate, setStartDate] = useState(() => iso(new Date(Date.now() - 90 * 86_400_000)))
@@ -266,7 +273,7 @@ export function ReportingPage() {
         <div className="shrink-0" style={{ fontSize: 18, fontWeight: 500, color: 'rgb(31,41,55)' }}>
           Reporting
         </div>
-        {TABS.map((t) => (
+        {TABS.filter((t) => !DISPATCH_ONLY.has(t.key) || canOpenAiAgents(user)).map((t) => (
           <button key={t.key} disabled={!!t.off} title={t.off}
             onClick={() => setTab(t.key)} className="shrink-0"
             style={{
@@ -586,7 +593,25 @@ export function ReportingPage() {
           </>
         )}
 
-        {!['call', 'appointment', 'lead-outcomes'].includes(tab) && (
+        {tab === 'speed-to-lead' && canOpenAiAgents(user) && (
+          <>
+            <div style={{ fontSize: 30, fontWeight: 500, color: 'rgb(16,24,40)', marginBottom: 4 }}>
+              Speed to lead
+            </div>
+            <div style={{ fontSize: 14, color: 'rgb(102,112,133)', marginBottom: 16 }}>
+              How fast a person on the team first answers a new lead, in business time.
+              The range is the day the lead arrived.
+            </div>
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <DateRange start={startDate} end={endDate}
+                onStart={setStartDate} onEnd={setEndDate} />
+            </div>
+            {inverted ? <InvertedRange start={startDate} end={endDate} />
+              : <SpeedToLeadReport since={startDate} until={endDate} />}
+          </>
+        )}
+
+        {!['call', 'appointment', 'lead-outcomes', 'speed-to-lead'].includes(tab) && (
           <div className="bg-white"
             style={{ borderRadius: 8, border: '1px solid rgb(234,236,240)', padding: 32 }}>
             <div style={{ fontSize: 24, fontWeight: 600, color: 'rgb(16,24,40)' }}>

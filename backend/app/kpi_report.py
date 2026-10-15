@@ -369,6 +369,14 @@ def _aware(dt: datetime | None) -> datetime | None:
     return dt.replace(tzinfo=UTC) if dt is not None and dt.tzinfo is None else dt
 
 
+def _local_naive(iso: str | None) -> datetime | None:
+    """An ISO moment as New York wall time, for a sheet cell (Excel has no time zones)."""
+    if not iso:
+        return None
+    from .dispatch import config as dconfig
+    return dconfig.local(datetime.fromisoformat(iso)).replace(tzinfo=None)
+
+
 # ---------------------------------------------------------------------------- money and commissions
 
 # Line items on a job (2026-10-01): what AHS paid vs what the customer paid on top.
@@ -915,6 +923,50 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
     _sheet(wb, "Moves", ["Job #", "Board", "Column", "Moved at (UTC)", "By", "Hours in column",
                          "Note"], move_rows, {"Moved at (UTC)": 20, "Column": 30, "Board": 24})
 
+    # ---- Speed to lead (app/dispatch/speed.py, 2026-10-15): the last 90 days, job numbers only
+    from .dispatch import speed
+    stl = speed.report(db, now - timedelta(days=90), now, now)
+    stl_rows: list[list] = []
+    for title, table in (("Board", stl["by_board"]), ("First response", stl["by_first_response"]),
+                         ("Who answered first", stl["by_person"]),
+                         ("Lead arrived", stl["by_arrival"]),
+                         ("Week starting", stl["by_week"])):
+        for t in table:
+            stl_rows.append([title, t["name"], t["leads"], t["on_time_pct"], t["on_time"],
+                             t["late"], t["not_contacted"], t["waiting"], t["response_median"],
+                             t["response_p90"], t["talk_median"], t["reached_pct"],
+                             t["attempts_before_talk_avg"], t["zuper_move_median"]])
+    for g in ("all", "AHS", "Retail"):
+        t = stl["summary"][g]
+        stl_rows.insert(0, ["Total", g, t["leads"], t["on_time_pct"], t["on_time"], t["late"],
+                            t["not_contacted"], t["waiting"], t["response_median"],
+                            t["response_p90"], t["talk_median"], t["reached_pct"],
+                            t["attempts_before_talk_avg"], t["zuper_move_median"]])
+    mc = stl["missed_calls"]
+    stl_rows.append(["Missed calls (any number)", "all lines", mc["missed"], mc["on_time_pct"],
+                     mc["on_time"], mc["late"], mc["never_called_back"], mc["waiting"],
+                     mc["callback_median"], mc["callback_p90"], None, None, None, None])
+    _sheet(wb, "Speed to lead", ["Group", "Name", "Leads", "On time %", "On time", "Late",
+                                 "Not contacted", "Waiting", "Median business min",
+                                 "90% within (business min)", "Median min to conversation",
+                                 "Reached %", "Unanswered calls first (avg)",
+                                 "Median min to Zuper move"],
+           stl_rows, {"Group": 26, "Name": 34})
+    _sheet(wb, "Speed to lead - leads",
+           ["Job #", "Board", "Clock started", "Started by", "Arrived", "First response",
+            "How", "By", "Business min", "Clock min", "Target min", "Result",
+            "Min to conversation", "Unanswered calls first", "Their missed calls",
+            "Zuper first move", "Moved to", "Min to Zuper move"],
+           [[r["job_number"], r["board"], _local_naive(r["start_at"]), r["started_by"],
+             r["arrived"], _local_naive(r["first_response_at"]), r["first_response_how"],
+             r["first_response_by"], r["response_minutes"], r["response_clock_minutes"],
+             r["target_minutes"], r["result_label"], r["talk_minutes"],
+             r["attempts_before_talk"], r["missed_their_calls"],
+             _local_naive(r["first_move_at"]), r["first_move_to"], r["move_minutes"]]
+            for r in stl["leads"]],
+           {"Board": 24, "Clock started": 18, "First response": 18, "Zuper first move": 18,
+            "Started by": 22, "By": 26, "How": 24, "Moved to": 26})
+
     # ---- Read me
     moves_stored = sum(len(v) for v in by_job.values())
     readme = [
@@ -941,6 +993,13 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
                          "owed. 'Expected commission' applies the rule in commission-rules.csv "
                          "on the server (dated, so a new rule never rewrites an old period); a "
                          "difference flags a missing or wrong commission.")],
+        ["Speed to lead", ("Last 90 days. Business minutes (Mon-Sat 8 AM-6 PM New York) from "
+                           "the job's creation in Zuper — or the customer's own call or text "
+                           "in the 3 days before — to the first call, text or answered call "
+                           "by a PERSON (Quo, the CRM line, Zuper Connect). Targets: AHS 2 h, "
+                           "Retail 1 h. Texts sent inside Zuper Connect and personal cell "
+                           "phones are not seen. 'Min to Zuper move' = Zuper's own trace, the "
+                           "first column move.")],
         ["Privacy", "Job numbers only: no customer names, phones, emails or addresses."],
         ["Sources", (f"Zuper jobs: {len(jobs)} · moves stored: {moves_stored} · Workiz jobs: "
                      f"{len(wjobs)} · Workiz invoices: {len(winv)} · AHS dispatches: {len(ahs)}")],

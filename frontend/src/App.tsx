@@ -193,7 +193,7 @@ export default function App() {
       ) : view === 'dashboard' ? (
         <DashboardPage />
       ) : view === 'reporting' ? (
-        <ReportingPage />
+        <ReportingPage user={user} />
       ) : view === 'dispatch' && canOpenAiAgents(user) ? (
         // Dispatch (2026-09-30): the AI Agents audience; anyone else falls through.
         <DispatchPage user={user} />

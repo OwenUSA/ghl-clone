@@ -10,7 +10,8 @@ Wrong is how the page's accuracy is measured before anything is ever allowed to 
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -28,7 +29,7 @@ from ..models import (
     ZuperStatusHistory,
 )
 from ..zuper import config as zuper_config
-from . import alerts, comms, rules
+from . import alerts, comms, rules, speed
 from . import config as c
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
@@ -259,6 +260,28 @@ def dispatch_to_book(principal: auth.Principal = VIEW, db: Session = Depends(get
             uid = db.scalar(select(DispatchJob.job_uid).where(
                 DispatchJob.job_number == r["job_number"]))
             r["zuper_url"] = _zuper_url(uid)
+    return out
+
+
+@router.get("/speed-to-lead")
+def dispatch_speed_to_lead(since: date | None = None, until: date | None = None,
+                           group: Literal["AHS", "Retail"] | None = None,
+                           principal: auth.Principal = VIEW, db: Session = Depends(get_db)):
+    """Speed to lead (app/dispatch/speed.py): leads whose clock started on `since`..`until`
+    (New York days, both included; default the last 30), every figure and every lead. A
+    board hidden from the reader is left out entirely. Reads the CRM's copy only."""
+    now = datetime.now(UTC)
+    today = c.local(now).date()
+    until = until or today
+    since = since or until - timedelta(days=29)
+    if since > until:
+        raise HTTPException(400, "The start date is after the end date.")
+    start = datetime(since.year, since.month, since.day, tzinfo=c.TZ)
+    end_day = until + timedelta(days=1)
+    end = datetime(end_day.year, end_day.month, end_day.day, tzinfo=c.TZ)
+    out = speed.report(db, start, end, now, _hidden(db, principal), group)
+    for r in out["leads"]:
+        r["zuper_url"] = _zuper_url(r["job_uid"])
     return out
 
 

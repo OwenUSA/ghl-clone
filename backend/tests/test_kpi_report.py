@@ -371,3 +371,27 @@ def test_the_nightly_hook_never_raises(monkeypatch, db):
     monkeypatch.setattr(kpi_report, "write", boom)
     with SessionLocal() as s:
         kpi_report.nightly(s)
+
+
+def test_speed_to_lead_sheets_carry_job_numbers_and_no_customer_details(tmp_path, db):
+    from app.models import DispatchCall, DispatchJob
+    now = datetime(2026, 10, 1, 19, 0, tzinfo=UTC)                 # Thu 3 PM New York
+    created = now - timedelta(hours=5)
+    with SessionLocal() as s:
+        s.add(DispatchJob(job_uid="L1", job_number="750", board="AHS - Inspection",
+                          title=SECRET_NAME + " - roof", customer_name=SECRET_NAME + " Zelda",
+                          phones=["5555550123"], zuper_created_at=created, status="Welcome Call!"))
+        s.add(DispatchCall(call_uid="c1", occurred_at=created + timedelta(minutes=25),
+                           direction="OUTGOING", status="COMPLETED", duration_seconds=120,
+                           number="5555550123", staff_name="Luis Candiales"))
+        s.commit()
+        path, _ = kpi_report.write(s, inputs(tmp_path), tmp_path / "out", now)
+    wb = load_workbook(path)
+    head, *rows = cells(wb["Speed to lead - leads"])
+    assert [(r[0], r[head.index("Business min")], r[head.index("Result")],
+             r[head.index("By")]) for r in rows] == [("750", 25, "On time", "Luis Candiales")]
+    totals = {(r[0], r[1]): r for r in cells(wb["Speed to lead"])[1:]}
+    assert totals[("Total", "AHS")][2:4] == [1, 100]
+    text = " ".join(str(v) for ws in wb.worksheets for row in cells(ws) for v in row)
+    for secret in (SECRET_NAME, "Zelda", "5555550123"):
+        assert secret not in text
