@@ -160,7 +160,11 @@ def test_reporting_shows_only_the_three_tabs_that_can_work():
     source = (FRONTEND / "pages" / "ReportingPage.tsx").read_text(encoding="utf-8")
 
     # The row renders TABS and nothing else, so the array is the whole tab row.
-    row = source.split("{TABS.map((t) => (", 1)[1].split("))}", 1)[0]
+    # Speed to lead (2026-10-15) is shown only to the Dispatch audience: the row maps TABS
+    # through that one filter, and nothing else.
+    row = source.split(
+        "{TABS.filter((t) => !DISPATCH_ONLY.has(t.key) || canOpenAiAgents(user)).map((t) => (",
+        1)[1].split("))}", 1)[0]
     assert "{t.label}" in row, "retarget this test -- the tab row no longer maps TABS"
     assert re.search(r"disabled=\{!!t\.off\}", row), (
         "a tab's `off` no longer disables it, so a stub is clickable")
@@ -168,8 +172,11 @@ def test_reporting_shows_only_the_three_tabs_that_can_work():
     tabs = source.split("const TABS: TabDef[] = [", 1)[1].split("\n]", 1)[0]
     labels = re.findall(r"label: '([^']+)'", tabs)
     # "Lead outcomes" joined on 2026-09-16 (Zuper v2): a real report, not a stub.
-    assert labels == ["Custom reports", "Call report", "Appointment report", "Lead outcomes"], (
-        f"the Reporting tab row is {labels}, not the three tabs that can work")
+    # "Speed to lead" joined on 2026-10-15: a real report, for the Dispatch audience only.
+    assert labels == ["Custom reports", "Call report", "Appointment report", "Lead outcomes",
+                      "Speed to lead"], (
+        f"the Reporting tab row is {labels}, not the tabs that can work")
+    assert "const DISPATCH_ONLY = new Set(['speed-to-lead'])" in source
 
     # Custom reports is a stub on purpose -- it must keep saying why on hover.
     custom = next(t for t in tabs.splitlines() if "'Custom reports'" in t)
