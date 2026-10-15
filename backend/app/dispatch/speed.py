@@ -49,6 +49,10 @@ BOOKED_COLUMNS = {c.INSPECTION_BOARD: ("Scheduled",), c.RETAIL_BOARD: ("Inspecti
                                                                        "Scheduled")}
 # Column moves before this are the 2026-09-17 load and bulk moves, not timing data (kpi_report).
 TIMING_FROM = datetime(2026, 9, 26, tzinfo=c.TZ)
+# Jobs created before this are not leads: Zuper dates every job the 2026-09-17 load made (109)
+# and the 2026-09-22 Workiz batch (14) by the day it was LOADED. It is also the first day the
+# Zuper Connect calls are here (2026-09-23), so nothing before it could be measured fairly.
+LEADS_FROM = datetime(2026, 9, 23, tzinfo=c.TZ)
 TEST_PREFIX = "TEST"
 
 # Result of one lead, in the order a person reads them.
@@ -392,6 +396,7 @@ def lead_jobs(db: Session, hidden: set[str] = frozenset()) -> list[Job]:
     out = []
     for j in db.scalars(select(DispatchJob).where(DispatchJob.board.in_(LEAD_BOARDS))):
         if j.board in hidden or not j.zuper_created_at or \
+                c.aware(j.zuper_created_at) < LEADS_FROM or \
                 (j.title or "").strip().upper().startswith(TEST_PREFIX):
             continue
         out.append(Job(job_uid=j.job_uid, job_number=j.job_number, board=j.board,
@@ -444,6 +449,8 @@ def report(db: Session, since: datetime, until: datetime, now: datetime,
     out["coverage"] = {
         "zuper_calls_from": _iso(first_zuper_call),
         "notes": [
+            ("Leads count from 2026-09-23: jobs Zuper dates earlier are the 2026-09-17 load "
+             "and the 2026-09-22 Workiz batch, not leads."),
             ("Texts sent from inside Zuper Connect are not read, so a lead answered only by a "
              "Zuper text shows as not contacted."),
             "Calls from personal cell phones are invisible.",

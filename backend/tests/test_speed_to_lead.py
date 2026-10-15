@@ -292,3 +292,15 @@ def test_time_in_each_column_is_business_time_until_the_next_move():
     # 4 h in WOR + 3 h in Welcome Call! + 2 h so far in Scheduled = 9 h on the board.
     assert out[0]["columns"][0]["name"] == "Work Order Received"
     assert (wor["share_pct"], cols["Scheduled"]["share_pct"]) == (44, 22)
+
+
+def test_jobs_the_zuper_load_dated_are_not_leads(db):
+    """Zuper dates every job the 2026-09-17 load made by the day it was loaded (109 on
+    production) — they are not leads and must not count, whatever the range."""
+    for uid, created in (("load", ny(2026, 9, 17, 15)), ("batch", ny(2026, 9, 22, 11)),
+                         ("real", ny(2026, 9, 23, 9))):
+        db.add(DispatchJob(job_uid=uid, job_number=uid, board=c.INSPECTION_BOARD,
+                           title="roof", status="New", phones=["9415550100"],
+                           zuper_created_at=created))
+    db.commit()
+    assert [j.job_uid for j in speed.lead_jobs(db)] == ["real"]
