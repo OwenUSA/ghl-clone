@@ -598,3 +598,23 @@ def test_a_customer_profile_has_every_job_every_number_and_the_flags(db):
     assert {x["job"] for x in briefs.customer_profile(db, FRI, query="#722")["jobs"]} == {
         "#355", "#722"}
     assert "error" in briefs.customer_profile(db, FRI, query="nobody like this")
+
+
+def test_a_flagged_call_reaches_the_ai_whole(db):
+    """John Dahdouh, 10/15: the Zuper Connect summary was cut at 300 characters, right before
+    "proposing to pay $450 instead of $675" — the AI reported $675 and missed the counter-offer."""
+    db.add(visit("d1", 738, 9, 8, status="Day-Before Call", status_type="NEW",
+                 phones=["3057945221"], name="John Dahdouh"))
+    zcall(db, "3057945221", ny(8, 9, 25), "Luis Candiales from Dream Team Roofing called John "
+          "Dahdouh to schedule a roof repair appointment for today between 2:00 PM and 4:00 PM "
+          "due to a cancellation. The conversation shifted to discussing the non-covered costs, "
+          "where the insurance covers $1,125 and there's an additional $675 out-of-pocket charge. "
+          "John expressed concern that the cost is high and offered to negotiate, proposing to "
+          "pay $450 instead of $675 (having already paid $125 for the service call). Luis agreed "
+          "to have Owen call John to discuss the pricing.")
+    db.commit()
+    out = briefs.customer_profile(db, FRI, query="dahdouh")
+    money = [f for f in out["flags"] if f["flag"] == "money"]
+    assert money and "$450" in money[0]["said"] and "$675" in money[0]["said"]
+    assert any("$450" in t["said"] for t in out["timeline_oldest_first"])
+    assert "counter-offer" in out["how_to_write"]
