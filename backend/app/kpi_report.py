@@ -934,34 +934,43 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
         for t in table:
             stl_rows.append([title, t["name"], t["leads"], t["on_time_pct"], t["on_time"],
                              t["late"], t["not_contacted"], t["waiting"], t["response_median"],
-                             t["response_p90"], t["talk_median"], t["reached_pct"],
-                             t["attempts_before_talk_avg"], t["zuper_move_median"]])
+                             t["response_avg"], t["response_p90"], t["call_median"],
+                             t["call_avg"], t["talk_median"], t["talk_avg"], t["reached_pct"],
+                             t["attempts_before_talk_avg"], t["booked_median"], t["booked_avg"],
+                             t["booked_pct"], t["zuper_move_median"]])
     for g in ("all", "AHS", "Retail"):
         t = stl["summary"][g]
         stl_rows.insert(0, ["Total", g, t["leads"], t["on_time_pct"], t["on_time"], t["late"],
                             t["not_contacted"], t["waiting"], t["response_median"],
-                            t["response_p90"], t["talk_median"], t["reached_pct"],
-                            t["attempts_before_talk_avg"], t["zuper_move_median"]])
+                            t["response_avg"], t["response_p90"], t["call_median"],
+                            t["call_avg"], t["talk_median"], t["talk_avg"], t["reached_pct"],
+                            t["attempts_before_talk_avg"], t["booked_median"], t["booked_avg"],
+                            t["booked_pct"], t["zuper_move_median"]])
     mc = stl["missed_calls"]
     stl_rows.append(["Missed calls (any number)", "all lines", mc["missed"], mc["on_time_pct"],
                      mc["on_time"], mc["late"], mc["never_called_back"], mc["waiting"],
-                     mc["callback_median"], mc["callback_p90"], None, None, None, None])
+                     mc["callback_median"], None, mc["callback_p90"], None, None, None, None,
+                     None, None, None, None, None, None])
     _sheet(wb, "Speed to lead", ["Group", "Name", "Leads", "On time %", "On time", "Late",
-                                 "Not contacted", "Waiting", "Median business min",
-                                 "90% within (business min)", "Median min to conversation",
-                                 "Reached %", "Unanswered calls first (avg)",
+                                 "Not contacted", "Waiting", "First response median (min)",
+                                 "First response average (min)", "90% within (min)",
+                                 "First call median (min)", "First call average (min)",
+                                 "Reached median (min)", "Reached average (min)", "Reached %",
+                                 "Unanswered calls first (avg)", "Booked median (min)",
+                                 "Booked average (min)", "Booked %",
                                  "Median min to Zuper move"],
            stl_rows, {"Group": 26, "Name": 34})
     _sheet(wb, "Speed to lead - leads",
            ["Job #", "Board", "Clock started", "Started by", "Arrived", "First response",
             "How", "By", "Business min", "Clock min", "Target min", "Result",
-            "Min to conversation", "Unanswered calls first", "Their missed calls",
+            "Min to first call", "Min to conversation", "Unanswered calls first",
+            "Their missed calls", "Min to booked",
             "Zuper first move", "Moved to", "Min to Zuper move"],
            [[r["job_number"], r["board"], _local_naive(r["start_at"]), r["started_by"],
              r["arrived"], _local_naive(r["first_response_at"]), r["first_response_how"],
              r["first_response_by"], r["response_minutes"], r["response_clock_minutes"],
-             r["target_minutes"], r["result_label"], r["talk_minutes"],
-             r["attempts_before_talk"], r["missed_their_calls"],
+             r["target_minutes"], r["result_label"], r["call_minutes"], r["talk_minutes"],
+             r["attempts_before_talk"], r["missed_their_calls"], r["booked_minutes"],
              _local_naive(r["first_move_at"]), r["first_move_to"], r["move_minutes"]]
             for r in stl["leads"]],
            {"Board": 24, "Clock started": 18, "First response": 18, "Zuper first move": 18,

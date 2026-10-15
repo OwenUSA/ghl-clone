@@ -2165,6 +2165,17 @@ export type SpeedSummary = {
   response_avg: number | null; talk_median: number | null; reached_pct: number | null
   attempts_before_talk_avg: number | null; customer_first: number
   zuper_move_median: number | null; zuper_move_lag_median: number | null
+  talk_avg: number | null; talk_p90: number | null
+  call_median: number | null; call_avg: number | null; call_p90: number | null
+  called_pct: number | null
+  booked_median: number | null; booked_avg: number | null; booked_pct: number | null
+}
+
+/** One column of a board: how long jobs stay in it (business minutes). */
+export type SpeedColumn = {
+  name: string; entered: number; left: number; avg_minutes: number | null
+  median_minutes: number | null; p90_minutes: number | null; now_in: number
+  longest_now_minutes: number | null; total_minutes: number; share_pct: number
 }
 
 export type SpeedLead = {
@@ -2174,6 +2185,8 @@ export type SpeedLead = {
   first_response_at: string | null; first_response_how: string | null
   first_response_by: string | null; response_minutes: number | null
   response_clock_minutes: number | null; first_talk_at: string | null
+  first_call_at: string | null; call_minutes: number | null
+  booked_at: string | null; booked_minutes: number | null
   talk_minutes: number | null; attempts_before_talk: number; missed_their_calls: number
   ai_handled: boolean; first_move_at: string | null; first_move_to: string | null
   first_move_by: string | null; move_minutes: number | null
@@ -2199,6 +2212,7 @@ export type SpeedReport = {
       never_called_back: number }[]
   }
   leads: SpeedLead[]
+  columns: { board: string; jobs: number; columns: SpeedColumn[] }[]
   coverage: { zuper_calls_from: string | null; notes: string[] }
 }
 

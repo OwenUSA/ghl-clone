@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
-  getSpeedToLead, type SpeedLead, type SpeedReport, type SpeedResult, type SpeedRow,
-  type SpeedSummary,
+  getSpeedToLead, type SpeedColumn, type SpeedLead, type SpeedReport, type SpeedResult,
+  type SpeedRow, type SpeedSummary,
 } from '../lib/api'
 import { whenLabel } from '../lib/accountTime'
 import { csvFilename, toCsv } from '../lib/csv'
@@ -35,6 +35,12 @@ function minutes(m: number | null | undefined): string {
   const h = Math.floor(m / 60)
   const r = m % 60
   return r ? `${h} h ${r} min` : `${h} h`
+}
+
+/** Business time, and business days (10 h each) once it is that long. */
+function span(m: number | null | undefined): string {
+  if (m === null || m === undefined) return '—'
+  return m >= 600 ? `${minutes(m)} (${(m / 600).toFixed(1)} days)` : minutes(m)
 }
 
 const pct = (n: number | null | undefined) => (n === null || n === undefined ? '—' : `${n}%`)
@@ -132,10 +138,14 @@ function Headline({ s, targets, group }: {
       <Tile label="Contacted on time" value={pct(s.on_time_pct)}
         color={s.on_time_pct === null ? INK : s.on_time_pct >= 80 ? GREEN : s.on_time_pct >= 50 ? AMBER : RED}
         sub={`${s.on_time} of ${judged} leads · target ${target}`} />
-      <Tile label="Median first response" value={minutes(s.response_median)}
-        sub={`90% within ${minutes(s.response_p90)} · average ${minutes(s.response_avg)}`} />
-      <Tile label="Median to a real conversation" value={minutes(s.talk_median)}
-        sub={`${pct(s.reached_pct)} of leads reached · ${s.attempts_before_talk_avg ?? '—'} unanswered calls first, on average`} />
+      <Tile label="First response (call or text)" value={minutes(s.response_avg)}
+        sub={`average · median ${minutes(s.response_median)} · 90% within ${minutes(s.response_p90)}`} />
+      <Tile label="Time to first call" value={minutes(s.call_avg)}
+        sub={`average · median ${minutes(s.call_median)} · ${pct(s.called_pct)} of leads called`} />
+      <Tile label="Time to reach the customer" value={minutes(s.talk_avg)}
+        sub={`average · median ${minutes(s.talk_median)} · ${pct(s.reached_pct)} reached · ${s.attempts_before_talk_avg ?? '—'} unanswered calls first`} />
+      <Tile label="Time to booked" value={minutes(s.booked_avg)}
+        sub={`average, lead to Scheduled · median ${minutes(s.booked_median)} · ${pct(s.booked_pct)} booked`} />
       <Tile label="Not contacted" value={String(s.not_contacted)}
         color={s.not_contacted ? RED : INK}
         sub={`${s.late} late · ${s.waiting} still within target${s.no_phone ? ` · ${s.no_phone} with no phone` : ''}`} />
@@ -158,12 +168,14 @@ function leadsCsv(leads: SpeedLead[]): string {
   return toCsv(
     ['Job #', 'Customer', 'Board', 'Clock started', 'Started by', 'Arrived', 'First response',
       'How', 'By', 'Business minutes', 'Clock minutes', 'Target minutes', 'Result',
-      'Minutes to conversation', 'Unanswered calls first', 'Their missed calls',
-      'Zuper first move', 'Moved to', 'Minutes to Zuper move'],
+      'Minutes to first call', 'Minutes to conversation', 'Unanswered calls first',
+      'Their missed calls', 'Minutes to booked', 'Zuper first move', 'Moved to',
+      'Minutes to Zuper move'],
     leads.map((r) => [r.job_number, r.customer_name, r.board, when(r.start_at), r.started_by,
       r.arrived, when(r.first_response_at), r.first_response_how, r.first_response_by,
       r.response_minutes, r.response_clock_minutes, r.target_minutes, r.result_label,
-      r.talk_minutes, r.attempts_before_talk, r.missed_their_calls, when(r.first_move_at),
+      r.call_minutes, r.talk_minutes, r.attempts_before_talk, r.missed_their_calls,
+      r.booked_minutes, when(r.first_move_at),
       r.first_move_to, r.move_minutes]))
 }
 
@@ -199,7 +211,8 @@ function Leads({ leads }: { leads: SpeedLead[] }) {
           <thead>
             <tr>
               {['Job', 'Board', 'Lead arrived', 'First response', 'Took', 'Result',
-                'Conversation after', 'Unanswered calls first', 'Zuper moved after']
+                'First call after', 'Reached after', 'Unanswered calls first', 'Booked after',
+                'Zuper moved after']
                 .map((h) => <th key={h} style={th}>{h}</th>)}
             </tr>
           </thead>
@@ -242,8 +255,10 @@ function Leads({ leads }: { leads: SpeedLead[] }) {
                   </span>
                   {r.ai_handled && <div style={{ fontSize: 12, color: GREY }}>AI agent spoke first</div>}
                 </td>
+                <td style={td}>{minutes(r.call_minutes)}</td>
                 <td style={td}>{minutes(r.talk_minutes)}</td>
                 <td style={td}>{r.attempts_before_talk}</td>
+                <td style={td}>{minutes(r.booked_minutes)}</td>
                 <td style={td}>
                   {minutes(r.move_minutes)}
                   {r.first_move_to && <div style={{ fontSize: 12, color: GREY }}>→ {r.first_move_to}</div>}
@@ -253,6 +268,49 @@ function Leads({ leads }: { leads: SpeedLead[] }) {
           </tbody>
         </table>
       )}
+    </Box>
+  )
+}
+
+function ColumnTable({ board, jobs, columns }: {
+  board: string; jobs: number; columns: SpeedColumn[]
+}) {
+  const top = columns[0]
+  return (
+    <Box title={board}
+      note={top ? `Most time goes to “${top.name}” (${top.share_pct}% of all the time jobs spent on this board). ${jobs} column moves in this range.` : undefined}>
+      <table className="w-full" aria-label={`Time in each column, ${board}`}>
+        <thead>
+          <tr>
+            {['Column', 'Share of time', 'Jobs in', 'Average stay', 'Median', '90% within',
+              'In it now', 'Longest wait now'].map((h) => <th key={h} style={th}>{h}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {columns.map((x) => (
+            <tr key={x.name} data-column={x.name}>
+              <td style={td}>{x.name}</td>
+              <td style={td}>
+                <span className="flex items-center gap-2">
+                  <span style={{ width: 90, height: 8, borderRadius: 4, backgroundColor: 'rgb(242,244,247)' }}>
+                    <span style={{ display: 'block', width: `${x.share_pct}%`, height: 8,
+                      borderRadius: 4, backgroundColor: 'rgb(83,155,245)' }} />
+                  </span>
+                  {x.share_pct}%
+                </span>
+              </td>
+              <td style={td}>{x.entered}</td>
+              <td style={{ ...td, fontWeight: 500 }}>{span(x.avg_minutes)}</td>
+              <td style={td}>{span(x.median_minutes)}</td>
+              <td style={td}>{span(x.p90_minutes)}</td>
+              <td style={td}>{x.now_in}</td>
+              <td style={{ ...td, color: (x.longest_now_minutes ?? 0) >= 1200 ? RED : 'rgb(52,64,84)' }}>
+                {span(x.longest_now_minutes)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Box>
   )
 }
@@ -345,6 +403,21 @@ export function SpeedToLeadReport({ since, until }: { since: string; until: stri
         </div>
 
         <Leads leads={r.leads} />
+
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 500, color: INK }}>Time in each column</div>
+          <div style={{ fontSize: 13, color: GREY, margin: '2px 0 12px' }}>
+            Every job that entered a column in this range (all jobs, not only new leads), in
+            business time — Mon–Sat 8 AM–6 PM, 10 hours a day. A stay ends at the job’s next
+            move; jobs still there count toward the share and the wait now. Paid / Cancelled are
+            left out. From Zuper’s own column history; before 2026-09-26 it is the load, not data.
+          </div>
+          <div className="grid gap-4">
+            {r.columns.length === 0
+              ? <div style={{ fontSize: 14, color: GREY }}>No column moves in this range.</div>
+              : r.columns.map((b) => <ColumnTable key={b.board} {...b} />)}
+          </div>
+        </div>
         <MissedCalls m={r.missed_calls} />
 
         <div style={{ fontSize: 13, color: GREY, lineHeight: '20px' }}>

@@ -252,3 +252,43 @@ def test_the_group_filter_narrows_every_table(api):
     assert [t["name"] for t in out["by_board"]] == [c.RETAIL_BOARD]
     assert c_.get("/api/dispatch/speed-to-lead?group=Other",
                   headers=as_("admin")).status_code == 422
+
+
+# ---- first call, booked, time in each column (2026-10-15, second round) -------------------
+
+def test_the_first_call_ignores_texts_and_booked_is_the_first_move_to_scheduled():
+    comms = [text(WED_9AM + timedelta(minutes=5), out=True),
+             call(WED_9AM + timedelta(minutes=50), out=True, talked=True)]
+    moves = [(WED_9AM, "Work Order Received", None),
+             (WED_9AM + timedelta(minutes=52), "Welcome Call!", "Luis"),
+             (WED_9AM + timedelta(minutes=55), "Scheduled", "Luis")]
+    r = speed.measure(lead(WED_9AM), comms, moves, now=WED_9AM + timedelta(hours=3))
+    assert (r["response_minutes"], r["call_minutes"], r["talk_minutes"]) == (5, 50, 50)
+    assert r["booked_minutes"] == 55
+    s = speed.summarize([r])
+    assert (s["call_avg"], s["talk_avg"], s["booked_avg"], s["booked_pct"]) == (50, 50, 55, 100)
+
+
+def test_time_in_each_column_is_business_time_until_the_next_move():
+    t = ny(2026, 10, 5, 9)                                   # Monday
+    moves = {
+        "a": [(t, c.INSPECTION_BOARD, "Work Order Received"),
+              (t + timedelta(hours=1), c.INSPECTION_BOARD, "Welcome Call!"),
+              (t + timedelta(hours=4), c.INSPECTION_BOARD, "Scheduled")],      # still there
+        "b": [(t, c.INSPECTION_BOARD, "Work Order Received"),
+              (t + timedelta(hours=3), c.INSPECTION_BOARD, "Cancelled")],      # closed: left out
+        "old": [(ny(2026, 9, 20, 9), c.INSPECTION_BOARD, "Welcome Call!")],    # the load
+    }
+    now = t + timedelta(hours=6)                             # Monday 3 PM
+    out = speed.column_times(moves, ny(2026, 9, 1, 0), now, now)
+    assert [b["board"] for b in out] == [c.INSPECTION_BOARD]
+    cols = {x["name"]: x for x in out[0]["columns"]}
+    assert set(cols) == {"Work Order Received", "Welcome Call!", "Scheduled"}
+    wor = cols["Work Order Received"]
+    assert (wor["entered"], wor["left"], wor["avg_minutes"], wor["median_minutes"]) == (
+        2, 2, 120, 120)
+    assert (cols["Welcome Call!"]["avg_minutes"], cols["Scheduled"]["now_in"],
+            cols["Scheduled"]["longest_now_minutes"]) == (180, 1, 120)
+    # 4 h in WOR + 3 h in Welcome Call! + 2 h so far in Scheduled = 9 h on the board.
+    assert out[0]["columns"][0]["name"] == "Work Order Received"
+    assert (wor["share_pct"], cols["Scheduled"]["share_pct"]) == (44, 22)

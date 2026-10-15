@@ -44,6 +44,11 @@ from . import config as c
 
 LEAD_BOARDS = (c.INSPECTION_BOARD, c.RETAIL_BOARD, *c.OTHER_PIPELINES)
 LOOKBACK = timedelta(days=3)       # "the customer reached out first" — how far back
+# The column that means "a visit is on the calendar" — the lead is BOOKED.
+BOOKED_COLUMNS = {c.INSPECTION_BOARD: ("Scheduled",), c.RETAIL_BOARD: ("Inspection / Estimate",
+                                                                       "Scheduled")}
+# Column moves before this are the 2026-09-17 load and bulk moves, not timing data (kpi_report).
+TIMING_FROM = datetime(2026, 9, 26, tzinfo=c.TZ)
 TEST_PREFIX = "TEST"
 
 # Result of one lead, in the order a person reads them.
@@ -137,6 +142,7 @@ def measure(j: Job, mine: list[cm.Comm], moves: list[tuple[datetime, str | None,
     human = [x for x in mine if x.at >= start and not x.ai]
     resp = next((x for x in human if x.out or x.talked), None)
     talk = next((x for x in human if x.talked), None)
+    first_call = next((x for x in human if x.out and x.kind == "call"), None)
     row.update(
         first_response_at=_iso(resp.at) if resp else None,
         first_response_how=how(resp) if resp else None,
@@ -144,6 +150,8 @@ def measure(j: Job, mine: list[cm.Comm], moves: list[tuple[datetime, str | None,
         if resp else None,
         response_minutes=business_minutes(start, resp.at) if resp else None,
         response_clock_minutes=round((resp.at - start).total_seconds() / 60) if resp else None,
+        first_call_at=_iso(first_call.at) if first_call else None,
+        call_minutes=business_minutes(start, first_call.at) if first_call else None,
         first_talk_at=_iso(talk.at) if talk else None,
         talk_minutes=business_minutes(start, talk.at) if talk else None,
         attempts_before_talk=sum(1 for x in human if x.out and x.kind == "call" and
@@ -160,6 +168,11 @@ def measure(j: Job, mine: list[cm.Comm], moves: list[tuple[datetime, str | None,
                first_move_by=first_move[2] if first_move else None,
                move_minutes=business_minutes(created, c.aware(first_move[0]))
                if first_move else None)
+    # Booked: the first move into the column that means a visit is on the calendar.
+    booked_in = BOOKED_COLUMNS.get(j.board, BOOKED_COLUMNS[c.RETAIL_BOARD])
+    booked = next((m for m in later if (m[1] or "") in booked_in), None)
+    row.update(booked_at=_iso(booked[0]) if booked else None,
+               booked_minutes=business_minutes(start, c.aware(booked[0])) if booked else None)
 
     if not j.phones:
         result = NO_PHONE
@@ -179,6 +192,10 @@ def _median(xs):
     return round(statistics.median(xs)) if xs else None
 
 
+def _avg(xs):
+    return round(sum(xs) / len(xs)) if xs else None
+
+
 def _pct(xs, q):
     if not xs:
         return None
@@ -195,6 +212,8 @@ def summarize(rows: list[dict]) -> dict:
     judged = by[ON_TIME] + by[LATE] + by[NOT_CONTACTED]
     resp = [r["response_minutes"] for r in rows if r["response_minutes"] is not None]
     talk = [r["talk_minutes"] for r in rows if r["talk_minutes"] is not None]
+    calls = [r["call_minutes"] for r in rows if r.get("call_minutes") is not None]
+    booked = [r["booked_minutes"] for r in rows if r.get("booked_minutes") is not None]
     moved = [r["move_minutes"] for r in rows if r["move_minutes"] is not None]
     reached = [r for r in rows if r["first_talk_at"]]
     lag = [r["move_minutes"] - r["response_minutes"] for r in rows
@@ -207,7 +226,11 @@ def summarize(rows: list[dict]) -> dict:
         "response_median": _median(resp), "response_p75": _pct(resp, .75),
         "response_p90": _pct(resp, .9),
         "response_avg": round(sum(resp) / len(resp)) if resp else None,
-        "talk_median": _median(talk),
+        "talk_median": _median(talk), "talk_avg": _avg(talk), "talk_p90": _pct(talk, .9),
+        "call_median": _median(calls), "call_avg": _avg(calls), "call_p90": _pct(calls, .9),
+        "called_pct": round(100 * len(calls) / len(rows)) if rows else None,
+        "booked_median": _median(booked), "booked_avg": _avg(booked),
+        "booked_pct": round(100 * len(booked) / len(rows)) if rows else None,
         "reached_pct": round(100 * len(reached) / len(rows)) if rows else None,
         "attempts_before_talk_avg": round(sum(r["attempts_before_talk"] for r in reached) /
                                           len(reached), 1) if reached else None,
@@ -290,9 +313,53 @@ def missed_calls(comms: dict[str, list[cm.Comm]], since: datetime, until: dateti
     }
 
 
+def column_times(moves: dict[str, list[tuple[datetime, str | None, str | None]]],
+                 since: datetime, until: datetime, now: datetime) -> list[dict]:
+    """Where jobs spend their time: for each board, each column a job ENTERED in the window —
+    how long it stayed (until its next move), how many are in it now and the longest wait now,
+    in business minutes. `moves` = job -> [(changed_at, board, column)], oldest first. Closed
+    columns (Paid, Cancelled, ...) are left out: sitting there forever is the point of them.
+    `share_pct` = this column's part of all the time spent on the board, finished stays and the
+    ones still running together."""
+    since = max(since, TIMING_FROM)
+    stays: dict[tuple[str, str], dict] = {}
+    for hist in moves.values():
+        hist = sorted(hist, key=lambda m: m[0])
+        for i, (at, board, column) in enumerate(hist):
+            at = c.aware(at)
+            if not (since <= at < until) or not column or column in c.CLOSED:
+                continue
+            nxt = c.aware(hist[i + 1][0]) if i + 1 < len(hist) else None
+            minutes = business_minutes(at, nxt or now)
+            k = (board or "?", column)
+            st = stays.setdefault(k, {"done": [], "open": []})
+            st["done" if nxt else "open"].append(minutes)
+    boards: dict[str, list[dict]] = defaultdict(list)
+    for (board, column), st in stays.items():
+        done, open_ = st["done"], st["open"]
+        boards[board].append({
+            "name": column, "entered": len(done) + len(open_), "left": len(done),
+            "avg_minutes": _avg(done), "median_minutes": _median(done),
+            "p90_minutes": _pct(done, .9), "now_in": len(open_),
+            "longest_now_minutes": max(open_) if open_ else None,
+            "total_minutes": sum(done) + sum(open_)})
+    out = []
+    for board in sorted(boards, key=lambda b: (b not in (c.INSPECTION_BOARD, c.REPAIR_BOARD,
+                                                         c.RETAIL_BOARD), b)):
+        cols = boards[board]
+        total = sum(x["total_minutes"] for x in cols) or 1
+        for x in cols:
+            x["share_pct"] = round(100 * x["total_minutes"] / total)
+        cols.sort(key=lambda x: -x["total_minutes"])
+        out.append({"board": board, "columns": cols,
+                    "jobs": sum(x["entered"] for x in cols)})
+    return out
+
+
 def build(jobs: list[Job], comms: dict[str, list[cm.Comm]],
           moves: dict[str, list[tuple[datetime, str | None, str | None]]],
-          since: datetime, until: datetime, now: datetime) -> dict:
+          since: datetime, until: datetime, now: datetime,
+          column_moves: dict | None = None) -> dict:
     """The whole report for leads whose clock started in [since, until)."""
     rows = []
     for j in jobs:
@@ -314,6 +381,7 @@ def build(jobs: list[Job], comms: dict[str, list[cm.Comm]],
         "by_week": sorted(_table(rows, lambda r: week_of(r["start_at"])),
                           key=lambda t: t["name"]),
         "missed_calls": missed_calls(comms, since, until, now),
+        "columns": column_times(column_moves or {}, since, until, now),
         "leads": rows,
     }
 
@@ -332,6 +400,27 @@ def lead_jobs(db: Session, hidden: set[str] = frozenset()) -> list[Job]:
     return out
 
 
+def _column_moves(db: Session, hidden: set[str], group: str | None) -> dict[str, list]:
+    """Every column move of every job on a pipeline the reader may see (repair board too)."""
+    boards = (c.INSPECTION_BOARD, c.REPAIR_BOARD, c.RETAIL_BOARD, *c.OTHER_PIPELINES)
+    if group == "AHS":
+        boards = (c.INSPECTION_BOARD, c.REPAIR_BOARD)
+    elif group == "Retail":
+        boards = (c.RETAIL_BOARD, *c.OTHER_PIPELINES)
+    uids = {j.job_uid: j.board for j in db.scalars(select(DispatchJob).where(
+        DispatchJob.board.in_(boards))) if j.board not in hidden and not
+        (j.title or "").strip().upper().startswith(TEST_PREFIX)}
+    out: dict[str, list] = defaultdict(list)
+    if not uids:
+        return out
+    for m in db.scalars(select(ZuperStatusHistory)
+                        .where(ZuperStatusHistory.job_uid.in_(list(uids)))):
+        board = m.category_name or uids[m.job_uid]
+        if m.changed_at and board in boards and board not in hidden:
+            out[m.job_uid].append((c.aware(m.changed_at), board, m.status_name))
+    return out
+
+
 def report(db: Session, since: datetime, until: datetime, now: datetime,
            hidden: set[str] = frozenset(), group: str | None = None) -> dict:
     """`group` "AHS" / "Retail" narrows the leads (and every table built from them); the missed
@@ -347,7 +436,8 @@ def report(db: Session, since: datetime, until: datetime, now: datetime,
                 moves[m.job_uid].append((c.aware(m.changed_at), m.status_name,
                                          m.done_by_name))
     comms = cm.load(db, since - LOOKBACK - timedelta(days=1))
-    out = build(jobs, comms, moves, since, until, now)
+    out = build(jobs, comms, moves, since, until, now,
+                column_moves=_column_moves(db, hidden, group))
     first_zuper_call = db.scalar(select(func.min(DispatchCall.occurred_at)))
     out["window"] = {"since": since.isoformat(), "until": until.isoformat(),
                      "now": now.isoformat()}

@@ -87,7 +87,10 @@ def serve(port: int, db_path: str) -> None:
             ZuperStatusHistory(history_uid="h1", job_uid="j801", status_name="Work Order Received",
                                changed_at=ny(5, 9)),
             ZuperStatusHistory(history_uid="h2", job_uid="j801", status_name="Welcome Call!",
-                               changed_at=ny(5, 9, 27), done_by_name="Luis Candiales")])
+                               changed_at=ny(5, 9, 27), done_by_name="Luis Candiales"),
+            ZuperStatusHistory(history_uid="h3", job_uid="j801", status_name="Scheduled",
+                               category_name="AHS - Inspection", changed_at=ny(5, 11, 27),
+                               done_by_name="Luis Candiales")])
         db.commit()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
@@ -162,6 +165,18 @@ def run(shots: Path) -> int:
             checks.ok("27 min" in row("801") and "Welcome Call!" in row("801"),
                       "801: Zuper's column moved 27 minutes after creation")
 
+            call_tile = page.locator("text=Time to first call").locator("..").inner_text()
+            checks.ok("median 40 min" in call_tile and "83% of leads called" in call_tile,
+                      f"time to first call: median 40 min, 5 of 6 called ({call_tile!r})")
+            booked = page.locator("text=Time to booked").locator("..").inner_text()
+            checks.ok("2 h 27 min" in booked and "17% booked" in booked,
+                      f"801 booked 2 h 27 min after it arrived ({booked!r})")
+            checks.ok("2 h 27 min" in row("801"), "801's row shows booked after 2 h 27 min")
+            cols = page.get_by_role("table", name="Time in each column, AHS - Inspection")
+            welcome = cols.locator('tr[data-column="Welcome Call!"]').inner_text()
+            checks.ok("2 h" in welcome, f"801 stayed 2 h in Welcome Call! ({welcome!r})")
+            cols.scroll_into_view_if_needed()
+            page.screenshot(path=str(shots / "04-columns.png"))
             table.scroll_into_view_if_needed()
             page.screenshot(path=str(shots / "03-every-lead.png"))
             page.get_by_role("button", name="Not contacted · 1").click()
