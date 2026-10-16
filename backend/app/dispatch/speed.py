@@ -415,14 +415,35 @@ def build(jobs: list[Job], comms: dict[str, list[cm.Comm]],
 
 # ---------------------------------------------------------------------------- from the database
 
+# AHS - Inspection's name before the 2026-09-25 split, as old history entries still carry it.
+OLD_BOARD_NAMES = {"AHS": c.INSPECTION_BOARD}
+
+
+def came_in_on(first_board: str | None, board_now: str | None) -> str | None:
+    """The board a lead ARRIVED on: the first one in Zuper's column history. An approved
+    inspection moved to AHS - Repair & Review is still an AHS - Inspection lead. A first board
+    that is no pipeline we know (Zuper's templates) falls back to where the job is now."""
+    first = OLD_BOARD_NAMES.get(first_board or "", first_board)
+    if first in LEAD_BOARDS or first == c.REPAIR_BOARD:
+        return first
+    return board_now
+
+
 def lead_jobs(db: Session, hidden: set[str] = frozenset()) -> list[Job]:
+    first_board: dict[str, str | None] = {}
+    for uid, board in db.execute(select(ZuperStatusHistory.job_uid,
+                                        ZuperStatusHistory.category_name)
+                                 .order_by(ZuperStatusHistory.changed_at)):
+        first_board.setdefault(uid, board)
     out = []
-    for j in db.scalars(select(DispatchJob).where(DispatchJob.board.in_(LEAD_BOARDS))):
-        if j.board in hidden or not j.zuper_created_at or \
-                c.aware(j.zuper_created_at) < LEADS_FROM or \
+    for j in db.scalars(select(DispatchJob).where(DispatchJob.board.in_(
+            (*LEAD_BOARDS, c.REPAIR_BOARD)))):
+        board = came_in_on(first_board.get(j.job_uid), j.board)
+        if board not in LEAD_BOARDS or board in hidden or j.board in hidden or \
+                not j.zuper_created_at or c.aware(j.zuper_created_at) < LEADS_FROM or \
                 (j.title or "").strip().upper().startswith(TEST_PREFIX):
             continue
-        out.append(Job(job_uid=j.job_uid, job_number=j.job_number, board=j.board,
+        out.append(Job(job_uid=j.job_uid, job_number=j.job_number, board=board,
                        customer_name=j.customer_name, status=j.status,
                        created_at=c.aware(j.zuper_created_at), phones=list(j.phones or [])))
     return out

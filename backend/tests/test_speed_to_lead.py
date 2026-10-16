@@ -352,3 +352,28 @@ def test_the_share_of_first_calls_answered_counts_only_leads_that_had_one():
     s = speed.summarize(rows)
     assert (s["first_call_answered_pct"], s["first_call_reached_pct"], s["not_called"]) == (
         50, 50, 1)
+
+
+def test_a_lead_counts_on_the_board_it_came_in_on_not_where_it_is_now(db):
+    """An AHS inspection that was approved and moved to AHS - Repair & Review is still a lead
+    that came in on AHS - Inspection (17 of them were missing on production, 2026-10-16). A job
+    that STARTED on Repair & Review is not a lead; Zuper's template boards fall back to the
+    board the job is on now."""
+    from app.models import ZuperStatusHistory
+    t = ny(2026, 10, 5, 9)
+    for uid, first, now_on in (("moved", c.INSPECTION_BOARD, c.REPAIR_BOARD),
+                               ("old-name", "AHS", c.REPAIR_BOARD),
+                               ("repair-only", c.REPAIR_BOARD, c.REPAIR_BOARD),
+                               ("template", "Repair Service", c.RETAIL_BOARD),
+                               ("no-history", None, c.RETAIL_BOARD)):
+        db.add(DispatchJob(job_uid=uid, job_number=uid, board=now_on, title="roof",
+                           status="Paid", phones=["9415550100"], zuper_created_at=t))
+        if first:
+            db.add(ZuperStatusHistory(history_uid="h-" + uid, job_uid=uid, category_name=first,
+                                      status_name="First", changed_at=t))
+    db.commit()
+    got = {j.job_uid: j.board for j in speed.lead_jobs(db)}
+    assert got == {"moved": c.INSPECTION_BOARD, "old-name": c.INSPECTION_BOARD,
+                   "template": c.RETAIL_BOARD, "no-history": c.RETAIL_BOARD}
+    # A reader who may not see AHS - Inspection does not get its leads, wherever they are now.
+    assert "moved" not in {j.job_uid for j in speed.lead_jobs(db, {c.INSPECTION_BOARD})}
