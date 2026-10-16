@@ -38,7 +38,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import DispatchCall, DispatchJob, ZuperStatusHistory
+from ..models import (
+    ConversationEvent,
+    Direction,
+    DispatchCall,
+    DispatchJob,
+    EventType,
+    NumberThreadEvent,
+    ZuperStatusHistory,
+)
 from . import comms as cm
 from . import config as c
 
@@ -415,14 +423,39 @@ def build(jobs: list[Job], comms: dict[str, list[cm.Comm]],
 
 # ---------------------------------------------------------------------------- from the database
 
+# Every AHS job starts on AHS - Inspection and moves on to AHS - Repair & Review (owner,
+# 2026-10-16): one lead, one source. "AHS" is AHS - Inspection's name before the 2026-09-25
+# split, as old history entries still carry it. A job whose recorded history starts on Repair &
+# Review began before that history did — it is an AHS - Inspection lead too.
+OLD_BOARD_NAMES = {"AHS": c.INSPECTION_BOARD, c.REPAIR_BOARD: c.INSPECTION_BOARD}
+
+
+def came_in_on(first_board: str | None, board_now: str | None) -> str | None:
+    """The board a lead ARRIVED on: the first one in Zuper's column history. An approved
+    inspection moved to AHS - Repair & Review is still an AHS - Inspection lead. A first board
+    that is no pipeline we know (Zuper's templates) falls back to where the job is now — and a
+    job now on Repair & Review is an AHS - Inspection lead whatever its history says."""
+    first = OLD_BOARD_NAMES.get(first_board or "", first_board)
+    if first in LEAD_BOARDS:
+        return first
+    return OLD_BOARD_NAMES.get(board_now or "", board_now)
+
+
 def lead_jobs(db: Session, hidden: set[str] = frozenset()) -> list[Job]:
+    first_board: dict[str, str | None] = {}
+    for uid, board in db.execute(select(ZuperStatusHistory.job_uid,
+                                        ZuperStatusHistory.category_name)
+                                 .order_by(ZuperStatusHistory.changed_at)):
+        first_board.setdefault(uid, board)
     out = []
-    for j in db.scalars(select(DispatchJob).where(DispatchJob.board.in_(LEAD_BOARDS))):
-        if j.board in hidden or not j.zuper_created_at or \
-                c.aware(j.zuper_created_at) < LEADS_FROM or \
+    for j in db.scalars(select(DispatchJob).where(DispatchJob.board.in_(
+            (*LEAD_BOARDS, c.REPAIR_BOARD)))):
+        board = came_in_on(first_board.get(j.job_uid), j.board)
+        if board not in LEAD_BOARDS or board in hidden or j.board in hidden or \
+                not j.zuper_created_at or c.aware(j.zuper_created_at) < LEADS_FROM or \
                 (j.title or "").strip().upper().startswith(TEST_PREFIX):
             continue
-        out.append(Job(job_uid=j.job_uid, job_number=j.job_number, board=j.board,
+        out.append(Job(job_uid=j.job_uid, job_number=j.job_number, board=board,
                        customer_name=j.customer_name, status=j.status,
                        created_at=c.aware(j.zuper_created_at), phones=list(j.phones or [])))
     return out
@@ -449,6 +482,75 @@ def _column_moves(db: Session, hidden: set[str], group: str | None) -> dict[str,
     return out
 
 
+# ---------------------------------------------------------------------------- incoming calls
+
+# How an incoming call ended, in the order a person reads them.
+OUTCOMES = ("answered", "missed", "voicemail", "ai_answered", "ai_transferred", "unknown")
+OUTCOME_LABEL = {"answered": "Answered by a person", "missed": "Missed",
+                 "voicemail": "Went to voicemail", "ai_answered": "Answered by an AI agent",
+                 "ai_transferred": "AI agent transferred to a person", "unknown": "Not recorded"}
+LINES = ("Quo", "Zuper Connect", "CRM line")
+
+
+def crm_call_outcome(call_status: str | None, ai_call: dict | None, ai_agent_id=None) -> str:
+    """A Quo or CRM-line call as the CRM stores it. owen-main reports a call its AI agent
+    transferred as "completed", so the agent's own record (`ai_call.outcome`) decides first."""
+    if ai_call or ai_agent_id:
+        outcome = ai_call.get("outcome") if isinstance(ai_call, dict) else None
+        return "ai_transferred" if outcome == "transfer" else "ai_answered"
+    status = (call_status or "").lower()
+    if status == "completed":
+        return "answered"
+    if status in ("no-answer", "busy", "failed"):
+        return "missed"
+    return "voicemail" if status == "voicemail" else "unknown"
+
+
+def zuper_call_outcome(status: str | None) -> str:
+    """A Zuper Connect call. MISSED carries Zuper's reason (the caller hung up while it rang,
+    or within seconds); Zuper Connect has no forwarded or transferred status."""
+    status = (status or "").upper()
+    if status == "COMPLETED":
+        return "answered"
+    if status in cm.NOT_ANSWERED - {"VOICEMAIL"}:
+        return "missed"
+    return "voicemail" if status == "VOICEMAIL" else "unknown"
+
+
+def tally_incoming(calls: list[tuple[str, str]]) -> list[dict]:
+    """[(line, outcome)] -> a row per line and a total: count and % of each outcome."""
+    rows = []
+    for line in (*LINES, "All lines"):
+        mine = [o for ln, o in calls if line == "All lines" or ln == line]
+        if not mine and line != "All lines":
+            continue
+        row = {"name": line, "total": len(mine)}
+        for o in OUTCOMES:
+            n = sum(1 for x in mine if x == o)
+            row[o] = n
+            row[o + "_pct"] = round(100 * n / len(mine)) if mine else None
+        rows.append(row)
+    return rows
+
+
+def incoming_calls(db: Session, since: datetime, until: datetime) -> dict:
+    """Every incoming call in the window, on all three lines, by how it ended. Calls only —
+    from customers, new leads and spam alike (nothing here knows which a number is)."""
+    calls: list[tuple[str, str]] = []
+    for model in (ConversationEvent, NumberThreadEvent):
+        for status, ai_call, ai_agent_id, source in db.execute(
+                select(model.call_status, model.ai_call, model.ai_agent_id, model.source_system)
+                .where(model.type == EventType.CALL, model.direction == Direction.INBOUND,
+                       model.occurred_at >= since, model.occurred_at < until)):
+            line = "Quo" if source == "OpenPhone" else "CRM line"
+            calls.append((line, crm_call_outcome(status, ai_call, ai_agent_id)))
+    for (status,) in db.execute(select(DispatchCall.status).where(
+            DispatchCall.direction == "INCOMING", DispatchCall.occurred_at >= since,
+            DispatchCall.occurred_at < until)):
+        calls.append(("Zuper Connect", zuper_call_outcome(status)))
+    return {"labels": OUTCOME_LABEL, "rows": tally_incoming(calls)}
+
+
 def report(db: Session, since: datetime, until: datetime, now: datetime,
            hidden: set[str] = frozenset(), group: str | None = None) -> dict:
     """`group` "AHS" / "Retail" narrows the leads (and every table built from them); the missed
@@ -466,6 +568,7 @@ def report(db: Session, since: datetime, until: datetime, now: datetime,
     comms = cm.load(db, since - LOOKBACK - timedelta(days=1))
     out = build(jobs, comms, moves, since, until, now,
                 column_moves=_column_moves(db, hidden, group))
+    out["incoming"] = incoming_calls(db, since, until)
     first_zuper_call = db.scalar(select(func.min(DispatchCall.occurred_at)))
     out["window"] = {"since": since.isoformat(), "until": until.isoformat(),
                      "now": now.isoformat()}

@@ -2201,6 +2201,13 @@ export type SpeedLead = {
 
 export type SpeedRow = SpeedSummary & { name: string }
 
+export type IncomingOutcome =
+  'answered' | 'missed' | 'voicemail' | 'ai_answered' | 'ai_transferred' | 'unknown'
+
+/** One phone line's incoming calls by how they ended: a count and a % of each. */
+export type IncomingRow = { name: string; total: number } &
+  Record<IncomingOutcome, number> & Record<`${IncomingOutcome}_pct`, number | null>
+
 export type SpeedReport = {
   targets: { AHS: number; Retail: number }
   summary: { all: SpeedSummary; AHS: SpeedSummary; Retail: SpeedSummary }
@@ -2217,6 +2224,7 @@ export type SpeedReport = {
       never_called_back: number }[]
   }
   leads: SpeedLead[]
+  incoming: { labels: Record<IncomingOutcome, string>; rows: IncomingRow[] }
   columns: { board: string; jobs: number; columns: SpeedColumn[] }[]
   coverage: { zuper_calls_from: string | null; notes: string[] }
 }
