@@ -49,6 +49,10 @@ BOOKED_COLUMNS = {c.INSPECTION_BOARD: ("Scheduled",), c.RETAIL_BOARD: ("Inspecti
                                                                        "Scheduled")}
 # Column moves before this are the 2026-09-17 load and bulk moves, not timing data (kpi_report).
 TIMING_FROM = datetime(2026, 9, 26, tzinfo=c.TZ)
+# Jobs created before this are not leads: Zuper dates every job the 2026-09-17 load made (109)
+# and the 2026-09-22 Workiz batch (14) by the day it was LOADED. It is also the first day the
+# Zuper Connect calls are here (2026-09-23), so nothing before it could be measured fairly.
+LEADS_FROM = datetime(2026, 9, 23, tzinfo=c.TZ)
 TEST_PREFIX = "TEST"
 
 # Result of one lead, in the order a person reads them.
@@ -140,9 +144,12 @@ def measure(j: Job, mine: list[cm.Comm], moves: list[tuple[datetime, str | None,
     row["due_at"] = _iso(due)
 
     human = [x for x in mine if x.at >= start and not x.ai]
-    resp = next((x for x in human if x.out or x.talked), None)
+    # Our first response: our call (answered or not) or text, or their call a person picked up.
+    resp = next((x for x in human if x.out or x.answered or x.talked), None)
     talk = next((x for x in human if x.talked), None)
-    first_call = next((x for x in human if x.out and x.kind == "call"), None)
+    # The first CALL between us and them: ours (answered or not), or theirs that a person
+    # picked up. A text is not a call; their call nobody answered is not one either.
+    first_call = next((x for x in human if x.kind == "call" and (x.out or x.answered)), None)
     row.update(
         first_response_at=_iso(resp.at) if resp else None,
         first_response_how=how(resp) if resp else None,
@@ -152,6 +159,17 @@ def measure(j: Job, mine: list[cm.Comm], moves: list[tuple[datetime, str | None,
         response_clock_minutes=round((resp.at - start).total_seconds() / 60) if resp else None,
         first_call_at=_iso(first_call.at) if first_call else None,
         call_minutes=business_minutes(start, first_call.at) if first_call else None,
+        first_call_how=("%s, %s" % ("We called" if first_call.out else "They called us",
+                                    first_call.source)) if first_call else None,
+        first_call_by=(first_call.staff or ("%s (person not recorded)" % first_call.source))
+        if first_call else None,
+        first_call_answered=first_call.answered if first_call else None,
+        first_call_reached=first_call.talked if first_call else None,
+        # Our calls until the first conversation (that one included); all of them so far when
+        # we have not reached them. Later calls are about later stages, not about the lead.
+        calls_to_reach=sum(1 for x in human if x.out and x.kind == "call" and
+                           (talk is None or x.at <= talk.at)),
+        not_called_minutes=None if first_call else business_minutes(start, now),
         first_talk_at=_iso(talk.at) if talk else None,
         talk_minutes=business_minutes(start, talk.at) if talk else None,
         attempts_before_talk=sum(1 for x in human if x.out and x.kind == "call" and
@@ -192,6 +210,12 @@ def _median(xs):
     return round(statistics.median(xs)) if xs else None
 
 
+def _share(rows, key):
+    """% of the leads that had a first call where `key` is true."""
+    had = [r for r in rows if r.get(key) is not None]
+    return round(100 * sum(1 for r in had if r[key]) / len(had)) if had else None
+
+
 def _avg(xs):
     return round(sum(xs) / len(xs)) if xs else None
 
@@ -229,6 +253,9 @@ def summarize(rows: list[dict]) -> dict:
         "talk_median": _median(talk), "talk_avg": _avg(talk), "talk_p90": _pct(talk, .9),
         "call_median": _median(calls), "call_avg": _avg(calls), "call_p90": _pct(calls, .9),
         "called_pct": round(100 * len(calls) / len(rows)) if rows else None,
+        "not_called": sum(1 for r in rows if r.get("first_call_at") is None),
+        "first_call_answered_pct": _share(rows, "first_call_answered"),
+        "first_call_reached_pct": _share(rows, "first_call_reached"),
         "booked_median": _median(booked), "booked_avg": _avg(booked),
         "booked_pct": round(100 * len(booked) / len(rows)) if rows else None,
         "reached_pct": round(100 * len(reached) / len(rows)) if rows else None,
@@ -392,6 +419,7 @@ def lead_jobs(db: Session, hidden: set[str] = frozenset()) -> list[Job]:
     out = []
     for j in db.scalars(select(DispatchJob).where(DispatchJob.board.in_(LEAD_BOARDS))):
         if j.board in hidden or not j.zuper_created_at or \
+                c.aware(j.zuper_created_at) < LEADS_FROM or \
                 (j.title or "").strip().upper().startswith(TEST_PREFIX):
             continue
         out.append(Job(job_uid=j.job_uid, job_number=j.job_number, board=j.board,
@@ -444,6 +472,8 @@ def report(db: Session, since: datetime, until: datetime, now: datetime,
     out["coverage"] = {
         "zuper_calls_from": _iso(first_zuper_call),
         "notes": [
+            ("Leads count from 2026-09-23: jobs Zuper dates earlier are the 2026-09-17 load "
+             "and the 2026-09-22 Workiz batch, not leads."),
             ("Texts sent from inside Zuper Connect are not read, so a lead answered only by a "
              "Zuper text shows as not contacted."),
             "Calls from personal cell phones are invisible.",

@@ -147,7 +147,7 @@ def run(shots: Path) -> int:
                   .filter(e => e.getBoundingClientRect().right > right + 1).length }""")
             checks.ok(over == 0, f"no card or tile runs past the right edge ({over})")
 
-            on_time = page.locator("text=Contacted on time").locator("..")
+            on_time = page.locator("[data-tile]", has_text="Contacted on time")
             # 801 25 min, 802 40 min (after hours: from 8 AM), 901 40 min from their call,
             # on time; 803 3 h and 902 2 h 30 late; 804 never contacted.
             checks.ok("50%" in on_time.inner_text() and "3 of 6" in on_time.inner_text(),
@@ -155,23 +155,27 @@ def run(shots: Path) -> int:
             row = lambda n: table.locator("tbody tr", has_text="#" + n).inner_text()  # noqa: E731
             checks.ok("25 min" in row("801") and "On time" in row("801")
                       and "Luis Candiales" in row("801"), "801: Luis called in 25 minutes")
-            checks.ok("40 min" in row("802") and "11 h 40 min on the clock" in row("802"),
-                      "802: arrived at 9 PM, called 8:40 AM = 40 business minutes")
-            checks.ok("Late" in row("803") and "3 h" in row("803"),
-                      "803: answered after 3 business hours is late")
-            checks.ok("Not contacted" in row("804"), "804: nobody called")
+            checks.ok("40 min" in row("802") and "Answered" in row("802"),
+                      "802: arrived at 9 PM, called 8:40 AM = 40 business minutes, answered")
+            checks.ok("Late" in row("803") and "3 h" in row("803") and "No answer" in row("803")
+                      and "5 h" in row("803"),
+                      "803: first call after 3 h, no answer; reached after 5 h; late")
+            checks.ok("Not contacted" in row("804") and "Not called yet" in row("804"),
+                      "804: nobody called — 'Not called yet' with the time so far")
             checks.ok("Customer called first" in row("901") and "40 min" in row("901"),
                       "901: the clock starts at the customer's own call")
-            checks.ok("27 min" in row("801") and "Welcome Call!" in row("801"),
-                      "801: Zuper's column moved 27 minutes after creation")
+            checks.ok("We called, Zuper" in row("801") and "Answered — talked" in row("801"),
+                      "801: the first call says who, on which line, and that it was answered")
 
-            call_tile = page.locator("text=Time to first call").locator("..").inner_text()
-            checks.ok("median 40 min" in call_tile and "83% of leads called" in call_tile,
-                      f"time to first call: median 40 min, 5 of 6 called ({call_tile!r})")
-            booked = page.locator("text=Time to booked").locator("..").inner_text()
+            call_tile = page.locator("[data-tile]", has_text="Time to first call").inner_text()
+            checks.ok("40 min" in call_tile and "83% of leads called" in call_tile
+                      and "1 not called yet" in call_tile,
+                      f"time to first call: typical 40 min, 5 of 6 called ({call_tile!r})")
+            picked = page.locator("[data-tile]", has_text="First call picked up").inner_text()
+            checks.ok("80%" in picked, f"4 of 5 first calls picked up ({picked!r})")
+            booked = page.locator("[data-tile]", has_text="Time to booked").inner_text()
             checks.ok("2 h 27 min" in booked and "17% booked" in booked,
                       f"801 booked 2 h 27 min after it arrived ({booked!r})")
-            checks.ok("2 h 27 min" in row("801"), "801's row shows booked after 2 h 27 min")
             cols = page.get_by_role("table", name="Time in each column, AHS - Inspection")
             welcome = cols.locator('tr[data-column="Welcome Call!"]').inner_text()
             checks.ok("2 h" in welcome, f"801 stayed 2 h in Welcome Call! ({welcome!r})")
