@@ -36,9 +36,11 @@ def ny(y, mo, d, h, mi=0):
 WED_9AM = ny(2026, 9, 30, 9)
 
 
-def call(at, *, out=False, talked=False, missed=False, ai=False, source="Quo", staff=None):
+def call(at, *, out=False, talked=False, missed=False, ai=False, source="Quo", staff=None,
+         answered=None):
     return Comm(at=at, kind="call", out=out, talked=talked, missed=missed, seconds=60 if talked
-                else 0, summary="", source=source, staff=staff, ai=ai)
+                else 0, summary="", source=source, staff=staff, ai=ai,
+                answered=talked if answered is None else answered)
 
 
 def text(at, *, out=False, ai=False):
@@ -304,3 +306,49 @@ def test_jobs_the_zuper_load_dated_are_not_leads(db):
                            zuper_created_at=created))
     db.commit()
     assert [j.job_uid for j in speed.lead_jobs(db)] == ["real"]
+
+
+# ---- the first CALL, answered or not (2026-10-16) -------------------------------------------
+
+def test_the_first_call_is_ours_answered_or_not_or_theirs_that_we_picked_up():
+    now = WED_9AM + timedelta(hours=6)
+    # A text first, then our call nobody answered, then a conversation.
+    r = speed.measure(lead(WED_9AM), [text(WED_9AM + timedelta(minutes=5), out=True),
+                                      call(WED_9AM + timedelta(minutes=30), out=True,
+                                           source="Zuper", staff="Luis Candiales"),
+                                      call(WED_9AM + timedelta(minutes=90), out=True,
+                                           talked=True)], [], now)
+    assert (r["response_minutes"], r["call_minutes"], r["talk_minutes"]) == (5, 30, 90)
+    assert (r["first_call_how"], r["first_call_by"]) == ("We called, Zuper", "Luis Candiales")
+    assert (r["first_call_answered"], r["first_call_reached"], r["calls_to_reach"]) == (
+        False, False, 2)
+    # Their call that a person picked up is the first call; their missed call is not.
+    r = speed.measure(lead(WED_9AM), [call(WED_9AM + timedelta(minutes=3), missed=True),
+                                      call(WED_9AM + timedelta(minutes=8), talked=True)], [], now)
+    assert (r["call_minutes"], r["first_call_how"], r["first_call_answered"]) == (
+        8, "They called us, Quo", True)
+    # A short call a person picked up is a response too, not only one of 30 seconds or more.
+    r = speed.measure(lead(WED_9AM), [call(WED_9AM + timedelta(minutes=4), answered=True)], [],
+                      now)
+    assert (r["response_minutes"], r["call_minutes"], r["talk_minutes"]) == (4, 4, None)
+    # Calls after the first conversation are about later stages: not counted to reach them.
+    r = speed.measure(lead(WED_9AM), [call(WED_9AM + timedelta(minutes=10), out=True),
+                                      call(WED_9AM + timedelta(minutes=20), out=True,
+                                           talked=True),
+                                      call(WED_9AM + timedelta(hours=3), out=True)], [], now)
+    assert r["calls_to_reach"] == 2
+    # Nobody called yet: how long it has been, in business time.
+    r = speed.measure(lead(WED_9AM), [], [], now)
+    assert (r["first_call_at"], r["not_called_minutes"]) == (None, 360)
+
+
+def test_the_share_of_first_calls_answered_counts_only_leads_that_had_one():
+    now = WED_9AM + timedelta(hours=6)
+    rows = [speed.measure(lead(WED_9AM, uid="a"), [call(WED_9AM + timedelta(minutes=10),
+                                                        out=True, talked=True)], [], now),
+            speed.measure(lead(WED_9AM, uid="b"), [call(WED_9AM + timedelta(minutes=10),
+                                                        out=True)], [], now),
+            speed.measure(lead(WED_9AM, uid="c"), [], [], now)]
+    s = speed.summarize(rows)
+    assert (s["first_call_answered_pct"], s["first_call_reached_pct"], s["not_called"]) == (
+        50, 50, 1)

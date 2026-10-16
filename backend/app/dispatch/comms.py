@@ -48,6 +48,7 @@ class Comm:
     staff: str | None = None
     transcript: str = ""
     ai: bool = False          # an AI agent wrote it or answered it alone — not a person
+    answered: bool = False    # a call somebody picked up (any length); never a text
 
 
 def by_ai(e) -> bool:
@@ -85,7 +86,7 @@ def _from_event(e, name: str | None) -> Comm:
     return Comm(
         at=config.aware(e.occurred_at), kind="call" if is_call else "text", out=out,
         talked=is_call and status == "completed" and secs >= config.TALK_SECONDS,
-        missed=is_call and not out and not answered,
+        missed=is_call and not out and not answered, answered=is_call and answered,
         seconds=secs, summary=summary_of(e.body) if is_call else (e.body or "")[:500],
         source=source, name=name, transcript=(e.transcript or "")[:4000] if is_call else "",
         ai=by_ai(e))
@@ -126,6 +127,7 @@ def load(db: Session, since: datetime) -> dict[str, list[Comm]]:
         add(c.number, Comm(
             at=config.aware(c.occurred_at), kind="call", out=not inbound,
             talked=done and secs >= config.TALK_SECONDS, missed=inbound and not_answered,
+            answered=done and secs > 0,
             seconds=secs, summary=c.summary or "", source="Zuper", staff=c.staff_name))
     for comms in out.values():
         comms.sort(key=lambda c: c.at)

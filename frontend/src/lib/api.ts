@@ -2168,6 +2168,8 @@ export type SpeedSummary = {
   talk_avg: number | null; talk_p90: number | null
   call_median: number | null; call_avg: number | null; call_p90: number | null
   called_pct: number | null
+  not_called: number; first_call_answered_pct: number | null
+  first_call_reached_pct: number | null
   booked_median: number | null; booked_avg: number | null; booked_pct: number | null
 }
 
@@ -2186,6 +2188,9 @@ export type SpeedLead = {
   first_response_by: string | null; response_minutes: number | null
   response_clock_minutes: number | null; first_talk_at: string | null
   first_call_at: string | null; call_minutes: number | null
+  first_call_how: string | null; first_call_by: string | null
+  first_call_answered: boolean | null; first_call_reached: boolean | null
+  calls_to_reach: number; not_called_minutes: number | null
   booked_at: string | null; booked_minutes: number | null
   talk_minutes: number | null; attempts_before_talk: number; missed_their_calls: number
   ai_handled: boolean; first_move_at: string | null; first_move_to: string | null

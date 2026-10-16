@@ -135,25 +135,25 @@ function Headline({ s, targets, group }: {
       : `AHS ${minutes(targets.AHS)} · Retail ${minutes(targets.Retail)}`
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))' }}>
+      <Tile label="Time to first call" value={minutes(s.call_median)}
+        sub={`typical (median) · average ${minutes(s.call_avg)} · ${pct(s.called_pct)} of leads called, ${s.not_called} not called yet`} />
+      <Tile label="First call picked up" value={pct(s.first_call_answered_pct)}
+        color={s.first_call_answered_pct === null ? INK : s.first_call_answered_pct >= 70 ? GREEN : AMBER}
+        sub={`${pct(s.first_call_reached_pct)} of first calls became a real conversation (30 s or more)`} />
+      <Tile label="Time to reach the customer" value={minutes(s.talk_median)}
+        sub={`typical · average ${minutes(s.talk_avg)} · ${pct(s.reached_pct)} reached · ${s.attempts_before_talk_avg ?? '—'} unanswered calls first`} />
+      <Tile label="First contact (call or text)" value={minutes(s.response_median)}
+        sub={`typical · average ${minutes(s.response_avg)} · a text can come before the first call`} />
       <Tile label="Contacted on time" value={pct(s.on_time_pct)}
         color={s.on_time_pct === null ? INK : s.on_time_pct >= 80 ? GREEN : s.on_time_pct >= 50 ? AMBER : RED}
-        sub={`${s.on_time} of ${judged} leads · target ${target}`} />
-      <Tile label="First response (call or text)" value={minutes(s.response_avg)}
-        sub={`average · median ${minutes(s.response_median)} · 90% within ${minutes(s.response_p90)}`} />
-      <Tile label="Time to first call" value={minutes(s.call_avg)}
-        sub={`average · median ${minutes(s.call_median)} · ${pct(s.called_pct)} of leads called`} />
-      <Tile label="Time to reach the customer" value={minutes(s.talk_avg)}
-        sub={`average · median ${minutes(s.talk_median)} · ${pct(s.reached_pct)} reached · ${s.attempts_before_talk_avg ?? '—'} unanswered calls first`} />
-      <Tile label="Time to booked" value={minutes(s.booked_avg)}
-        sub={`average, lead to Scheduled · median ${minutes(s.booked_median)} · ${pct(s.booked_pct)} booked`} />
+        sub={`${s.on_time} of ${judged} leads · first contact within ${target}`} />
       <Tile label="Not contacted" value={String(s.not_contacted)}
         color={s.not_contacted ? RED : INK}
         sub={`${s.late} late · ${s.waiting} still within target${s.no_phone ? ` · ${s.no_phone} with no phone` : ''}`} />
+      <Tile label="Time to booked" value={minutes(s.booked_median)}
+        sub={`typical, lead to Scheduled · average ${minutes(s.booked_avg)} · ${pct(s.booked_pct)} booked`} />
       <Tile label="Leads" value={String(s.leads)}
-        sub={`${s.customer_first} reached out to us first`} />
-      <Tile label="Zuper column moved after" value={minutes(s.zuper_move_median)}
-        sub={s.zuper_move_lag_median === null ? 'median, from the job’s creation'
-          : `median · ${minutes(Math.abs(s.zuper_move_lag_median))} ${s.zuper_move_lag_median >= 0 ? 'after' : 'before'} our first response`} />
+        sub={`${s.customer_first} reached out to us first · Zuper column moved a typical ${minutes(s.zuper_move_median)} after arriving`} />
     </div>
   )
 }
@@ -166,24 +166,36 @@ const FILTERS: { key: '' | SpeedResult; label: string }[] = [
 
 function leadsCsv(leads: SpeedLead[]): string {
   return toCsv(
-    ['Job #', 'Customer', 'Board', 'Clock started', 'Started by', 'Arrived', 'First response',
-      'How', 'By', 'Business minutes', 'Clock minutes', 'Target minutes', 'Result',
-      'Minutes to first call', 'Minutes to conversation', 'Unanswered calls first',
-      'Their missed calls', 'Minutes to booked', 'Zuper first move', 'Moved to',
-      'Minutes to Zuper move'],
+    ['Job #', 'Customer', 'Board', 'Lead came in', 'Started by', 'Arrived', 'First call',
+      'First call how', 'First call by', 'Minutes to first call', 'Not called yet (minutes so far)',
+      'First call picked up', 'First call reached them', 'Minutes to reach', 'Calls to reach',
+      'First contact (any)', 'First contact how', 'Minutes to first contact', 'Clock minutes',
+      'Target minutes', 'Result', 'Their missed calls', 'Minutes to booked', 'Zuper first move',
+      'Moved to', 'Minutes to Zuper move'],
     leads.map((r) => [r.job_number, r.customer_name, r.board, when(r.start_at), r.started_by,
-      r.arrived, when(r.first_response_at), r.first_response_how, r.first_response_by,
+      r.arrived, when(r.first_call_at), r.first_call_how, r.first_call_by, r.call_minutes,
+      r.not_called_minutes, yesNo(r.first_call_answered), yesNo(r.first_call_reached),
+      r.talk_minutes, r.calls_to_reach, when(r.first_response_at), r.first_response_how,
       r.response_minutes, r.response_clock_minutes, r.target_minutes, r.result_label,
-      r.call_minutes, r.talk_minutes, r.attempts_before_talk, r.missed_their_calls,
-      r.booked_minutes, when(r.first_move_at),
-      r.first_move_to, r.move_minutes]))
+      r.missed_their_calls, r.booked_minutes, when(r.first_move_at), r.first_move_to,
+      r.move_minutes]))
 }
 
-function Leads({ leads }: { leads: SpeedLead[] }) {
+const yesNo = (v: boolean | null) => (v === null ? '' : v ? 'yes' : 'no')
+
+function pickedUp(r: SpeedLead): { text: string; color: string } {
+  if (r.first_call_answered === null) return { text: '—', color: GREY }
+  if (r.first_call_reached) return { text: 'Answered — talked', color: GREEN }
+  if (r.first_call_answered) return { text: 'Answered, short call', color: AMBER }
+  return { text: 'No answer', color: AMBER }
+}
+
+function Leads({ leads, showBoard }: { leads: SpeedLead[]; showBoard: boolean }) {
   const [only, setOnly] = useState<'' | SpeedResult>('')
   const shown = only ? leads.filter((l) => l.result === only) : leads
   return (
-    <Box title="Every lead" note="Newest first. Business time is Mon–Sat 8 AM–6 PM New York.">
+    <Box title="Latest leads"
+      note="Newest first: when each lead came in, how long until the first call (ours on Quo or Zuper, answered or not — or theirs that we picked up), and how long until we actually reached them. Business time, Mon–Sat 8 AM–6 PM.">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {FILTERS.map((f) => {
           const n = f.key ? leads.filter((l) => l.result === f.key).length : leads.length
@@ -210,61 +222,60 @@ function Leads({ leads }: { leads: SpeedLead[] }) {
         <table className="w-full" aria-label="Speed to lead, every lead">
           <thead>
             <tr>
-              {['Job', 'Board', 'Lead arrived', 'First response', 'Took', 'Result',
-                'First call after', 'Reached after', 'Unanswered calls first', 'Booked after',
-                'Zuper moved after']
+              {['Job', ...(showBoard ? ['Board'] : []), 'Lead came in', 'First call',
+                'Time to first call', 'Picked up?', 'Reached after', 'Calls to reach',
+                'First contact (any)', 'Result']
                 .map((h) => <th key={h} style={th}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
-            {shown.map((r) => (
-              <tr key={r.job_uid} data-result={r.result}>
-                <td style={td}>
-                  {r.zuper_url
-                    ? <a href={r.zuper_url} target="_blank" rel="noreferrer"
-                      style={{ color: 'rgb(21,112,239)' }}>#{r.job_number}</a>
-                    : `#${r.job_number ?? '?'}`}
-                  <div style={{ fontSize: 12, color: GREY }}>{r.customer_name}</div>
-                </td>
-                <td style={td}>{r.board}</td>
-                <td style={td}>
-                  {when(r.start_at)}
-                  <div style={{ fontSize: 12, color: GREY }}>{r.started_by}</div>
-                </td>
-                <td style={td}>
-                  {r.first_response_at ? <>
-                    {when(r.first_response_at)}
-                    <div style={{ fontSize: 12, color: GREY }}>
-                      {r.first_response_how} · {r.first_response_by}
-                    </div>
-                  </> : <span style={{ color: GREY }}>
-                    none yet{r.waiting_minutes !== null ? ` · ${minutes(r.waiting_minutes)} so far` : ''}
-                  </span>}
-                </td>
-                <td style={{ ...td, fontWeight: 500 }}>
-                  {minutes(r.response_minutes)}
-                  {r.response_clock_minutes !== null && r.response_clock_minutes !== r.response_minutes && (
-                    <div style={{ fontSize: 12, fontWeight: 400, color: GREY }}>
-                      {minutes(r.response_clock_minutes)} on the clock
-                    </div>)}
-                </td>
-                <td style={td}>
-                  <span style={{ fontSize: 12, fontWeight: 500, padding: '2px 8px', borderRadius: 10,
-                    color: RESULT_COLOR[r.result], border: `1px solid ${RESULT_COLOR[r.result]}` }}>
-                    {r.result_label}
-                  </span>
-                  {r.ai_handled && <div style={{ fontSize: 12, color: GREY }}>AI agent spoke first</div>}
-                </td>
-                <td style={td}>{minutes(r.call_minutes)}</td>
-                <td style={td}>{minutes(r.talk_minutes)}</td>
-                <td style={td}>{r.attempts_before_talk}</td>
-                <td style={td}>{minutes(r.booked_minutes)}</td>
-                <td style={td}>
-                  {minutes(r.move_minutes)}
-                  {r.first_move_to && <div style={{ fontSize: 12, color: GREY }}>→ {r.first_move_to}</div>}
-                </td>
-              </tr>
-            ))}
+            {shown.map((r) => {
+              const pick = pickedUp(r)
+              return (
+                <tr key={r.job_uid} data-result={r.result}>
+                  <td style={td}>
+                    {r.zuper_url
+                      ? <a href={r.zuper_url} target="_blank" rel="noreferrer"
+                        style={{ color: 'rgb(21,112,239)' }}>#{r.job_number}</a>
+                      : `#${r.job_number ?? '?'}`}
+                    <div style={{ fontSize: 12, color: GREY }}>{r.customer_name}</div>
+                  </td>
+                  {showBoard && <td style={td}>{r.board}</td>}
+                  <td style={td}>
+                    {when(r.start_at)}
+                    <div style={{ fontSize: 12, color: GREY }}>{r.started_by}</div>
+                  </td>
+                  <td style={td}>
+                    {r.first_call_at ? <>
+                      {when(r.first_call_at)}
+                      <div style={{ fontSize: 12, color: GREY }}>{r.first_call_how} · {r.first_call_by}</div>
+                    </> : <span style={{ color: GREY }}>—</span>}
+                  </td>
+                  <td style={{ ...td, fontWeight: 500 }} data-col="time-to-first-call">
+                    {r.call_minutes !== null ? minutes(r.call_minutes)
+                      : <span style={{ color: RED }}>Not called yet
+                        <div style={{ fontSize: 12, fontWeight: 400 }}>{minutes(r.not_called_minutes)} so far</div>
+                      </span>}
+                  </td>
+                  <td style={{ ...td, color: pick.color }}>{pick.text}</td>
+                  <td style={td}>{r.talk_minutes !== null ? minutes(r.talk_minutes)
+                    : <span style={{ color: GREY }}>not yet</span>}</td>
+                  <td style={td}>{r.calls_to_reach}</td>
+                  <td style={td}>
+                    {minutes(r.response_minutes)}
+                    {r.first_response_how && r.first_response_at !== r.first_call_at && (
+                      <div style={{ fontSize: 12, color: GREY }}>{r.first_response_how}</div>)}
+                  </td>
+                  <td style={td}>
+                    <span style={{ fontSize: 12, fontWeight: 500, padding: '2px 8px', borderRadius: 10,
+                      color: RESULT_COLOR[r.result], border: `1px solid ${RESULT_COLOR[r.result]}` }}>
+                      {r.result_label}
+                    </span>
+                    {r.ai_handled && <div style={{ fontSize: 12, color: GREY }}>AI agent spoke first</div>}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       )}
@@ -382,6 +393,12 @@ export function SpeedToLeadReport({ since, until }: { since: string; until: stri
 
       {r && <>
         <Headline s={group ? r.summary[group] : r.summary.all} targets={r.targets} group={group} />
+        <div style={{ fontSize: 13, color: GREY, marginTop: -6 }}>
+          Typical = the median: half the leads were faster, half slower. The average is shown
+          beside it, because a few very slow leads pull it up a lot.
+        </div>
+
+        <Leads leads={r.leads} showBoard={group !== 'AHS'} />
 
         <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(460px, 100%), 1fr))' }}>
           <Box title="Week by week" note="Is it getting faster?">
@@ -402,7 +419,6 @@ export function SpeedToLeadReport({ since, until }: { since: string; until: stri
           </Box>
         </div>
 
-        <Leads leads={r.leads} />
 
         <div>
           <div style={{ fontSize: 20, fontWeight: 500, color: INK }}>Time in each column</div>
