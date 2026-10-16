@@ -80,7 +80,7 @@ from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import automations, number_threads
+from . import automations, number_threads, phone_match
 from .models import (
     Contact,
     Conversation,
@@ -410,6 +410,14 @@ def build_text(db: Session, ev, payload: dict) -> tuple[str, str | None]:
     return existing_text(ai_call, contact, caller, line), caller
 
 
+def is_test_contact(contact: Contact) -> bool:
+    """A record that exists only to test the agents (owner, 2026-10-16): "(TEST)" in its name,
+    or made by hand as a "Test record". Such a contact on the office line - a Zuper test
+    customer given the Quo number to test recognition - must not silence every call report."""
+    name = " ".join(filter(None, (contact.first_name, contact.last_name))).upper()
+    return "(TEST)" in name or (getattr(contact, "created_by", None) or "") == "Test record"
+
+
 def refusal(db: Session, recipient: str, caller: str | None) -> str | None:
     """Why this recipient must not get the text, or None. The customer guard lives here."""
     key = number_threads.phone_key(recipient)
@@ -418,8 +426,14 @@ def refusal(db: Session, recipient: str, caller: str | None) -> str | None:
     # The office line calling the agent itself (staff testing it from Quo) is not a customer:
     # its report still goes to the office (owner, 2026-10-16). Recipients only ever come from
     # AI_CALL_NOTIFY_NUMBERS, and the contact check below still refuses any customer's number.
-    if number_threads.contact_holding(db, recipient) is not None:
+    holders = db.scalars(select(Contact).where(
+        phone_match.phone_clause(Contact.phone, recipient))).all()
+    real = [c for c in holders if not is_test_contact(c)]
+    if real:
         return "a contact holds that number — this notification never texts a customer"
+    if holders:
+        log.info("ai_call_notify: only TEST contacts hold %s (%s) — the office still gets its "
+                 "report", recipient, ", ".join(str(c.id) for c in holders))
     from .crmlink import current
     if key == number_threads.phone_key(current().from_number):
         return "it is our own sending line"

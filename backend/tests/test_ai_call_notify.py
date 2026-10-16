@@ -427,3 +427,31 @@ def test_a_caller_saved_as_a_contact_before_the_job_runs_is_still_a_new_lead(off
                         .where(Contact.phone == STRANGER))
     db.close()
     assert body.endswith("\n\nRecording: %s/conversations?thread=c%d" % (BASE, conv_id))
+
+
+def _contact_on_office(first, last, created_by=None):
+    db = SessionLocal()
+    c = Contact(first_name=first, last_name=last, phone=OFFICE)
+    if created_by is not None:
+        c.created_by = created_by
+    db.add(c)
+    db.commit()
+    db.close()
+
+
+def test_a_test_contact_on_the_office_line_does_not_silence_the_report(office):
+    # Owner, 2026-10-16: the Zuper test customer "Santiago Villahermosa (TEST)" was given the
+    # Quo number to test recognition; that must not block every call report to the office.
+    _contact_on_office("Santiago", "Villahermosa (TEST)")
+    call(office)
+    run_due()
+    assert [s["to"] for s in office.rec.sent] == [OFFICE]
+
+
+def test_a_real_contact_on_the_office_line_still_blocks_it_even_beside_a_test_one(office, caplog):
+    _contact_on_office("Santiago", "Villahermosa (TEST)")
+    _contact_on_office("Real", "Customer")
+    call(office)
+    run_due()
+    assert office.rec.sent == []
+    assert "never texts a customer" in caplog.text

@@ -7329,3 +7329,11 @@ Owner: staff test the voice agent from the Quo line (+19549147244), which is als
 AI_CALL_NOTIFY_NUMBERS recipient. The "never text the caller's own number" refusal blocked those
 reports. A configured office line is not a customer, so it is no longer refused; recipients
 still come only from the setting, and a number any contact holds is still refused.
+
+### A TEST contact on the office line no longer silences call reports (2026-10-16)
+
+Owner chose this after the Zuper test customer "Santiago Villahermosa (TEST)" was given the
+Quo number (+19549147244) to test caller recognition: the "a contact holds that number"
+refusal then blocked EVERY AI call report. A contact counts as a test record when its name
+contains "(TEST)" or it was made as a "Test record"; if only such contacts hold the office
+line the report is sent (logged). Any real contact on that number still blocks it.
