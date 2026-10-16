@@ -7322,3 +7322,10 @@ None of these was created.
 **Fixed on the way:** `reader.read_calls` now passes the pass's clock to `fetch_summaries`;
 `test_a_recorded_calls_summary_is_fetched_from_its_details_and_kept` had started failing on
 2026-10-14 because the 14-day limit was measured against the real clock, not the test's.
+
+### The office line calling the agent itself still gets its report (2026-10-16)
+
+Owner: staff test the voice agent from the Quo line (+19549147244), which is also the
+AI_CALL_NOTIFY_NUMBERS recipient. The "never text the caller's own number" refusal blocked those
+reports. A configured office line is not a customer, so it is no longer refused; recipients
+still come only from the setting, and a number any contact holds is still refused.

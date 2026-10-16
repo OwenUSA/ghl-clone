@@ -21,7 +21,8 @@ notifications).
   * A recipient that any CONTACT holds (last ten digits, `number_threads.contact_holding`) is
     refused with a logged sentence. This can never text a customer, even if somebody puts a
     customer's number in the setting by mistake.
-  * The caller's own number is never a recipient; neither is our own sending line.
+  * Our own sending line is never a recipient. (The office line calling the agent itself
+    still gets its report - 2026-10-16.)
   * Only CALL events with a non-empty `ai_call`, and only fresh ones (`automations.is_fresh`):
     a backfilled call from last month is history, not news.
   * One text per call per recipient: the sent row carries a dedupe key derived from the call,
@@ -414,8 +415,9 @@ def refusal(db: Session, recipient: str, caller: str | None) -> str | None:
     key = number_threads.phone_key(recipient)
     if not key:
         return "%r is not a complete phone number" % recipient
-    if caller and key == number_threads.phone_key(caller):
-        return "it is the caller's own number"
+    # The office line calling the agent itself (staff testing it from Quo) is not a customer:
+    # its report still goes to the office (owner, 2026-10-16). Recipients only ever come from
+    # AI_CALL_NOTIFY_NUMBERS, and the contact check below still refuses any customer's number.
     if number_threads.contact_holding(db, recipient) is not None:
         return "a contact holds that number — this notification never texts a customer"
     from .crmlink import current

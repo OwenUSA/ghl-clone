@@ -338,11 +338,13 @@ def test_a_recipient_any_contact_holds_is_refused_and_nothing_is_written(office,
     assert "never texts a customer" in caplog.text
 
 
-def test_the_callers_own_number_is_never_a_recipient(office, monkeypatch):
+def test_an_office_line_calling_the_agent_itself_still_gets_its_report(office, monkeypatch):
+    # Owner, 2026-10-16: staff test the agent from the Quo line, which is also where the
+    # report goes. A configured office line is not a customer, so its report is sent.
     monkeypatch.setenv(ai_call_notify.NUMBERS_ENV, "%s,%s" % (STRANGER, OFFICE))
     call(office)
     run_due()
-    assert [s["to"] for s in office.rec.sent] == [OFFICE]
+    assert sorted(s["to"] for s in office.rec.sent) == sorted([STRANGER, OFFICE])
 
 
 def test_three_merging_reports_queue_one_job_and_send_one_text(office):
