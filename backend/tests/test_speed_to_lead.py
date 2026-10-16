@@ -218,11 +218,14 @@ def test_leads_only_from_lead_boards_with_the_first_response(api):
     c_, as_ = api
     out = c_.get("/api/dispatch/speed-to-lead", headers=as_("dispatcher")).json()
     by = {r["job_number"]: r for r in out["leads"]}
-    assert set(by) == {"701", "801"}                    # no repair board, no TEST job
+    # The repair-board job is an AHS - Inspection lead too (every AHS job starts there); the
+    # TEST job is not a lead.
+    assert set(by) == {"701", "801", "901"}
+    assert by["901"]["board"] == c.INSPECTION_BOARD
     assert by["701"]["first_response_by"] == "Luis Candiales"
     assert by["701"]["first_response_how"] == "Zuper call"
     assert by["801"]["result"] in ("not_contacted", "waiting")
-    assert out["summary"]["all"]["leads"] == 2
+    assert out["summary"]["all"]["leads"] == 3
     assert out["coverage"]["notes"]
 
 
@@ -234,10 +237,10 @@ def test_a_hidden_board_is_left_out(api, db, people):
     db.add(PipelinePermission(pipeline_id=p.id, user_id=people["admin"][0]))
     db.commit()
     out = c_.get("/api/dispatch/speed-to-lead", headers=as_("dispatcher")).json()
-    assert [r["job_number"] for r in out["leads"]] == ["701"]
+    assert {r["job_number"] for r in out["leads"]} == {"701", "901"}
     assert out["summary"]["Retail"]["leads"] == 0
     out = c_.get("/api/dispatch/speed-to-lead", headers=as_("admin")).json()
-    assert {r["job_number"] for r in out["leads"]} == {"701", "801"}
+    assert {r["job_number"] for r in out["leads"]} == {"701", "801", "901"}
 
 
 def test_a_backwards_range_is_refused(api):
@@ -356,9 +359,9 @@ def test_the_share_of_first_calls_answered_counts_only_leads_that_had_one():
 
 def test_a_lead_counts_on_the_board_it_came_in_on_not_where_it_is_now(db):
     """An AHS inspection that was approved and moved to AHS - Repair & Review is still a lead
-    that came in on AHS - Inspection (17 of them were missing on production, 2026-10-16). A job
-    that STARTED on Repair & Review is not a lead; Zuper's template boards fall back to the
-    board the job is on now."""
+    that came in on AHS - Inspection (17 of them were missing on production, 2026-10-16). Every
+    AHS job starts on Inspection (owner): one whose recorded history begins on Repair & Review
+    is an Inspection lead too. Zuper's template boards fall back to the board the job is on."""
     from app.models import ZuperStatusHistory
     t = ny(2026, 10, 5, 9)
     for uid, first, now_on in (("moved", c.INSPECTION_BOARD, c.REPAIR_BOARD),
@@ -374,6 +377,44 @@ def test_a_lead_counts_on_the_board_it_came_in_on_not_where_it_is_now(db):
     db.commit()
     got = {j.job_uid: j.board for j in speed.lead_jobs(db)}
     assert got == {"moved": c.INSPECTION_BOARD, "old-name": c.INSPECTION_BOARD,
-                   "template": c.RETAIL_BOARD, "no-history": c.RETAIL_BOARD}
+                   "repair-only": c.INSPECTION_BOARD, "template": c.RETAIL_BOARD,
+                   "no-history": c.RETAIL_BOARD}
     # A reader who may not see AHS - Inspection does not get its leads, wherever they are now.
     assert "moved" not in {j.job_uid for j in speed.lead_jobs(db, {c.INSPECTION_BOARD})}
+
+
+# ---- incoming calls by line: missed, voicemail, AI, transferred (2026-10-16) ----------------
+
+def test_how_an_incoming_call_ended_on_each_line():
+    # Quo and the CRM line, as the CRM stores them. owen-main reports an AI transfer as
+    # "completed", so the agent's own record decides first.
+    assert speed.crm_call_outcome("completed", None) == "answered"
+    assert speed.crm_call_outcome("no-answer", None) == "missed"
+    assert speed.crm_call_outcome("voicemail", None) == "voicemail"
+    assert speed.crm_call_outcome(None, None) == "unknown"
+    assert speed.crm_call_outcome("completed", {"outcome": "transfer"}) == "ai_transferred"
+    assert speed.crm_call_outcome("completed", {"outcome": "end_call"}) == "ai_answered"
+    # Zuper Connect: MISSED (hung up while ringing), VOICEMAIL; nothing is forwarded.
+    assert [speed.zuper_call_outcome(x) for x in ("COMPLETED", "MISSED", "VOICEMAIL", "RINGING")] \
+        == ["answered", "missed", "voicemail", "unknown"]
+
+
+def test_incoming_calls_are_counted_and_shared_per_line_and_in_total():
+    rows = {r["name"]: r for r in speed.tally_incoming(
+        [("Quo", "answered"), ("Quo", "answered"), ("Quo", "missed"), ("Quo", "unknown"),
+         ("Zuper Connect", "voicemail"), ("CRM line", "ai_transferred")])}
+    assert list(rows) == ["Quo", "Zuper Connect", "CRM line", "All lines"]
+    q = rows["Quo"]
+    assert (q["total"], q["answered"], q["answered_pct"], q["missed"], q["missed_pct"]) == (
+        4, 2, 50, 1, 25)
+    total = rows["All lines"]
+    assert (total["total"], total["voicemail"], total["ai_transferred"],
+            total["ai_transferred_pct"]) == (6, 1, 1, 17)
+
+
+def test_the_report_counts_incoming_calls_from_zuper_connect(api):
+    c_, as_ = api
+    out = c_.get("/api/dispatch/speed-to-lead", headers=as_("admin")).json()
+    rows = {r["name"]: r for r in out["incoming"]["rows"]}
+    # The fixture has one Zuper Connect call, and it is OUTGOING: no incoming call anywhere.
+    assert rows["All lines"]["total"] == 0 and "Zuper Connect" not in rows

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
-  getSpeedToLead, type SpeedColumn, type SpeedLead, type SpeedReport, type SpeedResult,
+  getSpeedToLead, type IncomingOutcome, type SpeedColumn, type SpeedLead, type SpeedReport, type SpeedResult,
   type SpeedRow, type SpeedSummary,
 } from '../lib/api'
 import { whenLabel } from '../lib/accountTime'
@@ -326,6 +326,48 @@ function ColumnTable({ board, jobs, columns }: {
   )
 }
 
+const OUTCOME_COLOR: Record<IncomingOutcome, string> = {
+  answered: GREEN, missed: RED, voicemail: AMBER, ai_answered: 'rgb(140,141,222)',
+  ai_transferred: 'rgb(83,155,245)', unknown: GREY,
+}
+const OUTCOME_ORDER: IncomingOutcome[] = [
+  'answered', 'missed', 'voicemail', 'ai_answered', 'ai_transferred', 'unknown']
+
+function IncomingCalls({ incoming }: { incoming: SpeedReport['incoming'] }) {
+  const rows = incoming.rows
+  return (
+    <Box title="Incoming calls by line"
+      note="Every incoming call in this range on Quo, Zuper Connect and the CRM line — customers, new leads and spam alike — and how it ended. Nothing is forwarded to another number on any line: Quo's forwarding is never used and Zuper Connect has no such status. 'Redirected' here means sent to voicemail, answered by an AI agent, or transferred by the AI agent to a person.">
+      {rows.length === 0 || rows[rows.length - 1].total === 0
+        ? <div style={{ fontSize: 14, color: GREY }}>No incoming calls in this range.</div> : (
+          <table className="w-full" aria-label="Incoming calls by line">
+            <thead>
+              <tr>
+                {['Line', 'Calls', ...OUTCOME_ORDER.map((o) => incoming.labels[o])]
+                  .map((h) => <th key={h} style={th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.name} data-line={r.name}
+                  style={r.name === 'All lines' ? { fontWeight: 500 } : undefined}>
+                  <td style={td}>{r.name}</td>
+                  <td style={td}>{r.total}</td>
+                  {OUTCOME_ORDER.map((o) => (
+                    <td key={o} style={{ ...td, color: r[o] ? OUTCOME_COLOR[o] : GREY }}>
+                      {r[o]} <span style={{ fontSize: 12, color: GREY }}>
+                        ({r[`${o}_pct`] ?? 0}%)</span>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+    </Box>
+  )
+}
+
 function MissedCalls({ m }: { m: SpeedReport['missed_calls'] }) {
   return (
     <Box title="Missed calls — how fast we call back"
@@ -434,6 +476,7 @@ export function SpeedToLeadReport({ since, until }: { since: string; until: stri
               : r.columns.map((b) => <ColumnTable key={b.board} {...b} />)}
           </div>
         </div>
+        <IncomingCalls incoming={r.incoming} />
         <MissedCalls m={r.missed_calls} />
 
         <div style={{ fontSize: 13, color: GREY, lineHeight: '20px' }}>

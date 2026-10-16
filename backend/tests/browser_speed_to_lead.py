@@ -193,6 +193,10 @@ def run(shots: Path) -> int:
             shown = table.inner_text()
             checks.ok("#901" in shown and "#902" in shown and "#801" not in shown,
                       "the Retail filter shows 901 and 902 (regional board) and no AHS lead")
+            inc = page.get_by_role("table", name="Incoming calls by line")
+            zrow = inc.locator('tr[data-line="Zuper Connect"]').inner_text()
+            checks.ok("2" in zrow and "100%" in zrow,
+                      f"Zuper Connect: 2 incoming calls, both missed ({zrow!r})")
             missed = page.locator("text=Missed calls — how fast we call back").locator("../..")
             checks.ok("Never called back" in missed.inner_text(),
                       "the missed-calls card is shown")
