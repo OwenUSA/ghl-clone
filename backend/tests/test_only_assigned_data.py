@@ -1237,7 +1237,10 @@ AUDITED = {
     # settings are ADMIN. Pinned by tests/test_reminders_service.py.
     **dict.fromkeys(("reminders_status", "reminders_upcoming", "reminders_log",
                      "reminders_put_settings", "reminders_get_language",
-                     "reminders_put_language"),
+                     "reminders_put_language",
+                     # The auto-reply (app/autoreply/api.py, 2026-10-19): the Dispatch gate;
+                     # PUT settings is ADMIN. Pinned by tests/test_autoreply_service.py.
+                     "autoreply_status", "autoreply_put_settings"),
                     "DISPATCH_VIEW: restricted refused 403"),
     # AI Agents (app/ai/api.py, 2026-09-15): the whole module refuses a restricted user
     # 403 before anything is read (`_viewer`), whatever their role — pinned by

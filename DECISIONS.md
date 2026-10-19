@@ -7337,3 +7337,95 @@ Quo number (+19549147244) to test caller recognition: the "a contact holds that 
 refusal then blocked EVERY AI call report. A contact counts as a test record when its name
 contains "(TEST)" or it was made as a "Test record"; if only such contacts hold the office
 line the report is sent (logged). Any real contact on that number still blocks it.
+
+## AMENDMENT (2026-10-19): the auto-reply — a polite text to an unanswered Zuper conversation
+
+**The owner (owen@dreamteamroofingfl.com, who is the owner) asked for it and approved every lift
+below, for this feature only**, after a grilling session (session "feature: respond messages
+that are not responded"). Built in `backend/app/autoreply/` (read `__init__.py` first). It is
+the first CRM code that texts customers BY ITSELF since 2026-09-15, and it was approved knowing
+the 2026-09-17 incident (231 mistaken messages) — which is why it starts OFF, in test mode,
+capped, and refusing to send from any number but the one the customer texted.
+
+**What it does.** A customer's text or call to the Zuper Connect line (954) 420-7373 that no
+person has answered for **5 minutes**, around the clock, gets ONE polite text from that same
+line, and a private note on the customer's Zuper job says what was sent. Nothing else is
+notified (owner: "it should send a notification in the system (zuper) nothing else").
+
+**The rules lifted, each for this feature only:**
+1. "No automatic texts — only texts a person sends" (2026-09-15) and "No AI agent acts by
+   itself": the auto-reply sends with no person approving each text (owner chose "automatic
+   from day one").
+2. Zuper read-only (2026-09-27): it READS the Connect text conversations, and WRITES two
+   things only — `POST /customers/{uid}/send` (one SMS, exact shape, still denylisted for every
+   other caller; `client.autoreply_write()` is the only way past) and `POST /jobs/{uid}/note`.
+   Both add; nothing is changed, moved or deleted (the add-only rule holds).
+3. The "needs attention" flag on the conversation was agreed (Q23) but NOT built: Zuper's
+   conversation screen has no such control (`needs_attention` belongs to Zuper's own AI
+   Responder), so the note itself says "⚠️ Needs a person" instead.
+
+**The owner's answers (the grilling, Q1–Q30), as built:**
+- Watches Zuper only (Q1). Every missed call counts, forwarded ones too, any length; a
+  voicemail gets its own wording (Q21, Q27).
+- Answered = a later outgoing text on the Zuper line that is not one of the six workflows'
+  texts (matched by wording, `rules.TEMPLATE_PHRASES`) and not the auto-reply's own; an
+  outgoing Quo or CRM-line text not written by an AI agent; or a call somebody picked up, on any
+  line (Q13, Q30). Zuper labels workflow texts "Owen" and "Zuper", so the user name alone cannot
+  tell a person from an automation.
+- Never answered: "ok" / "thanks" / 👍, "C" / "yes" confirmations, STOP (until START), a number
+  blocked in Zuper (Q14). A number with no Zuper customer is recorded as skipped:
+  `/customers/{uid}/send` needs a customer, so there is no one to send to (Q14d could not be
+  built as asked — acknowledge only — without a send by number, which Zuper's API does not
+  offer).
+- Once per unanswered stretch (Q5); never a second text to one number within 24 hours (Q11);
+  nothing waiting more than a day; nothing that started waiting before it was switched on or
+  before leaving test mode (Q22 — those are recorded as skipped, which is the one-time list
+  for staff).
+- The reply (Q4, Q6, Q16): in the customer's language; always the acknowledgement; after hours
+  (Mon–Sat 8 AM–6 PM New York is open; Sunday and New Year's, Memorial Day, July 4, Labor Day,
+  Thanksgiving and Christmas are after hours, Q17) it says we are outside of business hours and
+  will get back as soon as possible; ONE clear fact only when the customer is not upset — the
+  next visit's window, the technician's first name, or plain job status. Upset (the model's
+  reading, or Zuper's call sentiment "negative") = acknowledgement only.
+- `writer.refused` checks every model text before it goes out: no money words, no "approved" /
+  "aprobado", no link, no phone number other than 954-420-7373, no mention of AI or automation,
+  ≤ 320 characters, the after-hours words when after hours, no digits when upset. A refused
+  text, an unreadable answer, a provider that is down or no connection chosen all send the FIXED
+  polite wording (`writer.TEMPLATES`, English and Spanish) instead — never nothing.
+- Context (Q7, Q20, Q26): the whole Zuper conversation (texts, calls, Zuper's call summaries and
+  sentiment), every Quo / CRM-line text and call of the last 60 days with transcripts and
+  summaries, the customer's Zuper jobs (board, column, visit, technician), and our own
+  transcript of the customer's last 3 recorded Zuper calls — made just in time through an
+  OpenAI connection, kept on `dispatch_calls.transcript`, never in bulk.
+- The model is the existing production connection "Deepseek" (Q24). Phone numbers, emails and
+  street addresses are removed before anything is sent to it (`context.redact`, Q28).
+
+**Facts found read-only (2026-10-19, with the owner's OK — Q18, Q25):**
+- `POST {connect}/api/telephony/message/conversations` lists conversations with
+  `is_unresponded`, `unread_count`, `recent_message`, `customer_number.is_blocked`. 9 were
+  unanswered that day, the oldest from Oct 7. 10 of 125 conversations have no Zuper customer.
+- The full history is `POST {connect}/api/telephony/messages {"filters": {"conversation_uid",
+  "message_type": ["SMS","MMS","CALL","SYSTEM"]}, "limit", "page"}` — found by opening the TEST
+  customer's conversation in the guarded browser (every write aborted and logged, nothing
+  reached Zuper). A CALL row carries `call.status` COMPLETED / MISSED / VOICEMAIL / CANCELED,
+  `duration` and `call_recordings[].call_summary {summary, sentiment, next_action}`.
+- Zuper has its own AI texting agent ("CSR Agent", `ai_responder_status` INACTIVE on every
+  conversation). The owner chose to build ours: it reads Quo too and follows his exact rules.
+
+**Off three ways, and capped.** `ZUPER_AUTOREPLY_ENABLED` (server, default false — then the pass
+reads nothing and the client allows neither write), the switch in Dispatch → Settings (default
+off) and "Pause all AI agents". **Test mode is the default**: only `config.TEST_CUSTOMERS` (the
+Zuper TEST customer, whose number is the office Quo line 954-914-7244) is answered until an
+ADMIN types "TURN ON". Daily limit 30 (sent texts, New York day). Before every send it reads
+Zuper's company config and stops the whole pass if the System Notification Number is not
+19544207373 or system texts are off.
+
+**Exactly once.** `autoreply_log` is unique on (conversation, the message that opened the
+stretch); the row is committed as "sending" BEFORE the send, so a crash after Zuper accepted
+the text can never send a second one — a row left "sending" is never retried. A failed send is
+recorded "failed" and not retried either (a retry could text twice).
+
+**Not done, on purpose:** no reply to a number with no Zuper customer; Quo and CRM-line texts
+are context only (Q1 = Zuper only); no "needs attention" flag (above); the backlog is not
+answered. **Never exercised on a real conversation** — the first test is the owner texting
+954-420-7373 from the Quo line (Q29), in test mode.

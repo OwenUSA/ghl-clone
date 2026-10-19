@@ -30,7 +30,9 @@ deliberately out.
   texts) are OFF by module flag: the hook answers with a sentence, enqueues nothing, and
   the worker refuses a job of that type left in a queue. Settings → Automations shows them
   Off with the reason (`GET /api/automations`). Tests that pin the kept mechanics ask for
-  `rule_3_armed` / `rule_4_armed` by name. **No test reaches owen-main**:
+  `rule_3_armed` / `rule_4_armed` by name. **One owner-approved exception (2026-10-19): the
+  auto-reply** (`app/autoreply/`, next-to-last section) texts a customer whose Zuper text or
+  missed call sat unanswered 5 minutes — from Zuper, off by default, test mode by default. **No test reaches owen-main**:
   `tests/owen_guard.py` strips `CRM_LINK_*` / `OWEN_*` and refuses any connection to an
   owen-main host or whatever the link is pointed at, failing the test that tried.
   **ONE lift (2026-10-08, Owen):** appointment reminder texts from Zuper's job status —
@@ -859,6 +861,34 @@ cells, Connect calls before 2026-09-23) are printed under the report. What Zuper
 only a queue and a breach count, each a write the owner must approve — is
 `docs/ZUPER-SPEED-TO-LEAD.md`. `uv run python -m tests.browser_speed_to_lead` (from `backend/`)
 drives the tab in headless Chromium. See DECISIONS.md.
+
+## The auto-reply to unanswered Zuper texts (2026-10-19, OFF by default)
+
+`backend/app/autoreply/` (read `__init__.py` first). A customer's text or call to the Zuper
+Connect line (954) 420-7373 that no PERSON has answered for 5 minutes, around the clock, gets ONE
+polite text from that line, written by the "Deepseek" connection from the whole Zuper
+conversation, Quo / CRM-line history (with transcripts) and the Zuper job — and a private note
+on the job. **It sends by itself**: the owner lifted "no automatic texts" and Zuper's read-only
+rule for this feature only. Every rule: the 2026-10-19 amendment in `DECISIONS.md`.
+
+- **Off three ways:** `ZUPER_AUTOREPLY_ENABLED` (server; off = nothing read, nothing sendable),
+  Dispatch → Settings → Auto-reply (off), "Pause all AI agents". **Test mode is the default** —
+  only `config.TEST_CUSTOMERS`; real customers need an ADMIN to type "TURN ON". 30 a day.
+- **The send is still denylisted.** `client.autoreply_write()` is the ONE way past, for
+  `POST /customers/{uid}/send` in its exact shape `{"type": "SMS", "sms": {"body", "to"}}`, plus
+  `POST /jobs/{uid}/note`; every other non-GET in that scope is refused. Zuper sends from its
+  System Notification Number — checked before every send; not 19544207373 = nothing sent.
+- **Rules are pure** (`rules.py`, `tests/test_autoreply_rules.py`): workflow texts (matched by
+  wording — Zuper labels them "Owen" / "Zuper") are not a person answering; ok / thanks / C /
+  STOP open nothing; once per stretch; one text per number per 24 h; nothing older than a day or
+  from before the switch-on.
+- **The text is guarded** (`writer.refused`): no money, no "approved", no links or other
+  numbers, the after-hours words after hours, no fact when upset. Anything refused — or no model
+  — sends the fixed wording (`writer.TEMPLATES`, en / es). Phones, emails, addresses are removed
+  before the model sees anything (`context.redact`).
+- **Exactly once:** `autoreply_log` is unique per stretch and the row is committed "sending"
+  before the send; nothing is ever retried. Connect reads it uses: `client.CONNECT_READS`.
+- Tests mock Zuper and the model at the HTTP boundary (`tests/test_autoreply_service.py`).
 
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 

@@ -48,6 +48,7 @@ from . import (
 from .ai import api as ai_api
 from .ai import engine as ai_engine
 from .ai import triggers as ai_triggers
+from .autoreply import api as autoreply_api
 from .db import DATABASE_URL, Base, engine, get_db
 from .dispatch import act as dispatch_act
 from .dispatch import api as dispatch_api
@@ -152,6 +153,10 @@ app.include_router(dispatch_act.router)
 # Appointment reminder texts from Zuper's job status (2026-10-08, app/reminders): OFF by
 # default — the server gate ZUPER_REMINDERS_ENABLED and the mode in Settings → Automations.
 app.include_router(reminders_api.router)
+# The auto-reply (2026-10-19, app/autoreply): a polite text to a customer whose Zuper text
+# or missed call sat unanswered 5 minutes. OFF by default — the server gate
+# ZUPER_AUTOREPLY_ENABLED and the switch in Dispatch → Settings.
+app.include_router(autoreply_api.router)
 
 # AHS authorized a repair (2026-10-01): owen-main relays the note email; a Dispatch item
 # and the bell, nothing to Zuper. The feed's machine token. See app/ahs_authorizations.py.

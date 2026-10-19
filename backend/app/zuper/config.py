@@ -97,6 +97,18 @@ def dispatch_writes_enabled() -> bool:
     return _flag("DISPATCH_ZUPER_WRITES", False)
 
 
+AUTOREPLY_OFF_SENTENCE = ("The auto-reply is switched off on this server "
+                          "(ZUPER_AUTOREPLY_ENABLED is not set).")
+
+
+def autoreply_enabled() -> bool:
+    """The server's gate on the auto-reply (2026-10-19, app/autoreply): the polite text to a
+    customer whose Zuper text or missed call sat unanswered. Off unless the deployment says so.
+    With it off, `client.autoreply_write()` allows NOTHING and the pass reads nothing — whatever
+    the switch in Dispatch → Settings says. The second key of two."""
+    return _flag("ZUPER_AUTOREPLY_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

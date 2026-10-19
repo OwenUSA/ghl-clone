@@ -1920,6 +1920,9 @@ class DispatchCall(Base):
     job_uids: Mapped[list | None] = mapped_column(NullableJSONType)
     # Zuper's own summary of the recording; it arrives some time after the call ends.
     summary: Mapped[str | None] = mapped_column(Text)
+    # Our own transcript of the recording (2026-10-19, the auto-reply): made only for a customer
+    # the auto-reply is about to answer, never in bulk. "" = tried and there was nothing to hear.
+    transcript: Mapped[str | None] = mapped_column(Text)
 
 
 class DispatchNote(Base):
@@ -2088,6 +2091,25 @@ class DispatchSettings(Base):
     write_note: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     write_booking: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     write_stage: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # The auto-reply (2026-10-19, app/autoreply): a polite text to a customer whose Zuper text
+    # or missed call sat unanswered. OFF by default, and while `autoreply_test_only` (the
+    # default) it answers ONLY the test customers in autoreply/config.TEST_CUSTOMERS. The
+    # server's ZUPER_AUTOREPLY_ENABLED is the second key. `autoreply_enabled_at` is when it was
+    # last switched on: nothing that started waiting before it is ever answered (the backlog).
+    autoreply_enabled: Mapped[bool] = mapped_column(Boolean, default=False,
+                                                    server_default=false())
+    autoreply_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    autoreply_test_only: Mapped[bool] = mapped_column(Boolean, default=True,
+                                                      server_default=true())
+    autoreply_daily_cap: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    autoreply_connection_id: Mapped[int | None] = mapped_column(Integer)
+    autoreply_model: Mapped[str | None] = mapped_column(String(120))
+    # The connection that transcribes Zuper call recordings (an OpenAI one). None = summaries
+    # only, no transcripts.
+    autoreply_transcribe_connection_id: Mapped[int | None] = mapped_column(Integer)
+    # Its heartbeat: when the last pass ran and what stopped it, if anything.
+    autoreply_last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    autoreply_last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class DispatchSuggestion(Base):
@@ -2159,6 +2181,47 @@ class DispatchAiRun(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+
+
+class AutoReply(Base):
+    """One decision of the auto-reply (2026-10-19, app/autoreply) about one unanswered stretch
+    of a Zuper Connect conversation: the text it sent, or why it sent nothing.
+
+    `(conversation_uid, trigger_uid)` is UNIQUE — the message that opened the stretch — so a
+    stretch is answered at most once, whatever crashes or races in between. A row is written
+    (state "sending") BEFORE the send and committed, so a crash after Zuper accepted the text
+    can never lead to a second one."""
+    __tablename__ = "autoreply_log"
+    __table_args__ = (UniqueConstraint("conversation_uid", "trigger_uid",
+                                       name="uq_autoreply_stretch"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_uid: Mapped[str] = mapped_column(String(64), index=True)
+    trigger_uid: Mapped[str] = mapped_column(String(64))
+    trigger_kind: Mapped[str] = mapped_column(String(20))     # text | missed_call | voicemail
+    trigger_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    customer_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(10), index=True)   # last ten digits
+    job_uid: Mapped[str | None] = mapped_column(String(64))
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    # sending | sent | failed | skipped. "sending" left behind = a crash mid-send: never retried.
+    state: Mapped[str] = mapped_column(String(12))
+    reason: Mapped[str | None] = mapped_column(Text)
+    reply: Mapped[str | None] = mapped_column(Text)
+    after_hours: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    upset: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    needs_person: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # "model" (written by the AI) | "template" (the fixed wording: AI unavailable or refused)
+    written_by: Mapped[str | None] = mapped_column(String(12))
+    model: Mapped[str | None] = mapped_column(String(120))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    message_uid: Mapped[str | None] = mapped_column(String(64))  # Zuper's id of what we sent
+    note_state: Mapped[str | None] = mapped_column(String(12))   # added | failed | no_job
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class DispatchChat(Base):
