@@ -26,6 +26,10 @@ from . import config as c
 from .rules import ZMsg
 
 MESSAGE_TYPES = ["SMS", "MMS", "CALL", "SYSTEM"]
+# The one send. Denylisted for every other caller; client.autoreply_write() lets exactly this
+# shape through (client.AUTOREPLY_SEND). Kept out of client.PATHS on purpose: nothing there may
+# name a send.
+SEND_PATH = "/customers/%s/send"
 
 
 def _time(value) -> datetime | None:
@@ -133,7 +137,7 @@ def sender_check() -> str | None:
 
 def send(customer_uid: str, phone10: str, body: str) -> Any:
     with client.autoreply_write():
-        return client.request("POST", client.path("customer_send", uid=customer_uid), body={
+        return client.request("POST", SEND_PATH % customer_uid, body={
             "type": "SMS", "sms": {"body": body, "to": "+1" + phone10}})
 
 

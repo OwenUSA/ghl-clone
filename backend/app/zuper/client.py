@@ -252,10 +252,9 @@ PATHS = {
     # verified live: ?count=50&page=N, each row with users, metadata.request_source and, for a
     # job, activity_action_uid = the job's uid.
     "activities": "/activities/recent",
-    # The auto-reply (2026-10-19). `customer_send` is DENYLISTED and is reached only inside
-    # `autoreply_write()`; `company_config` is read before every send to check the sender
-    # (verified live: data.zuper_connect.system_notification_number / _enabled).
-    "customer_send": "/customers/{uid}/send",
+    # The auto-reply (2026-10-19) reads this before every send to check the sender (verified
+    # live: data.zuper_connect.system_notification_number / _enabled). Its send is NOT here:
+    # nothing in PATHS may be a send (tests/test_zuper_api.py) — see AUTOREPLY_SEND below.
     "company_config": "/company/config",
     "webhooks": "/service/notifications/webhook",
     "webhook_create": "/webhook",
@@ -460,7 +459,8 @@ def _proposal_lines_allowed(method: str, path: str, body: Any = None) -> bool:
 
 # The auto-reply's two writes (2026-10-19). The send must carry exactly this shape: one SMS,
 # one recipient, a body — nothing that could become an email, a template or a bulk send.
-AUTOREPLY_SEND = ("POST", _rx(PATHS["customer_send"]))
+# The path lives in app/autoreply/zconnect.py; only its pattern is here, inside this scope.
+AUTOREPLY_SEND = ("POST", r"^/customers/[^/]+/send$")
 AUTOREPLY_WRITES: tuple[tuple[str, str], ...] = (AUTOREPLY_SEND,
                                                  ("POST", _rx(PATHS["job_notes"])))
 AUTOREPLY_MAX_CHARS = 480
