@@ -2389,6 +2389,51 @@ export const saveDispatchSettings = (body: Partial<Omit<DispatchSettings,
   'runs_today' | 'connections' | 'writes'>>) =>
   send<DispatchSettings>('/api/dispatch/settings', 'PUT', body)
 export const dispatchWrites = () => get<DispatchWrites>('/api/dispatch/writes')
+
+/** The auto-reply (2026-10-19, backend/app/autoreply): a polite text to a customer whose Zuper
+ * text or missed call sat unanswered. Read by the Dispatch audience; changed by an ADMIN. */
+export interface AutoReplyRow {
+  id: number
+  state: 'sending' | 'sent' | 'failed' | 'skipped'
+  reason: string | null
+  kind: 'text' | 'missed_call' | 'voicemail'
+  waiting_since: string | null
+  customer: string | null
+  job_number: string | null
+  reply: string | null
+  after_hours: boolean
+  upset: boolean
+  needs_person: boolean
+  written_by: 'model' | 'template' | null
+  note: 'added' | 'failed' | 'no_job' | null
+  error: string | null
+  at: string | null
+  sent_at: string | null
+}
+export interface AutoReplyStatus {
+  server_enabled: boolean
+  enabled: boolean
+  enabled_at: string | null
+  test_only: boolean
+  daily_cap: number
+  sent_today: number
+  connection_id: number | null
+  model: string | null
+  transcribe_connection_id: number | null
+  last_run_at: string | null
+  last_error: string | null
+  wait_minutes: number
+  sender: string
+  connections: { id: number; name: string; provider: string; default_model: string | null }[]
+  log: AutoReplyRow[]
+}
+export const autoReplyStatus = () => get<AutoReplyStatus>('/api/autoreply')
+/** ADMIN. Leaving test mode (`test_only: false`) needs `confirm: 'TURN ON'`. */
+export const saveAutoReply = (body: {
+  enabled?: boolean; test_only?: boolean; daily_cap?: number; connection_id?: number
+  model?: string; transcribe_connection_id?: number; clear_transcribe?: boolean
+  confirm?: string
+}) => send<AutoReplyStatus>('/api/autoreply/settings', 'PUT', body)
 /** ADMIN. Turning a switch ON needs `confirm` = the typed phrase; off never does. */
 export const saveDispatchWrites = (body: Record<string, boolean | string | null>) =>
   send<DispatchWrites>('/api/dispatch/writes', 'PUT', body)

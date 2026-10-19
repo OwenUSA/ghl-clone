@@ -47,7 +47,9 @@ organised summary.
    board views (2026-09-30), the KPI questions and their job fields (2026-09-30,
    `ZUPER-KPI-SETUP.md`), the inspection questions (2026-10-12, 3.3a), the AHS - Inspection
    column order (2026-10-12), and the six customer-text workflows plus the System Notification
-   Number 19544207373 (2026-10-13, 4.5). Each lift covers that one thing only. The jobs in section 4 that write (`zuper_tasks`, `zuper_proposals`,
+   Number 19544207373 (2026-10-13, 4.5), and the CRM's auto-reply — reading the Connect text
+   conversations, one `POST /customers/{uid}/send` per unanswered stretch and a private job
+   note (2026-10-19, owner; `DECISIONS.md` 2026-10-19). Each lift covers that one thing only. The jobs in section 4 that write (`zuper_tasks`, `zuper_proposals`,
    routes) predate the rule; the owner said "ok leave that" on 2026-09-28.
 
 ---

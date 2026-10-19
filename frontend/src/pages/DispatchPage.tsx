@@ -6,6 +6,7 @@ import { WeekPlan } from '../components/dispatch/WeekPlan'
 import { ZuperCheck } from '../components/dispatch/ZuperCheck'
 import { ToBook } from '../components/dispatch/ToBook'
 import { Pipeline } from '../components/dispatch/Pipeline'
+import { AutoReplySection } from '../components/dispatch/AutoReplySection'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
 import {
   applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion,
@@ -458,6 +459,7 @@ function SettingsTab({ admin }: { admin: boolean }) {
         )}
       </div>
       {save.isError && <div style={{ color: RED, fontSize: 13 }}>{(save.error as Error).message}</div>}
+      <AutoReplySection admin={admin} />
       <WritesSection admin={admin} />
       {!admin && <div style={{ color: MUTED, fontSize: 12 }}>Only an admin can change these.</div>}
     </>

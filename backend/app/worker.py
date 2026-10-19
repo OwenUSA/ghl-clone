@@ -64,6 +64,10 @@ def main() -> None:
     # off again unless an admin switched the AI on.
     from .dispatch import service as dispatch_service
     dispatch_service.start_ai_thread(SessionLocal, stop)
+    # The auto-reply (2026-10-19): its own thread, every minute — a model's answer never holds
+    # up the sync. Does nothing unless ZUPER_AUTOREPLY_ENABLED and the Dispatch switch say so.
+    from .autoreply import service as autoreply_service
+    autoreply_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

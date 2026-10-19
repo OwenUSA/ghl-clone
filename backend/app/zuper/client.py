@@ -134,6 +134,31 @@ def dispatch_write():
         _DISPATCH_WRITE.reset(token)
 
 
+_AUTOREPLY: ContextVar[bool] = ContextVar("zuper_autoreply", default=False)
+
+
+@contextlib.contextmanager
+def autoreply_write():
+    """The auto-reply's own two writes (2026-10-19, owner-approved; app/autoreply):
+
+      POST /customers/{uid}/send   ONE text to that customer, body exactly
+                                   {"type": "SMS", "sms": {"body", "to"}} — the request Zuper's
+                                   own "Thank you for confirming" workflow makes. Zuper sends it
+                                   from the company's System Notification Number (954-420-7373).
+      POST /jobs/{uid}/note        the note saying what was sent
+
+    The send is on the DENYLIST for everyone else, and stays there: this scope is the only way
+    past it, only for that exact path and body shape, and only while the server gate
+    ZUPER_AUTOREPLY_ENABLED is on. Every other non-GET inside the scope is refused — no PUT, no
+    DELETE, no email, no second kind of send. Opened by app/autoreply/zconnect.py and nothing
+    else."""
+    token = _AUTOREPLY.set(True)
+    try:
+        yield
+    finally:
+        _AUTOREPLY.reset(token)
+
+
 def is_read_only() -> bool:
     return _READ_ONLY.get()
 
@@ -227,6 +252,11 @@ PATHS = {
     # verified live: ?count=50&page=N, each row with users, metadata.request_source and, for a
     # job, activity_action_uid = the job's uid.
     "activities": "/activities/recent",
+    # The auto-reply (2026-10-19). `customer_send` is DENYLISTED and is reached only inside
+    # `autoreply_write()`; `company_config` is read before every send to check the sender
+    # (verified live: data.zuper_connect.system_notification_number / _enabled).
+    "customer_send": "/customers/{uid}/send",
+    "company_config": "/company/config",
     "webhooks": "/service/notifications/webhook",
     "webhook_create": "/webhook",
     "webhook_list": "/webhook",                     # a second guess at the list (UNVERIFIED)
@@ -266,6 +296,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("GET", _rx(PATHS["invoices"])), ("GET", _rx(PATHS["invoice"])),
     ("GET", _rx(PATHS["payments"])), ("GET", _rx(PATHS["commissions"])),
     ("GET", _rx(PATHS["product"])), ("GET", _rx(PATHS["activities"])),
+    ("GET", _rx(PATHS["company_config"])),
     ("GET", _rx(PATHS["custom_fields"])), ("GET", _rx(PATHS["lead_sources"])),
     ("GET", _rx(PATHS["webhooks"])), ("POST", _rx(PATHS["webhook_create"])),
     ("GET", _rx(PATHS["webhook_list"])),
@@ -427,14 +458,47 @@ def _proposal_lines_allowed(method: str, path: str, body: Any = None) -> bool:
     return isinstance(job, dict) and set(job) <= PROPOSAL_LINE_JOB_KEYS and "job_uid" in job
 
 
+# The auto-reply's two writes (2026-10-19). The send must carry exactly this shape: one SMS,
+# one recipient, a body — nothing that could become an email, a template or a bulk send.
+AUTOREPLY_SEND = ("POST", _rx(PATHS["customer_send"]))
+AUTOREPLY_WRITES: tuple[tuple[str, str], ...] = (AUTOREPLY_SEND,
+                                                 ("POST", _rx(PATHS["job_notes"])))
+AUTOREPLY_MAX_CHARS = 480
+
+
+def _autoreply_send_body_ok(body: Any) -> bool:
+    if not (isinstance(body, dict) and set(body) == {"type", "sms"} and body["type"] == "SMS"):
+        return False
+    sms = body["sms"]
+    return (isinstance(sms, dict) and set(sms) == {"body", "to"}
+            and isinstance(sms["body"], str) and 0 < len(sms["body"]) <= AUTOREPLY_MAX_CHARS
+            and isinstance(sms["to"], str) and re.fullmatch(r"\+1\d{10}", sms["to"]) is not None)
+
+
+def _autoreply_allowed(method: str, path: str, body: Any = None) -> bool:
+    if not (_AUTOREPLY.get() and config.autoreply_enabled()):
+        return False
+    if method == AUTOREPLY_SEND[0] and re.match(AUTOREPLY_SEND[1], path):
+        return _autoreply_send_body_ok(body)
+    return any(m == method and re.match(rx, path) for m, rx in AUTOREPLY_WRITES)
+
+
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None) -> Any:
     method = method.upper()
     path = "/" + path.lstrip("/")
-    why = denied(method, path)
+    # Inside the auto-reply scope only its own two writes exist (the send is the ONE way past
+    # the denylist, and only in its exact shape); nothing at all while the server gate is off.
+    if method != "GET" and _AUTOREPLY.get() and not _autoreply_allowed(method, path, body):
+        raise ZuperError("refused", "%s %s is not one of the auto-reply's writes%s" % (
+            method, path, "" if config.autoreply_enabled()
+            else " (" + config.AUTOREPLY_OFF_SENTENCE + ")"))
+    autoreply_send = (_AUTOREPLY.get() and method == AUTOREPLY_SEND[0]
+                      and re.match(AUTOREPLY_SEND[1], path) is not None)
+    why = None if autoreply_send else denied(method, path)
     if why:
         raise ZuperError("refused", "%s %s is never called: %s" % (method, path, why))
-    if not allowed(method, path):
+    if not (autoreply_send or allowed(method, path)):
         raise ZuperError("refused", "%s %s is not on the sync's allowlist" % (method, path))
     if not (config.env_enabled() or _OPERATOR.get()):
         raise ZuperError("off")
@@ -457,7 +521,8 @@ def request(method: str, path: str, *, params: dict | None = None,
     if method != "GET" and config.pull_only() and not _mirror_write_allowed(path) \
             and not _ahs_create_allowed(method, path) \
             and not _dispatch_write_allowed(method, path) \
-            and not _proposal_lines_allowed(method, path, body):
+            and not _proposal_lines_allowed(method, path, body) \
+            and not _autoreply_allowed(method, path, body):
         # Backstop for the one-way mirror: every caller checks config.pull_only() first, so
         # reaching here is a bug — refuse before a connection exists rather than write.
         raise ZuperError("refused", config.PULL_ONLY_SENTENCE)
@@ -628,9 +693,20 @@ def path(name: str, **ids: str) -> str:
 #                                                   reads, the web app's own call list uses it)
 #   GET  {connect}/api/telephony/calls/{uid}/details
 # Verified read-only against the live account on 2026-09-30.
+#
+# The auto-reply (2026-10-19, owner-approved) reads the TEXT conversations on the same host:
+#   POST {connect}/api/telephony/message/conversations   — the inbox list (a body of filters)
+#   GET  {connect}/api/telephony/message/conversation/{uid}
+#   POST {connect}/api/telephony/messages                 — ONE conversation's history, a
+#        search {"filters": {"conversation_uid", "message_type"}, "limit", "page"}: the request
+#        Zuper's own conversation screen makes to show it (found read-only, 2026-10-19).
+# Still reads only: sending a text is never a Connect request (see `autoreply_write`).
 CONNECT_READS: tuple[tuple[str, str], ...] = (
     ("POST", r"^/calls$"),
     ("GET", r"^/calls/[A-Za-z0-9-]+/details$"),
+    ("POST", r"^/message/conversations$"),
+    ("GET", r"^/message/conversation/[A-Za-z0-9-]+$"),
+    ("POST", r"^/messages$"),
 )
 
 
@@ -648,7 +724,7 @@ def connect_read(method: str, path: str, *, body: dict | None = None) -> Any:
     method = method.upper()
     path = "/" + path.lstrip("/")
     if not any(m == method and re.match(rx, path) for m, rx in CONNECT_READS):
-        raise ZuperError("refused", "%s %s is not one of the call-history reads" % (method, path))
+        raise ZuperError("refused", "%s %s is not one of the Zuper Connect reads" % (method, path))
     if not (config.env_enabled() or _OPERATOR.get()):
         raise ZuperError("off")
     if not config.key_set():

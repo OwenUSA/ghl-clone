@@ -48,6 +48,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 PROVIDER_HOSTS = ("api.anthropic.com", "api.openai.com", "api.deepseek.com")
 
 TIMEOUT_SECONDS = 60.0
+TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
 MAX_RETRIES = 1
 
 # Tests set this to return an httpx2.Client on a mock transport. None = the SDK's own.
@@ -397,6 +398,18 @@ class OpenAIProvider(Provider):
             return sorted({m.id for m in self._client().models.list()})
         except openai.OpenAIError as e:
             raise _sentence(e, self.who, "", self.api_key) from None
+
+    def transcribe(self, audio: bytes, filename: str, model: str = TRANSCRIBE_MODEL) -> str:
+        """A recording as text (2026-10-19, the auto-reply reads Zuper's call recordings).
+        OpenAI only: DeepSeek and most compatible servers have no speech-to-text."""
+        if self.compatible:
+            raise ProviderError("%s cannot transcribe recordings." % self.who)
+        try:
+            out = self._client().audio.transcriptions.create(model=model,
+                                                             file=(filename, audio))
+        except openai.OpenAIError as e:
+            raise _sentence(e, self.who, model, self.api_key) from None
+        return (getattr(out, "text", None) or "").strip()
 
 
 class CompatibleProvider(OpenAIProvider):
