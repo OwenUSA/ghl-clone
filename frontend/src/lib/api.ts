@@ -2605,3 +2605,44 @@ export const refreshDispatchAvailability = () =>
 /** A DRAFT: proposes visits for every job waiting for one. Books nothing. */
 export const dispatchPlan = (days: number, kind: 'all' | DispatchPlanKind) =>
   get<DispatchPlan>(`/api/dispatch/plan?days=${days}&kind=${kind}`)
+
+// ---- the agent registry (2026-10-21, app/registry) ----------------------------------
+export type RegistryAction = {
+  action: string; label: string; customer: boolean; level: string; default: string
+  choices: string[]; note: string | null
+}
+export type RegistryEntry = {
+  key: string; name: string; kind: 'agent' | 'automation'; role: number | null
+  purpose: string; covers: string; channels: string[]; runs_on: string; provider: string | null
+  hours: string; never: string[]; is_test: boolean; notes: string | null
+  owner_user_id: number | null; owner: string | null; archived: boolean
+  actions: RegistryAction[]
+  status: { state: 'on' | 'off' | 'test' | 'outside' | 'unknown'; sentence: string }
+  health: { last_error: string | null; last_error_at: string | null; error_today: boolean }
+  spend_today: string | null; spend_unknown: boolean; daily_cap: string | null
+}
+export type RegistryOverview = {
+  roles: { role: number; name: string }[]
+  levels: { value: string; label: string }[]
+  entries: RegistryEntry[]
+  overall: { spend_today: string | null; spend_unknown: boolean; daily_cap: string | null; paused: boolean }
+  promote_confirm: string
+}
+export type RegistryActivityItem = {
+  key: string; name: string; at: string | null; what: string; text: string
+  tone: 'good' | 'bad' | 'info' | 'muted'; ref: number | null
+}
+export const registryOverview = () => get<RegistryOverview>('/api/ai/registry')
+export const registryActivity = (key?: string | null, limit = 200) => {
+  const sp = new URLSearchParams({ limit: String(limit) })
+  if (key) sp.set('key', key)
+  return get<{ items: RegistryActivityItem[] }>(`/api/ai/registry/activity?${sp}`)
+}
+export const registryUpdateEntry = (key: string, body: {
+  role?: number | null; owner_user_id?: number | null; is_test?: boolean
+  daily_cap_usd?: string | number | null; notes?: string | null
+}) => send<RegistryEntry>(`/api/ai/registry/entries/${encodeURIComponent(key)}`, 'PATCH', body)
+export const registrySetLevel = (key: string, action: string, body: { level: string; reason?: string; confirm?: string }) =>
+  send<RegistryEntry>(`/api/ai/registry/entries/${encodeURIComponent(key)}/actions/${encodeURIComponent(action)}`, 'PUT', body)
+export const registrySetOverall = (daily_cap_usd: string | number) =>
+  send<RegistryOverview['overall']>('/api/ai/registry/overall', 'PUT', { daily_cap_usd })

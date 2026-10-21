@@ -6,23 +6,26 @@ import { KnowledgeTab } from '../components/ai/KnowledgeTab'
 import { TemplatesTab } from '../components/ai/TemplatesTab'
 import { LogsTab } from '../components/ai/LogsTab'
 import { PhoneNumbersTab } from '../components/ai/PhoneNumbersTab'
+import { OverviewTab } from '../components/ai/OverviewTab'
+import { ActivityTab } from '../components/ai/ActivityTab'
 import { PAGE_BG } from '../components/ai/aiUi'
 import type { Me } from '../lib/auth'
 import { aiTabs, canOpenAiAgents, type AiTab } from '../lib/aiAgents'
 
 /**
  * AI Agents (2026-09-15): GoHighLevel's module, phase 1. One header with the shared tab
- * bar (PageTabs, as on every module); Agents · Knowledge Base · Templates · Phone numbers
- * (ADMIN, 2026-10-06) · Agent Logs (ADMIN). Opening an agent replaces the tab's content with its builder.
+ * bar (PageTabs, as on every module); Overview (the agent registry, 2026-10-21) · Agents ·
+ * Knowledge Base · Templates · Activity · Phone numbers (ADMIN, 2026-10-06) · Agent Logs (ADMIN).
+ * Opening an agent replaces the tab's content with its builder.
  */
 export function AiAgentsPage({ user }: { user: Me }) {
   const tabs = aiTabs(user)
-  const [tab, setTab] = useState<AiTab>('agents')
+  const [tab, setTab] = useState<AiTab>('overview')
   const [agentId, setAgentId] = useState<number | null>(null)
   const [templateToUse, setTemplateToUse] = useState<number | null>(null)
 
   if (!canOpenAiAgents(user)) return null
-  const active = tabs.some((t) => t.key === tab) ? tab : 'agents'
+  const active = tabs.some((t) => t.key === tab) ? tab : 'overview'
 
   return (
     <div className="flex min-w-0 flex-1 flex-col" style={{ height: '100vh', overflow: 'hidden',
@@ -32,6 +35,10 @@ export function AiAgentsPage({ user }: { user: Me }) {
           onSelect: () => { setAgentId(null); setTab(t.key) } }))} />
       {agentId != null ? (
         <AgentBuilder user={user} agentId={agentId} onBack={() => setAgentId(null)} />
+      ) : active === 'overview' ? (
+        <OverviewTab user={user} />
+      ) : active === 'activity' ? (
+        <ActivityTab user={user} />
       ) : active === 'agents' ? (
         <AgentsTab user={user} onOpen={setAgentId} templateToUse={templateToUse}
           onTemplateUsed={() => setTemplateToUse(null)} />

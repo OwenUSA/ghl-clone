@@ -1096,6 +1096,9 @@ class AiSettings(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     on_call_phone: Mapped[str | None] = mapped_column(String(40))
+    # The overall daily spending cap for every agent together (2026-10-21, app/registry), in
+    # micro-dollars. NULL = the registry's default ($25).
+    overall_daily_cap_micros: Mapped[int | None] = mapped_column(Integer)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
 
@@ -2377,3 +2380,56 @@ class ReminderSwitchLog(Base):
     field: Mapped[str] = mapped_column(String(40))
     old_value: Mapped[str | None] = mapped_column(Text)
     new_value: Mapped[str | None] = mapped_column(Text)
+
+
+# ---- the agent registry, 2026-10-21 (app/registry) ------------------------------------
+#
+# Every bot and automation in one list, each with a scope of work. WHAT an entry is (its
+# purpose, channels, never-list, the actions it can take) is code: `registry/catalog.py`.
+# What a person DECIDED about it is here: which of the ten roles it belongs to, who answers
+# for it, its spending cap, whether it is a test agent, and the level of each action.
+
+class AgentRegistryEntry(Base):
+    """A person's settings for one registry entry. No row = the catalog's defaults."""
+    __tablename__ = "agent_registry"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    role: Mapped[int | None] = mapped_column(Integer)
+    owner_user_id: Mapped[int | None] = mapped_column(Integer)
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Micro-dollars a New York day. NULL = no cap of its own (the overall cap still applies).
+    daily_cap_micros: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class AgentPermission(Base):
+    """The level one action of one entry is at: never | shadow | approve | auto. No row = the
+    catalog's default. Changed only by an ADMIN; every change is an AgentRegistryLog row."""
+    __tablename__ = "agent_permissions"
+    __table_args__ = (UniqueConstraint("entry_key", "action", name="uq_agent_permission"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_key: Mapped[str] = mapped_column(String(80), index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    level: Mapped[str] = mapped_column(String(12))
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    changed_by_id: Mapped[int | None] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(Text)
+
+
+class AgentRegistryLog(Base):
+    """Append-only: every change a person made in the registry, and every failure alert it
+    raised. Never updated, never deleted."""
+    __tablename__ = "agent_registry_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    entry_key: Mapped[str] = mapped_column(String(80), index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    # level | role | owner | test | cap | notes | overall_cap | failure | cap_reached
+    what: Mapped[str] = mapped_column(String(20))
+    target: Mapped[str | None] = mapped_column(String(80))
+    old_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)

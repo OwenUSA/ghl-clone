@@ -94,7 +94,8 @@ def runs_today(db: Session, now: datetime) -> int:
         DispatchAiRun.created_at >= start.astimezone(UTC))) or 0
 
 
-def provider_for(db: Session, now: datetime) -> tuple[providers.Provider, str]:
+def provider_for(db: Session, now: datetime, *, entry: str = "dispatch_assistant"
+                 ) -> tuple[providers.Provider, str]:
     s = settings(db)
     if not s.ai_enabled:
         raise Unavailable("The Dispatch AI is switched off (Dispatch → Settings).")
@@ -103,6 +104,10 @@ def provider_for(db: Session, now: datetime) -> tuple[providers.Provider, str]:
     if runs_today(db, now) >= s.daily_cap:
         raise Unavailable("Today's AI limit (%d) is used up; it resets at midnight."
                           % s.daily_cap)
+    from ..registry import service as registry
+    over = registry.cap_refusal(db, entry, now)
+    if over:
+        raise Unavailable(over)
     conn = db.get(AiConnection, s.connection_id) if s.connection_id else None
     if conn is None:
         raise Unavailable("No AI connection is chosen for Dispatch.")
@@ -123,6 +128,11 @@ def _record(db: Session, kind: str, model: str, turn: providers.Turn | None, *,
     # The sessions do not autoflush (app/db.py): without this, the cap's count in the next
     # chat round or the next item would not see this run (review 2026-10-01).
     db.flush()
+    if error is not None:
+        # The first failure of the day rings the bell for the admins (registry, Q13).
+        from ..registry import service as registry
+        registry.alert_failure(db, "availability_reader" if kind == "availability"
+                               else "dispatch_assistant", "the AI request failed: %s" % error)
 
 
 # ------------------------------------------------------------------------------- context

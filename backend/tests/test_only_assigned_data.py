@@ -1264,7 +1264,10 @@ AUDITED = {
         "ai_push_agent",
         # A voice agent's "Answering calls" switch (phase 2c, 2026-09-25): ADMIN, no
         # customer record — it tells owen-main to activate / deactivate an agent version.
-        "ai_set_answering"), "AI_MODULE: restricted refused 403"),
+        "ai_set_answering",
+        # The agent registry (2026-10-21, app/registry/api.py) — on the same router and gate.
+        "registry_overview", "registry_activity", "registry_update_entry",
+        "registry_set_level", "registry_set_overall"), "AI_MODULE: restricted refused 403"),
 }
 
 

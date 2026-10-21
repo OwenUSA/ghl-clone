@@ -19,16 +19,19 @@ export function canOpenAiAgents(user: AiUser | null | undefined): boolean {
 
 export const isAiAdmin = (user: AiUser | null | undefined) => !!user && user.role === 'ADMIN'
 
-export type AiTab = 'agents' | 'knowledge' | 'templates' | 'numbers' | 'logs'
+export type AiTab = 'overview' | 'agents' | 'knowledge' | 'templates' | 'activity' | 'numbers' | 'logs'
 
 /** The module's tabs. Phone numbers and Agent Logs are not drawn for a dispatcher (both are
-    ADMIN-only on the server — decision 18 of 2026-10-06 for the numbers). */
+    ADMIN-only on the server — decision 18 of 2026-10-06 for the numbers). Overview and Activity
+    (2026-10-21) are the agent registry: everyone in the module reads them. */
 export function aiTabs(user: AiUser | null | undefined): { key: AiTab; label: string }[] {
   if (!canOpenAiAgents(user)) return []
   const tabs: { key: AiTab; label: string }[] = [
+    { key: 'overview', label: 'Overview' },
     { key: 'agents', label: 'Agents' },
     { key: 'knowledge', label: 'Knowledge Base' },
     { key: 'templates', label: 'Templates' },
+    { key: 'activity', label: 'Activity' },
   ]
   if (isAiAdmin(user)) tabs.push({ key: 'numbers', label: 'Phone numbers' }, { key: 'logs', label: 'Agent Logs' })
   return tabs

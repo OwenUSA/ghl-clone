@@ -890,6 +890,24 @@ rule for this feature only. Every rule: the 2026-10-19 amendment in `DECISIONS.m
   before the send; nothing is ever retried. Connect reads it uses: `client.CONNECT_READS`.
 - Tests mock Zuper and the model at the HTTP boundary (`tests/test_autoreply_service.py`).
 
+## The agent registry (2026-10-21)
+
+`backend/app/registry/` (read `__init__.py` first) and AI Agents → **Overview** / **Activity**.
+Every bot and automation in one list under the boss's ten roles, each with a scope of work, and
+a level per action: **Never → Shadow → Approve each → Automatic**. The design is the 2026-10-21
+"agent system" amendment in `DECISIONS.md`; what is built is the amendment after it.
+
+- **What an entry IS is code** (`registry/catalog.py`): purpose, covers, channels, never-list,
+  actions and which levels each may take. People set role, owner, test flag, daily limit, notes
+  and the levels. Only an ADMIN changes anything; more freedom needs a reason + typed PROMOTE.
+- **A module asks before it acts:** `registry.service.refusal(db, key, action)` (level + spend
+  limits) or `level_refusal` (level only). The auto-reply and the Dispatch assistant's Zuper
+  changes are wired. **A new agent or automation must be added to the catalog and ask the
+  registry** — the registry itself never sends, calls or writes to Zuper.
+- AI Agents rows (`ai_agent:<id>`) mirror their own switches and are never set from here.
+- Spend: each entry's tokens × its connection's price; overall limit $25/day by default.
+  The first failure of the day rings the bell for admins + the entry's owner.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

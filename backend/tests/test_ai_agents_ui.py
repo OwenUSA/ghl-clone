@@ -33,9 +33,9 @@ def test_who_opens_the_module_and_which_tabs_they_get():
               none: [m.canOpenAiAgents(null), m.aiTabs(undefined)] })
     """ % js([OWEN, DANA, RITA, TESS]))
     assert got["open"] == [True, True, False, False]
-    assert got["tabs"][0] == ["Agents", "Knowledge Base", "Templates", "Phone numbers",
-                              "Agent Logs"]
-    assert got["tabs"][1] == ["Agents", "Knowledge Base", "Templates"], (
+    assert got["tabs"][0] == ["Overview", "Agents", "Knowledge Base", "Templates", "Activity",
+                              "Phone numbers", "Agent Logs"]
+    assert got["tabs"][1] == ["Overview", "Agents", "Knowledge Base", "Templates", "Activity"], (
         "a dispatcher must not be offered Phone numbers or Agent Logs — both are ADMIN-only")
     assert got["tabs"][2] == [] and got["tabs"][3] == []
     assert got["none"] == [False, []]

@@ -7539,3 +7539,42 @@ and general-task agents (Q5).
 **Build order** (Q23): 1 foundation (registry, scopes, action log, ladder, alerts, pause, caps,
 existing bots registered, voice clean-up) · 2 daily backups · 3 agent #1 Retail calls ·
 4 shadow copies of the six Zuper workflows · 5 the other agents one at a time.
+
+---
+
+## AMENDMENT (2026-10-21): the agent registry — step 1 of the agent system, BUILT
+
+Step 1 of the build order above (the foundation), first part. `backend/app/registry/` and the AI
+Agents page's new **Overview** and **Activity** tabs. Migration `b8d4f1c27e60` (three new tables,
+one nullable column; no row = today's behaviour exactly).
+
+- **One list.** `registry/catalog.py` is WHAT each entry is (purpose, covers, channels, where it
+  runs, provider, hours, never-list, actions) — code, reviewed in a commit. A person decides only
+  the role (1–10), who answers for it, its daily limit, whether it is a test agent, notes
+  (`agent_registry`) and the level of each EDITABLE action (`agent_permissions`). AI Agents rows
+  are listed as `ai_agent:<id>` and mirror their own switches (Answering calls, mode) — never
+  set here, so two controls never disagree. Automations that run in Zuper, owen-main or on the
+  dispatch server are listed with their real state "outside the CRM" and are not editable here.
+- **The ladder, enforced.** Only an ADMIN changes a level; more freedom needs a reason and the
+  typed word PROMOTE (`registry.set_level`); every change is an `agent_registry_log` row (never
+  updated or deleted). The two-weeks / 30-actions rule is shown in the dialog, not computed:
+  the clean-actions count needs the per-agent mismatch review that comes with shadow
+  comparisons (step 4).
+- **Wired:** the auto-reply's texts — Never (asks nothing, sends nothing), **Shadow** (decides,
+  writes the reply with the model, records `autoreply_log.state = "shadow"`, sends NO text and
+  adds NO note; once per stretch, like a real reply), Automatic (today's behaviour, the default:
+  the owner's 2026-10-19 lift). The Dispatch assistant's Zuper changes — Never refuses them
+  whatever the switches say; Approve each is how they already work.
+- **Spending (Q27).** Per-entry daily limit (none by default) and an overall one ($25 by default,
+  `ai_settings.overall_daily_cap_micros`), from each entry's own tokens priced by its
+  connection; an unknown price reads "unknown", never $0. Enforced on the auto-reply and the
+  Dispatch AI (assistant and availability reader). Voice minutes stay owen-main's cap
+  (Phone numbers tab).
+- **Failure alerts (Q13).** The first failure of the day per entry rings the bell for every active
+  ADMIN and the entry's owner: the auto-reply's model down (it still sends the fixed wording) or
+  Zuper refusing a send, a Dispatch AI request failing, a spend limit reached.
+- **Activity** reads each entry's own log (autoreply_log, ai_runs, dispatch_write_log, failed
+  dispatch_ai_runs, the registry log). Nothing is copied.
+- **Not in this part:** the approvals queue in Dispatch (comes with agent #1, its first user),
+  backups (step 2), outbound calls, the Q19 renames — those are an admin's edits in the new
+  Overview (role, test flag) plus the existing agent rename.
