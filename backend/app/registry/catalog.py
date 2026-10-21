@@ -52,6 +52,7 @@ ACTIONS: dict[str, dict] = {
     "ahs_portal": {"label": "Read and submit in the AHS portal (Frontdoor)", "customer": False},
     "ai_vision": {"label": "Look at the pictures with AI and write the draft", "customer": False},
     "send_customer": {"label": "Send the report to the customer", "customer": True},
+    "ai_suggest": {"label": "Suggest tools & materials with AI", "customer": False},
 }
 
 
@@ -227,6 +228,27 @@ ENTRIES: tuple[Entry, ...] = (
         ),
         never=("Send anything to the customer", "Mention prices or AHS approval",
                "Promise a date", "Write anything in Zuper"),
+        owner_hint="Luis", tags=("settings",),
+    ),
+    Entry(
+        key="tech_briefing", name="Field technician briefing", kind="agent", role=7,
+        purpose="At 6 PM the day before, texts each technician their jobs for tomorrow: when, "
+                "where, what the inspection found (leak, roof, what could not be inspected), "
+                "the time it takes and what to bring - suggested by AI only when nothing was "
+                "recorded, and marked so.",
+        covers="Every visit tomorrow on AHS - Inspection, AHS - Repair & Review and Retail. "
+               "Test technicians only until test-only is switched off in its settings.",
+        channels=("Text to the technician from the CRM line",),
+        runs_on="CRM worker (reads Zuper's copy only)", provider="DeepSeek (suggestions)",
+        hours="Once a day, at its send time (6 PM by default)",
+        actions=(
+            Action("text_staff", SHADOW, (NEVER, SHADOW, AUTO),
+                   "One text per technician a day. Phones come from the Inspection "
+                   "documentation settings."),
+            Action("ai_suggest", AUTO, (NEVER, AUTO),
+                   "Only for jobs whose inspection recorded no tools or materials."),
+        ),
+        never=("Text customers", "Write anything in Zuper", "Mention prices"),
         owner_hint="Luis", tags=("settings",),
     ),
     # ------------------------------------------------------------------ automations

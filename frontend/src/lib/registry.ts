@@ -74,6 +74,9 @@ export const SETTING_FIELDS: Record<string, { label: string; kind: 'bool' | 'int
   boards: { label: 'Boards it checks', kind: 'list', hint: 'AHS - Inspection, Retail, AHS - Repair & Review' },
   grace_minutes: { label: 'Minutes after the visit before checking', kind: 'int' },
   recheck_minutes: { label: 'Minutes after the text before the call', kind: 'int' },
+  send_time: { label: 'Send time (New York, 24-hour)', kind: 'text', hint: 'The day before, e.g. 18:00.' },
+  test_technicians: { label: 'Test technicians', kind: 'list', hint: 'Comma-separated Zuper names.' },
+  skip_stages: { label: 'Skip jobs in these columns', kind: 'list' },
   technicians: { label: 'Technician phones', kind: 'map', hint: 'One per line: Zuper name = phone, e.g. Antonio Brown = 954-555-0100' },
 }
 

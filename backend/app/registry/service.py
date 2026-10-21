@@ -48,7 +48,8 @@ MICRO = 1_000_000
 
 
 # Dispatch AI runs (`dispatch_ai_runs.kind`) that belong to an entry other than the assistant.
-DISPATCH_AI_KINDS = {"availability": "availability_reader", "inspection": "inspection_docs"}
+DISPATCH_AI_KINDS = {"availability": "availability_reader", "inspection": "inspection_docs",
+                     "briefing": "tech_briefing"}
 
 
 def _dispatch_kind_filter(key: str):
@@ -427,6 +428,18 @@ def _status(db: Session, v: View) -> dict:
                 return {"state": "test", "sentence": "On for test jobs only (%s)." % ", ".join(
                     "#" + x for x in st.test_jobs)}
             return {"state": "on", "sentence": "On for every inspection."}
+        if v.key == "tech_briefing":
+            from ..tech_briefing import service as tsvc
+            if not zconf.tech_briefing_enabled():
+                return {"state": "off",
+                        "sentence": "Off on this server (TECH_BRIEFING_ENABLED)."}
+            st = tsvc.settings(db)
+            words = "texts %s, at %s" % (cat.LEVEL_LABEL[level(db, v.key, "text_staff")].lower(),
+                                         st.send_time)
+            if st.test_only:
+                return {"state": "test", "sentence": "On for test technicians only (%s): %s." % (
+                    ", ".join(st.test_technicians), words)}
+            return {"state": "on", "sentence": "On for every technician: %s." % words}
         if v.key == "ahs_authorizations":
             return {"state": "outside", "sentence": "Switched at owen-main."}
         if v.outside:
@@ -511,7 +524,10 @@ def _settings_kinds():
     from ..followup import config as fconf
     from ..inspection_docs import config as iconf
     from ..inspection_report import config as rconf
-    return {"inspection_report": (lambda raw: rconf.Settings.from_config(raw).as_dict(),
+    from ..tech_briefing import config as tconf
+    return {"tech_briefing": (lambda raw: tconf.Settings.from_config(raw).as_dict(),
+                              tconf.validate),
+            "inspection_report": (lambda raw: rconf.Settings.from_config(raw).as_dict(),
                                   rconf.validate),
             "call_followup": (lambda raw: fconf.Settings.from_config(raw).as_dict(),
                               fconf.validate),
@@ -708,6 +724,17 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
                     }.get(r.state, "%s: %s" % (r.state.title(), label))
             add("inspection_report", r.updated_at or r.created_at, r.state, text,
                 tone={"failed": "bad", "draft": "good"}.get(r.state, "info"))
+    if key in (None, "tech_briefing"):
+        from ..models import TechBriefing
+        for r in db.scalars(select(TechBriefing).order_by(TechBriefing.id.desc()).limit(limit)):
+            n = len(r.job_numbers or [])
+            verb = {"sent": "Texted", "shadow": "Would have texted", "failed": "Could not text",
+                    "skipped": "Did not text"}.get(r.state, r.state.title())
+            add("tech_briefing", r.sent_at or r.created_at, r.state,
+                "%s %s %d job%s for %s%s:\n%s" % (
+                    verb, r.technician, n, "" if n == 1 else "s", r.brief_date.isoformat(),
+                    " (%s)" % r.note if r.note and r.state != "sent" else "", r.body or ""),
+                tone={"failed": "bad", "sent": "good", "skipped": "muted"}.get(r.state, "info"))
     if key in (None, "inspection_docs"):
         for r in db.scalars(select(InspectionCheck).order_by(InspectionCheck.id.desc())
                             .limit(limit)):

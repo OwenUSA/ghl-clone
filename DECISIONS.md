@@ -7741,3 +7741,36 @@ in Zuper; **an AI vision model picks the pictures** and captions them; contents 
 - Off unless `INSPECTION_REPORT_ENABLED`; test jobs #701 / #734 only until "test only" is off;
   "Send the report to the customer" is in the registry at Never and cannot be switched on.
 - New dependencies: `pillow`, `pillow-heif`, `fpdf2` (wheels / pure Python, no build step).
+
+
+---
+
+## AMENDMENT (2026-10-21): the field technician briefing (agent #7) - tomorrow's jobs, texted the day before
+
+The user's request: an agent that collects what the inspection documentation found and reminds
+each technician of tomorrow's jobs - what was found on each inspection and what tools and
+materials it may need - with a text the day before to the technician assigned. Built as
+`backend/app/tech_briefing/`, "Field technician briefing" (role 7). Migration `f2c7a91d3b58`
+(`tech_briefings`).
+
+**The user's answers (2026-10-21):** **6 PM New York the day before** (a setting); **every visit**
+tomorrow, inspections and repairs; when the inspection recorded no tools or materials, **an AI
+suggestion, marked "suggested - check the inspection"** - what the technician recorded always wins.
+
+**How it works:**
+- Tomorrow's visits come from `DispatchJob.scheduled_start` on the chosen boards, grouped by the
+  Zuper Technician field (else the first assigned user), skipping Reschedule Required / Cancelled.
+- Each job line: time window, job number, customer, address, inspection or repair, roof type,
+  leak location, what to bring, time to complete, what could not be inspected - from the job
+  fields first, then the inspection-documentation agent's findings (`InspectionCheck.found`);
+  "not recorded" where nothing is.
+- Jobs with no recorded tools: ONE DeepSeek call per briefing (the Dispatch AI's connection,
+  switch, pause and daily cap; spend kind "briefing"); a suggestion over 160 characters or naming
+  money is dropped.
+- ONE briefing per technician and day, recorded before it is sent, never re-sent (a job added
+  later is not); split into texts of at most 1,000 characters between jobs. Sent from the CRM
+  line to the phone in the **Inspection documentation settings** (the one place technicians'
+  phones live); a missing phone is "skipped" with a note.
+- Off unless `TECH_BRIEFING_ENABLED`; texts start at **Shadow**; test technicians only (Owen
+  Buzaglo) until "test only" is off. It texts only technicians - never customers - and writes
+  nothing to Zuper.

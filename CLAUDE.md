@@ -937,6 +937,14 @@ to the customer; nothing is written to Zuper. Off unless `INSPECTION_REPORT_ENAB
 vision connection (OpenAI / Anthropic) in AI Agents -> Overview -> its settings. See the
 2026-10-21 post-inspection report amendment in `DECISIONS.md`.
 
+## The field technician briefing (2026-10-21)
+
+`backend/app/tech_briefing/` (read `__init__.py` first): at 6 PM the day before, one text per
+technician with tomorrow's visits - time, place, what the inspection found, time to complete and
+what to bring (an AI suggestion only when nothing was recorded, marked so). Phones come from the
+Inspection documentation settings. Off unless `TECH_BRIEFING_ENABLED`; Shadow and test
+technicians first. See the 2026-10-21 field technician briefing amendment in `DECISIONS.md`.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

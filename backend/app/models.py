@@ -9,11 +9,12 @@ Shape is driven by what was measured in the live GHL account (see DECISIONS.md):
   Measured pipeline: "Dream Team Roofing AHS", 5 stages, home-warranty shaped.
 """
 import enum
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -2543,3 +2544,26 @@ class InspectionReport(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approved_by_id: Mapped[int | None] = mapped_column(Integer)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TechBriefing(Base):
+    """The field technician briefing (2026-10-21, app/tech_briefing): ONE day-before text per
+    technician and day - tomorrow's visits with what was found and what to bring. Recorded
+    before it is sent; never re-sent. Never deleted."""
+    __tablename__ = "tech_briefings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), unique=True)
+    technician: Mapped[str] = mapped_column(String(120))
+    phone: Mapped[str | None] = mapped_column(String(10))
+    brief_date: Mapped[date] = mapped_column(Date, index=True)
+    job_numbers: Mapped[list | None] = mapped_column(NullableJSONType)
+    body: Mapped[str | None] = mapped_column(Text)
+    # building | shadow | sending | sent | failed | skipped
+    state: Mapped[str] = mapped_column(String(12), default="building", server_default="building")
+    note: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(120))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
