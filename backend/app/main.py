@@ -161,6 +161,10 @@ app.include_router(autoreply_api.router)
 # AHS authorized a repair (2026-10-01): owen-main relays the note email; a Dispatch item
 # and the bell, nothing to Zuper. The feed's machine token. See app/ahs_authorizations.py.
 app.include_router(ahs_authorizations.router)
+# The post-inspection report drafts (2026-10-21, app/inspection_report).
+from .inspection_report import api as inspection_report_api  # noqa: E402
+
+app.include_router(inspection_report_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

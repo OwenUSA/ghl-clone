@@ -2505,3 +2505,41 @@ class InspectionCheck(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InspectionReport(Base):
+    """The post-inspection report (2026-10-21, app/inspection_report): a DRAFT for the office to
+    review - the pictures the vision model picked (copies in the CRM's media store), their
+    captions, a title, a summary and findings. "Approved" means a person checked it; nothing is
+    sent to anyone. One per job and visit day. Never deleted."""
+    __tablename__ = "inspection_reports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(160), unique=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    address: Mapped[str | None] = mapped_column(String(300))
+    board: Mapped[str | None] = mapped_column(String(120))
+    visit_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    technician: Mapped[str | None] = mapped_column(String(120))
+    language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+    title: Mapped[str | None] = mapped_column(String(200))
+    summary: Mapped[str | None] = mapped_column(Text)
+    findings: Mapped[list | None] = mapped_column(NullableJSONType)
+    # [{sha, caption, taken_at}] in report order; `candidates` = every picture it looked at.
+    photos: Mapped[list | None] = mapped_column(NullableJSONType)
+    candidates: Mapped[list | None] = mapped_column(NullableJSONType)
+    # building | draft | approved | discarded | failed
+    state: Mapped[str] = mapped_column(String(12), default="building",
+                                       server_default="building", index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(120))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cost_micros: Mapped[int | None] = mapped_column(Integer)
+    item_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by_id: Mapped[int | None] = mapped_column(Integer)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

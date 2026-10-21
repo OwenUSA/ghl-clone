@@ -35,6 +35,9 @@ dependencies = [
     # (see "The SSL interception" in DECISIONS.md).
     "python-multipart>=0.0.20",
     "openpyxl>=3.1",
+    "pillow>=11",
+    "pillow-heif>=0.21",
+    "fpdf2>=2.8",
 ]
 
 [project.scripts]

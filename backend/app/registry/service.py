@@ -234,6 +234,11 @@ def spend_today(db: Session, key: str, now: datetime) -> int | None:
                                  AiRun.is_test.is_(False))).one()
         return None if rows[1] else int(rows[0])
     s = _dispatch_settings(db)
+    if key == "inspection_report":
+        from ..models import InspectionReport
+        v = db.scalar(select(func.coalesce(func.sum(InspectionReport.cost_micros), 0))
+                      .where(InspectionReport.updated_at >= start))
+        return int(v or 0)
     if key == "autoreply":
         tin, tout = db.execute(select(func.coalesce(func.sum(AutoReply.input_tokens), 0),
                                       func.coalesce(func.sum(AutoReply.output_tokens), 0))
@@ -410,6 +415,18 @@ def _status(db: Session, v: View) -> dict:
                 return {"state": "test", "sentence": "On for test jobs only (%s): %s." % (
                     ", ".join("#" + x for x in st.test_jobs), words)}
             return {"state": "on", "sentence": "On for every finished visit: %s." % words}
+        if v.key == "inspection_report":
+            from ..inspection_report import service as rsvc
+            if not zconf.inspection_report_enabled():
+                return {"state": "off",
+                        "sentence": "Off on this server (INSPECTION_REPORT_ENABLED)."}
+            st = rsvc.settings(db)
+            if not st.vision_connection_id:
+                return {"state": "off", "sentence": "No vision connection chosen in its settings."}
+            if st.test_only:
+                return {"state": "test", "sentence": "On for test jobs only (%s)." % ", ".join(
+                    "#" + x for x in st.test_jobs)}
+            return {"state": "on", "sentence": "On for every inspection."}
         if v.key == "ahs_authorizations":
             return {"state": "outside", "sentence": "Switched at owen-main."}
         if v.outside:
@@ -493,7 +510,10 @@ def entry_out(db: Session, v: View, now: datetime) -> dict:
 def _settings_kinds():
     from ..followup import config as fconf
     from ..inspection_docs import config as iconf
-    return {"call_followup": (lambda raw: fconf.Settings.from_config(raw).as_dict(),
+    from ..inspection_report import config as rconf
+    return {"inspection_report": (lambda raw: rconf.Settings.from_config(raw).as_dict(),
+                                  rconf.validate),
+            "call_followup": (lambda raw: fconf.Settings.from_config(raw).as_dict(),
                               fconf.validate),
             "inspection_docs": (lambda raw: iconf.Settings.from_config(raw).as_dict(),
                                 iconf.validate)}
@@ -676,6 +696,18 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
             add("call_followup", r.created_at, "started", "%s did not answer our call (%s%s). "
                 "Now: %s" % (who, r.trigger_source or "?", ", %s" % r.staff if r.staff else "",
                              r.reason or r.state), tone="muted")
+    if key in (None, "inspection_report"):
+        from ..models import InspectionReport
+        for r in db.scalars(select(InspectionReport).order_by(InspectionReport.id.desc())
+                            .limit(limit)):
+            label = "#%s %s" % (r.job_number or "?", r.customer_name or "")
+            text = {"draft": "Draft ready: %s, %d pictures" % (label, len(r.photos or [])),
+                    "approved": "Approved: %s (nothing sent)" % label,
+                    "discarded": "Discarded: %s" % label,
+                    "failed": "Failed: %s - %s" % (label, r.error or "?"),
+                    }.get(r.state, "%s: %s" % (r.state.title(), label))
+            add("inspection_report", r.updated_at or r.created_at, r.state, text,
+                tone={"failed": "bad", "draft": "good"}.get(r.state, "info"))
     if key in (None, "inspection_docs"):
         for r in db.scalars(select(InspectionCheck).order_by(InspectionCheck.id.desc())
                             .limit(limit)):

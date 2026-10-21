@@ -928,6 +928,15 @@ default) and later can have "DTR Inspection Assistant" call them (Never by defau
 only. Off unless `INSPECTION_DOCS_ENABLED`; settings (technician phones, waits, test jobs) in AI
 Agents -> Overview. See the 2026-10-21 inspection-documentation amendment in `DECISIONS.md`.
 
+## The post-inspection report (2026-10-21)
+
+`backend/app/inspection_report/` (read `__init__.py` first): when an inspection's pictures have
+been quiet for 30 minutes, a vision model picks the key pictures and writes a DRAFT report (title,
+summary, findings) for Dispatch -> Reports, where the office edits and approves it. Nothing is sent
+to the customer; nothing is written to Zuper. Off unless `INSPECTION_REPORT_ENABLED`; needs a
+vision connection (OpenAI / Anthropic) in AI Agents -> Overview -> its settings. See the
+2026-10-21 post-inspection report amendment in `DECISIONS.md`.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

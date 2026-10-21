@@ -2648,3 +2648,28 @@ export const registrySetLevel = (key: string, action: string, body: { level: str
   send<RegistryEntry>(`/api/ai/registry/entries/${encodeURIComponent(key)}/actions/${encodeURIComponent(action)}`, 'PUT', body)
 export const registrySetOverall = (daily_cap_usd: string | number) =>
   send<RegistryOverview['overall']>('/api/ai/registry/overall', 'PUT', { daily_cap_usd })
+
+// ---- the post-inspection report drafts (2026-10-21, app/inspection_report) -----------
+export type InspectionReportRow = {
+  id: number; job_uid: string; job_number: string | null; customer_name: string | null
+  address: string | null; board: string | null; visit_at: string | null
+  technician: string | null; state: string; title: string | null; language: string
+  error: string | null; photo_count: number; created_at: string | null; approved_at: string | null
+}
+export type ReportPhoto = { sha: string; caption?: string | null; url: string; taken_at?: string | null }
+export type InspectionReportDetail = InspectionReportRow & {
+  summary: string | null; findings: string[]; photos: ReportPhoto[]; candidates: ReportPhoto[]
+  model: string | null; pdf_url: string
+}
+export const inspectionReports = (state?: string) =>
+  get<{ reports: InspectionReportRow[] }>('/api/inspection-reports' + (state ? `?state=${encodeURIComponent(state)}` : ''))
+export const inspectionReport = (id: number) => get<InspectionReportDetail>(`/api/inspection-reports/${id}`)
+export const editInspectionReport = (id: number, body: {
+  title?: string; summary?: string; findings?: string[]; photos?: { sha: string; caption: string }[]
+}) => send<InspectionReportDetail>(`/api/inspection-reports/${id}`, 'PATCH', body)
+export const approveInspectionReport = (id: number) =>
+  send<InspectionReportDetail>(`/api/inspection-reports/${id}/approve`, 'POST')
+export const discardInspectionReport = (id: number) =>
+  send<InspectionReportDetail>(`/api/inspection-reports/${id}/discard`, 'POST')
+export const rebuildInspectionReport = (id: number) =>
+  send<InspectionReportDetail>(`/api/inspection-reports/${id}/rebuild`, 'POST')
