@@ -7,7 +7,7 @@ import {
 import type { Me } from '../../lib/auth'
 import { isAiAdmin } from '../../lib/aiAgents'
 import {
-  groupByRole, isPromotion, LEVEL_HELP, LEVEL_TONE, LEVELS, levelLabel, SETTING_FIELDS, settingValue,
+  groupByRole, isPromotion, LEVEL_HELP, LEVEL_TONE, LEVELS, levelLabel, SETTING_FIELDS, settingShown, settingValue,
   spendLine, STATUS_TONE, visible, type Show,
 } from '../../lib/registry'
 import {
@@ -354,7 +354,7 @@ function SettingsPanel({ e, admin, onError, onNotice }: {
 }) {
   const qc = useQueryClient()
   const current = e.settings ?? {}
-  const shown = (_k: string, v: unknown) => Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? v : String(v ?? '')
+  const shown = (_k: string, v: unknown) => settingShown(v)
   const [draft, setDraft] = useState<Record<string, string | boolean>>(
     Object.fromEntries(Object.entries(current).map(([k, v]) => [k, shown(k, v)])))
   const save = useMutation({
@@ -388,7 +388,7 @@ function SettingsPanel({ e, admin, onError, onNotice }: {
           }
           return (
             <Field key={k} label={f.label} hint={f.hint}>
-              {f.kind === 'long' ? (
+              {f.kind === 'long' || f.kind === 'map' ? (
                 <textarea id={id} disabled={!admin} value={String(draft[k] ?? '')}
                   onChange={(ev) => setDraft({ ...draft, [k]: ev.target.value })} style={textarea} />
               ) : (

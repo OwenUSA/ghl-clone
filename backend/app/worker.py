@@ -72,6 +72,9 @@ def main() -> None:
     # call. Its own thread; does nothing unless CALL_FOLLOWUP_ENABLED.
     from .followup import service as followup_service
     followup_service.start_thread(SessionLocal, stop)
+    # The inspection-documentation agent (2026-10-21): reads Zuper, flags what is missing.
+    from .inspection_docs import service as inspection_service
+    inspection_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

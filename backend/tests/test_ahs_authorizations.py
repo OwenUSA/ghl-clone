@@ -364,7 +364,9 @@ def test_amounts_are_kept_as_written_and_shown_as_dollars():
 def test_a_dispatch_pass_never_resolves_a_fed_item(world):
     out = post(world, approval()).json()
     # ai_change_request: a voice agent's caller request (2026-10-06, app/agent_requests.py).
-    assert {"ahs_approved", "ahs_items_updated", "ai_change_request"} == set(rules.FED_KINDS)
+    # missing_docs: the inspection-documentation agent's flag (2026-10-21, app/inspection_docs).
+    assert {"ahs_approved", "ahs_items_updated", "ai_change_request",
+            "missing_docs"} == set(rules.FED_KINDS)
 
     def run_pass(now):
         db = SessionLocal()

@@ -120,6 +120,16 @@ def followup_enabled() -> bool:
     return _flag("CALL_FOLLOWUP_ENABLED", False)
 
 
+INSPECTION_DOCS_OFF_SENTENCE = ("The inspection documentation agent is switched off on this "
+                                "server (INSPECTION_DOCS_ENABLED is not set).")
+
+
+def inspection_docs_enabled() -> bool:
+    """The server's gate on the inspection-documentation agent (2026-10-21,
+    app/inspection_docs). It only READS Zuper; off unless the deployment says so."""
+    return _flag("INSPECTION_DOCS_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:
