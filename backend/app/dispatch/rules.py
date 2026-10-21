@@ -45,7 +45,10 @@ QUEUE_LABEL = {
 # on (app/agent_requests.py, 2026-10-06).
 # A pass never resolves one for not finding it (the
 # rules never would); staff close it with Done / Wrong.
-FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated", "ai_change_request"})
+# ... and an inspection or repair missing its details (app/inspection_docs, 2026-10-21),
+# which that agent resolves itself when the details appear.
+FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated", "ai_change_request",
+                       "missing_docs"})
 
 
 @dataclass

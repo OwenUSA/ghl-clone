@@ -2469,3 +2469,39 @@ class CallFollowup(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InspectionCheck(Base):
+    """The inspection-documentation agent (2026-10-21, app/inspection_docs): one row per finished
+    visit it checked - what was found and where, what is missing, the Dispatch item it raised,
+    the text and the call to the technician. Unique per job, day and visit kind. Never deleted."""
+    __tablename__ = "inspection_checks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(160), unique=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(12))                  # inspection | repair
+    visit_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    technician: Mapped[str | None] = mapped_column(String(120))
+    tech_phone: Mapped[str | None] = mapped_column(String(10))
+    # waiting | documented | flagged | resolved | expired
+    state: Mapped[str] = mapped_column(String(12), default="waiting", server_default="waiting",
+                                       index=True)
+    missing: Mapped[list | None] = mapped_column(NullableJSONType)
+    found: Mapped[dict | None] = mapped_column(NullableJSONType)
+    photos: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    videos: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    item_id: Mapped[int | None] = mapped_column(Integer)
+    text_state: Mapped[str | None] = mapped_column(String(12))     # shadow|sent|failed|skipped
+    text_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    text_body: Mapped[str | None] = mapped_column(Text)
+    call_state: Mapped[str | None] = mapped_column(String(12))     # shadow|requested|failed|skipped
+    call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    call_ref: Mapped[str | None] = mapped_column(String(64))
+    note: Mapped[str | None] = mapped_column(Text)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

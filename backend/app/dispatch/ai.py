@@ -131,8 +131,8 @@ def _record(db: Session, kind: str, model: str, turn: providers.Turn | None, *,
     if error is not None:
         # The first failure of the day rings the bell for the admins (registry, Q13).
         from ..registry import service as registry
-        registry.alert_failure(db, "availability_reader" if kind == "availability"
-                               else "dispatch_assistant", "the AI request failed: %s" % error)
+        registry.alert_failure(db, registry.DISPATCH_AI_KINDS.get(kind, "dispatch_assistant"),
+                               "the AI request failed: %s" % error)
 
 
 # ------------------------------------------------------------------------------- context

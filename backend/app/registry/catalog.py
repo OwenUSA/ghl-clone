@@ -46,6 +46,9 @@ ACTIONS: dict[str, dict] = {
     "suggest": {"label": "Suggest changes to the office", "customer": False},
     "alert_staff": {"label": "Ring the bell for the office", "customer": False},
     "report": {"label": "Write reports", "customer": False},
+    "text_staff": {"label": "Text the technician", "customer": False},
+    "call_staff": {"label": "Call the technician", "customer": False},
+    "ai_read": {"label": "Read notes and replies with AI", "customer": False},
 }
 
 
@@ -152,6 +155,31 @@ ENTRIES: tuple[Entry, ...] = (
         never=("Prices or money", "Saying a claim is approved", "Promising a date",
                "Calling outside 8 AM-8 PM Mon-Sat", "More than 2 calls a day to one number"),
         owner_hint="Office", tags=("settings",),
+    ),
+    Entry(
+        key="inspection_docs", name="Inspection documentation", kind="agent", role=4,
+        purpose="After a technician finishes an inspection or repair, checks the job has where "
+                "the leak is, tools & materials, time to complete, photos and a video - reading "
+                "fields, checklist answers and notes - and flags what is missing.",
+        covers="Finished visits on AHS - Inspection, Retail and AHS - Repair & Review. Test "
+               "jobs only until test-only is switched off in its settings.",
+        channels=("Dispatch item + bell", "Text to the technician from the CRM line",
+                  "Technician call agent"),
+        runs_on="CRM worker (reads Zuper only)", provider="DeepSeek (notes), Retell (calls)",
+        hours="Checks 30 minutes after a visit; calls 8 AM-8 PM Mon-Sat",
+        actions=(
+            Action("alert_staff", AUTO, (), "A Dispatch item and the bell for the office."),
+            Action("ai_read", AUTO, (NEVER, AUTO),
+                   "Looks in notes and replies for details the fields do not hold. Every value "
+                   "must quote the words it came from."),
+            Action("text_staff", SHADOW, (NEVER, SHADOW, AUTO),
+                   "Texts the technician what is missing."),
+            Action("call_staff", NEVER, (NEVER, SHADOW, AUTO),
+                   "The technician call agent asks for what is still missing after the wait. "
+                   "Needs that agent on owen-main and AGENT_OUTBOUND_ENABLED."),
+        ),
+        never=("Write anything in Zuper", "Touch job photos", "Text or call customers"),
+        owner_hint="Luis", tags=("settings",),
     ),
     # ------------------------------------------------------------------ automations
     Entry(

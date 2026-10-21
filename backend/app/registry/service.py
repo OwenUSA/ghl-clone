@@ -34,6 +34,7 @@ from ..models import (
     DispatchAiRun,
     DispatchSettings,
     DispatchWriteLog,
+    InspectionCheck,
     Role,
     User,
 )
@@ -44,6 +45,16 @@ log = logging.getLogger("registry")
 DEFAULT_OVERALL_CAP_MICROS = 25_000_000          # $25 a day, every agent together (Q27)
 PROMOTE_CONFIRM = "PROMOTE"
 MICRO = 1_000_000
+
+
+# Dispatch AI runs (`dispatch_ai_runs.kind`) that belong to an entry other than the assistant.
+DISPATCH_AI_KINDS = {"availability": "availability_reader", "inspection": "inspection_docs"}
+
+
+def _dispatch_kind_filter(key: str):
+    if key == "dispatch_assistant":
+        return DispatchAiRun.kind.notin_(tuple(DISPATCH_AI_KINDS))
+    return DispatchAiRun.kind.in_([k for k, v in DISPATCH_AI_KINDS.items() if v == key])
 
 
 class Invalid(ValueError):
@@ -227,9 +238,8 @@ def spend_today(db: Session, key: str, now: datetime) -> int | None:
                                       func.coalesce(func.sum(AutoReply.output_tokens), 0))
                                .where(AutoReply.created_at >= start)).one()
         return _token_cost(_price(db, s.autoreply_connection_id if s else None), tin, tout)
-    if key in ("dispatch_assistant", "availability_reader"):
-        kinds = DispatchAiRun.kind == "availability"
-        cond = kinds if key == "availability_reader" else ~kinds
+    if key in ("dispatch_assistant", *DISPATCH_AI_KINDS.values()):
+        cond = _dispatch_kind_filter(key)
         tin, tout = db.execute(select(func.coalesce(func.sum(DispatchAiRun.input_tokens), 0),
                                       func.coalesce(func.sum(DispatchAiRun.output_tokens), 0))
                                .where(DispatchAiRun.created_at >= start, cond)).one()
@@ -385,6 +395,18 @@ def _status(db: Session, v: View) -> dict:
             if st.test_only:
                 return {"state": "test", "sentence": "On for test customers only: %s." % words}
             return {"state": "on", "sentence": "On for every customer: %s." % words}
+        if v.key == "inspection_docs":
+            from ..inspection_docs import service as isvc
+            if not zconf.inspection_docs_enabled():
+                return {"state": "off", "sentence": "Off on this server (INSPECTION_DOCS_ENABLED)."}
+            st = isvc.settings(db)
+            words = "texts %s, calls %s" % (
+                cat.LEVEL_LABEL[level(db, v.key, "text_staff")].lower(),
+                cat.LEVEL_LABEL[level(db, v.key, "call_staff")].lower())
+            if st.test_only:
+                return {"state": "test", "sentence": "On for test jobs only (%s): %s." % (
+                    ", ".join("#" + x for x in st.test_jobs), words)}
+            return {"state": "on", "sentence": "On for every finished visit: %s." % words}
         if v.key == "ahs_authorizations":
             return {"state": "outside", "sentence": "Switched at owen-main."}
         if v.outside:
@@ -409,9 +431,8 @@ def _health(db: Session, v: View, now: datetime) -> dict:
                        .order_by(AutoReply.id.desc()).limit(1)).first()
         if r is not None and (at is None or (r.created_at and _aw(r.created_at) > _aw(at))):
             err, at = r.error, r.created_at
-    elif v.key in ("dispatch_assistant", "availability_reader"):
-        kinds = DispatchAiRun.kind == "availability"
-        cond = kinds if v.key == "availability_reader" else ~kinds
+    elif v.key in ("dispatch_assistant", *DISPATCH_AI_KINDS.values()):
+        cond = _dispatch_kind_filter(v.key)
         r = db.scalars(select(DispatchAiRun).where(DispatchAiRun.ok.is_(False), cond)
                        .order_by(DispatchAiRun.id.desc()).limit(1)).first()
         if r is not None and (at is None or _aw(r.created_at) > _aw(at)):
@@ -468,8 +489,11 @@ def entry_out(db: Session, v: View, now: datetime) -> dict:
 # Entries with settings a person may edit, and how each is read and checked.
 def _settings_kinds():
     from ..followup import config as fconf
+    from ..inspection_docs import config as iconf
     return {"call_followup": (lambda raw: fconf.Settings.from_config(raw).as_dict(),
-                              fconf.validate)}
+                              fconf.validate),
+            "inspection_docs": (lambda raw: iconf.Settings.from_config(raw).as_dict(),
+                                iconf.validate)}
 
 
 def _settings_out(db: Session, key: str) -> dict | None:
@@ -649,16 +673,41 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
             add("call_followup", r.created_at, "started", "%s did not answer our call (%s%s). "
                 "Now: %s" % (who, r.trigger_source or "?", ", %s" % r.staff if r.staff else "",
                              r.reason or r.state), tone="muted")
+    if key in (None, "inspection_docs"):
+        for r in db.scalars(select(InspectionCheck).order_by(InspectionCheck.id.desc())
+                            .limit(limit)):
+            label = "#%s %s" % (r.job_number or "?", r.customer_name or "")
+            if r.state == "documented":
+                add("inspection_docs", r.checked_at or r.created_at, "documented",
+                    "%s: %s fully documented" % (label, r.kind), tone="good")
+            elif r.state in ("flagged", "resolved"):
+                from ..inspection_docs import rules as irules
+                add("inspection_docs", r.checked_at or r.created_at, r.state,
+                    "%s: %s missing %s%s" % (label, r.kind, irules.words(r.missing or []),
+                                             " (now resolved)" if r.state == "resolved" else ""),
+                    tone="bad" if r.state == "flagged" else "good")
+            if r.text_state in ("sent", "shadow", "failed"):
+                add("inspection_docs", r.text_at, "text", "%s %s: \u201c%s\u201d" % (
+                    {"sent": "Texted", "shadow": "Would have texted",
+                     "failed": "Could not text"}[r.text_state],
+                    r.technician or "the technician", r.text_body or ""),
+                    tone={"failed": "bad", "sent": "good"}.get(r.text_state, "info"))
+            if r.call_state in ("requested", "shadow", "failed"):
+                add("inspection_docs", r.call_at, "call", "%s %s about %s" % (
+                    {"requested": "Called", "shadow": "Would have called",
+                     "failed": "Could not call"}[r.call_state],
+                    r.technician or "the technician", label),
+                    tone={"failed": "bad", "requested": "good"}.get(r.call_state, "info"))
     if key in (None, "dispatch_assistant"):
         for r in db.scalars(select(DispatchWriteLog).order_by(DispatchWriteLog.id.desc())
                             .limit(limit)):
             add("dispatch_assistant", r.at, "zuper_" + (r.action or ""),
                 r.sentence or "%s %s → %s" % (r.target or r.action, r.old_value, r.new_value),
                 tone="bad" if r.result == "failed" else "info")
-    if key in (None, "dispatch_assistant", "availability_reader"):
+    if key in (None, "dispatch_assistant", *DISPATCH_AI_KINDS.values()):
         for r in db.scalars(select(DispatchAiRun).where(DispatchAiRun.ok.is_(False))
                             .order_by(DispatchAiRun.id.desc()).limit(limit)):
-            k = "availability_reader" if r.kind == "availability" else "dispatch_assistant"
+            k = DISPATCH_AI_KINDS.get(r.kind, "dispatch_assistant")
             if key in (None, k):
                 add(k, r.created_at, "failed", "The AI request failed: %s" % (r.error or "?"),
                     tone="bad")

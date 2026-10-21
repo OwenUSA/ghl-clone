@@ -7632,3 +7632,51 @@ PROMOTE). It starts at **Shadow**: everything is decided and recorded, nothing i
   says only that Anisa is calling.
 - Unverified: that Zuper's `/customers/{uid}/send` delivers to a `to` number that is not on that
   customer (the typed test number). The first test shows it.
+
+
+---
+
+## AMENDMENT (2026-10-21): the inspection-documentation agent (agent #4) - reads Zuper, flags what is missing
+
+The user's request: after a technician's inspection or repair, find out at once whether the job
+says **where the leak is, what tools and materials are needed and how long it will take**, and
+whether there is an **inspection video** and an **after-repair video**; if not, flag it and get
+it from the technician - eventually by an AI call (off by default). Built as
+`backend/app/inspection_docs/`, "Inspection documentation" (role 4) in the registry. Migration
+`d5a2f8c41e73` (table `inspection_checks`).
+
+**The user's answers (2026-10-21):** add three OPTIONAL questions in Zuper ("Tools & materials
+needed", "Estimated time to complete", "Couldn't inspect yet (e.g. plywood under tiles)") AND
+read everything - fields, checklist answers, notes, the technician's reply - to find the details
+wherever they were written; photos by count and type first, AI picture review later; flag =
+a Dispatch item + the bell AND a text to the technician; the call = a NEW Retell agent for
+technicians ("DTR Inspection Assistant"), not Anisa.
+
+**How it works:**
+- A visit is finished when the Dispatch reader's photo-quiet signal fires or the job reaches
+  Inspection Completed / Repair Complete (`dispatch.rules.visit_done_at`, stages). After a grace
+  period (30 min, setting) ONE check opens per job, kind and day.
+- Inspection needs leak location, tools & materials, time to complete, photos, a video; a repair
+  needs photos and a video. "Couldn't inspect yet" is collected and shown, never flagged.
+- The evidence is read, never written: `DispatchJob.fields`, a live `GET /jobs/{uid}` for the
+  checklist answers (a VIDEO answer or a video file is a video), note attachments' types,
+  `DispatchNote` texts, and the technician's own texts / call summaries after we asked.
+- Details still missing after the fields go to the Dispatch AI's connection (DeepSeek). **Every
+  value must come with the exact words it came from; a quote that is not in the sources is
+  dropped.** Runs are `dispatch_ai_runs` of kind "inspection" (the Dispatch AI's switch, pause,
+  daily cap and the registry's limits apply).
+- Missing: one Dispatch item `missing_docs` (queue After inspection / repair; a fed kind the
+  Dispatch pass never resolves) and one bell; the text to the technician (registry `text_staff`,
+  **Shadow by default**) from the CRM line to the phone in its settings (Zuper name = phone -
+  nothing mapped technicians to phones before); after the recheck wait (60 min) the call
+  (`call_staff`, **Never by default**) through owen-main's agent-calls with the technician agent.
+  When the details appear, the item resolves itself.
+- **It writes nothing to Zuper.** The technician's answers are shown on the Dispatch item for the
+  office to copy in; a private job note with them would be its own lift.
+- Off unless `INSPECTION_DOCS_ENABLED`; test jobs #701 / #734 only until "test only" is switched
+  off; it records its first run and never checks a visit from before it.
+
+**Not done yet:** the three Zuper questions (a Zuper settings write - done separately with the
+backups and snapshots the owner's rules require); the "DTR Inspection Assistant" agent in Retell
+and on owen-main (its script is still to be written with the user); transcribing the optional
+voice note; AI picture review (phase D, off).

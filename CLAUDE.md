@@ -918,6 +918,16 @@ levels (texts, calls) live there. Off unless `CALL_FOLLOWUP_ENABLED`; starts at 
 customers only; Anisa really dials only when owen-main also has `AGENT_OUTBOUND_ENABLED`. Rules
 are pure (`rules.py`). See the 2026-10-21 call follow-up amendment in `DECISIONS.md`.
 
+## The inspection-documentation agent (2026-10-21)
+
+`backend/app/inspection_docs/` (read `__init__.py` first): after an inspection or repair visit,
+checks the job has where the leak is, tools & materials, time to complete, photos and a video -
+from fields, checklist answers, notes and the technician's reply (AI values must quote their
+source) - and raises a `missing_docs` Dispatch item + bell, texts the technician (Shadow by
+default) and later can have "DTR Inspection Assistant" call them (Never by default). Reads Zuper
+only. Off unless `INSPECTION_DOCS_ENABLED`; settings (technician phones, waits, test jobs) in AI
+Agents -> Overview. See the 2026-10-21 inspection-documentation amendment in `DECISIONS.md`.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

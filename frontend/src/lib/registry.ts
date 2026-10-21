@@ -62,7 +62,7 @@ export function groupByRole<E extends { role: number | null; name: string }>(
 }
 
 /** How each known setting is labelled and edited. Unknown keys are shown read-only. */
-export const SETTING_FIELDS: Record<string, { label: string; kind: 'bool' | 'int' | 'text' | 'long' | 'phones'; hint?: string }> = {
+export const SETTING_FIELDS: Record<string, { label: string; kind: 'bool' | 'int' | 'text' | 'long' | 'phones' | 'list' | 'map'; hint?: string }> = {
   test_only: { label: 'Test customers only', kind: 'bool', hint: 'Only the Zuper TEST customers and the numbers below.' },
   test_phones: { label: 'Extra test numbers', kind: 'phones', hint: 'Comma-separated. Treated as the Zuper TEST customer.' },
   text_delay_minutes: { label: 'Minutes before the text', kind: 'int' },
@@ -70,13 +70,34 @@ export const SETTING_FIELDS: Record<string, { label: string; kind: 'bool' | 'int
   text_template: { label: 'The text', kind: 'long', hint: '{first_name} is replaced by the customer\'s first name. No prices, links or "approved".' },
   caller_id: { label: 'Anisa calls from', kind: 'text', hint: 'A number the phone system owns. The CRM line is +19547758492.' },
   call_agent: { label: 'Voice agent (phone system name)', kind: 'text' },
+  test_jobs: { label: 'Test jobs (Zuper job numbers)', kind: 'list', hint: 'Comma-separated, e.g. 701, 734.' },
+  boards: { label: 'Boards it checks', kind: 'list', hint: 'AHS - Inspection, Retail, AHS - Repair & Review' },
+  grace_minutes: { label: 'Minutes after the visit before checking', kind: 'int' },
+  recheck_minutes: { label: 'Minutes after the text before the call', kind: 'int' },
+  technicians: { label: 'Technician phones', kind: 'map', hint: 'One per line: Zuper name = phone, e.g. Antonio Brown = 954-555-0100' },
+}
+
+/** A stored setting as the form shows it: a list comma-separated, a map one `name = value` per line. */
+export function settingShown(v: unknown): string | boolean {
+  if (Array.isArray(v)) return v.join(', ')
+  if (typeof v === 'boolean') return v
+  if (v && typeof v === 'object') return Object.entries(v as Record<string, unknown>).map(([k, x]) => `${k} = ${x}`).join('\n')
+  return String(v ?? '')
 }
 
 /** A settings form value back to what the server takes. */
 export function settingValue(kind: string, raw: string | boolean): unknown {
   if (kind === 'bool') return !!raw
   if (kind === 'int') return Number.parseInt(String(raw), 10)
-  if (kind === 'phones') return String(raw).split(',').map((x) => x.trim()).filter(Boolean)
+  if (kind === 'phones' || kind === 'list') return String(raw).split(',').map((x) => x.trim()).filter(Boolean)
+  if (kind === 'map') {
+    const out: Record<string, string> = {}
+    for (const line of String(raw).split('\n')) {
+      const i = line.indexOf('=')
+      if (i > 0 && line.slice(0, i).trim()) out[line.slice(0, i).trim()] = line.slice(i + 1).trim()
+    }
+    return out
+  }
   return String(raw)
 }
 
