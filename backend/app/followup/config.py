@@ -36,7 +36,7 @@ class Settings:
     text_delay_minutes: int = 2
     wait_minutes: int = 10
     text_template: str = DEFAULT_TEXT
-    caller_id: str = "+19547758492"           # the CRM line; must be a number owen-main owns
+    caller_id: str = ""                       # empty = the CRM line (crmlink, ONE place)
     call_agent: str = "DTR Retell - Brian"    # owen-main's name for Anisa
 
     @classmethod
@@ -49,7 +49,9 @@ class Settings:
             v = raw.get(k)
             if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi:
                 setattr(s, k, v)
-        for k in ("text_template", "caller_id", "call_agent"):
+        if isinstance(raw.get("caller_id"), str):
+            s.caller_id = raw["caller_id"].strip()
+        for k in ("text_template", "call_agent"):
             v = raw.get(k)
             if isinstance(v, str) and v.strip():
                 setattr(s, k, v.strip())
@@ -84,7 +86,7 @@ def validate(raw: dict) -> list[str]:
         elif any(w in t.lower() for w in ("$", "approved", "http")):
             out.append("the text may not mention money, approval or a link")
     cid = raw.get("caller_id")
-    if cid is not None and not (isinstance(cid, str) and ten(cid)):
+    if cid is not None and not (isinstance(cid, str) and (not cid.strip() or ten(cid))):
         out.append("the caller ID must be a full phone number")
     if "test_only" in raw and not isinstance(raw["test_only"], bool):
         out.append("test only is on or off")

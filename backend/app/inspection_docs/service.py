@@ -218,7 +218,8 @@ def _call_tech(db: Session, row: InspectionCheck, missing: list[str], s: c.Setti
                                                 rules.words(missing))
     first = (row.technician or "").split(" ")[0] or None
     r = crmlink.agent_call("+1" + row.tech_phone, s.call_agent, reason,
-                           from_number=s.caller_id, first_name=first,
+                           from_number=s.caller_id or crmlink.current().from_number,
+                           first_name=first,
                            requested_by="CRM inspection documentation")
     if r.ok:
         row.call_ref = str((r.data or {}).get("call_id") or "")[:64] or None

@@ -68,7 +68,7 @@ export const SETTING_FIELDS: Record<string, { label: string; kind: 'bool' | 'int
   text_delay_minutes: { label: 'Minutes before the text', kind: 'int' },
   wait_minutes: { label: 'Minutes after the text before Anisa calls', kind: 'int' },
   text_template: { label: 'The text', kind: 'long', hint: '{first_name} is replaced by the customer\'s first name. No prices, links or "approved".' },
-  caller_id: { label: 'Anisa calls from', kind: 'text', hint: 'A number the phone system owns. The CRM line is +19547758492.' },
+  caller_id: { label: 'Anisa calls from', kind: 'text', hint: 'Empty = the CRM line. Any other number must be one the phone system owns.' },
   call_agent: { label: 'Voice agent (phone system name)', kind: 'text' },
   test_jobs: { label: 'Test jobs (Zuper job numbers)', kind: 'list', hint: 'Comma-separated, e.g. 701, 734.' },
   boards: { label: 'Boards it checks', kind: 'list', hint: 'AHS - Inspection, Retail, AHS - Repair & Review' },

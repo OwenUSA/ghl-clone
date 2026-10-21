@@ -100,7 +100,7 @@ def test_automatic_texts_once_then_calls_once(db, fu):
     assert len(fu.calls) == 1
     args, kw = fu.calls[0]
     assert args[0] == "+1" + PHONE and args[1] == "DTR Retell - Brian"
-    assert kw["from_number"] == "+19547758492" and kw["first_name"] == "Santiago"
+    assert kw["from_number"] == crmlink.current().from_number and kw["first_name"] == "Santiago"
     row = db.query(CallFollowup).one()
     assert (row.call_state, row.call_ref, row.state) == ("requested", "agent-outbound-1", "done")
     # Never again for this call - and our own unanswered AI call is not a new trigger.

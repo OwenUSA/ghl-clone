@@ -12,7 +12,6 @@ LOOKBACK_DAYS = 2            # a visit older than this never starts a check
 EXPIRE_DAYS = 3              # an open check gives up after this
 NOTES_BEFORE_HOURS = 12      # notes written this long before the visit still count
 CALL_AGENT = "DTR Inspection Assistant"
-CALLER_ID = "+19547758492"
 
 LIMITS = {"grace_minutes": (5, 480), "recheck_minutes": (10, 1440)}
 ALL_BOARDS = [dc.INSPECTION_BOARD, dc.RETAIL_BOARD, dc.REPAIR_BOARD]
@@ -32,7 +31,7 @@ class Settings:
     recheck_minutes: int = 60
     # Zuper technician name -> phone (ten digits). Nothing maps them anywhere else.
     technicians: dict[str, str] = field(default_factory=dict)
-    caller_id: str = CALLER_ID
+    caller_id: str = ""                       # empty = the CRM line (crmlink)
     call_agent: str = CALL_AGENT
 
     @classmethod
@@ -52,9 +51,10 @@ class Settings:
         if isinstance(raw.get("technicians"), dict):
             s.technicians = {str(k).strip(): ten(v) for k, v in raw["technicians"].items()
                              if str(k).strip() and ten(v)}
-        for k in ("caller_id", "call_agent"):
-            if isinstance(raw.get(k), str) and raw[k].strip():
-                setattr(s, k, raw[k].strip())
+        if isinstance(raw.get("caller_id"), str):
+            s.caller_id = raw["caller_id"].strip()
+        if isinstance(raw.get("call_agent"), str) and raw["call_agent"].strip():
+            s.call_agent = raw["call_agent"].strip()
         return s
 
     def as_dict(self) -> dict:
@@ -95,6 +95,6 @@ def validate(raw: dict) -> list[str]:
         out.append("boards must be among: %s" % ", ".join(ALL_BOARDS))
     if "test_only" in raw and not isinstance(raw["test_only"], bool):
         out.append("test only is on or off")
-    if "caller_id" in raw and not ten(raw["caller_id"]):
+    if "caller_id" in raw and str(raw["caller_id"] or "").strip() and not ten(raw["caller_id"]):
         out.append("the caller ID must be a full phone number")
     return out

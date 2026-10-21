@@ -166,7 +166,8 @@ def _place_call(db: Session, row: CallFollowup, s: c.Settings, now: datetime) ->
     row.call_state = "requested"
     db.commit()                                # recorded BEFORE the request - never twice
     first = (row.customer_name or "").split(" ")[0] if row.customer_name else None
-    r = crmlink.agent_call("+1" + row.phone, s.call_agent, CALL_REASON, from_number=s.caller_id,
+    caller = s.caller_id or crmlink.current().from_number
+    r = crmlink.agent_call("+1" + row.phone, s.call_agent, CALL_REASON, from_number=caller,
                            first_name=first if first and first.isalpha() else None,
                            requested_by="CRM call follow-up")
     if not r.ok:
@@ -177,7 +178,7 @@ def _place_call(db: Session, row: CallFollowup, s: c.Settings, now: datetime) ->
     row.call_ref = str((r.data or {}).get("call_id") or "")[:64] or None
     row.reason = "Anisa is calling"
     _note(row, "Call follow-up: no answer to our call or our text, so Anisa (AI) is calling "
-               "the customer now from %s." % s.caller_id)
+               "the customer now from %s." % caller)
     return "called"
 
 
