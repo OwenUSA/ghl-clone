@@ -61,6 +61,25 @@ export function groupByRole<E extends { role: number | null; name: string }>(
   return out
 }
 
+/** How each known setting is labelled and edited. Unknown keys are shown read-only. */
+export const SETTING_FIELDS: Record<string, { label: string; kind: 'bool' | 'int' | 'text' | 'long' | 'phones'; hint?: string }> = {
+  test_only: { label: 'Test customers only', kind: 'bool', hint: 'Only the Zuper TEST customers and the numbers below.' },
+  test_phones: { label: 'Extra test numbers', kind: 'phones', hint: 'Comma-separated. Treated as the Zuper TEST customer.' },
+  text_delay_minutes: { label: 'Minutes before the text', kind: 'int' },
+  wait_minutes: { label: 'Minutes after the text before Anisa calls', kind: 'int' },
+  text_template: { label: 'The text', kind: 'long', hint: '{first_name} is replaced by the customer\'s first name. No prices, links or "approved".' },
+  caller_id: { label: 'Anisa calls from', kind: 'text', hint: 'A number the phone system owns. The CRM line is +19547758492.' },
+  call_agent: { label: 'Voice agent (phone system name)', kind: 'text' },
+}
+
+/** A settings form value back to what the server takes. */
+export function settingValue(kind: string, raw: string | boolean): unknown {
+  if (kind === 'bool') return !!raw
+  if (kind === 'int') return Number.parseInt(String(raw), 10)
+  if (kind === 'phones') return String(raw).split(',').map((x) => x.trim()).filter(Boolean)
+  return String(raw)
+}
+
 export type Show = 'all' | 'agents' | 'automations'
 
 export function visible<E extends { kind: string; is_test: boolean; archived: boolean }>(

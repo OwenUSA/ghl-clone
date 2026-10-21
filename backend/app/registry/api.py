@@ -33,6 +33,7 @@ class EntryIn(BaseModel):
     is_test: bool | None = None
     daily_cap_usd: float | str | None = None
     notes: str | None = Field(None, max_length=2000)
+    config: dict | None = None
 
 
 @router.patch("/registry/entries/{key}")

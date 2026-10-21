@@ -30,6 +30,7 @@ from ..models import (
     AiRun,
     AiSettings,
     AutoReply,
+    CallFollowup,
     DispatchAiRun,
     DispatchSettings,
     DispatchWriteLog,
@@ -373,6 +374,17 @@ def _status(db: Session, v: View) -> dict:
             return ({"state": "on", "sentence": "Runs nightly with the Zuper sync."}
                     if zconf.env_enabled() else {"state": "off", "sentence": "The Zuper sync "
                                                  "is off on this server."})
+        if v.key == "call_followup":
+            from ..followup import service as fsvc
+            if not zconf.followup_enabled():
+                return {"state": "off", "sentence": "Off on this server (CALL_FOLLOWUP_ENABLED)."}
+            st = fsvc.settings(db)
+            lv = {a: level(db, v.key, a) for a in ("send_text", "place_calls")}
+            words = "texts %s, calls %s" % (cat.LEVEL_LABEL[lv["send_text"]].lower(),
+                                            cat.LEVEL_LABEL[lv["place_calls"]].lower())
+            if st.test_only:
+                return {"state": "test", "sentence": "On for test customers only: %s." % words}
+            return {"state": "on", "sentence": "On for every customer: %s." % words}
         if v.key == "ahs_authorizations":
             return {"state": "outside", "sentence": "Switched at owen-main."}
         if v.outside:
@@ -446,10 +458,26 @@ def entry_out(db: Session, v: View, now: datetime) -> dict:
             "level": level(db, v.key, a.action), "default": a.default,
             "choices": list(a.choices), "note": a.note} for a in v.actions],
         "status": _status(db, v), "health": _health(db, v, now),
+        "settings": _settings_out(db, v.key),
         "spend_today": money(spent), "spend_unknown": spent is None,
         "daily_cap": money(r.daily_cap_micros) if r and r.daily_cap_micros is not None
         else None,
     }
+
+
+# Entries with settings a person may edit, and how each is read and checked.
+def _settings_kinds():
+    from ..followup import config as fconf
+    return {"call_followup": (lambda raw: fconf.Settings.from_config(raw).as_dict(),
+                              fconf.validate)}
+
+
+def _settings_out(db: Session, key: str) -> dict | None:
+    kinds = _settings_kinds()
+    if key not in kinds:
+        return None
+    r = settings_row(db, key)
+    return kinds[key][0](r.config if r is not None else None)
 
 
 def overview(db: Session, now: datetime) -> dict:
@@ -519,6 +547,22 @@ def update_entry(db: Session, key: str, changes: dict, *, user_id: int | None) -
         if new != r.daily_cap_micros:
             note("cap", money(r.daily_cap_micros), money(new))
             r.daily_cap_micros = new
+    if "config" in changes:
+        kinds = _settings_kinds()
+        if key not in kinds:
+            raise Invalid("%s has no settings." % v.name)
+        new = changes["config"]
+        if not isinstance(new, dict):
+            raise Invalid("Settings are a set of named values.")
+        problems = kinds[key][1](new)
+        if problems:
+            raise Invalid("Not saved: %s." % "; ".join(problems))
+        old = kinds[key][0](r.config)
+        merged = kinds[key][0]({**(r.config or {}), **new})
+        if merged != old:
+            r.config = merged
+            note("settings", ", ".join("%s=%s" % (k, old[k]) for k in sorted(new) if k in old),
+                 ", ".join("%s=%s" % (k, merged[k]) for k in sorted(new) if k in merged))
     if "notes" in changes:
         new = (changes["notes"] or "").strip() or None
         if new != r.notes:
@@ -585,6 +629,26 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
                             " — %s" % r.subject_label if r.subject_label else "",
                             ": %s" % r.reason if r.reason else ""),
                 tone="bad" if r.outcome == "error" else "info", ref=r.id)
+    if key in (None, "call_followup"):
+        for r in db.scalars(select(CallFollowup).order_by(CallFollowup.id.desc()).limit(limit)):
+            who = r.customer_name or "%s-%s-%s" % (r.phone[:3], r.phone[3:6], r.phone[6:])
+            if r.call_state in ("requested", "shadow", "failed"):
+                verb = {"requested": "Anisa called %s",
+                        "shadow": "Would have had Anisa call %s (shadow)",
+                        "failed": "Could not have Anisa call %s"}[r.call_state]
+                add("call_followup", r.call_at, "call", (verb % who) + (
+                    ": %s" % r.error if r.call_state == "failed" and r.error else ""),
+                    tone={"failed": "bad", "requested": "good"}.get(r.call_state, "info"))
+            if r.text_state in ("sent", "shadow", "failed", "sending"):
+                verb = {"sent": "Texted %s", "sending": "Texted %s",
+                        "shadow": "Would have texted %s (shadow)",
+                        "failed": "Could not text %s"}[r.text_state]
+                add("call_followup", r.text_at, "text", (verb % who) + (
+                    ": \u201c%s\u201d" % r.text_body if r.text_body else ""),
+                    tone={"failed": "bad", "sent": "good"}.get(r.text_state, "info"))
+            add("call_followup", r.created_at, "started", "%s did not answer our call (%s%s). "
+                "Now: %s" % (who, r.trigger_source or "?", ", %s" % r.staff if r.staff else "",
+                             r.reason or r.state), tone="muted")
     if key in (None, "dispatch_assistant"):
         for r in db.scalars(select(DispatchWriteLog).order_by(DispatchWriteLog.id.desc())
                             .limit(limit)):
@@ -627,6 +691,8 @@ def _log_text(r: AgentRegistryLog, db: Session) -> str:
     if r.what == "test":
         return "%s marked it %s" % (who, "a test agent" if r.new_value == "True"
                                     else "not a test agent")
+    if r.what == "settings":
+        return "%s changed its settings: %s" % (who, r.new_value)
     if r.what == "cap":
         return "%s set its daily limit from %s to %s" % (who, r.old_value or "none",
                                                           r.new_value or "none")

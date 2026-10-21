@@ -7578,3 +7578,57 @@ one nullable column; no row = today's behaviour exactly).
 - **Not in this part:** the approvals queue in Dispatch (comes with agent #1, its first user),
   backups (step 2), outbound calls, the Q19 renames — those are an admin's edits in the new
   Overview (role, test flag) plus the existing agent rename.
+
+
+---
+
+## AMENDMENT (2026-10-21): the call follow-up - a text, then Anisa's call, after an unanswered team call
+
+The user's request (2026-10-21): when the team calls a customer and nobody answers, text them; if
+there is still no answer, the AI calls. Built as agent #2's first job (`backend/app/followup/`),
+registered as "Call follow-up" in the registry. Migration `c3e9a7d15b42` (table `call_followups`,
+nullable `agent_registry.config`).
+
+**The user's answers:**
+- **Every** unanswered team call starts it - Quo, the CRM line and Zuper Connect, outgoing, by a
+  person, final - but **at the beginning only the Zuper test customers** (setting "test only",
+  default on). Test numbers = the Zuper TEST customers' numbers as the Dispatch reader copied
+  them, plus the numbers typed in its settings (default 561-878-8090, treated as the Zuper TEST
+  customer so the text goes to that phone through that customer).
+- The text: "Hi {first_name}, this is Dream Team Roofing. We just tried to call you about your
+  roof. Reply here or call us back at (954) 420-7373." - editable; refused if it mentions money,
+  "approved" or a link. Sent 2 minutes after the call (setting) through Zuper from
+  (954) 420-7373, with a private note on the job.
+- **10 minutes** after the text (setting), if the customer still was not reached, Anisa ("DTR
+  Retell - Brian" on owen-main) calls from the **CRM line +1 954-775-8492** (setting `caller_id`;
+  calling from the Zuper number is only possible once that number is moved to BulkVS -
+  showing a number we do not own is spoofing). 8 AM-8 PM Mon-Sat, at most 2 a day per number.
+- "Reached" = any answered call either way, a text from the customer or the team, a call back
+  from the customer. Then it stops.
+
+**This is a lift of 2026-09-15 "no automatic texts" and of "no AI agent acts by itself", for this
+agent only,** and only once an ADMIN moves its actions from Shadow to Automatic (reason +
+PROMOTE). It starts at **Shadow**: everything is decided and recorded, nothing is sent or dialled.
+
+**Safety:**
+- Off unless `CALL_FOLLOWUP_ENABLED` (server). Its Zuper writes go through
+  `client.followup_write()` - the same two writes as the auto-reply, same exact body check, but
+  its OWN gate: one feature switched on never opens the other.
+- A text and a call are recorded BEFORE they are sent and never retried. owen-main's
+  `POST /api/crm-link/agent-calls` is not idempotent.
+- Anisa's own call coming back unanswered never starts another follow-up (matched by time,
+  whatever line reports it - a bug the tests caught).
+- A promotion restarts its clock: calls before the latest level change are never acted on.
+- owen-main keeps its own guards (AGENT_OUTBOUND_ENABLED - **still off** -, 8-20, 10/day,
+  10-minute repeat, spend cap). The CRM applies its stricter ones before asking. No owen-main
+  change was needed: the request already takes `from_number` and `customer_first_name`.
+
+**Not done, on purpose:**
+- **Callbacks to the CRM line do not reach Anisa.** Assigning a flow to +19547758492 would stop
+  it ringing the team's phones the way it does now (owen-main `crm/numbers.py`) - a decision for
+  the user.
+- **Voicemail:** owen-main has no answering-machine detection; Anisa talks to a voicemail.
+- The call's outcome reaches the CRM thread through owen-main's usual call event; a Zuper note
+  says only that Anisa is calling.
+- Unverified: that Zuper's `/customers/{uid}/send` delivers to a `to` number that is not on that
+  customer (the typed test number). The first test shows it.

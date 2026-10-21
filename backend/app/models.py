@@ -2399,6 +2399,9 @@ class AgentRegistryEntry(Base):
     # Micro-dollars a New York day. NULL = no cap of its own (the overall cap still applies).
     daily_cap_micros: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str | None] = mapped_column(Text)
+    # The entry's own settings, when its catalog entry declares some (2026-10-21: the call
+    # follow-up's wait, wording, caller ID, test numbers). NULL = the catalog's defaults.
+    config: Mapped[dict | None] = mapped_column(NullableJSONType)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_by_id: Mapped[int | None] = mapped_column(Integer)
 
@@ -2433,3 +2436,36 @@ class AgentRegistryLog(Base):
     old_value: Mapped[str | None] = mapped_column(Text)
     new_value: Mapped[str | None] = mapped_column(Text)
     reason: Mapped[str | None] = mapped_column(Text)
+
+
+class CallFollowup(Base):
+    """The call follow-up (2026-10-21, app/followup): one row per team call to a customer that
+    went unanswered and that the agent is following up — the text, then the AI call. Unique on
+    the call that started it, so a pass can never act on it twice. Never deleted."""
+    __tablename__ = "call_followups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trigger_key: Mapped[str] = mapped_column(String(160), unique=True)
+    phone: Mapped[str] = mapped_column(String(10), index=True)
+    trigger_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    trigger_source: Mapped[str | None] = mapped_column(String(20))   # Quo | Zuper | CRM line
+    staff: Mapped[str | None] = mapped_column(String(120))
+    customer_uid: Mapped[str | None] = mapped_column(String(64))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    job_uid: Mapped[str | None] = mapped_column(String(64))
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    # open | done | skipped | expired
+    state: Mapped[str] = mapped_column(String(12), default="open", server_default="open",
+                                       index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    text_body: Mapped[str | None] = mapped_column(Text)
+    # shadow | sending | sent | failed | skipped
+    text_state: Mapped[str | None] = mapped_column(String(12))
+    text_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # shadow | requested | failed | skipped
+    call_state: Mapped[str | None] = mapped_column(String(12))
+    call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    call_ref: Mapped[str | None] = mapped_column(String(64))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -7,8 +7,8 @@ import {
 import type { Me } from '../../lib/auth'
 import { isAiAdmin } from '../../lib/aiAgents'
 import {
-  groupByRole, isPromotion, LEVEL_HELP, LEVEL_TONE, LEVELS, levelLabel, spendLine, STATUS_TONE,
-  visible, type Show,
+  groupByRole, isPromotion, LEVEL_HELP, LEVEL_TONE, LEVELS, levelLabel, SETTING_FIELDS, settingValue,
+  spendLine, STATUS_TONE, visible, type Show,
 } from '../../lib/registry'
 import {
   Chip, Empty, FAINT, Field, INK, INPUT, LINE, Modal, MUTED, Notice, PageHeader,
@@ -204,6 +204,7 @@ function ScopeCard({ e, admin, roles, promoteWord, onError, onNotice }: {
             promoteWord={promoteWord} onError={onError} onNotice={onNotice} />
         ))}
       </div>
+      {e.settings && <SettingsPanel e={e} admin={admin} onError={onError} onNotice={onNotice} />}
       {admin && !editing && (
         <div><button type="button" style={{ ...smallButton, marginTop: 8 }} onClick={() => setEditing(true)}>
           Edit role, owner and limit
@@ -343,6 +344,65 @@ function EditEntry({ e, roles, onDone, onError }: {
       </div>
       <div style={{ fontSize: 12, color: FAINT, marginTop: 8 }}>
         To rename an agent or switch it on, open it in Agents.
+      </div>
+    </div>
+  )
+}
+
+function SettingsPanel({ e, admin, onError, onNotice }: {
+  e: RegistryEntry; admin: boolean; onError: (s: string) => void; onNotice: (s: string) => void
+}) {
+  const qc = useQueryClient()
+  const current = e.settings ?? {}
+  const shown = (_k: string, v: unknown) => Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? v : String(v ?? '')
+  const [draft, setDraft] = useState<Record<string, string | boolean>>(
+    Object.fromEntries(Object.entries(current).map(([k, v]) => [k, shown(k, v)])))
+  const save = useMutation({
+    mutationFn: () => {
+      const config: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(draft)) {
+        const f = SETTING_FIELDS[k]
+        if (f && shown(k, current[k]) !== v) config[k] = settingValue(f.kind, v)
+      }
+      return registryUpdateEntry(e.key, { config })
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['registry'] }); onNotice(`${e.name}: settings saved.`) },
+    onError: (err: Error) => onError(err.message),
+  })
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>Settings</div>
+      <div style={{ border: `1px solid ${LINE}`, borderRadius: 4, padding: '4px 12px 12px', marginTop: 6 }}>
+        {Object.keys(current).map((k) => {
+          const f = SETTING_FIELDS[k]
+          const id = `registry-setting-${e.key}-${k}`
+          if (!f) return <Line key={k} label={k}>{String(shown(k, current[k]))}</Line>
+          if (f.kind === 'bool') {
+            return (
+              <label key={k} htmlFor={id} className="flex items-center gap-6" style={{ marginTop: 12, fontSize: 13, color: TEXT }}>
+                <input id={id} type="checkbox" disabled={!admin} checked={!!draft[k]}
+                  onChange={(ev) => setDraft({ ...draft, [k]: ev.target.checked })} />
+                {f.label}{f.hint && <span style={{ color: FAINT }}> - {f.hint}</span>}
+              </label>
+            )
+          }
+          return (
+            <Field key={k} label={f.label} hint={f.hint}>
+              {f.kind === 'long' ? (
+                <textarea id={id} disabled={!admin} value={String(draft[k] ?? '')}
+                  onChange={(ev) => setDraft({ ...draft, [k]: ev.target.value })} style={textarea} />
+              ) : (
+                <input id={id} disabled={!admin} value={String(draft[k] ?? '')}
+                  inputMode={f.kind === 'int' ? 'numeric' : undefined}
+                  onChange={(ev) => setDraft({ ...draft, [k]: ev.target.value })} style={INPUT} />
+              )}
+            </Field>
+          )
+        })}
+        {admin && (
+          <button type="button" style={{ ...primarySmall, marginTop: 12 }} disabled={save.isPending}
+            onClick={() => save.mutate()}>Save settings</button>
+        )}
       </div>
     </div>
   )
