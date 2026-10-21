@@ -271,7 +271,7 @@ def refresh(db: Session, now: datetime, *, limit: int = PER_TICK,
             break
         used += 1
         try:
-            prov, model = ai.provider_for(db, now)
+            prov, model = ai.provider_for(db, now, entry="availability_reader")
         except ai.Unavailable as e:
             counts["skipped"] = str(e)
             break

@@ -1590,3 +1590,9 @@ def ai_set_agent_spend(body: SpendIn, _: auth.Principal = ADMIN):
     if not r.ok:
         raise _link_failed(r)
     return {"configured": True, "detail": None, **numbers.spend_out(r.data)}
+
+
+# ============================================================ the agent registry (2026-10-21)
+# Its routes live in app/registry/api.py, which adds them to THIS router when imported here,
+# last — so the module's access rule and tests/test_ai_permissions.py's enumeration cover them.
+from ..registry import api as _registry_api  # noqa: E402, F401

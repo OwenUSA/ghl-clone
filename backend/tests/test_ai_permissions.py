@@ -44,6 +44,11 @@ ADMIN_ONLY = {
     ("POST", "/api/ai/knowledge-gaps/{gap_id}/resolve"),
     ("POST", "/api/ai/knowledge-gaps/{gap_id}/dismiss"), ("GET", "/api/ai/runs"),
     ("GET", "/api/ai/runs/{run_id}"), ("GET", "/api/ai/metrics"),
+    # The agent registry (2026-10-21): everyone in the module reads it; only an ADMIN changes a
+    # level, an entry's settings or the overall limit.
+    ("PATCH", "/api/ai/registry/entries/{key}"),
+    ("PUT", "/api/ai/registry/entries/{key}/actions/{action}"),
+    ("PUT", "/api/ai/registry/overall"),
 }
 
 

@@ -106,7 +106,8 @@ def why_not(db: Session, kind: str) -> str | None:
     switch = KIND_SWITCH[kind]
     if not _on(s, switch):
         return "“%s” is off (Dispatch → Settings)." % SWITCHES[switch]
-    return None
+    from ..registry import service as registry
+    return registry.level_refusal(db, "dispatch_assistant", "zuper_change")
 
 
 def status(db: Session) -> dict:

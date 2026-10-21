@@ -6,7 +6,9 @@ Order, every pass — the first gate that is closed stops it with a sentence (th
   1. the server gate ZUPER_AUTOREPLY_ENABLED and the Zuper sync armed;
   2. the switch in Dispatch → Settings;
   3. "Pause all AI agents" (Settings → AI Connections) — it stops the fixed wording too;
-  4. today's limit (New York day; sent texts are counted).
+  4. today's limit (New York day; sent texts are counted);
+  5. the registry (2026-10-21): texts held at Never, its own spend limit or the overall one.
+     Held at Shadow, it decides and writes the reply, records it as "shadow", and sends nothing.
 Then, per conversation with activity in the last day: read its history, decide (rules.py),
 and for a reply: write it (writer.py), check Zuper's sender, RECORD the decision and commit,
 send, add the note. The record comes first so that a crash after Zuper accepted the text can
@@ -28,6 +30,8 @@ from ..ai import providers, vault
 from ..dispatch import comms
 from ..dispatch import config as dc
 from ..models import AiConnection, AutoReply, DispatchSettings
+from ..registry import catalog as reg_catalog
+from ..registry import service as registry
 from ..zuper import client
 from ..zuper import config as zconfig
 from . import config as c
@@ -36,6 +40,7 @@ from . import context, rules, writer, zconnect
 log = logging.getLogger("autoreply")
 
 SENT_STATES = ("sending", "sent")
+KEY = "autoreply"                              # its registry entry
 # Conversations whose latest activity was already decided ("nothing to do" or recorded): the
 # history is not read again until something new happens in them. Per process.
 _seen: dict[str, str] = {}
@@ -69,7 +74,18 @@ def closed_gate(db: Session, now: datetime) -> str | None:
     cap = s.autoreply_daily_cap if s.autoreply_daily_cap is not None else 30
     if sent_today(db, now) >= cap:
         return "Today's limit of %d auto-replies is used up; it resets at midnight." % cap
+    held = registry.level_refusal(db, KEY, "send_text")
+    if held:
+        return held
+    over = registry.cap_refusal(db, KEY, now)
+    if over:
+        registry.alert_failure(db, KEY, over, now, what="cap_reached")
+        return over
     return None
+
+
+def shadow(db: Session) -> bool:
+    return registry.level(db, KEY, "send_text") == reg_catalog.SHADOW
 
 
 def _provider(db: Session, s: DispatchSettings) -> tuple[providers.Provider | None, str | None,
@@ -146,6 +162,12 @@ def handle(db: Session, conv: dict, now: datetime, s: DispatchSettings,
         return "waiting"
     if d.action == "nothing":
         return "nothing"
+    if db.scalar(select(AutoReply.id).where(AutoReply.conversation_uid == uid,
+                                            AutoReply.trigger_uid == d.trigger.uid)):
+        # Already decided for this stretch (sent, shadow, skipped, or left "sending" by a
+        # crash): never ask the model again. A shadow reply leaves the stretch unanswered, so
+        # without this every new message in it would cost a model call (registry, 2026-10-21).
+        return "nothing"
     base = {"conversation_uid": uid, "trigger_uid": d.trigger.uid, "trigger_kind": d.kind,
             "trigger_at": d.trigger.at, "customer_uid": cust["customer_uid"],
             "customer_name": cust["name"], "phone": cust["phone"] or None,
@@ -170,6 +192,14 @@ def handle(db: Session, conv: dict, now: datetime, s: DispatchSettings,
                      sentiment_negative=negative, unavailable=why)
     base.update(reply=w.reply, upset=w.upset, needs_person=w.needs_person, written_by=w.by,
                 model=w.model, input_tokens=w.input_tokens, output_tokens=w.output_tokens)
+    if w.by == "template" and (why or (w.why_template or "").startswith("the AI did not")):
+        # The provider is down or unusable: the fixed wording still goes, and the office hears
+        # about it once today (Q13) — a dead model must never go unnoticed for days again.
+        registry.alert_failure(db, KEY, w.why_template or why or "the AI did not answer", now)
+    if shadow(db):
+        # Shadow: everything up to the send, recorded, and nothing leaves (no text, no note).
+        row = _record(db, state="shadow", reason=w.why_template, **base)
+        return "shadow" if row is not None else "nothing"
     # --- the sender, then the record, then the send
     try:
         problem = zconnect.sender_check()
@@ -188,6 +218,7 @@ def handle(db: Session, conv: dict, now: datetime, s: DispatchSettings,
         answer = zconnect.send(cust["customer_uid"], cust["phone"], w.reply)
     except client.ZuperError as e:
         row.state, row.error = "failed", client.sentence(e)[:500]
+        registry.alert_failure(db, KEY, "Zuper did not send a text: %s" % row.error, now)
         db.commit()
         log.warning("auto-reply to conversation %s failed: %s", uid, e.kind)
         return "failed"
@@ -214,7 +245,7 @@ class _Stop(Exception):
 
 def run(db: Session, now: datetime | None = None) -> dict:
     now = c.aware(now or datetime.now(UTC))
-    out = {"checked": 0, "replied": 0, "skipped": 0, "waiting": 0, "failed": 0}
+    out = {"checked": 0, "replied": 0, "shadow": 0, "skipped": 0, "waiting": 0, "failed": 0}
     gate = closed_gate(db, now)
     s = settings(db, for_update=True)
     s.autoreply_last_run_at = now
@@ -254,7 +285,7 @@ def run(db: Session, now: datetime | None = None) -> dict:
             continue
         if result in out:
             out[result] += 1
-        if result in ("nothing", "skipped", "replied", "failed"):
+        if result in ("nothing", "skipped", "replied", "shadow", "failed"):
             _seen[uid] = conv.get("recent_conversation_at")
     s = settings(db, for_update=True)
     s.autoreply_last_run_at = now
