@@ -68,6 +68,10 @@ def main() -> None:
     # up the sync. Does nothing unless ZUPER_AUTOREPLY_ENABLED and the Dispatch switch say so.
     from .autoreply import service as autoreply_service
     autoreply_service.start_thread(SessionLocal, stop)
+    # The call follow-up (2026-10-21): a text, then Anisa's call, after an unanswered team
+    # call. Its own thread; does nothing unless CALL_FOLLOWUP_ENABLED.
+    from .followup import service as followup_service
+    followup_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

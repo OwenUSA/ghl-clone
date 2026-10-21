@@ -49,6 +49,7 @@ class Comm:
     transcript: str = ""
     ai: bool = False          # an AI agent wrote it or answered it alone — not a person
     answered: bool = False    # a call somebody picked up (any length); never a text
+    final: bool = True        # False = a Zuper Connect call still ringing / in progress when read
 
 
 def by_ai(e) -> bool:
@@ -127,7 +128,7 @@ def load(db: Session, since: datetime) -> dict[str, list[Comm]]:
         add(c.number, Comm(
             at=config.aware(c.occurred_at), kind="call", out=not inbound,
             talked=done and secs >= config.TALK_SECONDS, missed=inbound and not_answered,
-            answered=done and secs > 0,
+            answered=done and secs > 0, final=done or not_answered,
             seconds=secs, summary=c.summary or "", source="Zuper", staff=c.staff_name))
     for comms in out.values():
         comms.sort(key=lambda c: c.at)

@@ -2620,6 +2620,7 @@ export type RegistryEntry = {
   status: { state: 'on' | 'off' | 'test' | 'outside' | 'unknown'; sentence: string }
   health: { last_error: string | null; last_error_at: string | null; error_today: boolean }
   spend_today: string | null; spend_unknown: boolean; daily_cap: string | null
+  settings: Record<string, unknown> | null
 }
 export type RegistryOverview = {
   roles: { role: number; name: string }[]
@@ -2641,6 +2642,7 @@ export const registryActivity = (key?: string | null, limit = 200) => {
 export const registryUpdateEntry = (key: string, body: {
   role?: number | null; owner_user_id?: number | null; is_test?: boolean
   daily_cap_usd?: string | number | null; notes?: string | null
+  config?: Record<string, unknown>
 }) => send<RegistryEntry>(`/api/ai/registry/entries/${encodeURIComponent(key)}`, 'PATCH', body)
 export const registrySetLevel = (key: string, action: string, body: { level: string; reason?: string; confirm?: string }) =>
   send<RegistryEntry>(`/api/ai/registry/entries/${encodeURIComponent(key)}/actions/${encodeURIComponent(action)}`, 'PUT', body)

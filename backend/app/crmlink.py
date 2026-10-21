@@ -282,6 +282,25 @@ def place_call(to_number: str, operator: str | None = None) -> LinkResult:
     return _post(CALLS_PATH, body)
 
 
+AGENT_CALLS_PATH = "/api/crm-link/agent-calls"
+
+
+def agent_call(to_number: str, agent_name: str, reason: str, *, from_number: str,
+               first_name: str | None = None, requested_by: str | None = None) -> LinkResult:
+    """`POST /api/crm-link/agent-calls` (owen-main `AgentCallIn`, 2026-10-15): an AI voice agent
+    DIALS a customer. owen-main checks its own switch (AGENT_OUTBOUND_ENABLED), hours, daily cap,
+    10-minute repeat rule and spend cap, and answers 202 {"call_id", "status": "dialing"}.
+    NOT idempotent - the caller must record the request before calling this and never retry.
+    `from_number` is required in practice: an agent with two numbers is refused without one."""
+    body: dict[str, str] = {"to_number": to_number, "agent_name": agent_name,
+                            "reason": reason[:300], "from_number": from_number}
+    if first_name:
+        body["customer_first_name"] = first_name[:40]
+    if requested_by:
+        body["requested_by"] = requested_by[:120]
+    return _post(AGENT_CALLS_PATH, body)
+
+
 def health() -> LinkResult:
     cfg = current()
     if not cfg.configured:

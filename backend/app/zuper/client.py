@@ -135,6 +135,7 @@ def dispatch_write():
 
 
 _AUTOREPLY: ContextVar[bool] = ContextVar("zuper_autoreply", default=False)
+_FOLLOWUP: ContextVar[bool] = ContextVar("zuper_followup", default=False)
 
 
 @contextlib.contextmanager
@@ -157,6 +158,29 @@ def autoreply_write():
         yield
     finally:
         _AUTOREPLY.reset(token)
+
+
+@contextlib.contextmanager
+def followup_write():
+    """The call follow-up's own two writes (2026-10-21; app/followup) — the SAME two as the
+    auto-reply's, in the same exact shape: one SMS through POST /customers/{uid}/send and the
+    private job note saying what was sent. Its own server gate, CALL_FOLLOWUP_ENABLED, so
+    switching one feature on never opens the other. Opened by app/followup/zconnect.py only."""
+    token = _FOLLOWUP.set(True)
+    try:
+        yield
+    finally:
+        _FOLLOWUP.reset(token)
+
+
+def _send_scope() -> tuple[bool, bool, str, str]:
+    """(inside a send scope, its server gate is on, its off-sentence, its name)."""
+    if _AUTOREPLY.get():
+        return True, config.autoreply_enabled(), config.AUTOREPLY_OFF_SENTENCE, "auto-reply"
+    if _FOLLOWUP.get():
+        return (True, config.followup_enabled(), config.FOLLOWUP_OFF_SENTENCE,
+                "call follow-up")
+    return False, False, "", ""
 
 
 def is_read_only() -> bool:
@@ -476,7 +500,9 @@ def _autoreply_send_body_ok(body: Any) -> bool:
 
 
 def _autoreply_allowed(method: str, path: str, body: Any = None) -> bool:
-    if not (_AUTOREPLY.get() and config.autoreply_enabled()):
+    """Inside the auto-reply's OR the call follow-up's scope, with that scope's gate on."""
+    inside, on, _, _ = _send_scope()
+    if not (inside and on):
         return False
     if method == AUTOREPLY_SEND[0] and re.match(AUTOREPLY_SEND[1], path):
         return _autoreply_send_body_ok(body)
@@ -489,11 +515,11 @@ def request(method: str, path: str, *, params: dict | None = None,
     path = "/" + path.lstrip("/")
     # Inside the auto-reply scope only its own two writes exist (the send is the ONE way past
     # the denylist, and only in its exact shape); nothing at all while the server gate is off.
-    if method != "GET" and _AUTOREPLY.get() and not _autoreply_allowed(method, path, body):
-        raise ZuperError("refused", "%s %s is not one of the auto-reply's writes%s" % (
-            method, path, "" if config.autoreply_enabled()
-            else " (" + config.AUTOREPLY_OFF_SENTENCE + ")"))
-    autoreply_send = (_AUTOREPLY.get() and method == AUTOREPLY_SEND[0]
+    inside, gate_on, off_sentence, scope_name = _send_scope()
+    if method != "GET" and inside and not _autoreply_allowed(method, path, body):
+        raise ZuperError("refused", "%s %s is not one of the %s's writes%s" % (
+            method, path, scope_name, "" if gate_on else " (" + off_sentence + ")"))
+    autoreply_send = (inside and method == AUTOREPLY_SEND[0]
                       and re.match(AUTOREPLY_SEND[1], path) is not None)
     why = None if autoreply_send else denied(method, path)
     if why:

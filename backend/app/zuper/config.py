@@ -109,6 +109,17 @@ def autoreply_enabled() -> bool:
     return _flag("ZUPER_AUTOREPLY_ENABLED", False)
 
 
+FOLLOWUP_OFF_SENTENCE = ("The call follow-up is switched off on this server "
+                         "(CALL_FOLLOWUP_ENABLED is not set).")
+
+
+def followup_enabled() -> bool:
+    """The server's gate on the call follow-up (2026-10-21, app/followup): a text, then an AI
+    call, after the team's call to a customer went unanswered. Off unless the deployment says
+    so; then `client.followup_write()` allows NOTHING and the pass reads nothing."""
+    return _flag("CALL_FOLLOWUP_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

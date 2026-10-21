@@ -908,6 +908,16 @@ a level per action: **Never → Shadow → Approve each → Automatic**. The des
 - Spend: each entry's tokens × its connection's price; overall limit $25/day by default.
   The first failure of the day rings the bell for admins + the entry's owner.
 
+## The call follow-up (2026-10-21)
+
+`backend/app/followup/` (read `__init__.py` first): when the team's call to a customer goes
+unanswered, a text through Zuper from (954) 420-7373, then - no reply after the wait - Anisa
+calls from the CRM line through owen-main's `/api/crm-link/agent-calls`. "Call follow-up" in AI
+Agents -> Overview: its settings (test only, test numbers, wait, wording, caller ID) and its two
+levels (texts, calls) live there. Off unless `CALL_FOLLOWUP_ENABLED`; starts at Shadow on test
+customers only; Anisa really dials only when owen-main also has `AGENT_OUTBOUND_ENABLED`. Rules
+are pure (`rules.py`). See the 2026-10-21 call follow-up amendment in `DECISIONS.md`.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

@@ -130,6 +130,29 @@ ENTRIES: tuple[Entry, ...] = (
         actions=(Action("crm_write", AUTO, (), "Saves availability; the office can correct it."),),
         never=("Talk to customers",),
     ),
+    Entry(
+        key="call_followup", name="Call follow-up", kind="agent", role=2,
+        purpose="When the team calls a customer and nobody answers, it texts them a couple of "
+                "minutes later, and if they still have not replied or called back, Anisa calls "
+                "them.",
+        covers="Every unanswered team call (Quo, the CRM line, Zuper Connect). Test customers "
+               "only until an admin switches test-only off in its settings.",
+        channels=("Zuper text from (954) 420-7373", "Anisa's call from the CRM line"),
+        runs_on="CRM worker -> owen-main (Retell)", provider="Retell (Anisa)",
+        hours="Texts any time after the team's call; calls 8 AM-8 PM Mon-Sat, at most 2 a day "
+              "per number",
+        actions=(
+            Action("send_text", SHADOW, (NEVER, SHADOW, AUTO),
+                   "The text after an unanswered team call."),
+            Action("place_calls", SHADOW, (NEVER, SHADOW, AUTO),
+                   "Anisa's call when the text got no answer. Needs AGENT_OUTBOUND_ENABLED on "
+                   "owen-main to really dial."),
+            Action("zuper_note", AUTO, (), "Goes with every text and call it makes."),
+        ),
+        never=("Prices or money", "Saying a claim is approved", "Promising a date",
+               "Calling outside 8 AM-8 PM Mon-Sat", "More than 2 calls a day to one number"),
+        owner_hint="Office", tags=("settings",),
+    ),
     # ------------------------------------------------------------------ automations
     Entry(
         key="dispatch_flags", name="Dispatch items and bell", kind="automation", role=10,
