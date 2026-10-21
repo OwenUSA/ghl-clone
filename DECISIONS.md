@@ -7429,3 +7429,113 @@ recorded "failed" and not retried either (a retry could text twice).
 are context only (Q1 = Zuper only); no "needs attention" flag (above); the backlog is not
 answered. **Never exercised on a real conversation** — the first test is the owner texting
 954-420-7373 from the Quo line (Q29), in test mode.
+
+---
+
+## AMENDMENT (2026-10-21): the agent system — ten agents, one registry, a scope each (DESIGN ONLY, nothing built)
+
+The boss plans ten agents for every kind of customer, Retail to AHS: 1 Phone answering &
+speed to lead · 2 Customer service & follow-up · 3 Scheduling & dispatch · 4 Inspection
+documentation · 5 AHS submission & authorization · 6 Post-inspection explanation & sales ·
+7 Production & field technician assistant · 8 Payments & collections · 9 Quality control,
+callbacks & reviews · 10 Management & daily reporting. Settled with the user in a grilling
+session (Q1–Q38). Agents 2–10 get their own detailed design (prompts, exact actions) later.
+**Nothing here switches anything on.** Every rule below that loosens an earlier one ("no
+automatic texts", "no AI agent acts by itself", Zuper read-only) still needs its own dated lift
+when the thing is actually turned on.
+
+**What exists today (checked read-only 2026-10-21).** AI lives in four places, each with its own
+switch and logs; only "Pause all AI agents" spans them: AI Agents (`app/ai/`, 4 voice agents,
+0 text runs ever), the Retell voice agents (prompts only in Retell's dashboard), the Dispatch
+assistant (`app/dispatch/`, DeepSeek), the auto-reply (`app/autoreply/`, DeepSeek, never
+switched on, 0 rows). owen-main HAS an outbound AI call path (`app/agents/outbound_call.py`,
+2026-10-15, `AGENT_OUTBOUND_ENABLED` unset = off; 8–20 NY, 10/day, 10 min per number, spend
+cap). Voice routing: "DTR AI Agent - Kate" in the CRM is owen-main's "DTR Retell - Brian" on
+786-920-0331 / 786-936-7597 and says its name is **Anisa**; Roofing Receptionist answers Quo
+overflow 954-685-9990 (+ 754-704-9800, 0 calls); Test 954-906-2005 and Marissa 754-352-5145 had
+1–2 calls. The CRM copies ONE Quo line (954-914-7244); the call-center line 954-906-0312 is
+not copied. There is NO automated backup of the CRM database.
+
+**Organisation**
+- **One registry** (Q1, Q24): the AI Agents page — tabs Agents, Automations, Activity, Spend &
+  health. Existing modules keep their code and register into it; the auto-reply and Dispatch AI
+  settings move there.
+- **A scope of work per agent** (Q7, Q8): purpose · covers (boards, customers, stages) ·
+  channels · actions, each with its own ladder level · hours, caps, owner · a never-list.
+  **Code refuses anything outside the scope**, whatever the prompt says.
+- **Mapping** (Q9): Retell agents + auto-reply → #1; Dispatch assistant, planner, availability
+  → #3; Dispatch items and bell → #10; AHS authorizations → #5; the six live Zuper text
+  workflows → #2 / #3, Zuper side, to be shadowed.
+- **Non-AI automations are listed too** (Q10), read-only: the Zuper workflows, `zuper_tasks`,
+  `zuper_proposals`, the routes cron, AHS email → Zuper job.
+- **Voice clean-up** (Q19): the main agent is named "Anisa – main line (786-920-0331)" in both
+  systems; Roofing Receptionist stays, scope "Quo overflow, inbound"; Test and Marissa are test
+  agents; the "Craiglist" campaign tag on 786-920-0331 is corrected.
+- **Providers** (Q12, Q13): Retell for voice, DeepSeek for chat. Every prompt / knowledge /
+  rule set is edited and versioned in the CRM and published through owen-main to Retell
+  (the Retell version trap is then handled in code). First step: a nightly copy of the Retell
+  prompts. A provider failure STOPS the agent and alerts at the first failure; no automatic
+  switch to another model; customer-facing agents fall back to fixed wording.
+
+**Safety**
+- **The ladder is per action type** (Q4): shadow → approve each → automatic. Promotion = an
+  ADMIN's OK (typed confirmation, reason recorded) + 2 weeks or 30 actions, whichever is later,
+  with zero mismatches. Deletes and gallery/photo changes never leave "never".
+- **Approvals** (Q25, Q26): "Waiting for approval" in Dispatch with the bell, history in AI
+  Agents. Any ADMIN or unrestricted DISPATCHER approves one action; only an ADMIN promotes or
+  switches on; anyone in the office can pause. A call request expires after 15 minutes.
+- **Caps** (Q27): per-agent daily $ (model + Retell + BulkVS) and an overall cap — start $5/day
+  for #1, $25/day overall. A cap stops the agent for the day and alerts.
+- **Backups before any agent writes to Zuper** (Q6, Q29): nightly CRM `pg_dump` + media;
+  nightly read-only Zuper export (customers, jobs with every field and checklist answer, tasks,
+  notes, estimates, invoices, settings and workflows); photo/video files downloaded once then
+  only new ones. Stored on the dispatch server, plus a weekly copy to an office machine. No
+  cloud. CRM 30 days, Zuper 90 days, monthly restore test.
+- **Zuper writes** come per agent, in phases, each a named scope in `zuper/client.py` like
+  `ahs_create` / `autoreply_write`, each read back and logged.
+
+**Communication** (Q2, Q3): customers are reached on Zuper's number now, through owen-main's
+BulkVS numbers later; an agent's channel is one setting. Before the CRM takes over a message
+type Zuper sends, it runs in SHADOW (computes, records, sends nothing) with a daily "Zuper
+sent / CRM would have sent" comparison; then one type at a time switches Zuper → CRM shadow →
+CRM live, and that Zuper workflow is turned off in the same step. Testing starts with Retail
+and general-task agents (Q5).
+
+**Outbound calls** (Q11, Q14–Q18, Q20, Q31, Q35)
+- Which agents: #1, then #2, #3, #9. #6 and #8 only after a separate decision. #4, #5, #7, #10
+  never call customers.
+- Plumbing: owen-main's existing path. The CRM sends each request with the agent's scope;
+  owen-main applies the STRICTER of its own limits and the scope. One BulkVS number per
+  outbound purpose; a callback to it reaches the same agent with context.
+- Rules, enforced in code: only people who contacted us about a job or lead (never lists,
+  never cold calls); **8 AM–8 PM, Monday–Saturday**, no holidays (`autoreply.config.holidays`);
+  at most 2 attempts a day and 3 a week per subject, then text; short voicemail with no
+  details; says it is an AI and that the call is recorded; English/Spanish, preferred language
+  saved on the contact (Q28); "don't call me" is permanent and shared by every agent.
+  **An attorney confirms the TCPA (AI voice = artificial voice) and Florida rules (8–8, 3 calls
+  per 24 h per subject, all-party consent to record) before the first real call.**
+- Wants a person: office hours are **8 AM–5 PM** — then the inbound transfer (office 12 s,
+  backup 15 s); outside them, or nobody answers, it takes the details and creates an urgent
+  Dispatch item (Q16, Q31).
+- Results (outcome, summary, transcript, recording) go to the CRM thread AND a private note on
+  the Zuper job (Q17).
+
+**Agent #1 for Retail — the first agent** (Q21, Q22, Q30, Q32, Q33, Q36–Q38)
+- Starts on: a new caller/texter on the call-center line 954-906-0312 nobody answered, OR a
+  new Retail "New Lead" job in Zuper — one call per customer, whichever comes first. Skipped if
+  anyone on the team called, texted or answered that number in the last 30 minutes on any line.
+- New wiring: the CRM copies 954-906-0312 from Quo (read-only); Zuper Retail New Lead is read
+  every 20–30 s (GET only — no webhook, no Zuper change).
+- On the call: a generic opening (the line collects several call sources) and "how did you hear
+  about us"; confirms name and address; the call Checklist questions; offers 3 inspection slots
+  (`dispatch/booking.py`); says the office will confirm — Luis books in Zuper (no Zuper write
+  at first; booking climbs the ladder later).
+- Target: first attempt within 1 minute in business hours; "reached" is reported too;
+  overnight leads are called from 8 AM.
+- Testing: test customers first (Luis makes a Retail test job by hand in Zuper), then real leads
+  from 954-906-0312 in approve-each, then automatic. AHS leads after Retail is proven.
+  **Calling stays OFF until the user switches it on.**
+
+**Build order** (Q23): 1 foundation (registry, scopes, action log, ladder, alerts, pause, caps,
+existing bots registered, voice clean-up) · 2 daily backups · 3 agent #1 Retail calls ·
+4 shadow copies of the six Zuper workflows · 5 the other agents one at a time.
