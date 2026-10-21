@@ -49,6 +49,7 @@ ACTIONS: dict[str, dict] = {
     "text_staff": {"label": "Text the technician", "customer": False},
     "call_staff": {"label": "Call the technician", "customer": False},
     "ai_read": {"label": "Read notes and replies with AI", "customer": False},
+    "ahs_portal": {"label": "Read and submit in the AHS portal (Frontdoor)", "customer": False},
 }
 
 
@@ -78,6 +79,8 @@ class Entry:
     never: tuple[str, ...] = ()
     owner_hint: str | None = None
     tags: tuple[str, ...] = field(default=())
+    # Not built yet: shown Off with this sentence, every action Never and not switchable.
+    planned: str | None = None
 
     def action(self, name: str) -> Action | None:
         return next((a for a in self.actions if a.action == name), None)
@@ -180,6 +183,26 @@ ENTRIES: tuple[Entry, ...] = (
         ),
         never=("Write anything in Zuper", "Touch job photos", "Text or call customers"),
         owner_hint="Luis", tags=("settings",),
+    ),
+    Entry(
+        key="ahs_submission", name="AHS Submission & Authorization", kind="agent", role=5,
+        purpose="Prepare the inspection package for the office, track the AHS authorization, "
+                "missing information, decisions and deadlines, record the approved scope, "
+                "covered amounts and the customer's share, and alert Marianne and Luis when a "
+                "claim stalls.",
+        covers="AHS jobs.", channels=("AHS portal (Frontdoor)", "Dispatch item + bell"),
+        runs_on="Not built", provider=None, hours="Off",
+        actions=(
+            Action("ahs_portal", NEVER, (), "Not built."),
+            Action("alert_staff", NEVER, (), "Not built."),
+            Action("report", NEVER, (), "Not built."),
+        ),
+        never=("Submit anything to AHS without a person", "Change a claim"),
+        owner_hint="Marianne",
+        planned="Off - not built. Waiting to confirm access to AHS's contractor portal, "
+                "Frontdoor: an API key if AHS offers one; if not, a logged-in browser session "
+                "(Playwright) that only reads. Until then AHS approvals arrive by email "
+                "(AHS approvals into Dispatch).",
     ),
     # ------------------------------------------------------------------ automations
     Entry(
@@ -332,6 +355,8 @@ def validate() -> list[str]:
                 out.append("%s.%s: default not among its choices" % (e.key, a.action))
             if any(c not in LEVELS for c in a.choices):
                 out.append("%s.%s: unknown choice" % (e.key, a.action))
+        if e.planned and any(a.choices or a.default != NEVER for a in e.actions):
+            out.append("%s: a planned entry has every action at Never, not switchable" % e.key)
         if e.kind == "automation" and any(a.choices for a in e.actions):
             out.append("%s: an automation's levels are not editable here" % e.key)
     return out

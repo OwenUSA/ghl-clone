@@ -7680,3 +7680,27 @@ technicians ("DTR Inspection Assistant"), not Anisa.
 backups and snapshots the owner's rules require); the "DTR Inspection Assistant" agent in Retell
 and on owen-main (its script is still to be written with the user); transcribing the optional
 voice note; AI picture review (phase D, off).
+
+
+---
+
+## AMENDMENT (2026-10-21): the AHS Submission & Authorization agent (agent #5) - listed, OFF, not built
+
+The user (2026-10-21): this agent cannot work yet - first find out whether we can reach AHS's
+contractor portal, **Frontdoor**, by API (probably not); if there is no API key, maybe a
+Playwright session. Write the idea down and show the agent Off.
+
+It is in the registry as "AHS Submission & Authorization" (role 5) with every action at Never and
+**no way to switch it on from the screen** (`catalog.Entry.planned`; `catalog.validate()` refuses
+a planned entry with a switchable action). Its status reads the sentence below.
+
+**Access options, to check in this order:**
+1. Ask AHS / Frontdoor whether contractors can get API access (a key) to read job status,
+   authorizations and submitted invoices.
+2. If not: a Playwright browser session logged in as the company, **read-only**, guarded like the
+   Zuper browser on dispatch (every write request blocked and logged), reading the same pages a
+   person reads.
+3. Until then the source stays the email path that already exists: owen-main parses AHS note
+   emails and posts them to `POST /api/ahs-jobs/authorizations` ("AHS approvals into Dispatch").
+
+Nothing else is built: no portal code, no credentials stored.
