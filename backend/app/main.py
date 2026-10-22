@@ -173,6 +173,10 @@ app.include_router(payments_api.router)
 from .insights import api as insights_api  # noqa: E402
 
 app.include_router(insights_api.router)
+# Speak instead of type in every AI chat (2026-10-22, app/speech.py).
+from . import speech  # noqa: E402
+
+app.include_router(speech.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

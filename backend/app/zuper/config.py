@@ -178,6 +178,23 @@ def insights_enabled() -> bool:
     return _flag("INSIGHTS_ENABLED", False)
 
 
+REVIEWS_OFF_SENTENCE = ("The reviews & QC agent is switched off on this server "
+                        "(REVIEWS_ENABLED is not set).")
+REVIEWS_TEXTS_OFF_SENTENCE = ("Review texts to customers are switched off on this server "
+                              "(REVIEWS_TEXTS_ENABLED is not set).")
+
+
+def reviews_enabled() -> bool:
+    """The server's gate on the reviews & QC pass (2026-10-22, app/reviews)."""
+    return _flag("REVIEWS_ENABLED", False)
+
+
+def reviews_texts_enabled() -> bool:
+    """The second key on its texts to customers (the registry level is the first): with it off,
+    `client.reviews_write()` allows nothing."""
+    return _flag("REVIEWS_TEXTS_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

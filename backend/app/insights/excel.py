@@ -13,7 +13,8 @@ from . import metrics
 
 TABLE_TITLES = {"technicians": "Technicians", "callbacks": "Callbacks",
                 "still_leaking": "Still leaking", "complaints": "Complaints",
-                "callback_requests": "Asked to come back", "upsells": "Upsells"}
+                "callback_requests": "Asked to come back", "upsells": "Upsells",
+                "ratings": "Ratings"}
 
 
 def workbook(rep: dict, prev: dict | None, *, label: str) -> bytes:

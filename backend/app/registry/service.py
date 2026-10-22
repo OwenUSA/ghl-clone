@@ -50,7 +50,7 @@ MICRO = 1_000_000
 # Dispatch AI runs (`dispatch_ai_runs.kind`) that belong to an entry other than the assistant.
 DISPATCH_AI_KINDS = {"availability": "availability_reader", "inspection": "inspection_docs",
                      "briefing": "tech_briefing", "payments": "payments",
-                     "insights": "insights"}
+                     "insights": "insights", "reviews": "reviews"}
 
 
 def _dispatch_kind_filter(key: str):
@@ -447,6 +447,18 @@ def _status(db: Session, v: View) -> dict:
                         "pass is off on this server (PAYMENTS_ENABLED)."}
             return {"state": "on", "sentence": "On; customer reminders %s." % cat.LEVEL_LABEL[
                 level(db, v.key, "send_customer")].lower()}
+        if v.key == "reviews":
+            if not zconf.reviews_enabled():
+                return {"state": "off", "sentence": "Off on this server (REVIEWS_ENABLED)."}
+            from ..reviews import service as rvsvc
+            st = rvsvc.settings(db)
+            words = "texts %s, calls %s%s" % (
+                cat.LEVEL_LABEL[level(db, v.key, "send_text")].lower(),
+                cat.LEVEL_LABEL[level(db, v.key, "place_calls")].lower(),
+                "" if st.review_link else "; no review link set yet")
+            if st.test_only:
+                return {"state": "test", "sentence": "On for test customers only: %s." % words}
+            return {"state": "on", "sentence": "On for every finished job: %s." % words}
         if v.key == "insights":
             if not zconf.insights_enabled():
                 return {"state": "off", "sentence": "The Insights tab works; reading calls and "
@@ -540,9 +552,11 @@ def _settings_kinds():
     from ..inspection_docs import config as iconf
     from ..inspection_report import config as rconf
     from ..payments import config as pconf
+    from ..reviews import config as vconf
     from ..tech_briefing import config as tconf
     return {"payments": (lambda raw: pconf.Settings.from_config(raw).as_dict(), pconf.validate),
             "insights": (lambda raw: nconf.Settings.from_config(raw).as_dict(), nconf.validate),
+            "reviews": (lambda raw: vconf.Settings.from_config(raw).as_dict(), vconf.validate),
             "tech_briefing": (lambda raw: tconf.Settings.from_config(raw).as_dict(),
                               tconf.validate),
             "inspection_report": (lambda raw: rconf.Settings.from_config(raw).as_dict(),
@@ -759,6 +773,26 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
                             .limit(limit)):
             add("payments", r.created_at, "change", "%s%s (via %s)" % (
                 r.summary, " - undone" if r.undone_at else "", r.via), tone="info")
+    if key in (None, "reviews"):
+        from ..models import ReviewRequest
+        for r in db.scalars(select(ReviewRequest).order_by(ReviewRequest.id.desc())
+                            .limit(limit)):
+            label = "#%s %s" % (r.job_number or "?", r.customer_name or "")
+            if r.state == "skipped":
+                add("reviews", r.created_at, "skipped", "%s: not asked - %s" % (label, r.reason),
+                    tone="muted")
+                continue
+            if r.asked_body:
+                add("reviews", r.asked_at or r.created_at, r.asked_state or "asked",
+                    "%s %s: \u201c%s\u201d" % ("Would have asked" if r.asked_state == "shadow"
+                                               else "Asked", label, r.asked_body),
+                    tone="bad" if r.asked_state == "failed" else "info")
+            if r.reply:
+                add("reviews", r.replied_at or r.created_at, "reply",
+                    "%s answered%s: \u201c%s\u201d%s" % (
+                    label, " %s of 5" % r.score if r.score else "", r.reply[:300],
+                    " - what to improve: \u201c%s\u201d" % r.improve[:300] if r.improve else ""),
+                    tone="good" if r.score == 5 and not r.leak else "bad")
     if key in (None, "insights"):
         from ..insights import config as nconf
         from ..models import ConversationSignal

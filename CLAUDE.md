@@ -971,6 +971,29 @@ result can be pinned (`insight_saved_kpis`). Excel with native charts, CSV per t
 off unless `INSIGHTS_ENABLED`; the report works regardless. Nothing is sent, nothing reaches
 Zuper. See the 2026-10-22 insights amendment in `DECISIONS.md`.
 
+## Reviews & QC - agent #9 (2026-10-22, OFF)
+
+`backend/app/reviews/` (read `__init__.py` first). Two days after a job reaches Repair Complete,
+if the customer said nothing unhappy (Insights signals, open issues, a callback job, money due,
+STOP, asked in 90 days), it texts from the Zuper line: how did we do, 1-5. A 5 gets a thank-you +
+the Google review link; 1-4 or a leak gets "what could we have done better?" + a `low_rating`
+item in Dispatch "Customer issues" + the bell, and once they answer, the link too. **The link
+goes to EVERY customer who answers, never only the happy ones (Google's review-gating rule).**
+Its own Zuper send scope `client.reviews_write()`; the auto-reply leaves a customer alone while
+this agent talks to them (`reviews.service.active_on`). Off unless `REVIEWS_ENABLED`; texts need
+`REVIEWS_TEXTS_ENABLED` AND the registry's "Text customers" (Shadow by default); calls at Never;
+test customers only; no link until `review_link` is set. Never moves a Zuper column.
+
+## Speak instead of type in the AI chats (2026-10-22)
+
+`components/MicButton.tsx` sits beside the box of every AI chat - the Dispatch assistant,
+Collections, Insights' "Ask for a KPI", an agent's Try it - and a new chat box gets one too.
+Press, talk, press again: the browser records (MediaRecorder; MP4 on an iPhone), `POST
+/api/speech/transcribe` (`app/speech.py`, Dispatch's audience) transcribes it with the OpenAI
+connection (the one picked for transcription in Dispatch → Settings, else the first OpenAI one),
+and the words are ADDED to the box for the person to read and send. Nothing is sent by itself;
+the recording is not kept; 2 minutes / 10 MB; "Pause all AI agents" stops it.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

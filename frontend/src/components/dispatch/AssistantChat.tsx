@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { MicButton } from '../MicButton'
 import { useEffect, useRef, useState } from 'react'
 import {
   ApiError, deleteDispatchChat, dispatchChats, dispatchChatThread, rateDispatchChatMessage,
@@ -779,6 +780,8 @@ function Composer({ value, onChange, onSend, busy, placeholder, attached, readin
           <span style={{ fontSize: 12, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis',
             whiteSpace: 'nowrap' }}>Dispatch assistant · reads only</span>
         </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <MicButton value={value} onChange={onChange} disabled={busy} />
         <button type="button" aria-label="Send" disabled={!ready} onClick={onSend}
           style={{ width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center',
             justifyContent: 'center', background: ready ? BLUE : 'rgb(234,236,240)',
@@ -787,6 +790,7 @@ function Composer({ value, onChange, onSend, busy, placeholder, attached, readin
             strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M12 19V5M5 12l7-7 7 7" /></svg>
         </button>
+        </span>
       </div>
     </div>
     {fileError && (

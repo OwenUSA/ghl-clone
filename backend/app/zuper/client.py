@@ -137,6 +137,7 @@ def dispatch_write():
 _AUTOREPLY: ContextVar[bool] = ContextVar("zuper_autoreply", default=False)
 _FOLLOWUP: ContextVar[bool] = ContextVar("zuper_followup", default=False)
 _PAYMENTS: ContextVar[bool] = ContextVar("zuper_payments", default=False)
+_REVIEWS: ContextVar[bool] = ContextVar("zuper_reviews", default=False)
 
 
 @contextlib.contextmanager
@@ -186,6 +187,18 @@ def payments_write():
         _PAYMENTS.reset(token)
 
 
+@contextlib.contextmanager
+def reviews_write():
+    """Reviews & QC's texts and job notes (2026-10-22; app/reviews): the SAME send and private
+    note, in the same exact shape as the auto-reply's, under its own server gate
+    REVIEWS_TEXTS_ENABLED. Opened by app/reviews/zconnect.py only."""
+    token = _REVIEWS.set(True)
+    try:
+        yield
+    finally:
+        _REVIEWS.reset(token)
+
+
 def _send_scope() -> tuple[bool, bool, str, str]:
     """(inside a send scope, its server gate is on, its off-sentence, its name)."""
     if _AUTOREPLY.get():
@@ -196,6 +209,9 @@ def _send_scope() -> tuple[bool, bool, str, str]:
     if _PAYMENTS.get():
         return (True, config.payments_texts_enabled(), config.PAYMENTS_TEXTS_OFF_SENTENCE,
                 "payments agent")
+    if _REVIEWS.get():
+        return (True, config.reviews_texts_enabled(), config.REVIEWS_TEXTS_OFF_SENTENCE,
+                "reviews agent")
     return False, False, "", ""
 
 

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { MicButton } from '../MicButton'
 import { useEffect, useMemo, useState } from 'react'
 import {
   aiAgent, aiCatalogue, aiConnectionNames, aiFolders, aiKbs, getContact, listContacts, listPipelines,
@@ -1088,6 +1089,7 @@ function TryItPanel({ agent, draft }: { agent: AiAgentDetail; draft: Draft }) {
           placeholder="Type a customer message"
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
           style={{ ...textarea, marginTop: 0, minHeight: 40, height: 40, fontSize: 13 }} />
+        <MicButton value={text} onChange={setText} disabled={send.isPending} size={40} />
         <button type="button" onClick={submit} disabled={!text.trim() || send.isPending}
           style={{ ...primarySmall, height: 40, opacity: !text.trim() || send.isPending ? 0.5 : 1 }}>
           Send

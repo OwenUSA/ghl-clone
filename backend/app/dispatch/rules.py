@@ -51,9 +51,10 @@ QUEUE_LABEL = {
 # ... and an inspection or repair missing its details (app/inspection_docs, 2026-10-21),
 # which that agent resolves itself when the details appear.
 # ... and a customer issue the insights agent heard in a call or text (app/insights, 2026-10-22).
+# ... and a low or unclear answer to the review text (app/reviews, 2026-10-22).
 FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated", "ai_change_request",
                        "missing_docs", "report_ready", "payment_due",
-                       "customer_issue"})
+                       "customer_issue", "low_rating"})
 
 
 @dataclass

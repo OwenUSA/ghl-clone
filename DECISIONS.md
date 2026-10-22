@@ -7870,3 +7870,42 @@ are the same view with longer ranges.
   the report itself is computed on demand and always works. Nothing is texted, called or written
   to Zuper by this agent.
 
+
+## AMENDMENT (2026-10-22): speak instead of type in every AI chat
+
+**The user's request:** every chat agent gets a speech-to-text option, so nobody has to type.
+
+**Decided:** a mic button beside every AI chat box (Dispatch assistant, Collections, Insights'
+Ask for a KPI, an agent's Try it). The SERVER transcribes, with the OpenAI connection already
+used for Zuper's call recordings (gpt-4o-mini-transcribe), not the browser's own speech API:
+that one is Chrome / Edge only, unreliable on an iPhone, and sends the audio to the browser
+maker. English and Spanish are detected by themselves. The words are ADDED to what is typed and
+the person sends - nothing is sent by itself. The recording is not stored; each transcription is
+a dispatch_ai_runs row (kind "speech"). 2 minutes / 10 MB, the type decided by the bytes.
+Pause all AI agents stops it; with no OpenAI connection it says so and the box still works.
+
+
+## AMENDMENT (2026-10-22): reviews & QC (agent #9) - a rating text after a finished repair
+
+**The user's request:** when a job is completed and the customer looks satisfied, text or call
+to ask how we did and whether they would give 5 stars; a 5 gets the review link, anything less
+is asked why and what to improve.
+
+**Answers (2026-10-22):** compliant with Google's rule against review gating (the link is
+offered to EVERY customer who answers - 5 with the thank-you, 1-4 after they say what to
+improve, and the office is alerted for 1-4 at once); asked at Repair Complete + 2 days; text
+first from the Zuper line, Anisa calls only if no reply in 2 days and calls stay Off; Shadow and
+test customers first; the review link is a setting the user will send.
+
+**How it works:** `app/reviews/` - plan (Repair Complete after the agent started, `wait_days`
+later, skipped with a reason for unhappy words since the visit, an open issue, a callback job,
+money due, STOP, asked in `resurvey_days`, test mode), ask (recorded before the send, a private
+job note), read replies in Zuper Connect (a bare 1-5 in code; words by DeepSeek with the quote
+verified; unclear -> a person), answer (5 -> link; 1-4 / leak -> improve question + `low_rating`
+Dispatch item + bell + an Insights signal; their answer kept, then the link), no reply -> Anisa
+(Never) and closed after 5 days. The wording avoids the phrases Zuper's "Thank you for
+confirming" workflow reacts to; the auto-reply skips a customer the agent is talking to.
+Insights shows ratings received, average, 5-star %, answered %, review links sent and low
+ratings per technician. Never moves a Zuper column ("Review Requested" / "Review Received" stay
+with the team).
+
