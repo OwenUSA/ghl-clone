@@ -251,6 +251,32 @@ ENTRIES: tuple[Entry, ...] = (
         never=("Text customers", "Write anything in Zuper", "Mention prices"),
         owner_hint="Luis", tags=("settings",),
     ),
+    Entry(
+        key="payments", name="Payments & collections", kind="agent", role=8,
+        purpose="Tracks what each customer agreed to pay and when (e.g. 50% before the job, 50% "
+                "after), shows what is due and overdue, keeps the proof, suggests payments it "
+                "sees in Zuper or in a customer's screenshot for a person to confirm, and lets "
+                "the office update everything by chat.",
+        covers="Every agreement entered in Collections.",
+        channels=("Collections page + chat", "Dispatch item + bell",
+                  "Customer reminder through Zuper (off)"),
+        runs_on="CRM (reads Zuper only)", provider="DeepSeek (chat), OpenAI/Anthropic (vision)",
+        hours="Reminders 8 AM-8 PM Mon-Sat",
+        actions=(
+            Action("crm_write", AUTO, (), "The page and the chat; every change can be undone."),
+            Action("alert_staff", AUTO, (), "A Dispatch item when a part is due, the bell when "
+                                            "it is overdue or a screenshot arrives."),
+            Action("ai_read", AUTO, (NEVER, AUTO), "The chat understands what you write."),
+            Action("ai_vision", AUTO, (NEVER, AUTO),
+                   "Checks customers' pictures for payment screenshots. Needs a vision "
+                   "connection in its settings."),
+            Action("send_customer", NEVER, (NEVER, SHADOW, AUTO),
+                   "Payment reminders to customers. Also needs PAYMENTS_TEXTS_ENABLED."),
+        ),
+        never=("Mark anything paid without a person", "Write anything in Zuper",
+               "Text a customer while its reminders are at Never"),
+        owner_hint="Luis", tags=("settings",),
+    ),
     # ------------------------------------------------------------------ automations
     Entry(
         key="dispatch_flags", name="Dispatch items and bell", kind="automation", role=10,

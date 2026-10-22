@@ -196,6 +196,10 @@ function Row({ item }: { item: DispatchItem }) {
           borderRadius: 4, padding: '1px 6px' }}>{due}</span>}
       </div>
       {item.why && <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>{item.why}</div>}
+      {item.kind === 'payment_due' && typeof item.evidence.agreement_id === 'number' && (
+        <a style={{ ...link, fontSize: 13, marginTop: 6, display: 'inline-block' }}
+          href={`/collections?agreement=${item.evidence.agreement_id}`}>Open in Collections</a>
+      )}
       {item.kind === 'report_ready' && typeof item.evidence.report_id === 'number' && (
         <a style={{ ...link, fontSize: 13, marginTop: 6, display: 'inline-block' }}
           href={`?tab=reports&report=${item.evidence.report_id}`}>Open the report</a>

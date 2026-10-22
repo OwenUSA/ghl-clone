@@ -2567,3 +2567,121 @@ class TechBriefing(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---- payments & collections, 2026-10-21 (app/payments) ----------------------------------
+# What a customer agreed to pay and when, whether each part was paid, the proof, what the
+# agent suggests from Zuper and from customers' screenshots, and every change (for Undo).
+# Money in cents, as integers. Nothing here is written to Zuper.
+
+class PaymentAgreement(Base):
+    __tablename__ = "payment_agreements"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contact_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    opportunity_id: Mapped[int | None] = mapped_column(Integer)
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(10), index=True)
+    quoted_cents: Mapped[int | None] = mapped_column(Integer)      # None = not quoted
+    agreed_cents: Mapped[int | None] = mapped_column(Integer)      # None = not agreed yet
+    description: Mapped[str | None] = mapped_column(Text)
+    terms: Mapped[str | None] = mapped_column(String(300))
+    # quoted | agreed | collecting | paid | cancelled
+    state: Mapped[str] = mapped_column(String(12), default="quoted", server_default="quoted",
+                                       index=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentMilestone(Base):
+    __tablename__ = "payment_milestones"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agreement_id: Mapped[int] = mapped_column(Integer, index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    label: Mapped[str] = mapped_column(String(120))
+    amount_cents: Mapped[int] = mapped_column(Integer)
+    # before_start | after_completion | on_date
+    due_rule: Mapped[str] = mapped_column(String(20), default="on_date", server_default="on_date")
+    due_on: Mapped[date | None] = mapped_column(Date)
+    # pending | paid | waived
+    state: Mapped[str] = mapped_column(String(10), default="pending", server_default="pending")
+    paid_cents: Mapped[int | None] = mapped_column(Integer)
+    paid_on: Mapped[date | None] = mapped_column(Date)
+    method: Mapped[str | None] = mapped_column(String(60))
+    marked_by_id: Mapped[int | None] = mapped_column(Integer)
+    # manual | chat | zuper | screenshot
+    source: Mapped[str | None] = mapped_column(String(12))
+    reminders_sent: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentProof(Base):
+    __tablename__ = "payment_proofs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agreement_id: Mapped[int] = mapped_column(Integer, index=True)
+    milestone_id: Mapped[int | None] = mapped_column(Integer)
+    message_attachment_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    sha: Mapped[str | None] = mapped_column(String(64))
+    content_type: Mapped[str | None] = mapped_column(String(40))
+    ai_reading: Mapped[dict | None] = mapped_column(NullableJSONType)
+    # to_review | accepted | rejected | not_payment
+    state: Mapped[str] = mapped_column(String(12), default="to_review",
+                                       server_default="to_review")
+    created_by_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class PaymentSuggestion(Base):
+    __tablename__ = "payment_suggestions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(160), unique=True)     # the evidence, once
+    agreement_id: Mapped[int] = mapped_column(Integer, index=True)
+    milestone_id: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(12))                # zuper | screenshot
+    amount_cents: Mapped[int | None] = mapped_column(Integer)
+    paid_on: Mapped[date | None] = mapped_column(Date)
+    evidence: Mapped[str | None] = mapped_column(Text)
+    proof_id: Mapped[int | None] = mapped_column(Integer)
+    # open | accepted | dismissed
+    state: Mapped[str] = mapped_column(String(10), default="open", server_default="open",
+                                       index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    decided_by_id: Mapped[int | None] = mapped_column(Integer)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentChange(Base):
+    """Append-only: every change to an agreement or its milestones, with the values before and
+    after, so the latest one can be undone. Never deleted."""
+    __tablename__ = "payment_changes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agreement_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer)
+    via: Mapped[str] = mapped_column(String(12))                   # page | chat | suggestion
+    summary: Mapped[str] = mapped_column(Text)
+    before: Mapped[dict | None] = mapped_column(NullableJSONType)
+    after: Mapped[dict | None] = mapped_column(NullableJSONType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    undone_by_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class PaymentChatMessage(Base):
+    __tablename__ = "payment_chat_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    role: Mapped[str] = mapped_column(String(10))                  # user | assistant
+    text: Mapped[str] = mapped_column(Text)
+    steps: Mapped[list | None] = mapped_column(NullableJSONType)
+    change_ids: Mapped[list | None] = mapped_column(NullableJSONType)
+    error: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)

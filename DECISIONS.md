@@ -7774,3 +7774,56 @@ suggestion, marked "suggested - check the inspection"** - what the technician re
 - Off unless `TECH_BRIEFING_ENABLED`; texts start at **Shadow**; test technicians only (Owen
   Buzaglo) until "test only" is off. It texts only technicians - never customers - and writes
   nothing to Zuper.
+
+
+---
+
+## AMENDMENT (2026-10-21): payments & collections (agent #8) - the "Collections" page; GoHighLevel's Payments stays removed
+
+The user's request: an agent that, at first, only reminds the office about customers who agreed
+to pay in parts (50% before the job and 50% after, or any other agreement) - in the CRM, in its
+own view - that keeps the proof (a screenshot the customer sends, or "we mark it paid"), that the
+office can CHAT with to change whether a customer paid, what was quoted and what was agreed, and
+that, when switched on later, follows up with customers whose payment has not arrived.
+Built as `backend/app/payments/`, "Payments & collections" (role 8). Migration `a4d81e6c2f97`
+(six new tables).
+
+**The user's answers (2026-10-21):** its own page; the chat **applies changes at once, with
+Undo**; Zuper's invoices / payments are **read and turned into suggestions** a person confirms;
+a customer's picture is **checked by AI and flagged for a person** when it looks like a payment.
+
+**The page is named "Collections" (`/collections`), not "Payments".** GoHighLevel's Payments
+module was removed at the owner's request on 2026-09-10 and `/payments` still redirects to
+Dashboard (`tests/test_frontend_nav.py` pins it). This page charges and invoices nothing - it
+tracks what was agreed and collected - so it does not bring that module back, and its name keeps
+the two apart. The API is `/api/payments` (not a page).
+
+**How it works:**
+- An agreement: customer / Zuper job, quoted (or not), agreed (or not), what for, terms, and its
+  parts - a 50/50 split makes "Deposit 50%" (due the day before the visit, `deposit_days_before`)
+  and "Balance 50%" (due when the job reaches Repair Complete or later); 30/70, "full" or free
+  parts with a date also exist. Cents add up exactly.
+- Status per part: upcoming / due / overdue (after `grace_days`, 3) / paid / waived. A due part
+  keeps ONE Dispatch item in the new queue **"Payments to collect"** (`payment_due`, a fed kind);
+  the bell rings once when it becomes overdue; the item resolves itself when paid or waived.
+- **Every change** - page, chat or confirmed suggestion - goes through `payments/ledger.py` and is
+  a `payment_changes` row with the values before and after; the latest one can be undone.
+- **The chat** (DeepSeek, the Dispatch AI's connection, its own tools) applies at once. Two
+  guards are CODE: an amount must be one the person typed in that conversation or one already on
+  file (the agreement's total, the part's own amount) - otherwise the tool refuses and the model
+  must ask; a name matching more than one open job is refused with the candidates.
+- **Zuper:** the CRM's own copy of Zuper's invoices (`ZuperDocument` total - balance) above what is
+  recorded becomes ONE suggestion ("Zuper shows $1,500 paid") - never "paid" by itself, nothing
+  written to Zuper.
+- **Screenshots:** a picture a customer with an unpaid part texts (stored inbound MMS, after the
+  agent's first run) is checked once by the vision connection in its settings; a likely payment
+  becomes a proof "to review" + a suggestion + the bell. Nothing is marked paid by AI. Staff can
+  also upload a proof (pictures only, sniffed, 5 MB).
+- **Customer reminders:** built and OFF - the registry action `send_customer` is at Never, and the
+  server gate `PAYMENTS_TEXTS_ENABLED` is a second key on its own Zuper send scope
+  (`client.payments_write()`, the same exact body as the auto-reply). When promoted: overdue parts
+  only, every `remind_every_days`, at most `max_reminders`, 8 AM-8 PM Mon-Sat, recorded before
+  sending.
+- Access: Dispatch's rule (ADMIN + unrestricted DISPATCHER); hidden boards answer 404; the chat
+  is refused for a user with hidden pipelines (it reads every agreement).
+- The background pass is off unless `PAYMENTS_ENABLED`; the page and the chat work regardless.

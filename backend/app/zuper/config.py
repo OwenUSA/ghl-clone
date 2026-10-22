@@ -150,6 +150,24 @@ def tech_briefing_enabled() -> bool:
     return _flag("TECH_BRIEFING_ENABLED", False)
 
 
+PAYMENTS_OFF_SENTENCE = ("The payments agent's background pass is switched off on this server "
+                         "(PAYMENTS_ENABLED is not set).")
+PAYMENTS_TEXTS_OFF_SENTENCE = ("Payment reminders to customers are switched off on this server "
+                               "(PAYMENTS_TEXTS_ENABLED is not set).")
+
+
+def payments_enabled() -> bool:
+    """The server's gate on the payments agent's background pass (2026-10-21, app/payments):
+    due items, Zuper suggestions, screenshot checks. The page and the chat work regardless."""
+    return _flag("PAYMENTS_ENABLED", False)
+
+
+def payments_texts_enabled() -> bool:
+    """The second key on payment reminders TO CUSTOMERS (the registry level is the first): with
+    it off, `client.payments_write()` allows nothing."""
+    return _flag("PAYMENTS_TEXTS_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

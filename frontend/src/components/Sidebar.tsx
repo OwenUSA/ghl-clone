@@ -12,7 +12,7 @@
  */
 import {
   IconCalendar, IconChart, IconChat, IconGrid, IconImage,
-  IconDispatch, IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
+  IconDispatch, IconCollections, IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
 } from './Icon'
 import { logout } from '../lib/auth'
 import { navKeys } from '../lib/access'
@@ -197,6 +197,27 @@ export function Sidebar({
           >
             <IconDispatch size={18} color="#fff" />
             Dispatch
+          </button>
+        )}
+        {/* Collections (2026-10-21): what customers agreed to pay, what is due, the proof. */}
+        {canOpenAiAgents(user) && (
+          <button
+            onClick={() => onNavigate('collections')}
+            className="flex w-full items-center gap-3 text-left"
+            style={{
+              height: 36,
+              borderRadius: 6,
+              paddingLeft: 16,
+              paddingRight: 16,
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 500,
+              lineHeight: '20px',
+              backgroundColor: active === 'collections' ? 'rgb(26,32,44)' : 'transparent',
+            }}
+          >
+            <IconCollections size={18} color="#fff" />
+            Collections
           </button>
         )}
 

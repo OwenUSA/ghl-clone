@@ -945,6 +945,17 @@ what to bring (an AI suggestion only when nothing was recorded, marked so). Phon
 Inspection documentation settings. Off unless `TECH_BRIEFING_ENABLED`; Shadow and test
 technicians first. See the 2026-10-21 field technician briefing amendment in `DECISIONS.md`.
 
+## Payments & collections - the "Collections" page (2026-10-21)
+
+`backend/app/payments/` (read `__init__.py` first) and **Collections** in the left menu: what each
+customer agreed to pay and when (50/50 and other splits), due / overdue parts as Dispatch items in
+"Payments to collect", proof screenshots, suggestions from Zuper's invoices and from customers'
+pictures that a person confirms, and a chat that updates it all - every change through
+`payments/ledger.py`, the latest undoable; an amount the person never typed is refused in code.
+**Not "Payments":** GoHighLevel's Payments module stays removed (`tests/test_frontend_nav.py`).
+Background pass off unless `PAYMENTS_ENABLED`; customer reminders need the registry level AND
+`PAYMENTS_TEXTS_ENABLED`. See the 2026-10-21 payments amendment in `DECISIONS.md`.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

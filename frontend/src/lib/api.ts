@@ -2673,3 +2673,52 @@ export const discardInspectionReport = (id: number) =>
   send<InspectionReportDetail>(`/api/inspection-reports/${id}/discard`, 'POST')
 export const rebuildInspectionReport = (id: number) =>
   send<InspectionReportDetail>(`/api/inspection-reports/${id}/rebuild`, 'POST')
+
+// ---- payments & collections (2026-10-21, app/payments) ---------------------------------
+export type PaymentPart = {
+  id: number; label: string; amount_cents: number; due_rule: string; due_on: string | null
+  status: string; paid_cents: number | null; paid_on: string | null; method: string | null
+  source: string | null; reminders_sent: number
+}
+export type PaymentRow = {
+  id: number; customer_name: string | null; job_number: string | null; board: string | null
+  state: string; quoted_cents: number | null; agreed_cents: number | null; terms: string | null
+  owed_now_cents: number; status: string; parts: PaymentPart[]; updated_at: string | null
+}
+export type PaymentChangeRow = {
+  id: number; summary: string; via: string; created_at: string | null; undone_at: string | null
+  undoable?: boolean; agreement_id?: number
+}
+export type PaymentDetail = PaymentRow & {
+  description: string | null; notes: string | null; phone: string | null
+  proofs: { id: number; milestone_id: number | null; state: string; url: string; created_at: string | null
+    ai_reading: Record<string, unknown> | null }[]
+  suggestions: { id: number; source: string; amount_cents: number | null; paid_on: string | null
+    evidence: string | null; milestone_id: number | null; proof_id: number | null; state: string }[]
+  history: PaymentChangeRow[]
+}
+export type PaymentChatMessage = { id: number; role: 'user' | 'assistant'; text: string; error: boolean
+  created_at: string | null; changes: PaymentChangeRow[] }
+export const paymentsList = (show = 'open') =>
+  get<{ agreements: PaymentRow[]; summary: { overdue_cents: number; due_cents: number; open: number
+    quoted: number; suggestions: number } }>(`/api/payments?show=${encodeURIComponent(show)}`)
+export const paymentGet = (id: number) => get<PaymentDetail>(`/api/payments/${id}`)
+export const paymentCreate = (body: { job_number?: string; customer_name?: string; quoted?: string
+  agreed?: string; description?: string; split?: string }) =>
+  send<PaymentDetail>('/api/payments', 'POST', body)
+export const paymentUpdate = (id: number, body: { quoted?: string; agreed?: string; notes?: string
+  description?: string; cancel?: boolean; split?: string }) =>
+  send<PaymentDetail>(`/api/payments/${id}`, 'PATCH', body)
+export const paymentMarkPaid = (id: number, partId: number, body: { amount?: string; method?: string; paid_on?: string }) =>
+  send<PaymentDetail>(`/api/payments/${id}/parts/${partId}/paid`, 'POST', body)
+export const paymentWaive = (id: number, partId: number) =>
+  send<PaymentDetail>(`/api/payments/${id}/parts/${partId}/waive`, 'POST')
+export const paymentUndo = (changeId: number) =>
+  send<PaymentDetail>(`/api/payments/changes/${changeId}/undo`, 'POST')
+export const paymentSuggestion = (sid: number, how: 'accept' | 'dismiss') =>
+  send<PaymentDetail>(`/api/payments/suggestions/${sid}/${how}`, 'POST')
+export const paymentUploadProof = (id: number, file: File) =>
+  upload<PaymentDetail>(`/api/payments/${id}/proofs`, file)
+export const paymentChatHistory = () => get<{ messages: PaymentChatMessage[] }>('/api/payments/chat/messages')
+export const paymentChatSend = (text: string) =>
+  send<{ messages: PaymentChatMessage[] }>('/api/payments/chat/messages', 'POST', { text })

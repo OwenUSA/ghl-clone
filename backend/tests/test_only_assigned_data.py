@@ -1275,6 +1275,13 @@ AUDITED = {
         "inspection_report_approve", "inspection_report_discard", "inspection_report_rebuild",
         "inspection_report_photo", "inspection_report_pdf"),
         "DISPATCH_VIEW: restricted refused 403"),
+    # Payments & collections (app/payments/api.py, 2026-10-21): Dispatch's rule.
+    **dict.fromkeys((
+        "payments_list", "payments_get", "payments_create", "payments_update",
+        "payments_add_part", "payments_mark_paid", "payments_waive", "payments_undo",
+        "payments_accept_suggestion", "payments_dismiss_suggestion", "payments_upload_proof",
+        "payments_proof_image", "payments_chat_history", "payments_chat_send"),
+        "DISPATCH_VIEW: restricted refused 403"),
 }
 
 

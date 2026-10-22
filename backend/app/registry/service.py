@@ -49,7 +49,7 @@ MICRO = 1_000_000
 
 # Dispatch AI runs (`dispatch_ai_runs.kind`) that belong to an entry other than the assistant.
 DISPATCH_AI_KINDS = {"availability": "availability_reader", "inspection": "inspection_docs",
-                     "briefing": "tech_briefing"}
+                     "briefing": "tech_briefing", "payments": "payments"}
 
 
 def _dispatch_kind_filter(key: str):
@@ -440,6 +440,12 @@ def _status(db: Session, v: View) -> dict:
                 return {"state": "test", "sentence": "On for test technicians only (%s): %s." % (
                     ", ".join(st.test_technicians), words)}
             return {"state": "on", "sentence": "On for every technician: %s." % words}
+        if v.key == "payments":
+            if not zconf.payments_enabled():
+                return {"state": "off", "sentence": "The page and chat work; the background "
+                        "pass is off on this server (PAYMENTS_ENABLED)."}
+            return {"state": "on", "sentence": "On; customer reminders %s." % cat.LEVEL_LABEL[
+                level(db, v.key, "send_customer")].lower()}
         if v.key == "ahs_authorizations":
             return {"state": "outside", "sentence": "Switched at owen-main."}
         if v.outside:
@@ -524,8 +530,10 @@ def _settings_kinds():
     from ..followup import config as fconf
     from ..inspection_docs import config as iconf
     from ..inspection_report import config as rconf
+    from ..payments import config as pconf
     from ..tech_briefing import config as tconf
-    return {"tech_briefing": (lambda raw: tconf.Settings.from_config(raw).as_dict(),
+    return {"payments": (lambda raw: pconf.Settings.from_config(raw).as_dict(), pconf.validate),
+            "tech_briefing": (lambda raw: tconf.Settings.from_config(raw).as_dict(),
                               tconf.validate),
             "inspection_report": (lambda raw: rconf.Settings.from_config(raw).as_dict(),
                                   rconf.validate),
@@ -735,6 +743,12 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
                     verb, r.technician, n, "" if n == 1 else "s", r.brief_date.isoformat(),
                     " (%s)" % r.note if r.note and r.state != "sent" else "", r.body or ""),
                 tone={"failed": "bad", "sent": "good", "skipped": "muted"}.get(r.state, "info"))
+    if key in (None, "payments"):
+        from ..models import PaymentChange
+        for r in db.scalars(select(PaymentChange).order_by(PaymentChange.id.desc())
+                            .limit(limit)):
+            add("payments", r.created_at, "change", "%s%s (via %s)" % (
+                r.summary, " - undone" if r.undone_at else "", r.via), tone="info")
     if key in (None, "inspection_docs"):
         for r in db.scalars(select(InspectionCheck).order_by(InspectionCheck.id.desc())
                             .limit(limit)):
