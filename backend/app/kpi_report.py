@@ -976,6 +976,23 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
            {"Board": 24, "Clock started": 18, "First response": 18, "Zuper first move": 18,
             "Started by": 22, "By": 26, "How": 24, "Moved to": 26})
 
+    # ---- What customers said (agent #10, app/insights, 2026-10-22): counts and job numbers
+    # only - the customers' own words stay in the CRM (Reporting -> Insights).
+    from .models import ConversationSignal
+    said: dict[tuple, int] = defaultdict(int)
+    leaking: dict[str, list] = {}
+    for sg in db.scalars(select(ConversationSignal).order_by(ConversationSignal.at)):
+        said[(month(sg.at), sg.technician or "(not recorded)", sg.tag)] += 1
+        key = sg.job_uid or "phone:%s" % sg.phone
+        if sg.tag == "still_leaking" and key not in leaking:
+            leaking[key] = [sg.job_number, sg.board, sg.technician, _local_naive(
+                sg.at.isoformat() if sg.at else None), sg.source]
+    _sheet(wb, "Conversations", ["Month", "Technician", "What the customer said", "Times"],
+           [[m, t, tag.replace("_", " "), n] for (m, t, tag), n in sorted(said.items())],
+           {"Technician": 22, "What the customer said": 24})
+    _sheet(wb, "Still leaking", ["Job #", "Board", "Technician", "First said at", "Heard on"],
+           list(leaking.values()), {"Board": 24, "Technician": 22, "First said at": 18})
+
     # ---- Read me
     moves_stored = sum(len(v) for v in by_job.values())
     readme = [
@@ -1009,6 +1026,11 @@ def build(db: Session, input_dir: Path, now: datetime | None = None):
                            "Retail 1 h. Texts sent inside Zuper Connect and personal cell "
                            "phones are not seen. 'Min to Zuper move' = Zuper's own trace, the "
                            "first column move.")],
+        ["Conversations", ("Every call and text the insights agent read once with AI and "
+                           "tagged (still leaking, asked us back, complaint, upsell interest, "
+                           "payment issue, praise, schedule change), counted by month and the "
+                           "job's technician. The exact words are in the CRM: Reporting -> "
+                           "Insights.")],
         ["Privacy", "Job numbers only: no customer names, phones, emails or addresses."],
         ["Sources", (f"Zuper jobs: {len(jobs)} · moves stored: {moves_stored} · Workiz jobs: "
                      f"{len(wjobs)} · Workiz invoices: {len(winv)} · AHS dispatches: {len(ahs)}")],

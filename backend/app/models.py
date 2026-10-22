@@ -2685,3 +2685,61 @@ class PaymentChatMessage(Base):
     error: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+
+
+# ---- insights (agent #10), 2026-10-22 (app/insights) -------------------------------------
+# What the conversations say (one AI reading per call / text, each tag with its exact quote),
+# the daily KPI snapshot for trends, and the KPIs a person pinned from "Ask".
+
+class ConversationRead(Base):
+    """A call or text the tagger has read - so it is read ONCE."""
+    __tablename__ = "conversation_reads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_ref: Mapped[str] = mapped_column(String(120), unique=True)
+    read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    tags: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class ConversationSignal(Base):
+    __tablename__ = "conversation_signals"
+    __table_args__ = (UniqueConstraint("source_ref", "tag", name="uq_signal_source_tag"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(20))             # quo | crm_line | zuper_connect
+    source_ref: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(10))               # call | text
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    phone: Mapped[str | None] = mapped_column(String(10), index=True)
+    inbound: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    technician: Mapped[str | None] = mapped_column(String(120))
+    # still_leaking | callback_request | complaint | upsell_interest | payment_issue | praise |
+    # schedule_change
+    tag: Mapped[str] = mapped_column(String(30), index=True)
+    quote: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class InsightSnapshot(Base):
+    __tablename__ = "insight_snapshots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date, unique=True)
+    values: Mapped[dict | None] = mapped_column(NullableJSONType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class InsightSavedKpi(Base):
+    """A KPI a person asked for and pinned: the tool call, recomputed live on every view."""
+    __tablename__ = "insight_saved_kpis"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    spec: Mapped[dict] = mapped_column(JSONType)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_by_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())

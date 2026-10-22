@@ -956,6 +956,21 @@ pictures that a person confirms, and a chat that updates it all - every change t
 Background pass off unless `PAYMENTS_ENABLED`; customer reminders need the registry level AND
 `PAYMENTS_TEXTS_ENABLED`. See the 2026-10-21 payments amendment in `DECISIONS.md`.
 
+## Daily report & insights - Reporting → Insights (2026-10-22, agent #10)
+
+`backend/app/insights/` (read `__init__.py` first) and the **Insights** tab on Reporting (Dispatch's
+audience). The AI reads every call and text ONCE (`conversation_reads`) and tags it - still
+leaking, asked us back, complaint, upsell interest, payment issue, praise, schedule change - each
+tag with the customer's EXACT words (`conversation_signals`; an invented quote is dropped).
+`metrics.py` is the ONE place every KPI is computed (callbacks charged to the ORIGINAL job's
+technician, as `kpi_report`), over Day / Week / Month / Quarter vs the previous period. Still
+leaking / come back / complaint → ONE Dispatch item in "Customer issues" (`customer_issue`, a
+fed kind) + the bell; still leaking resolves itself when a visit is booked. "Ask for a KPI" only
+composes the fixed metrics (never a query) and flags any number the tools did not return; a
+result can be pinned (`insight_saved_kpis`). Excel with native charts, CSV per table. Reading is
+off unless `INSIGHTS_ENABLED`; the report works regardless. Nothing is sent, nothing reaches
+Zuper. See the 2026-10-22 insights amendment in `DECISIONS.md`.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

@@ -27,7 +27,7 @@ export function formatPhone(digits: string | null): string {
 /** Tab names short enough for one line; the server's longer label is the tooltip. */
 export const SHORT: Record<string, string> = {
   new: 'New jobs', after_visit: 'After visit', missed: 'Missed', book: 'Book',
-  zuper: 'Update Zuper', visits: 'Today', stale: 'Quiet',
+  zuper: 'Update Zuper', visits: 'Today', stale: 'Quiet', issues: 'Issues',
 }
 
 /** A tab's label: "Missed 4" (with "!" when some are overdue). */
