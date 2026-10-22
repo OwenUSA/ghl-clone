@@ -223,3 +223,16 @@ def test_dispatch_zuper_changes_are_refused_at_never(db, writes_on):
                            level="never"))
     db.commit()
     assert "at Never" in writes_on.why_not(db, kind)
+
+
+def test_the_ahs_portal_agent_is_listed_off_and_cannot_be_switched_on(world):
+    a = world.client("admin")
+    e = next(x for x in a.get("/api/ai/registry").json()["entries"]
+             if x["key"] == "ahs_submission")
+    assert e["status"]["state"] == "off" and "Frontdoor" in e["status"]["sentence"]
+    assert e["role"] == 5 and all(x["level"] == "never" and x["choices"] == []
+                                  for x in e["actions"])
+    r = a.put("/api/ai/registry/entries/ahs_submission/actions/ahs_portal",
+              json={"level": "auto", "reason": "x", "confirm": "PROMOTE"})
+    assert r.status_code == 400 and "not set here" in r.json()["detail"]
+    assert count(AgentPermission) == 0

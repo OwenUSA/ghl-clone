@@ -79,6 +79,7 @@ class View:
     owner_hint: str | None = None
     outside: bool = False
     archived: bool = False
+    planned: str | None = None
 
 
 # ------------------------------------------------------------------------------ time
@@ -109,7 +110,7 @@ def _cat_view(e: cat.Entry) -> View:
     return View(key=e.key, name=e.name, kind=e.kind, role=e.role, purpose=e.purpose,
                 covers=e.covers, channels=e.channels, runs_on=e.runs_on, provider=e.provider,
                 hours=e.hours, never=e.never, actions=e.actions, owner_hint=e.owner_hint,
-                outside="outside" in e.tags)
+                outside="outside" in e.tags, planned=e.planned)
 
 
 def views(db: Session, *, include_archived: bool = False) -> list[View]:
@@ -342,6 +343,8 @@ def alert_failure(db: Session, key: str, sentence: str, now: datetime | None = N
 
 def _status(db: Session, v: View) -> dict:
     """{state: on | off | test | outside | unknown, sentence}."""
+    if v.planned:
+        return {"state": "off", "sentence": v.planned}
     try:
         aid = cat.ai_agent_id(v.key)
         if aid is not None:
