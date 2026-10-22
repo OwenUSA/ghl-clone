@@ -90,6 +90,9 @@ def main() -> None:
     # Reviews & QC (2026-10-22): a finished job's customer is asked how we did.
     from .reviews import service as reviews_service
     reviews_service.start_thread(SessionLocal, stop)
+    # Weather (2026-10-22): NWS forecast over every job, flags in Dispatch, texts to staff.
+    from .weather import service as weather_service
+    weather_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

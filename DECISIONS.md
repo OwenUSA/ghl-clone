@@ -7936,3 +7936,35 @@ lift #16) and asked the inspection-documentation agent (#4) to check that, after
   notes and checklist answers). Confirm a picture filed into an album raises its count before
   relying on it.
 
+
+## AMENDMENT (2026-10-22): the weather agent - NWS forecast at every job, flags, texts, scheduling
+
+**The user's request:** an accurate weather agent that flags scheduled and not-yet-scheduled
+inspections and customers; it should help the scheduling agent too.
+
+**Answers:** flag a booked visit at a 50%+ chance of rain in its hours; for customers not
+scheduled: heavy rain coming over open leaks, the best dry days to book, and roofs to check after
+a storm; Dispatch items plus texts to numbers the user types in its settings; 7 days ahead,
+re-checked every 3 hours.
+
+**How it works (`app/weather/`):**
+- **Source: the National Weather Service** (api.weather.gov, official, free, no key): the hourly
+  chance of rain and rain amount for each job's 2.5 km grid (`forecastGridData`), and the active
+  official alerts for Florida. Only a rounded position (2 decimals) leaves the CRM - never an
+  address or a name. One request per grid; a spot's grid is looked up once and kept.
+- **Accuracy:** every flag quotes the NWS numbers and when the NWS made the forecast; days 4-7
+  are marked "less certain"; each 3-hour refresh updates or clears the flags; a failed read
+  flags nothing new and keeps the last good forecast (and says so in the registry).
+- **Weather queue in Dispatch** (fed kinds `weather_visit`, `weather_leak`, `weather_storm`): a
+  booked visit at risk (resolved when the forecast drops or the visit moves); heavy rain (half an
+  inch at 50%+ in 48 h) over open leaks not yet repaired - ONE item per rainy day listing them;
+  a storm warning that just ended over roofs repaired in the last 60 days - ONE item per storm.
+  Anything within 48 h rings the bell once.
+- **Texts:** only to the numbers in its settings (none = nobody), registry "Text the technician"
+  at Shadow by default; a 7 AM summary and a text when an urgent flag first appears.
+- **Scheduling:** `booking.slots` takes the house's forecast and never offers a time with rain
+  at or above the threshold; each option says its chance ("rain 10%") and the answer lists the
+  dry days. The Dispatch assistant has a `weather` tool. Both use the KEPT forecast only.
+- Off unless `WEATHER_ENABLED`. Never texts a customer, never writes to Zuper. No test reaches
+  the weather service (conftest installs a refusing transport).
+

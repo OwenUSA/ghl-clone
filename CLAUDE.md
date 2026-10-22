@@ -984,6 +984,16 @@ this agent talks to them (`reviews.service.active_on`). Off unless `REVIEWS_ENAB
 `REVIEWS_TEXTS_ENABLED` AND the registry's "Text customers" (Shadow by default); calls at Never;
 test customers only; no link until `review_link` is set. Never moves a Zuper column.
 
+## The weather agent (2026-10-22, OFF)
+
+`backend/app/weather/` (read `__init__.py` first). Every 3 hours, the National Weather Service's
+hourly forecast at each job's 2.5 km grid (`nws.py` is the ONLY code that calls api.weather.gov;
+only rounded positions leave the CRM) and Florida's official alerts. Dispatch "Weather" items: a
+booked visit at 50%+ rain in its hours, heavy rain over open leaks, roofs to check after a storm;
+the bell within 48 h; texts only to the numbers in its settings (Shadow first). It also feeds
+scheduling: `booking.slots(rain=...)` skips rainy times, and the assistant has a `weather` tool.
+Off unless `WEATHER_ENABLED`. No test reaches the NWS (conftest's refusing transport).
+
 ## Speak instead of type in the AI chats (2026-10-22)
 
 `components/MicButton.tsx` sits beside the box of every AI chat - the Dispatch assistant,

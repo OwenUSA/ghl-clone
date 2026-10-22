@@ -31,7 +31,7 @@ def is_ack(text: str) -> bool:
 
 
 QUEUES = ("new", "after_visit", "missed", "book", "zuper", "visits", "stale", "collect",
-          "issues")
+          "issues", "weather")
 QUEUE_LABEL = {
     "new": "New jobs not called",
     "after_visit": "After inspection / repair",
@@ -42,6 +42,7 @@ QUEUE_LABEL = {
     "stale": "Gone quiet",
     "collect": "Payments to collect",
     "issues": "Customer issues",
+    "weather": "Weather",
 }
 # Items a FEED writes rather than these rules — an AHS authorization note from owen-main
 # (app/ahs_authorizations.py, 2026-10-01), and a caller's change request a voice agent passed
@@ -52,9 +53,11 @@ QUEUE_LABEL = {
 # which that agent resolves itself when the details appear.
 # ... and a customer issue the insights agent heard in a call or text (app/insights, 2026-10-22).
 # ... and a low or unclear answer to the review text (app/reviews, 2026-10-22).
+# ... and the weather agent's flags (app/weather, 2026-10-22), which it resolves itself.
 FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated", "ai_change_request",
                        "missing_docs", "report_ready", "payment_due",
-                       "customer_issue", "low_rating"})
+                       "customer_issue", "low_rating",
+                       "weather_visit", "weather_leak", "weather_storm"})
 
 
 @dataclass

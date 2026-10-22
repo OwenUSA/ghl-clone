@@ -13,7 +13,9 @@ How a slot is chosen:
     Zuper's map coordinates x ROAD_FACTOR, at AVERAGE_KMH. No address leaves the CRM.
 
 Each slot says who, when, how many extra minutes of driving it adds and which booked visit it
-sits next to. A person still agrees it with the customer and books it in Zuper.
+sits next to. With the weather agent's forecast (2026-10-22, `rain`), a time with a chance of
+rain at or above `rain_pct` at the house is never offered, and each slot says its chance.
+A person still agrees it with the customer and books it in Zuper.
 """
 from __future__ import annotations
 
@@ -64,6 +66,7 @@ class Slot:
     day_ends: datetime | None = None   # when his last booked visit that day ends
     next_to_km: float | None = None
     from_home: bool = False
+    rain_pct: int | None = None        # NWS chance of rain at the house in those hours
 
     @property
     def fit(self) -> str:
@@ -83,13 +86,15 @@ class Slot:
         else:
             near = "%s has %d visit%s that day" % (first, self.day_count,
                                                    "" if self.day_count == 1 else "s")
-        return "%s · +%d min driving" % (near, self.extra_drive_minutes)
+        rain = " · rain %d%%" % self.rain_pct if self.rain_pct is not None else ""
+        return "%s · +%d min driving%s" % (near, self.extra_drive_minutes, rain)
 
     def as_dict(self) -> dict:
         return {"tech": self.tech, "start": self.start.isoformat(), "end": self.end.isoformat(),
                 "extra_drive_minutes": self.extra_drive_minutes, "next_to": self.next_to,
                 "fit": self.fit, "why": self.why, "day_count": self.day_count,
-                "day_ends": self.day_ends.isoformat() if self.day_ends else None}
+                "day_ends": self.day_ends.isoformat() if self.day_ends else None,
+                "rain_pct": self.rain_pct}
 
 
 def km(a: tuple[float, float] | None, b: tuple[float, float] | None) -> float | None:
@@ -136,10 +141,13 @@ def _day_ok(rules, tech_name: str, day) -> bool:
 def slots(*, lat: float | None, lng: float | None, kind: str, visits: list[Visit],
           now: datetime, technicians: list[dict] | None = None, want: int = 3,
           tech: str | None = None, rules=None, minutes: dict | None = None,
-          days_ahead: int = DAYS_AHEAD) -> list[Slot]:
+          days_ahead: int = DAYS_AHEAD, rain=None, rain_pct: int | None = None
+          ) -> list[Slot]:
     """`rules`: the customer's limits (planner.PlanJob fields: not_before, blocked, weekdays,
     earliest, latest, technician) — a day or time they said does not work is never offered.
-    `minutes`: {tech: {kind: minutes}} — how long that technician's visits really take."""
+    `minutes`: {tech: {kind: minutes}} — how long that technician's visits really take.
+    `rain`: (start, end) -> chance of rain at the house, or None when not forecast (the weather
+    agent); a time at or above `rain_pct` is skipped."""
     techs = [t for t in (technicians or DEFAULT_TECHNICIANS)
              if kind in t.get("does", []) and (tech is None or t["name"] == tech)]
     here = (lat, lng) if lat is not None and lng is not None else None
@@ -181,6 +189,9 @@ def slots(*, lat: float | None, lng: float | None, kind: str, visits: list[Visit
                 direct = drive_minutes(prev_at, next_at) if prev_at and next_at else 0
                 fits = (not prev or prev.end + timedelta(minutes=to_here) <= start) and \
                     (not nxt or end + timedelta(minutes=from_here) <= nxt.start)
+                wet = rain(start, end) if rain is not None else None
+                if rain_pct is not None and wet is not None and wet >= rain_pct:
+                    fits = False                     # rain likely at the house then
                 if not clash and fits:
                     extra = max(0, to_here + from_here - direct)
                     score = extra + offset * DAY_PENALTY_MINUTES + penalty
@@ -192,7 +203,7 @@ def slots(*, lat: float | None, lng: float | None, kind: str, visits: list[Visit
                                     day_count=len(today),
                                     day_ends=max((v.end for v in today), default=None),
                                     next_to_km=km((near.lat, near.lng), here) if near else None,
-                                    from_home=bool(home and not prev))
+                                    from_home=bool(home and not prev), rain_pct=wet)
                 start += timedelta(minutes=GRID_MINUTES)
             if best:
                 found.append(best)
