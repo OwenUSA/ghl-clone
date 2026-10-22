@@ -55,6 +55,18 @@ from tests import retell_guard  # noqa: E402
 retell_guard.strip_environment()
 retell_guard.install()
 
+# No test may reach the National Weather Service (2026-10-22): its client's transport refuses
+# every request unless a test installs its own MockTransport.
+import httpx  # noqa: E402
+from app.weather import nws as _nws  # noqa: E402
+
+
+def _refuse_nws(request):
+    raise AssertionError("a test tried to reach the weather service: %s" % request.url)
+
+
+_nws.TRANSPORT = httpx.MockTransport(_refuse_nws)
+
 # The AI Agents fixtures (mocked providers, a seeded world), shared by tests/test_ai_*.py.
 from tests.ai_support import script, secrets_key, world  # noqa: E402, F401
 

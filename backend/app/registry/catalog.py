@@ -326,6 +326,26 @@ ENTRIES: tuple[Entry, ...] = (
                "Ask a customer who said it still leaks or complained", "Mention prices"),
         owner_hint="Luis", tags=("settings",),
     ),
+    Entry(
+        key="weather", name="Weather", kind="agent", role=3,
+        purpose="Reads the National Weather Service forecast at every job's house every 3 hours, "
+                "7 days ahead, and flags booked visits with a 50%+ chance of rain in their hours, "
+                "heavy rain coming over customers with an open leak, and roofs repaired recently "
+                "under a storm that just passed. Gives the booking options the dry days.",
+        covers="Every open job with a map position in Zuper.",
+        channels=("Dispatch item + bell (Weather)", "Texts to the numbers in its settings",
+                  "Booking options and the Dispatch assistant"),
+        runs_on="CRM (reads the NWS only)", provider=None,
+        hours="Every 3 hours; the morning summary at 7 AM",
+        actions=(
+            Action("alert_staff", AUTO, (), "Dispatch items and the bell for the next 48 h."),
+            Action("text_staff", SHADOW, (NEVER, SHADOW, AUTO),
+                   "Texts to the numbers typed in its settings - nobody while it has none."),
+        ),
+        never=("Text or call a customer", "Write anything in Zuper",
+               "Send an address or a name to the weather service"),
+        owner_hint="Luis", tags=("settings",),
+    ),
     # ------------------------------------------------------------------ automations
     Entry(
         key="dispatch_flags", name="Dispatch items and bell", kind="automation", role=10,

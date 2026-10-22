@@ -2781,3 +2781,48 @@ class ReviewRequest(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
 
+
+class WeatherPoint(Base):
+    """A job's spot on the National Weather Service's map (2026-10-22, app/weather): its 2.5 km
+    forecast grid and its forecast / county zones (which official alerts name). Looked up once
+    per rounded position and kept."""
+    __tablename__ = "weather_points"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    point_key: Mapped[str] = mapped_column(String(40), unique=True)
+    lat: Mapped[float] = mapped_column(Float)
+    lng: Mapped[float] = mapped_column(Float)
+    grid_url: Mapped[str | None] = mapped_column(String(300))
+    zones: Mapped[list | None] = mapped_column(NullableJSONType)
+    error: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class WeatherGrid(Base):
+    """One NWS forecast grid's hourly forecast: {"<UTC hour ISO>": [rain chance %, rain mm]},
+    the last 48 hours kept as they pass. `nws_updated_at` is when the NWS made the forecast."""
+    __tablename__ = "weather_grids"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grid_url: Mapped[str] = mapped_column(String(300), unique=True)
+    hours: Mapped[dict | None] = mapped_column(NullableJSONType)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    nws_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(String(300))
+
+
+class WeatherAlert(Base):
+    """An official NWS alert for Florida, as first seen - kept so a storm that has PASSED can
+    still be matched to the roofs it covered."""
+    __tablename__ = "weather_alerts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String(300), unique=True)
+    event: Mapped[str] = mapped_column(String(120))
+    severity: Mapped[str | None] = mapped_column(String(30))
+    headline: Mapped[str | None] = mapped_column(Text)
+    area: Mapped[str | None] = mapped_column(Text)
+    zones: Mapped[list | None] = mapped_column(NullableJSONType)
+    onset: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ends: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+

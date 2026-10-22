@@ -532,6 +532,12 @@ TOOLS = [
                            "job_number": {"type": "string"}, "kind": {"type": "string"},
                            "technician": {"type": "string"}},
                         "required": ["job_number"], "additionalProperties": False}),
+    providers.ToolSpec("weather", "The NWS forecast at ONE job's house (the weather agent's): "
+                       "the chance of rain during its booked visit, the next dry working days "
+                       "(8 AM-5 PM under 30%), and heavy rain in the next 48 h. Use it before "
+                       "offering or confirming a day. Booking options already skip rainy times.",
+                       {"type": "object", "properties": {"job_number": {"type": "string"}},
+                        "required": ["job_number"], "additionalProperties": False}),
     providers.ToolSpec("find_slots", "Three visit slots for a job, closest to what is already "
                        "booked. kind: inspection or repair (default from the job).",
                        {"type": "object", "properties": {
@@ -724,10 +730,13 @@ def booking_options(db: Session, j: DispatchJob, now: datetime, *, kind: str | N
     if j.lat is None or j.lng is None:
         out["note"] = ("The job has no map position in Zuper, so driving cannot be compared; "
                        "the options are only by free time.")
+    rain, rain_pct, wx = _rain_for(db, j, now)
+    if wx:
+        out["weather"] = wx
     out["options"] = [s.as_dict() for s in booking.slots(
         lat=j.lat, lng=j.lng, kind=kind, visits=visits_for_booking(db, now, hidden), now=now,
         technicians=techs, tech=tech, rules=rules, minutes=minutes,
-        days_ahead=OPTIONS_DAYS_AHEAD)]
+        days_ahead=OPTIONS_DAYS_AHEAD, rain=rain, rain_pct=rain_pct)]
     working = {d for t in techs for d in t.get("days", c.BUSINESS_DAYS)}
     if agreed and not out["options"]:
         day = date.fromisoformat(agreed)
@@ -738,6 +747,52 @@ def booking_options(db: Session, j: DispatchJob, now: datetime, *, kind: str | N
     if not out["options"] and not out["note"]:
         out["note"] = ("No free time in the next %d days that fits what the customer said%s." % (
             OPTIONS_DAYS_AHEAD, " (%s)" % "; ".join(rules.limits) if rules.limits else ""))
+    return out
+
+
+def _rain_for(db: Session, j: DispatchJob, now: datetime):
+    """(rain lookup, threshold, summary) from the weather agent's kept NWS forecast at the house
+    (2026-10-22); (None, None, None) while it is off or has no forecast there. Never a network
+    call."""
+    from ..weather import config as wconf
+    from ..weather import rules as wrules
+    from ..weather import service as wsvc
+    if not wconf.enabled():
+        return None, None, None
+    hours, g = wsvc.forecast(db, j.lat, j.lng)
+    if not hours:
+        return None, None, None
+    s = wsvc.settings(db)
+    dry = wrules.dry_days(hours, c.local(now).date())
+    return wrules.rain_lookup(hours), s.rain_pct, {
+        "skips_rain_from_pct": s.rain_pct, "made": wsvc.made(g),
+        "dry_days": [d.strftime("%a %m/%d") for d, _ in dry]}
+
+
+def weather_for(db: Session, j: DispatchJob, now: datetime) -> dict:
+    """The weather tool: the house's NWS forecast as the weather agent keeps it."""
+    from ..weather import config as wconf
+    from ..weather import rules as wrules
+    from ..weather import service as wsvc
+    if not wconf.enabled():
+        return {"error": wconf.OFF_SENTENCE}
+    hours, g = wsvc.forecast(db, j.lat, j.lng)
+    if not hours:
+        return {"error": "no forecast kept for this job's spot yet (no map position, or not "
+                         "read yet)"}
+    s = wsvc.settings(db)
+    out = {"job_number": j.job_number, "made": wsvc.made(g),
+           "dry_days": [{"day": d.isoformat(), "max_rain_pct": p}
+                        for d, p in wrules.dry_days(hours, c.local(now).date())]}
+    if j.scheduled_start:
+        start = c.aware(j.scheduled_start)
+        w = wrules.window(hours, start, c.aware(j.scheduled_end) or start + timedelta(hours=2))
+        out["visit"] = {"start": start.isoformat(), "rain": wrules.pct_text(w),
+                        "at_risk": (w.pop or 0) >= s.rain_pct,
+                        "certainty": wrules.certainty(start, now)}
+    hit = wrules.heavy_rain(hours, now)
+    out["heavy_rain_next_48h"] = ({"day": hit[0].isoformat(), "rain": wrules.pct_text(hit[1])}
+                                  if hit else None)
     return out
 
 
@@ -870,6 +925,8 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
     if name == "get_job":
         return json.dumps(job_context(db, j, comms.load(db, now - timedelta(days=c.COMMS_DAYS)),
                                       now), default=str)
+    if name == "weather":
+        return json.dumps(weather_for(db, j, now), default=str)
     if name in ("find_slots", "booking_options"):
         return json.dumps(booking_options(db, j, now, kind=args.get("kind"),
                                           tech=args.get("technician"), hidden=hidden),

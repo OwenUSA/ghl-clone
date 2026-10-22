@@ -447,6 +447,16 @@ def _status(db: Session, v: View) -> dict:
                         "pass is off on this server (PAYMENTS_ENABLED)."}
             return {"state": "on", "sentence": "On; customer reminders %s." % cat.LEVEL_LABEL[
                 level(db, v.key, "send_customer")].lower()}
+        if v.key == "weather":
+            from ..weather import config as wconf
+            from ..weather import service as wsvc
+            if not wconf.enabled():
+                return {"state": "off", "sentence": "Off on this server (WEATHER_ENABLED)."}
+            st = wsvc.settings(db)
+            return {"state": "on", "sentence": "On: flags rain at %d%%+; texts %s to %d "
+                    "number%s." % (st.rain_pct, cat.LEVEL_LABEL[level(
+                        db, v.key, "text_staff")].lower(), len(st.phones),
+                        "" if len(st.phones) == 1 else "s")}
         if v.key == "reviews":
             if not zconf.reviews_enabled():
                 return {"state": "off", "sentence": "Off on this server (REVIEWS_ENABLED)."}
@@ -554,9 +564,11 @@ def _settings_kinds():
     from ..payments import config as pconf
     from ..reviews import config as vconf
     from ..tech_briefing import config as tconf
+    from ..weather import config as wconf
     return {"payments": (lambda raw: pconf.Settings.from_config(raw).as_dict(), pconf.validate),
             "insights": (lambda raw: nconf.Settings.from_config(raw).as_dict(), nconf.validate),
             "reviews": (lambda raw: vconf.Settings.from_config(raw).as_dict(), vconf.validate),
+            "weather": (lambda raw: wconf.Settings.from_config(raw).as_dict(), wconf.validate),
             "tech_briefing": (lambda raw: tconf.Settings.from_config(raw).as_dict(),
                               tconf.validate),
             "inspection_report": (lambda raw: rconf.Settings.from_config(raw).as_dict(),
@@ -773,6 +785,15 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
                             .limit(limit)):
             add("payments", r.created_at, "change", "%s%s (via %s)" % (
                 r.summary, " - undone" if r.undone_at else "", r.via), tone="info")
+    if key in (None, "weather"):
+        for r in db.scalars(select(AgentRegistryLog).where(
+                AgentRegistryLog.entry_key == "weather",
+                AgentRegistryLog.what.in_(("digest", "urgent_text")))
+                .order_by(AgentRegistryLog.id.desc()).limit(limit)):
+            add("weather", r.at, r.what, "%s%s" % (
+                "Would have texted: " if r.reason == "shadow" else
+                "Not texted (no numbers): " if r.reason == "no numbers to text" else "Texted: ",
+                r.new_value or ""), tone="info")
     if key in (None, "reviews"):
         from ..models import ReviewRequest
         for r in db.scalars(select(ReviewRequest).order_by(ReviewRequest.id.desc())
