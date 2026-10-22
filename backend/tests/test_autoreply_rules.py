@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from app.autoreply import config as c
 from app.autoreply import context, writer
-from app.autoreply.rules import Ours, ZMsg, decide
+from app.autoreply.rules import Ours, ZMsg, decide, is_template
 from app.dispatch.comms import Comm
 
 NOW = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)          # Tue 11 AM New York: office open
@@ -260,3 +260,14 @@ def test_first_names():
     assert context.first_name("Santiago Villahermosa (TEST)") == "Santiago"
     assert context.first_name("ELISHA WRIGHT") == "Elisha"
     assert context.first_name(None) == ""
+
+
+def test_the_new_job_welcome_is_automatic_not_a_person():
+    """Workflow 7 (2026-10-22): the welcome Zuper sends every new AHS job is not a person
+    answering - a customer who replies to it still gets answered."""
+    welcome = ("Hi Mary, welcome to Dream Team Roofing! We received your roof service request from "
+               "American Home Shield. A member of our team will contact you within the next 24 "
+               "hours to schedule your inspection. Questions? Call or text (954) 420-7373. Reply "
+               "STOP to opt out.")
+    assert is_template(welcome)
+
