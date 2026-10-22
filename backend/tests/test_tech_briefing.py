@@ -150,3 +150,14 @@ def test_nothing_before_the_send_time_and_no_phone_is_skipped(db, tb, script):
     row = db.query(TechBriefing).one()
     assert out["skipped"] == 1 and row.technician == "Antonio Brown" and tb == []
     assert "no phone for Antonio Brown" in row.note
+
+
+def test_each_job_carries_its_zuper_link():
+    """2026-10-22: the technician can open every job in Zuper from the text."""
+    url = "https://next.zuperpro.com/jobs/uid-701/details"
+    line = rules.job_line(job("701"), {}, "inspection", link=url)
+    assert line.text.endswith("Zuper: " + url)
+    assert "Zuper:" not in rules.job_line(job("702"), {}, "inspection").text
+    parts = rules.texts("Luis Perez", date(2026, 10, 23), [line.text] * 12, 1000)
+    assert all(len(p) <= 1000 for p in parts) and sum(p.count(url) for p in parts) == 12
+

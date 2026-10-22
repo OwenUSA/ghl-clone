@@ -7909,3 +7909,12 @@ Insights shows ratings received, average, 5-star %, answered %, review links sen
 ratings per technician. Never moves a Zuper column ("Review Requested" / "Review Received" stay
 with the team).
 
+
+## AMENDMENT (2026-10-22): the technician briefing carries each job's Zuper link
+
+The user asked that the day-before briefing (agent #7) also send the link to each customer's job in
+Zuper. Every job line now ends with "Zuper: <link>" - the same link the Dispatch page draws
+(`zuper.config.job_url_template()`, next.zuperpro.com/jobs/<uid>/details); an empty
+ZUPER_JOB_URL_TEMPLATE draws none. The link adds ~60 characters a job, so a busy day splits into
+more texts (never mid-job). Only technicians receive it; customers never do.
+

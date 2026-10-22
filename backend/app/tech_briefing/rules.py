@@ -2,7 +2,8 @@
 
     due(now, hour, minute)      the date to brief (tomorrow) once it is past the send time
     by_technician(jobs, day)    tomorrow's visits grouped by technician, earliest first
-    job_line(job, found, ...)   one job in a few words: when, who, where, what, bring, time
+    job_line(job, found, ...)   one job in a few words: when, who, where, what, bring, time,
+                                and its Zuper link (2026-10-22) when one is given
     texts(tech, day, lines)     the briefing in texts of at most MAX_TEXT, never cutting a job
 
 Recorded beats suggested: tools the technician wrote are shown as recorded; an AI suggestion is
@@ -81,7 +82,8 @@ class Line:
     facts: dict = field(default_factory=dict)
 
 
-def job_line(job, found: dict | None, kind: str, suggestion: str | None = None) -> Line:
+def job_line(job, found: dict | None, kind: str, suggestion: str | None = None,
+             link: str | None = None) -> Line:
     fields = getattr(job, "fields", None) or {}
     when = _hm(job.scheduled_start)
     if getattr(job, "scheduled_end", None):
@@ -109,6 +111,8 @@ def job_line(job, found: dict | None, kind: str, suggestion: str | None = None) 
         parts.append("Time: %s." % (hours or NOT_RECORDED))
     if couldnt:
         parts.append("Not inspected yet: %s." % couldnt)
+    if link:
+        parts.append("Zuper: %s" % link)
     return Line(job.job_number or "?", " ".join(parts), needs_tools=not tools,
                 facts={"roof": roof, "leak": leak, "couldnt": couldnt,
                        "title": getattr(job, "title", None)})

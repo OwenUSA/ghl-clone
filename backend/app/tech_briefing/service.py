@@ -60,6 +60,13 @@ def _in_test(tech: str, s: c.Settings) -> bool:
                for x in s.test_technicians if x.strip())
 
 
+def zuper_link(job: DispatchJob) -> str | None:
+    """The job in Zuper, the same link the Dispatch page draws (2026-10-22, the user: send each
+    technician the link to every job); none when the deployment sets no link."""
+    template = zconfig.job_url_template()
+    return template.format(uid=job.job_uid) if template and job.job_uid else None
+
+
 def brief(db: Session, tech: str, jobs: list[DispatchJob], day, s: c.Settings,
           now: datetime) -> str:
     key = "%s|%s" % (tech.strip().lower(), day.isoformat())
@@ -74,7 +81,8 @@ def brief(db: Session, tech: str, jobs: list[DispatchJob], day, s: c.Settings,
     except IntegrityError:
         return "already"
     db.commit()                                  # recorded BEFORE anything is sent
-    lines = [rules.job_line(j, _found(db, j.job_uid), drules.visit_kind(j)) for j in jobs]
+    lines = [rules.job_line(j, _found(db, j.job_uid), drules.visit_kind(j),
+                            link=zuper_link(j)) for j in jobs]
     need = [{"job_number": ln.job_number, **ln.facts} for ln in lines if ln.needs_tools]
     if need and registry.level(db, c.KEY, "ai_suggest") != rcat.NEVER:
         tips, meta = suggest.suggest(db, need, now)
@@ -83,7 +91,8 @@ def brief(db: Session, tech: str, jobs: list[DispatchJob], day, s: c.Settings,
         row.note = meta["note"]
         if tips:
             lines = [rules.job_line(j, _found(db, j.job_uid), drules.visit_kind(j),
-                                    tips.get(j.job_number or "")) for j in jobs]
+                                    tips.get(j.job_number or ""), link=zuper_link(j))
+                     for j in jobs]
     parts = rules.texts(tech, day, [ln.text for ln in lines], c.MAX_TEXT)
     row.body = "\n\n".join(parts)
     lv = registry.level(db, c.KEY, "text_staff")
