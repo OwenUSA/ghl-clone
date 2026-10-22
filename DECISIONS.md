@@ -7918,3 +7918,21 @@ Zuper. Every job line now ends with "Zuper: <link>" - the same link the Dispatch
 ZUPER_JOB_URL_TEMPLATE draws none. The link adds ~60 characters a job, so a busy day splits into
 more texts (never mid-job). Only technicians receive it; customers never do.
 
+
+## AMENDMENT (2026-10-22): an inspection must fill the four new photo albums
+
+The user added default job albums in Zuper (360 Roof, 360 Ground, 360 Attic, Leaks, For the Owner;
+lift #16) and asked the inspection-documentation agent (#4) to check that, after an inspection,
+**360 Roof, 360 Ground, 360 Attic and For the Owner** each hold at least one picture.
+
+- Read with ONE request per job: `GET /attachments/folders?filter.module=JOB&filter.module_uid=`
+  gives every album with its `attachment_count` (`zapi.job_albums`, on the client's read list).
+- Albums are copied onto a job when it is CREATED, so a job only has the albums that existed then;
+  the agent asks only for the albums the job HAS (older jobs are never flagged for them). Leaks is
+  not required. Repairs are not checked for albums. Albums not read (Zuper error) = not flagged.
+- An empty album joins the job's "missing details" Dispatch item ("pictures in 360 Attic") and
+  the Shadow text to the technician; the item resolves itself when the pictures are added.
+- **Unverified on 2026-10-22:** no job had a picture in any album yet (the team's pictures were on
+  notes and checklist answers). Confirm a picture filed into an album raises its count before
+  relying on it.
+

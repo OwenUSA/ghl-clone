@@ -63,6 +63,10 @@ def gather(db: Session, j: DispatchJob, visit_at: datetime, *, tech_phone: str |
             rules.from_attachments(ev, atts)
         except client.ZuperError as e:
             log.info("job %s attachments not read: %s", j.job_number, e.kind)
+        try:
+            ev.albums = zapi.job_albums(j.job_uid)
+        except client.ZuperError as e:
+            log.info("job %s albums not read: %s", j.job_number, e.kind)
     if ev.photos == 0 and (j.visit_photo_count or 0) > 0:
         ev.photos = j.visit_photo_count        # the reader's own count of the visit's pictures
     notes = [n for n in db.scalars(select(DispatchNote).where(

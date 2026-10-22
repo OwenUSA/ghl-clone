@@ -289,6 +289,9 @@ PATHS = {
     # The account-wide attachments module is listed here only as a read for the setup check:
     # nothing in it says which record a row belongs to, so it can never answer "this job's".
     "job_attachments": "/attachments",
+    # A job's photo albums with each one's picture count (read-only, verified 2026-10-22):
+    # GET /attachments/folders?filter.module=JOB&filter.module_uid=<job uid>.
+    "job_folders": "/attachments/folders",
     "job_service_tasks": "/jobs/{uid}/service_tasks",
     "job_service_task": "/jobs/{uid}/service_tasks/{task_uid}",
     "appointments": "/appointments",
@@ -341,7 +344,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("PUT", _rx(PATHS["job_update"])),
     ("GET", _rx(PATHS["job_notes"])), ("POST", _rx(PATHS["job_notes"])),
     ("PUT", _rx(PATHS["job_note"])), ("DELETE", _rx(PATHS["job_note"])),
-    ("GET", _rx(PATHS["job_attachments"])),
+    ("GET", _rx(PATHS["job_attachments"])), ("GET", _rx(PATHS["job_folders"])),
     ("GET", _rx(PATHS["job_service_tasks"])), ("POST", _rx(PATHS["job_service_tasks"])),
     ("PUT", _rx(PATHS["job_service_task"])), ("DELETE", _rx(PATHS["job_service_task"])),
     ("GET", _rx(PATHS["appointments"])), ("POST", _rx(PATHS["appointments"])),

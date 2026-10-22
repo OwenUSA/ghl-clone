@@ -202,3 +202,19 @@ def test_test_only_ignores_other_jobs(db, world, script):
     script.responses = [openai_completion(content="{}", model="deepseek-flash")]
     service.run(db, NOW)
     assert [r.job_number for r in db.query(InspectionCheck)] == ["701"]
+
+
+def test_an_inspection_needs_a_picture_in_each_album_the_job_has():
+    """2026-10-22: 360 Roof, 360 Ground, 360 Attic and For the Owner each need a picture; an
+    album the job does not have (created before it existed) and "Leaks" are never asked for."""
+    ev = rules.Evidence(photos=3, videos=1, albums={
+        "360 Roof": 2, "360 ground": 0, "360 Attic": 0, "Leaks": 0, "Inspection": 0})
+    for k in ("leak_location", "tools_materials", "time_estimate"):
+        ev.add(k, rules.Found("x", "field"))
+    gone = rules.missing("inspection", ev)
+    assert gone == ["album:360 Ground", "album:360 Attic"]          # no For the Owner album
+    assert rules.words(gone) == "pictures in 360 Ground and pictures in 360 Attic"
+    assert rules.missing("repair", ev) == []                        # albums: inspections only
+    ev.albums = None                                                # not read: never flagged
+    assert rules.missing("inspection", ev) == []
+
