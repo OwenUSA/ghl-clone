@@ -7968,3 +7968,28 @@ re-checked every 3 hours.
 - Off unless `WEATHER_ENABLED`. Never texts a customer, never writes to Zuper. No test reaches
   the weather service (conftest installs a refusing transport).
 
+
+## AMENDMENT (2026-10-22): a text to callers who left an AI call before being helped (LIVE)
+
+**The owner's request and lift:** when a customer drops the call before reaching a person, or
+hangs up while still with the agent, text them: "Sorry we couldn't take your call, we will call
+you back as soon as possible." Live for everyone, from the Zuper line. This lifts "no automatic
+texts - only texts a person sends" (2026-09-15) for THIS text only.
+
+**How (`app/dropped_call.py`):** every inbound CALL carrying `ai_call` queues one
+`dropped_call_text` job ~3 minutes later (Retell's summary and analysis arrive in later reports).
+The job:
+- skips at once a transfer a person answered, or a call the agent ended as successful;
+- otherwise asks DeepSeek (the Dispatch AI's connection) whether the caller LEFT BEFORE BEING
+  HELPED, from the summary, who hung up, Retell's "successful" and the transfer - not for handled
+  calls, "I don't need anything", sales/spam/wrong numbers. No AI answer = no text (never a guess);
+- never texts twice in 24 h (this text, the auto-reply, the call follow-up), after STOP on the
+  number's CRM threads, or once a PERSON has called or texted them back; never our own lines;
+- 8 AM - 8 PM Mon-Sat; a call at night is re-queued for 8:01 AM;
+- sends from the Zuper line (954) 420-7373 through `client.dropped_call_write()` (+ a private job
+  note) when exactly one Zuper customer holds the number - Zuper can only text a customer; any
+  other caller gets the same text from the CRM line through the ordinary transport (owen-main
+  still refuses opted-out numbers there);
+- recorded in `agent_registry_log` (entry `dropped_call_text`) BEFORE the send, never retried.
+Off unless DROPPED_CALL_TEXTS_ENABLED; the registry's "Text customers" is Automatic by default.
+

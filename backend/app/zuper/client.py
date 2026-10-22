@@ -138,6 +138,7 @@ _AUTOREPLY: ContextVar[bool] = ContextVar("zuper_autoreply", default=False)
 _FOLLOWUP: ContextVar[bool] = ContextVar("zuper_followup", default=False)
 _PAYMENTS: ContextVar[bool] = ContextVar("zuper_payments", default=False)
 _REVIEWS: ContextVar[bool] = ContextVar("zuper_reviews", default=False)
+_DROPPED: ContextVar[bool] = ContextVar("zuper_dropped_call", default=False)
 
 
 @contextlib.contextmanager
@@ -199,6 +200,17 @@ def reviews_write():
         _REVIEWS.reset(token)
 
 
+@contextlib.contextmanager
+def dropped_call_write():
+    """The dropped-call text (2026-10-22; app/dropped_call.py): the same send and private note,
+    in the auto-reply's exact shape, under its own server gate DROPPED_CALL_TEXTS_ENABLED."""
+    token = _DROPPED.set(True)
+    try:
+        yield
+    finally:
+        _DROPPED.reset(token)
+
+
 def _send_scope() -> tuple[bool, bool, str, str]:
     """(inside a send scope, its server gate is on, its off-sentence, its name)."""
     if _AUTOREPLY.get():
@@ -212,6 +224,9 @@ def _send_scope() -> tuple[bool, bool, str, str]:
     if _REVIEWS.get():
         return (True, config.reviews_texts_enabled(), config.REVIEWS_TEXTS_OFF_SENTENCE,
                 "reviews agent")
+    if _DROPPED.get():
+        return (True, config.dropped_call_texts_enabled(), config.DROPPED_CALL_OFF_SENTENCE,
+                "dropped-call text")
     return False, False, "", ""
 
 
