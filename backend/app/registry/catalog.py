@@ -50,6 +50,8 @@ ACTIONS: dict[str, dict] = {
     "call_staff": {"label": "Call the technician", "customer": False},
     "ai_read": {"label": "Read notes and replies with AI", "customer": False},
     "ahs_portal": {"label": "Read and submit in the AHS portal (Frontdoor)", "customer": False},
+    "ai_vision": {"label": "Look at the pictures with AI and write the draft", "customer": False},
+    "send_customer": {"label": "Send the report to the customer", "customer": True},
 }
 
 
@@ -203,6 +205,29 @@ ENTRIES: tuple[Entry, ...] = (
                 "Frontdoor: an API key if AHS offers one; if not, a logged-in browser session "
                 "(Playwright) that only reads. Until then AHS approvals arrive by email "
                 "(AHS approvals into Dispatch).",
+    ),
+    Entry(
+        key="inspection_report", name="Post-inspection report", kind="agent", role=6,
+        purpose="When an inspection's pictures have stopped arriving for 30 minutes, builds a "
+                "draft report for the customer - the pictures that best show the problem, with "
+                "captions, and the findings in plain words - and leaves it for the office to "
+                "review and approve.",
+        covers="Inspections on AHS - Inspection and Retail. Test jobs only until test-only is "
+               "switched off in its settings.",
+        channels=("Dispatch -> Reports (draft)", "Dispatch item + bell"),
+        runs_on="CRM worker (reads Zuper only)", provider="OpenAI or Anthropic (vision)",
+        hours="Around the clock",
+        actions=(
+            Action("ai_vision", AUTO, (NEVER, AUTO),
+                   "Picks the pictures and writes the draft. Needs a vision connection in its "
+                   "settings."),
+            Action("crm_write", AUTO, (), "The draft, kept in the CRM."),
+            Action("alert_staff", AUTO, (), "A Dispatch item and the bell when a draft is ready."),
+            Action("send_customer", NEVER, (), "Not built yet - a person reviews every report."),
+        ),
+        never=("Send anything to the customer", "Mention prices or AHS approval",
+               "Promise a date", "Write anything in Zuper"),
+        owner_hint="Luis", tags=("settings",),
     ),
     # ------------------------------------------------------------------ automations
     Entry(

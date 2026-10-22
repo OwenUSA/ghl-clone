@@ -1268,6 +1268,13 @@ AUDITED = {
         # The agent registry (2026-10-21, app/registry/api.py) — on the same router and gate.
         "registry_overview", "registry_activity", "registry_update_entry",
         "registry_set_level", "registry_set_overall"), "AI_MODULE: restricted refused 403"),
+    # The post-inspection report drafts (app/inspection_report/api.py, 2026-10-21): Dispatch's
+    # rule (dispatch.api.VIEW) - a restricted user is refused 403 before anything is read.
+    **dict.fromkeys((
+        "inspection_reports_list", "inspection_report_get", "inspection_report_edit",
+        "inspection_report_approve", "inspection_report_discard", "inspection_report_rebuild",
+        "inspection_report_photo", "inspection_report_pdf"),
+        "DISPATCH_VIEW: restricted refused 403"),
 }
 
 

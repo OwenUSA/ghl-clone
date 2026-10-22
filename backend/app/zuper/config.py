@@ -130,6 +130,16 @@ def inspection_docs_enabled() -> bool:
     return _flag("INSPECTION_DOCS_ENABLED", False)
 
 
+INSPECTION_REPORT_OFF_SENTENCE = ("The post-inspection report is switched off on this server "
+                                  "(INSPECTION_REPORT_ENABLED is not set).")
+
+
+def inspection_report_enabled() -> bool:
+    """The server's gate on the post-inspection report (2026-10-21, app/inspection_report). It
+    only READS Zuper (job pictures); off unless the deployment says so."""
+    return _flag("INSPECTION_REPORT_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

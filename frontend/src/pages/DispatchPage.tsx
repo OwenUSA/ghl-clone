@@ -7,6 +7,7 @@ import { ZuperCheck } from '../components/dispatch/ZuperCheck'
 import { ToBook } from '../components/dispatch/ToBook'
 import { Pipeline } from '../components/dispatch/Pipeline'
 import { AutoReplySection } from '../components/dispatch/AutoReplySection'
+import { InspectionReports } from '../components/dispatch/InspectionReports'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
 import {
   applyDispatchSuggestion, bookDispatchSlot, closeDispatchItem, decideSuggestion,
@@ -31,6 +32,7 @@ const BOOK = 'book'
 const CHECK = 'check'
 const TOBOOK = 'tobook'
 const PIPELINE = 'pipeline'
+const REPORTS = 'reports'
 const BOOKABLE = new Set(['book_visit', 'new_not_called', 'needs_date'])
 
 const card: React.CSSProperties = { background: '#fff', border: `1px solid ${LINE}`,
@@ -58,7 +60,7 @@ export function DispatchPage({ user }: { user: Me }) {
   // A link can open a tab: the assistant's "Open plan on the calendar" is ?tab=book&plan=N.
   const [tab, setTab] = useState<string>(() => {
     const t = new URLSearchParams(window.location.search).get('tab')
-    return t === BOOK || t === CHECK || t === TOBOOK || t === PIPELINE ? t : ASK
+    return t === BOOK || t === CHECK || t === TOBOOK || t === PIPELINE || t === REPORTS ? t : ASK
   })
   const [activeChatId, setActiveChatId] = useState<number | null>(readActiveChat)
   useEffect(() => { writeActiveChat(activeChatId) }, [activeChatId])
@@ -66,7 +68,8 @@ export function DispatchPage({ user }: { user: Me }) {
     enabled: allowed, refetchInterval: 60000, refetchOnWindowFocus: true })
   const sugs = useQuery({ queryKey: ['dispatch-suggestions'], queryFn: () => dispatchSuggestions(),
     enabled: allowed, refetchInterval: 60000 })
-  const isQueue = ![SUGGESTIONS, ASK, SETTINGS, CHECK, TOBOOK, PIPELINE].includes(tab)
+  const isQueue = ![SUGGESTIONS, ASK, SETTINGS, CHECK, TOBOOK, PIPELINE, REPORTS].includes(tab)
+  const openReport = Number(new URLSearchParams(window.location.search).get('report')) || null
   const items = useQuery({ queryKey: ['dispatch-items', tab],
     queryFn: () => dispatchItems(tab === URGENT ? null : tab), enabled: allowed && isQueue,
     refetchInterval: 60000, refetchOnWindowFocus: true })
@@ -79,6 +82,7 @@ export function DispatchPage({ user }: { user: Me }) {
     { key: CHECK, label: 'Check Zuper' },
     { key: TOBOOK, label: 'To book' },
     { key: PIPELINE, label: 'Pipeline' },
+    { key: REPORTS, label: 'Reports' },
     { key: URGENT, label: s ? `Urgent${s.urgent ? ` ${s.urgent}` : ''}` : 'Urgent' },
     ...(s?.queues ?? []).map((q) => ({ key: q.key, label: queueLabel(q) })),
     { key: SUGGESTIONS, label: openSugs ? `Suggestions ${openSugs}` : 'Suggestions' },
@@ -109,7 +113,8 @@ export function DispatchPage({ user }: { user: Me }) {
       ) : (
       <div style={{ overflowY: 'auto', padding: '16px 24px', flex: 1 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 980 }}>
-          {tab === CHECK ? <ZuperCheck />
+          {tab === REPORTS ? <InspectionReports isAdmin={isAiAdmin(user)} openId={openReport} />
+            : tab === CHECK ? <ZuperCheck />
             : tab === TOBOOK ? <ToBook />
             : tab === PIPELINE ? <Pipeline />
             : tab === SUGGESTIONS ? <SuggestionsTab list={sugs.data?.suggestions ?? []} />
@@ -191,6 +196,10 @@ function Row({ item }: { item: DispatchItem }) {
           borderRadius: 4, padding: '1px 6px' }}>{due}</span>}
       </div>
       {item.why && <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>{item.why}</div>}
+      {item.kind === 'report_ready' && typeof item.evidence.report_id === 'number' && (
+        <a style={{ ...link, fontSize: 13, marginTop: 6, display: 'inline-block' }}
+          href={`?tab=reports&report=${item.evidence.report_id}`}>Open the report</a>
+      )}
       {said && (
         <div style={{ fontSize: 13, color: INK, marginTop: 6, padding: '6px 10px',
           background: 'rgb(249,250,251)', borderRadius: 6, borderLeft: `3px solid ${LINE}` }}>

@@ -7704,3 +7704,40 @@ a planned entry with a switchable action). Its status reads the sentence below.
    emails and posts them to `POST /api/ahs-jobs/authorizations` ("AHS approvals into Dispatch").
 
 Nothing else is built: no portal code, no credentials stored.
+
+
+---
+
+## AMENDMENT (2026-10-21): the post-inspection report (agent #6) - a DRAFT, reviewed in the CRM, sent to nobody
+
+The user's request: once a technician has uploaded the inspection pictures and none have arrived
+for about **30 minutes**, the inspection is over; build a report with the most important pictures
+and the findings **as a draft**, and alert someone to review it. Sending to the customer comes
+later; for now it only creates the draft. Built as `backend/app/inspection_report/`,
+"Post-inspection report" (role 6) in the registry. Migration `e8b3c62f9a10` (`inspection_reports`).
+
+**The user's answers (2026-10-21):** the draft lives **in the CRM** (Dispatch -> Reports), nothing
+in Zuper; **an AI vision model picks the pictures** and captions them; contents = the pictures +
+**findings in plain words** (no prices, no repair options for now); a **web page + PDF**.
+
+**How it works:**
+- Trigger: `DispatchJob.visit_photo_at` (the Dispatch reader's record of the visit's last
+  picture) quiet for `quiet_minutes` (30, a setting), an inspection (`dispatch.rules.visit_kind`),
+  ONE report per job and visit day, never for a visit before the agent's first run.
+- The row is recorded BEFORE anything else; the visit's pictures (note images and checklist photo
+  answers of that day; videos skipped) are downloaded through `client.fetch_file`, turned into
+  JPEG (HEIC too - `pillow-heif`) and kept in the CRM's own media store (`app/attachments.py`).
+- ONE vision call (an OpenAI or Anthropic connection chosen in its settings; DeepSeek cannot read
+  pictures) sees up to 16 pictures and the job's written findings and answers JSON: pictures +
+  captions, title, summary, findings, in the customer's language (`reminders.language`).
+  `rules.accept` keeps only valid, unique picture numbers and drops any caption / finding naming
+  money, approval or a date.
+- A `report_ready` Dispatch item (a fed kind) and the bell. Dispatch -> Reports: edit the title,
+  summary, findings and captions, reorder / remove / swap in pictures, Approve (records who checked
+  it - **nothing is sent**), Discard, Rebuild (ADMIN), Download PDF (fpdf2, built on demand).
+- Access: Dispatch's rule (ADMIN + unrestricted DISPATCHER); a board hidden by pipeline
+  permissions answers 404; a picture is served only to the report it belongs to.
+- A failure is "failed" with its reason and one alert; never retried by itself.
+- Off unless `INSPECTION_REPORT_ENABLED`; test jobs #701 / #734 only until "test only" is off;
+  "Send the report to the customer" is in the registry at Never and cannot be switched on.
+- New dependencies: `pillow`, `pillow-heif`, `fpdf2` (wheels / pure Python, no build step).
