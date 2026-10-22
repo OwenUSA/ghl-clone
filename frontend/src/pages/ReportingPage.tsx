@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Donut } from '../components/Donut'
 import { SpeedToLeadReport } from '../components/SpeedToLeadReport'
+import { InsightsReport } from '../components/insights/InsightsReport'
 import { IconCalendar, IconFilter, IconGrid, IconSearch } from '../components/Icon'
 import {
   getAppointmentReport, getCallReport, getLeadOutcomeReport, listCalendars, listPipelines,
@@ -50,9 +51,11 @@ const TABS: TabDef[] = [
   // 2026-10-15: how fast a person first answers a new lead (app/dispatch/speed.py). Only for
   // the Dispatch audience — the same people the API answers.
   { key: 'speed-to-lead', label: 'Speed to lead' },
+  // 2026-10-22: agent #10, Daily report & insights (app/insights) - the same audience.
+  { key: 'insights', label: 'Insights' },
 ]
 
-const DISPATCH_ONLY = new Set(['speed-to-lead'])
+const DISPATCH_ONLY = new Set(['speed-to-lead', 'insights'])
 
 const PALETTE = ['rgb(83,155,245)', 'rgb(93,205,235)', 'rgb(140,141,222)',
   'rgb(18,183,106)', 'rgb(247,144,9)', 'rgb(217,45,32)', 'rgb(152,162,179)']
@@ -592,6 +595,8 @@ export function ReportingPage({ user }: { user?: AiUser | null }) {
             </div>
           </>
         )}
+
+        {tab === 'insights' && canOpenAiAgents(user) && <InsightsReport />}
 
         {tab === 'speed-to-lead' && canOpenAiAgents(user) && (
           <>

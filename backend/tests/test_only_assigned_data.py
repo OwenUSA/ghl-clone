@@ -1282,6 +1282,12 @@ AUDITED = {
         "payments_accept_suggestion", "payments_dismiss_suggestion", "payments_upload_proof",
         "payments_proof_image", "payments_chat_history", "payments_chat_send"),
         "DISPATCH_VIEW: restricted refused 403"),
+    # Daily report & insights (app/insights/api.py, 2026-10-22): Dispatch's rule.
+    **dict.fromkeys((
+        "insights_report", "insights_excel", "insights_table_csv", "insights_signals",
+        "insights_ask", "insights_result_excel", "insights_saved", "insights_pin",
+        "insights_unpin"),
+        "DISPATCH_VIEW: restricted refused 403"),
 }
 
 

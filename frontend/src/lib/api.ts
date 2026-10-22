@@ -2722,3 +2722,50 @@ export const paymentUploadProof = (id: number, file: File) =>
 export const paymentChatHistory = () => get<{ messages: PaymentChatMessage[] }>('/api/payments/chat/messages')
 export const paymentChatSend = (text: string) =>
   send<{ messages: PaymentChatMessage[] }>('/api/payments/chat/messages', 'POST', { text })
+
+// ---- daily report & insights (2026-10-22, app/insights) ---------------------------------
+export type InsightTile = { key: string; label: string; value: number; previous: number | null;
+  lower_is_better: boolean }
+export type InsightResult = { title: string; columns: string[]; rows: (string | number | null)[][];
+  chart: 'bar' | 'line' | 'none'; error?: string }
+export type InsightSpec = { tool: string; args: Record<string, unknown> }
+export type InsightPinned = { id: number; name: string; spec: InsightSpec; created_by_id: number | null;
+  result: InsightResult }
+export type InsightIssue = { id: number; title: string; why: string | null; todo: string | null;
+  job_number: string | null; board: string | null; urgent: boolean; due_at: string | null }
+export type InsightReport = {
+  range: string; first: string; last: string; previous: { first: string; last: string }
+  tiles: InsightTile[]; series: Record<string, Record<string, number>>
+  tables: Record<string, Record<string, string | number | null>[]>
+  issues: InsightIssue[]; pinned: InsightPinned[]; boards: string[]; technicians: string[]
+  reading: { server: boolean; sentence: string | null; exclude_phones: number }
+}
+export type InsightFilters = { range: string; date?: string; board?: string; technician?: string }
+const insightQuery = (f: InsightFilters) => {
+  const p = new URLSearchParams({ range: f.range })
+  if (f.date) p.set('date', f.date)
+  if (f.board) p.set('board', f.board)
+  if (f.technician) p.set('technician', f.technician)
+  return p.toString()
+}
+export const insightsReport = (f: InsightFilters) =>
+  get<InsightReport>(`/api/insights/report?${insightQuery(f)}`)
+export const insightsExcelUrl = (f: InsightFilters) => `${BASE}/api/insights/report.xlsx?${insightQuery(f)}`
+export const insightsCsvUrl = (table: string, f: InsightFilters) =>
+  `${BASE}/api/insights/table/${encodeURIComponent(table)}.csv?${insightQuery(f)}`
+export const insightsAsk = (question: string) =>
+  send<{ reply: string; error: boolean; result: InsightResult | null; spec: InsightSpec | null }>(
+    '/api/insights/ask', 'POST', { question })
+export const insightsPin = (name: string, spec: InsightSpec) =>
+  send<{ id: number }>('/api/insights/saved', 'POST', { name, spec })
+export const insightsUnpin = (id: number) => send<{ deleted: boolean }>(`/api/insights/saved/${id}`, 'DELETE')
+/** One Ask result as an Excel file (a POST, so it is fetched and handed over as a blob). */
+export async function insightsResultExcel(result: InsightResult): Promise<Blob> {
+  const r = await fetch(BASE + '/api/insights/result.xlsx', {
+    method: 'POST', credentials: 'include',
+    headers: { 'X-CSRF-Token': cookie('ghl_csrf') ?? '', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ result }),
+  })
+  if (!r.ok) throw await failed(r)
+  return r.blob()
+}

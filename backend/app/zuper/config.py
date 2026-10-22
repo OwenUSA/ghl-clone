@@ -168,6 +168,16 @@ def payments_texts_enabled() -> bool:
     return _flag("PAYMENTS_TEXTS_ENABLED", False)
 
 
+INSIGHTS_OFF_SENTENCE = ("The insights agent's reading of calls and texts is switched off on "
+                         "this server (INSIGHTS_ENABLED is not set).")
+
+
+def insights_enabled() -> bool:
+    """The server's gate on the insights pass (2026-10-22, app/insights): the AI reads each call
+    and text once and raises customer issues. The report itself works regardless."""
+    return _flag("INSIGHTS_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

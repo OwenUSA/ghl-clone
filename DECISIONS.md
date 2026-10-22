@@ -7827,3 +7827,46 @@ the two apart. The API is `/api/payments` (not a page).
 - Access: Dispatch's rule (ADMIN + unrestricted DISPATCHER); hidden boards answer 404; the chat
   is refused for a user with hidden pipelines (it reads every agreement).
 - The background pass is off unless `PAYMENTS_ENABLED`; the page and the chat work regardless.
+
+
+## AMENDMENT (2026-10-22): daily report & insights (agent #10) - Reporting → Insights
+
+**The user's request:** track the most important information of every job - did we have to go
+back, does it still leak, how many callbacks and how many per technician, upsell money -
+measured from Zuper AND from what customers said (Quo, the CRM line, Zuper Connect: transcripts,
+summaries, texts); Excel, CSV, tables, KPIs, charts. **Answers:** the AI reads each call / text
+once; KPIs and alerts in the agent's own view, with "ask for a custom KPI"; the owner's reports
+are the same view with longer ranges.
+
+**How it works:**
+- **Tagging** (`insights/tagger.py`): every new call (summary + transcript) and text, batched ~20
+  per DeepSeek call through the Dispatch AI's connection (`provider_for(entry="insights")` - its
+  switch, pause, daily cap and the registry's cap apply; runs are `dispatch_ai_runs` kind
+  "insights"). Each item is read ONCE (`conversation_reads`, even when nothing was found). A tag
+  is kept only when its quote is really in the text (`quote_ok`) - so every "still leaking"
+  number goes back to a sentence a customer said. The job is the newest open Dispatch job
+  holding that phone; its technician is recorded with the tag. Staff / test phones can be
+  excluded (registry settings `exclude_phones`).
+- **Metrics** (`insights/metrics.py`): the nightly Excel's rules, not new ones - callbacks are
+  `kpi_report.is_callback` charged to the ORIGINAL job's Technician; upsells are "Customer chose"
+  other than "AHS only", worth "Customer paid ($)"; inspections / repairs / AHS approvals are
+  column moves in `zuper_status_history`; still leaking counts DISTINCT jobs. Boards hidden from
+  the reader (pipeline permissions) are left out of everything, pinned KPIs included.
+- **Alerts:** still leaking / asked us back / complaint → ONE Dispatch item per conversation in
+  the new queue "Customer issues" (`customer_issue`, `rules.FED_KINDS`) + the bell, with the
+  quote, the job and the technician. Still leaking resolves itself when a future visit exists on
+  the job; the rest close with Done / Wrong.
+- **Ask for a KPI** (`insights/ask.py`): the AI only calls three tools over the same metrics
+  (`kpis`, `breakdown`, `trend`) - it never writes SQL. The last table a tool returned is the
+  result (table + chart, Excel / CSV, "Pin to report", which stores the TOOL CALL and recomputes
+  it live). A number in the reply that no tool returned is listed under the answer as "check
+  them". Registry action `ai_chat`.
+- **Downloads:** `report.xlsx` (Summary vs previous, a sheet per table, Trend, native bar / line
+  charts), a CSV per table. The nightly server Excel gains "Conversations" (tags per month per
+  technician) and "Still leaking" (job numbers only - the file's privacy rule; the words stay in
+  the CRM).
+- A daily `insight_snapshots` row keeps yesterday's tiles for trends.
+- **Off:** reading needs `INSIGHTS_ENABLED` + the registry's `ai_read` + the Dispatch AI switch;
+  the report itself is computed on demand and always works. Nothing is texted, called or written
+  to Zuper by this agent.
+

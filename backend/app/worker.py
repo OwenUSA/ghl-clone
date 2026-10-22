@@ -84,6 +84,9 @@ def main() -> None:
     # Payments & collections (2026-10-21): due items, Zuper suggestions, screenshots.
     from .payments import service as payments_service
     payments_service.start_thread(SessionLocal, stop)
+    # Daily report & insights (2026-10-22): reads calls and texts once, raises customer issues.
+    from .insights import service as insights_service
+    insights_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

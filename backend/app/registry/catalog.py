@@ -53,6 +53,7 @@ ACTIONS: dict[str, dict] = {
     "ai_vision": {"label": "Look at the pictures with AI and write the draft", "customer": False},
     "send_customer": {"label": "Send the report to the customer", "customer": True},
     "ai_suggest": {"label": "Suggest tools & materials with AI", "customer": False},
+    "ai_chat": {"label": "Answer questions in a chat with AI", "customer": False},
 }
 
 
@@ -276,6 +277,28 @@ ENTRIES: tuple[Entry, ...] = (
         never=("Mark anything paid without a person", "Write anything in Zuper",
                "Text a customer while its reminders are at Never"),
         owner_hint="Luis", tags=("settings",),
+    ),
+    Entry(
+        key="insights", name="Daily report & insights", kind="agent", role=10,
+        purpose="Reads every call and text once and tags what matters - still leaking, asked "
+                "us to come back, complaints, interest in more work, payment problems, praise - "
+                "each with the customer's exact words; measures leads, inspections, AHS "
+                "approvals, repairs, callbacks per technician, upsell money and collections; "
+                "raises customer issues; answers \"ask for a KPI\" questions.",
+        covers="Every Zuper job and every Quo, CRM-line and Zuper Connect call and text.",
+        channels=("Reporting -> Insights (KPIs, charts, tables, Excel, CSV)",
+                  "Dispatch item + bell (Customer issues)"),
+        runs_on="CRM (reads Zuper only)", provider="DeepSeek",
+        hours="Every hour",
+        actions=(
+            Action("ai_read", AUTO, (NEVER, AUTO), "Each call and text is read once."),
+            Action("alert_staff", AUTO, (), "A Dispatch item and the bell for still leaking, "
+                                            "come back and complaints."),
+            Action("ai_chat", AUTO, (NEVER, AUTO), "\"Ask for a KPI\" on the Insights tab."),
+        ),
+        never=("Text or call anyone", "Write anything in Zuper",
+               "Report a number that is not in the data"),
+        owner_hint="Owner", tags=("settings",),
     ),
     # ------------------------------------------------------------------ automations
     Entry(

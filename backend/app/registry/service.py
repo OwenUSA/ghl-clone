@@ -49,7 +49,8 @@ MICRO = 1_000_000
 
 # Dispatch AI runs (`dispatch_ai_runs.kind`) that belong to an entry other than the assistant.
 DISPATCH_AI_KINDS = {"availability": "availability_reader", "inspection": "inspection_docs",
-                     "briefing": "tech_briefing", "payments": "payments"}
+                     "briefing": "tech_briefing", "payments": "payments",
+                     "insights": "insights"}
 
 
 def _dispatch_kind_filter(key: str):
@@ -446,6 +447,13 @@ def _status(db: Session, v: View) -> dict:
                         "pass is off on this server (PAYMENTS_ENABLED)."}
             return {"state": "on", "sentence": "On; customer reminders %s." % cat.LEVEL_LABEL[
                 level(db, v.key, "send_customer")].lower()}
+        if v.key == "insights":
+            if not zconf.insights_enabled():
+                return {"state": "off", "sentence": "The Insights tab works; reading calls and "
+                        "texts is off on this server (INSIGHTS_ENABLED)."}
+            if level(db, v.key, "ai_read") == cat.NEVER:
+                return {"state": "off", "sentence": "Reading calls and texts is at Never."}
+            return {"state": "on", "sentence": "On: reads every new call and text each hour."}
         if v.key == "ahs_authorizations":
             return {"state": "outside", "sentence": "Switched at owen-main."}
         if v.outside:
@@ -528,11 +536,13 @@ def entry_out(db: Session, v: View, now: datetime) -> dict:
 # Entries with settings a person may edit, and how each is read and checked.
 def _settings_kinds():
     from ..followup import config as fconf
+    from ..insights import config as nconf
     from ..inspection_docs import config as iconf
     from ..inspection_report import config as rconf
     from ..payments import config as pconf
     from ..tech_briefing import config as tconf
     return {"payments": (lambda raw: pconf.Settings.from_config(raw).as_dict(), pconf.validate),
+            "insights": (lambda raw: nconf.Settings.from_config(raw).as_dict(), nconf.validate),
             "tech_briefing": (lambda raw: tconf.Settings.from_config(raw).as_dict(),
                               tconf.validate),
             "inspection_report": (lambda raw: rconf.Settings.from_config(raw).as_dict(),
@@ -749,6 +759,14 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
                             .limit(limit)):
             add("payments", r.created_at, "change", "%s%s (via %s)" % (
                 r.summary, " - undone" if r.undone_at else "", r.via), tone="info")
+    if key in (None, "insights"):
+        from ..insights import config as nconf
+        from ..models import ConversationSignal
+        for r in db.scalars(select(ConversationSignal).order_by(ConversationSignal.id.desc())
+                            .limit(limit)):
+            add("insights", r.created_at or r.at, r.tag, "%s%s: “%s”" % (
+                nconf.TAGS.get(r.tag, r.tag), " (job #%s)" % r.job_number if r.job_number
+                else "", r.quote), tone="bad" if r.tag in nconf.ALERT_TAGS else "info")
     if key in (None, "inspection_docs"):
         for r in db.scalars(select(InspectionCheck).order_by(InspectionCheck.id.desc())
                             .limit(limit)):
