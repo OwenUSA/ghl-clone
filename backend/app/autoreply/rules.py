@@ -42,13 +42,15 @@ STOPS = {"stop", "stopall", "unsubscribe", "quit", "end", "cancel", "opt out", "
          "stop texting", "stop texting me", "remove me", "parar", "basta", "no mas", "no más"}
 STARTS = {"start", "unstop", "yes start", "resume"}
 
-# The six Zuper workflows' texts (docs/ZUPER-CUSTOMER-TEXT-WORKFLOWS.md §2). A text with one of
+# The Zuper workflows' texts (docs/ZUPER-CUSTOMER-TEXT-WORKFLOWS.md §2). A text with one of
 # these is automatic, not a person answering — they go out under "Owen" or "Zuper".
 TEMPLATE_PHRASES = (
     "to confirm the appointment", "your appointment is confirmed", "to rate our technician",
     "thank you for your feedback", "we have submitted your inspection report",
     "has authorized your roof repair", "can you confirm you received this message",
     "reminder: your roof", "is on schedule to arrive today",
+    # 2026-10-22: workflow 7, the welcome text for every new AHS job.
+    "welcome to dream team roofing",
 )
 AUTOMATIC_USERS = {"zuper"}
 

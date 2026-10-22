@@ -22,6 +22,7 @@ Nothing here contains customer data. Message wording below uses a sample custome
 | 4 | DTR - AHS text - Awaiting AHS Decision | `5a41a844-cc97-494e-b676-3be55d646efd` | job moves INTO that column | report submitted to AHS |
 | 5 | DTR - AHS text - AHS Approved | `ad2e937e-1e86-4f93-9672-142cc777b5f2` | job moves INTO that column | repair authorized, we will call |
 | 6 | DTR - Thank you for confirming | `79afb5bb-9272-427c-8a12-c3487b55f6a2` | an incoming text (via webhook) | thank-you for a "yes" or a rating; alert on any other reply |
+| 7 | DTR - AHS welcome - new job | `a5de1df0-3223-491b-867d-f7fe901b59d1` | a job is CREATED on AHS - Inspection ("On Create Job") | welcome + "we'll contact you within 24 hours" (added 2026-10-22) |
 
 Plus one Zuper **webhook**: "DTR - Thank you for confirming (incoming SMS)"
 `5c798249-a7c9-4de9-98de-c2e8e6ef8e7d`, event `sms.new_sms` → workflow 6.
@@ -56,6 +57,10 @@ Thank-yous (6):
 The wording is in each workflow's **Notify Customer** step (1-5) or the "Decide" code step (6), and
 in the builder scripts (section 6). Change both, or a rebuild undoes the edit.
 
+Welcome (7), added 2026-10-22:
+
+- `Hi Mary, welcome to Dream Team Roofing! We received your roof service request from American Home Shield. A member of our team will contact you within the next 24 hours to schedule your inspection. Questions? Call or text (954) 420-7373. Reply STOP to opt out.`
+
 ## 3. The rules
 
 **Texting window: 8 AM - 8 PM New York, enforced twice** (when planning, and again right before sending).
@@ -81,6 +86,16 @@ Thank-you (6) — **regular conversations on the 954 line are left alone**:
 - One reply only: after our thank-you, our thank-you is the last text, so further texts get nothing.
 - Outside 8 AM - 8 PM: no thank-you at all.
 - STOP / UNSUBSCRIBE are left to the carrier.
+
+Welcome (7):
+- Trigger "On Create Job" (`job.new`) filtered to AHS - Inspection: it fires ONCE per job, at
+  creation - a job that later moves to AHS - Repair & Review is never welcomed again.
+- Never a revisit / callback: job_type REVISIT, a parent job, "callback" in the Job Type field or
+  the tags (checked when planned and again before sending).
+- Created between 8:01 AM and 7:50 PM -> sent ~1 minute later; otherwise at 8:01 AM.
+- Final check: still on AHS - Inspection, not Cancelled / Estimate Declined, has a mobile.
+- The thank-you workflow (6) ignores it; the CRM auto-reply treats it as automatic
+  (`autoreply/rules.py` TEMPLATE_PHRASES).
 
 ## 4. Alerts to Luis and Owen — currently NOT delivered
 
@@ -144,6 +159,7 @@ Folder `/home/qa/zbrowser/ahs_reminders/` (run as root with `python3 -I`, helper
 |---|---|
 | `build_ahs_reminders.py` | builds/updates workflows 1-2 (shared helpers, New York time code, `TEXTS`) — refuses active workflows; dry run default |
 | `build_ahs_stage_texts.py` | workflows 3-5 |
+| `build_ahs_welcome.py` + `test_welcome.py` | workflow 7 (builder: dry run default, `--apply`, refuses an active workflow; test: pins #701, runs, unpins) |
 | `build_ahs_thanks2.py` + `republish_thanks_and_test.py` | workflow 6 (`--test` re-runs Santiago's "Yes"; without it just republishes) |
 | `add_not_confirmed_alert.py [--two-hours] --apply` | added the 1-hour "not confirmed" branch to 1 / 2 in place |
 | `alerts_to_bell.py` | turned the alert steps into the bell step (2026-10-13) |
