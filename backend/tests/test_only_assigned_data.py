@@ -1288,6 +1288,8 @@ AUDITED = {
         "insights_ask", "insights_result_excel", "insights_saved", "insights_pin",
         "insights_unpin"),
         "DISPATCH_VIEW: restricted refused 403"),
+    # Speak instead of type in the AI chats (app/speech.py, 2026-10-22): Dispatch's rule.
+    "speech_transcribe": "DISPATCH_VIEW: restricted refused 403",
 }
 
 

@@ -368,9 +368,10 @@ def test_a_dispatch_pass_never_resolves_a_fed_item(world):
     # report_ready: the post-inspection report's draft (2026-10-21, app/inspection_report).
     # payment_due: a part of a payment agreement due or overdue (2026-10-21, app/payments).
     # customer_issue: still leaking / come back / complaint heard in a call (app/insights).
+    # low_rating: a 1-4 (or unclear) answer to the review text (app/reviews).
     assert {"ahs_approved", "ahs_items_updated", "ai_change_request",
             "missing_docs", "report_ready", "payment_due",
-            "customer_issue"} == set(rules.FED_KINDS)
+            "customer_issue", "low_rating"} == set(rules.FED_KINDS)
 
     def run_pass(now):
         db = SessionLocal()

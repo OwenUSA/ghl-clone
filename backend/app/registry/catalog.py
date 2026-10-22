@@ -300,6 +300,32 @@ ENTRIES: tuple[Entry, ...] = (
                "Report a number that is not in the data"),
         owner_hint="Owner", tags=("settings",),
     ),
+    Entry(
+        key="reviews", name="Reviews & QC", kind="agent", role=9,
+        purpose="Two days after a repair is complete, if the customer said nothing unhappy, asks "
+                "how we did from 1 to 5. A 5 gets a thank-you and the Google review link; 1-4 "
+                "or a leak gets 'what could we do better?', the office is alerted at once, and "
+                "the link is offered after they answer - never only to happy customers "
+                "(Google's rule).",
+        covers="Jobs that reach Repair Complete on every board.",
+        channels=("Text from the Zuper line (954-420-7373)", "Anisa call if no reply (off)",
+                  "Dispatch item + bell (Customer issues)", "Private note on the Zuper job"),
+        runs_on="CRM (texts through Zuper)", provider="DeepSeek",
+        hours="Texts and calls 8 AM-8 PM Mon-Sat",
+        actions=(
+            Action("send_text", SHADOW, (NEVER, SHADOW, AUTO),
+                   "The rating text and the answers to it. Also needs REVIEWS_TEXTS_ENABLED."),
+            Action("place_calls", NEVER, (NEVER, SHADOW, AUTO),
+                   "Anisa calls when the rating text had no answer."),
+            Action("ai_read", AUTO, (NEVER, AUTO), "Reads a reply that is not a plain 1-5."),
+            Action("alert_staff", AUTO, (), "A Dispatch item and the bell for 1-4, a leak or "
+                                            "an unclear answer."),
+            Action("zuper_note", AUTO, (), "A private note on the job for every step."),
+        ),
+        never=("Send the review link only to happy customers", "Move a Zuper column",
+               "Ask a customer who said it still leaks or complained", "Mention prices"),
+        owner_hint="Luis", tags=("settings",),
+    ),
     # ------------------------------------------------------------------ automations
     Entry(
         key="dispatch_flags", name="Dispatch items and bell", kind="automation", role=10,

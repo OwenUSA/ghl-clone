@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { MicButton } from '../components/MicButton'
 import { useEffect, useRef, useState } from 'react'
 import { PageTabs } from '../components/PageTabs'
 import { BLUE, INK, LINE, PAGE_BG } from '../components/ai/aiUi'
@@ -276,6 +277,7 @@ function Chat({ onOpen }: { onOpen: (id: number) => void }) {
         onSubmit={(e) => { e.preventDefault(); const t = text.trim(); if (t) { sendIt.mutate(t); setText('') } }}>
         <input id="payments-chat-input" aria-label="Message the payments assistant" style={input} value={text}
           onChange={(e) => setText(e.target.value)} placeholder="Tell it what was agreed or paid…" />
+        <MicButton value={text} onChange={setText} disabled={sendIt.isPending} size={36} />
         <button type="submit" style={primary} disabled={sendIt.isPending}>Send</button>
       </form>
     </div>

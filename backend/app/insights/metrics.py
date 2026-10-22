@@ -26,6 +26,7 @@ from ..models import (
     DispatchItem,
     PaymentAgreement,
     PaymentMilestone,
+    ReviewRequest,
     ZuperStatusHistory,
 )
 from . import config as c
@@ -203,6 +204,26 @@ def compute(db: Session, first: date, last: date, *, hidden: set[str] = frozense
         DispatchItem.state == "open", DispatchItem.urgent.is_(True)))
         if not (i.board and i.board in hidden))
 
+    # ---- ratings customers gave (agent #9, app/reviews): answered in the range
+    rating_rows = []
+    for r in db.scalars(select(ReviewRequest).where(
+            ReviewRequest.replied_at >= start, ReviewRequest.replied_at < end,
+            ReviewRequest.score.isnot(None)).order_by(ReviewRequest.replied_at)):
+        t = r.technician or UNKNOWN
+        if not board_ok(r.board) or not tech_ok(t):
+            continue
+        rating_rows.append({"day": _day(r.replied_at).isoformat(), "job": r.job_number,
+                            "customer": r.customer_name, "technician": t, "board": r.board,
+                            "score": r.score, "leak": r.leak, "said": r.reply,
+                            "to_improve": r.improve, "review_link_sent": r.link_sent})
+        per_tech[t]["ratings"] += 1
+        per_tech[t]["rating_sum"] += r.score
+        if r.score < 5 or r.leak:
+            per_tech[t]["low_ratings"] += 1
+    asked = sum(1 for _ in db.scalars(select(ReviewRequest.id).where(
+        ReviewRequest.asked_at >= start, ReviewRequest.asked_at < end,
+        ReviewRequest.asked_state == "sent")))
+
     tech_rows = []
     for t, v in sorted(per_tech.items(), key=lambda kv: -kv[1].get("repairs", 0)):
         reps = int(v.get("repairs", 0))
@@ -212,7 +233,10 @@ def compute(db: Session, first: date, last: date, *, hidden: set[str] = frozense
                           "callback_rate": round(cbs / reps, 3) if reps else None,
                           "still_leaking": int(v.get("still_leaking", 0)),
                           "upsells": int(v.get("upsells", 0)),
-                          "upsell_paid": round(v.get("upsell_paid", 0.0), 2)})
+                          "upsell_paid": round(v.get("upsell_paid", 0.0), 2),
+                          "avg_rating": round(v["rating_sum"] / v["ratings"], 2)
+                          if v.get("ratings") else None,
+                          "low_ratings": int(v.get("low_ratings", 0))})
     tiles = {
         "leads": leads, "inspections": len(inspected), "ahs_approvals": len(approved),
         "ahs_authorized": round(authorized, 2), "repairs": len(repaired),
@@ -222,6 +246,13 @@ def compute(db: Session, first: date, last: date, *, hidden: set[str] = frozense
         "upsells": len(upsell_rows), "upsell_paid": round(sum(r["paid"] for r in upsell_rows), 2),
         "retail_sold": round(sold, 2), "collected": round(collected / 100, 2),
         "overdue_work": overdue_work,
+        "ratings": len(rating_rows),
+        "avg_rating": round(sum(r["score"] for r in rating_rows) / len(rating_rows), 2)
+        if rating_rows else 0,
+        "five_star_pct": round(100 * sum(1 for r in rating_rows if r["score"] == 5)
+                               / len(rating_rows)) if rating_rows else 0,
+        "answered_pct": round(100 * len(rating_rows) / asked) if asked else 0,
+        "review_links": sum(1 for r in rating_rows if r["review_link_sent"]),
     }
     return {
         "first": first.isoformat(), "last": last.isoformat(), "tiles": tiles,
@@ -234,6 +265,7 @@ def compute(db: Session, first: date, last: date, *, hidden: set[str] = frozense
             "callback_requests": [_said(s) for s in said.get("callback_request", [])],
             "upsells": [dict(r, day=r["day"].isoformat() if r["day"] else None)
                         for r in upsell_rows],
+            "ratings": rating_rows,
         },
         "events": events,
     }
@@ -253,6 +285,9 @@ TILE_LABELS = {
     "praise": "Praise", "upsells": "Upsells", "upsell_paid": "Upsell paid ($)",
     "retail_sold": "Retail sold ($)", "collected": "Collected ($)",
     "overdue_work": "Overdue work (now)",
+    "ratings": "Ratings received", "avg_rating": "Average rating",
+    "five_star_pct": "5-star %", "answered_pct": "Answered the rating text %",
+    "review_links": "Review links sent",
 }
 # A rise is bad for these (shown red); good for the rest.
 LOWER_IS_BETTER = {"callbacks", "still_leaking", "callback_requests", "complaints",

@@ -87,6 +87,9 @@ def main() -> None:
     # Daily report & insights (2026-10-22): reads calls and texts once, raises customer issues.
     from .insights import service as insights_service
     insights_service.start_thread(SessionLocal, stop)
+    # Reviews & QC (2026-10-22): a finished job's customer is asked how we did.
+    from .reviews import service as reviews_service
+    reviews_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

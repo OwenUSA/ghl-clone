@@ -153,6 +153,9 @@ def handle(db: Session, conv: dict, now: datetime, s: DispatchSettings,
         return "nothing"
     if zconnect.our_line(conv) and zconnect.our_line(conv) != c.SENDER[-10:]:
         return "nothing"                      # a conversation on another Zuper line
+    from ..reviews import service as reviews  # the reviews agent asked them; it answers
+    if reviews.active_on(db, cust["phone"], now):
+        return "nothing"
     msgs = zconnect.messages(uid)
     other = talk.get(cust["phone"], []) if cust["phone"] else []
     mine = ours(db, cust["phone"])

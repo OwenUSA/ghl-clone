@@ -19,7 +19,7 @@ from . import metrics
 
 STEPS = 5
 TABLES = ("technicians", "callbacks", "still_leaking", "complaints", "callback_requests",
-          "upsells")
+          "upsells", "ratings")
 SERIES = ("leads", "inspections", "repairs", "callbacks", "still_leaking", "upsell_paid")
 SYSTEM = (
     "You answer questions about Dream Team Roofing's numbers using ONLY the tools. Ranges are "
@@ -37,7 +37,8 @@ TOOLS = [
                                                          "board": _STR, "technician": _STR},
                         "required": ["range"]}),
     providers.ToolSpec("breakdown", "A table: technicians, callbacks, still_leaking, "
-                       "complaints, callback_requests or upsells.",
+                       "complaints, callback_requests, upsells or ratings (what customers "
+                       "rated the finished repair, 1-5).",
                        {"type": "object", "properties": {"table": {"type": "string",
                                                                    "enum": list(TABLES)},
                                                          "range": _ENUM_R, "date": _STR,

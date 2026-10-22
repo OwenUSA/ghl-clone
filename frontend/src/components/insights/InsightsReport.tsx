@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { MicButton } from '../MicButton'
 import { useState } from 'react'
 import {
   insightsAsk, insightsCsvUrl, insightsExcelUrl, insightsPin, insightsReport, insightsResultExcelUrl,
@@ -23,6 +24,7 @@ const RANGES = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter'
 const TABLES: [string, string][] = [
   ['technicians', 'By technician'], ['callbacks', 'Callbacks'], ['still_leaking', 'Still leaking'],
   ['callback_requests', 'Asked us to come back'], ['complaints', 'Complaints'], ['upsells', 'Upsells'],
+  ['ratings', 'Ratings (Reviews & QC)'],
 ]
 const card: React.CSSProperties = { background: 'white', border: `1px solid ${LINE}`, borderRadius: 8,
   padding: 16 }
@@ -281,6 +283,7 @@ function Ask() {
         <input value={question} onChange={(e) => setQuestion(e.target.value)}
           placeholder="e.g. callbacks per technician last month"
           style={{ flex: 1, minWidth: 0, border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 10px', fontSize: 14 }} />
+        <MicButton value={question} onChange={setQuestion} disabled={ask.isPending} size={36} />
         <button type="submit" disabled={ask.isPending} style={{ background: BLUE, color: 'white',
           borderRadius: 6, padding: '8px 14px', fontSize: 14 }}>{ask.isPending ? 'Working…' : 'Ask'}</button>
       </form>

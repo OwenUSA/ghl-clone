@@ -2762,3 +2762,7 @@ export const insightsUnpin = (id: number) => send<{ deleted: boolean }>(`/api/in
 /** An Ask result / pinned KPI as Excel: the tool call goes, the server recomputes it. */
 export const insightsResultExcelUrl = (spec: InsightSpec) =>
   `${BASE}/api/insights/result.xlsx?spec=${encodeURIComponent(JSON.stringify(spec))}`
+
+// ---- speak instead of type in the AI chats (2026-10-22, app/speech.py) -------------------
+export const transcribeSpeech = (audio: Blob) =>
+  upload<{ text: string }>('/api/speech/transcribe', new File([audio], 'speech', { type: audio.type }))

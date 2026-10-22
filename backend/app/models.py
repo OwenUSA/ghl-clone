@@ -2743,3 +2743,41 @@ class InsightSavedKpi(Base):
     created_by_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class ReviewRequest(Base):
+    """Agent #9, Reviews & QC (2026-10-22, app/reviews): one finished job's satisfaction check.
+    Recorded BEFORE each text or call is sent, never retried. `state`:
+    planned | asked | improve | needs_person | done | no_reply | skipped."""
+    __tablename__ = "review_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_uid: Mapped[str] = mapped_column(String(64), unique=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120))
+    customer_uid: Mapped[str | None] = mapped_column(String(64))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(20), index=True)
+    technician: Mapped[str | None] = mapped_column(String(120))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(20), index=True)
+    reason: Mapped[str | None] = mapped_column(String(300))
+    asked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    asked_body: Mapped[str | None] = mapped_column(Text)
+    # sending | sent | shadow | failed
+    asked_state: Mapped[str | None] = mapped_column(String(20))
+    score: Mapped[int | None] = mapped_column(Integer)
+    reply: Mapped[str | None] = mapped_column(Text)
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    leak: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    improve: Mapped[str | None] = mapped_column(Text)
+    link_sent: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # every text after the first, oldest first: [{"at", "body", "state"}]
+    texts: Mapped[list | None] = mapped_column(NullableJSONType)
+    seen_uids: Mapped[list | None] = mapped_column(NullableJSONType)
+    call_state: Mapped[str | None] = mapped_column(String(20))
+    call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    item_id: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
