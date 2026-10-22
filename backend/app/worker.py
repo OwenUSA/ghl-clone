@@ -78,6 +78,9 @@ def main() -> None:
     # The post-inspection report (2026-10-21): a draft report after photos go quiet.
     from .inspection_report import service as report_service
     report_service.start_thread(SessionLocal, stop)
+    # The technicians' day-before briefing (2026-10-21): tomorrow's jobs, findings, tools.
+    from .tech_briefing import service as briefing_service
+    briefing_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:

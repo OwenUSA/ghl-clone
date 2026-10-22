@@ -140,6 +140,16 @@ def inspection_report_enabled() -> bool:
     return _flag("INSPECTION_REPORT_ENABLED", False)
 
 
+TECH_BRIEFING_OFF_SENTENCE = ("The field technician briefing is switched off on this server "
+                              "(TECH_BRIEFING_ENABLED is not set).")
+
+
+def tech_briefing_enabled() -> bool:
+    """The server's gate on the technicians' day-before briefing (2026-10-21,
+    app/tech_briefing). Off unless the deployment says so."""
+    return _flag("TECH_BRIEFING_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:
