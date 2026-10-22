@@ -30,7 +30,7 @@ def is_ack(text: str) -> bool:
     return t in ACKS
 
 
-QUEUES = ("new", "after_visit", "missed", "book", "zuper", "visits", "stale")
+QUEUES = ("new", "after_visit", "missed", "book", "zuper", "visits", "stale", "collect")
 QUEUE_LABEL = {
     "new": "New jobs not called",
     "after_visit": "After inspection / repair",
@@ -39,6 +39,7 @@ QUEUE_LABEL = {
     "zuper": "Update Zuper",
     "visits": "Today & tomorrow",
     "stale": "Gone quiet",
+    "collect": "Payments to collect",
 }
 # Items a FEED writes rather than these rules — an AHS authorization note from owen-main
 # (app/ahs_authorizations.py, 2026-10-01), and a caller's change request a voice agent passed
@@ -48,7 +49,7 @@ QUEUE_LABEL = {
 # ... and an inspection or repair missing its details (app/inspection_docs, 2026-10-21),
 # which that agent resolves itself when the details appear.
 FED_KINDS = frozenset({"ahs_approved", "ahs_items_updated", "ai_change_request",
-                       "missing_docs", "report_ready"})
+                       "missing_docs", "report_ready", "payment_due"})
 
 
 @dataclass

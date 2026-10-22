@@ -42,6 +42,7 @@ export function viewFromPath(pathname: string): string | null {
   if (path === '/opportunities') return 'opportunities'
   if (path === '/ai-agents') return 'ai-agents'
   if (path === '/dispatch') return 'dispatch'
+  if (path === '/collections') return 'collections'
   if (path === '/settings' || path.startsWith('/settings/')) return 'settings'
   return null
 }

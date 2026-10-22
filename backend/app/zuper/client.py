@@ -136,6 +136,7 @@ def dispatch_write():
 
 _AUTOREPLY: ContextVar[bool] = ContextVar("zuper_autoreply", default=False)
 _FOLLOWUP: ContextVar[bool] = ContextVar("zuper_followup", default=False)
+_PAYMENTS: ContextVar[bool] = ContextVar("zuper_payments", default=False)
 
 
 @contextlib.contextmanager
@@ -173,6 +174,18 @@ def followup_write():
         _FOLLOWUP.reset(token)
 
 
+@contextlib.contextmanager
+def payments_write():
+    """The payments agent's customer reminder (2026-10-21; app/payments): the SAME send in the
+    same exact shape as the auto-reply's, under its own server gate PAYMENTS_TEXTS_ENABLED.
+    Opened by app/payments/service.py only, and only when an admin promoted its reminders."""
+    token = _PAYMENTS.set(True)
+    try:
+        yield
+    finally:
+        _PAYMENTS.reset(token)
+
+
 def _send_scope() -> tuple[bool, bool, str, str]:
     """(inside a send scope, its server gate is on, its off-sentence, its name)."""
     if _AUTOREPLY.get():
@@ -180,6 +193,9 @@ def _send_scope() -> tuple[bool, bool, str, str]:
     if _FOLLOWUP.get():
         return (True, config.followup_enabled(), config.FOLLOWUP_OFF_SENTENCE,
                 "call follow-up")
+    if _PAYMENTS.get():
+        return (True, config.payments_texts_enabled(), config.PAYMENTS_TEXTS_OFF_SENTENCE,
+                "payments agent")
     return False, False, "", ""
 
 

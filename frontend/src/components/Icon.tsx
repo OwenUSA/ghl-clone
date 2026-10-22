@@ -166,6 +166,14 @@ export const IconDispatch = make(
     <path d="M9 14l2 2 4-4" />
   </>,
 )
+// Collections (2026-10-21): a banknote.
+export const IconCollections = make(
+  <>
+    <rect x="2" y="6" width="20" height="12" rx="2" />
+    <circle cx="12" cy="12" r="2.5" />
+    <path d="M6 10v4M18 10v4" />
+  </>,
+)
 export const IconFilter = make(<path d="M4 5h16M7 12h10M10 19h4" />)
 
 export const IconDownload = make(

@@ -165,6 +165,10 @@ app.include_router(ahs_authorizations.router)
 from .inspection_report import api as inspection_report_api  # noqa: E402
 
 app.include_router(inspection_report_api.router)
+# Payments & collections (2026-10-21, app/payments).
+from .payments import api as payments_api  # noqa: E402
+
+app.include_router(payments_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

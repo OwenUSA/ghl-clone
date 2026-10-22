@@ -81,6 +81,9 @@ def main() -> None:
     # The technicians' day-before briefing (2026-10-21): tomorrow's jobs, findings, tools.
     from .tech_briefing import service as briefing_service
     briefing_service.start_thread(SessionLocal, stop)
+    # Payments & collections (2026-10-21): due items, Zuper suggestions, screenshots.
+    from .payments import service as payments_service
+    payments_service.start_thread(SessionLocal, stop)
     while True:
         try:
             if drain_once() == 0:
