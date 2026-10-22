@@ -644,7 +644,28 @@ def rules() -> list[dict]:
          "(owner's decision, 2026-09-15). AI agents' “stage entered” triggers are "
          "separate and follow each agent's own Off / Suggest / Auto-pilot setting."},
         _ai_call_notify_rule(),
+        _dropped_call_rule(),
     ]
+
+
+# The ONE rule that texts a customer and may be On (2026-10-22): the owner lifted "no automatic
+# texts" for this text only. tests/test_sms_live.py names it as the single exception.
+OWNER_APPROVED_CUSTOMER_TEXTS = frozenset({"dropped_call_text"})
+
+
+def _dropped_call_rule() -> dict:
+    from . import dropped_call
+    on = dropped_call.enabled()
+    return {
+        "key": "dropped_call_text", "name": "Caller left an AI call → text them",
+        "trigger": "An inbound call an AI agent answered, where the caller left before being "
+                   "helped (the AI reads the call's summary)",
+        "texts_customer": True, "enabled": on,
+        "reason": ("On. The owner's decision (2026-10-22): \"Sorry we couldn't take your call, "
+                   "we will call you back as soon as possible.\" Once a day at most, never "
+                   "after STOP or after a person called back, 8 AM-8 PM.") if on else
+                  "Off. Set %s on the server to send it (owner-approved 2026-10-22)."
+                  % dropped_call.ENV}
 
 
 def _ai_call_notify_rule() -> dict:

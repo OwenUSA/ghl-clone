@@ -86,8 +86,11 @@ def test_every_rule_that_texts_a_customer_is_off():
     # texts nobody and places no call — pinned below.
     not_a_rule = {"ai_agent_run", "fetch_message_media", "ai_voice_push"}
     assert set(rules) == set(automations.HANDLERS) - not_a_rule
+    # The owner lifted "no automatic texts" for ONE text (2026-10-22): the caller who left an
+    # AI call before being helped. Nothing else that texts a customer may be On.
+    assert {"dropped_call_text"} == automations.OWNER_APPROVED_CUSTOMER_TEXTS
     for key, r in rules.items():
-        if r["texts_customer"]:
+        if r["texts_customer"] and key not in automations.OWNER_APPROVED_CUSTOMER_TEXTS:
             assert r["enabled"] is False and r["reason"].startswith("Off."), key
 
 
