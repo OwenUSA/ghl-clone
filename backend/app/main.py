@@ -32,6 +32,7 @@ from . import (
     crmlink,
     custom_fields,
     dlr,
+    dropped_call,
     lead_outcomes,
     live_calls,
     media_api,
@@ -1923,6 +1924,8 @@ def _ingest_to_number(db: Session, body: EventIngest, key: str) -> dict:
     pictures = _plan_pictures(db, ev, body)
     # The office's text about an AI call (2026-10-06): ONE queued job, ~120 s later.
     ai_call_notify.maybe_enqueue(db, ev, body.from_number)
+    # A caller who left the AI's call before being helped (2026-10-22).
+    dropped_call.maybe_enqueue(db, ev, body.from_number)
     db.commit()
     return {"id": ev.id, "conversation_id": None, "number_thread_id": thread.id,
             "contact_id": None, "attachments_expected": pictures,
@@ -1960,6 +1963,7 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
                 # The call became an AI call only on this report. Queued once per call —
                 # the job's dedupe key makes every later merge a no-op (2026-10-06).
                 ai_call_notify.maybe_enqueue(db, seen, body.from_number)
+                dropped_call.maybe_enqueue(db, seen, body.from_number)
             if filled:
                 db.commit()
             if isinstance(seen, NumberThreadEvent):
@@ -2062,6 +2066,8 @@ def ingest_event(body: EventIngest, db: Session = Depends(get_db),
         ai_triggers.inbound_event(db, contact, conv, ev)
     pictures = _plan_pictures(db, ev, body)
     ai_call_notify.maybe_enqueue(db, ev, body.from_number)
+    # A caller who left the AI's call before being helped (2026-10-22).
+    dropped_call.maybe_enqueue(db, ev, body.from_number)
     db.commit()
     return {"id": ev.id, "conversation_id": conv.id, "contact_id": contact.id,
             "attachments_expected": pictures, "automation": outcome}

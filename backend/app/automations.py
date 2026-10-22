@@ -590,6 +590,14 @@ def _h_ai_call_notify(db: Session, payload: dict) -> None:
     ai_call_notify.handle_job(db, payload)
 
 
+def _h_dropped_call_text(db: Session, payload: dict) -> None:
+    """Text a caller who left an AI call before being helped (2026-10-22, the owner's lift of
+    "no automatic texts" for this text only). Never raises, never retried. See
+    app/dropped_call.py."""
+    from . import dropped_call
+    dropped_call.handle_job(db, payload)
+
+
 HANDLERS = {
     "missed_call_textback": _h_missed_call,
     "new_lead_notify": _h_new_lead,
@@ -599,6 +607,7 @@ HANDLERS = {
     "fetch_message_media": _h_fetch_message_media,
     "ai_voice_push": _h_ai_voice_push,
     "ai_call_notify": _h_ai_call_notify,
+    "dropped_call_text": _h_dropped_call_text,
 }
 
 

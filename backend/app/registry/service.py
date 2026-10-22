@@ -50,7 +50,8 @@ MICRO = 1_000_000
 # Dispatch AI runs (`dispatch_ai_runs.kind`) that belong to an entry other than the assistant.
 DISPATCH_AI_KINDS = {"availability": "availability_reader", "inspection": "inspection_docs",
                      "briefing": "tech_briefing", "payments": "payments",
-                     "insights": "insights", "reviews": "reviews"}
+                     "insights": "insights", "reviews": "reviews",
+                     "dropped_call": "dropped_call_text"}
 
 
 def _dispatch_kind_filter(key: str):
@@ -447,6 +448,13 @@ def _status(db: Session, v: View) -> dict:
                         "pass is off on this server (PAYMENTS_ENABLED)."}
             return {"state": "on", "sentence": "On; customer reminders %s." % cat.LEVEL_LABEL[
                 level(db, v.key, "send_customer")].lower()}
+        if v.key == "dropped_call_text":
+            from .. import dropped_call
+            if not dropped_call.enabled():
+                return {"state": "off", "sentence": "Off on this server "
+                        "(DROPPED_CALL_TEXTS_ENABLED)."}
+            return {"state": "on", "sentence": "On: texts %s." % cat.LEVEL_LABEL[
+                level(db, v.key, "send_text")].lower()}
         if v.key == "weather":
             from ..weather import config as wconf
             from ..weather import service as wsvc
@@ -785,6 +793,15 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
                             .limit(limit)):
             add("payments", r.created_at, "change", "%s%s (via %s)" % (
                 r.summary, " - undone" if r.undone_at else "", r.via), tone="info")
+    if key in (None, "dropped_call_text"):
+        for r in db.scalars(select(AgentRegistryLog).where(
+                AgentRegistryLog.entry_key == "dropped_call_text",
+                AgentRegistryLog.what.in_(("text", "shadow", "skipped")))
+                .order_by(AgentRegistryLog.id.desc()).limit(limit)):
+            add("dropped_call_text", r.at, r.what, "%s %s: %s" % (
+                {"text": "Texted", "shadow": "Would have texted", "skipped": "Not texted"}[
+                    r.what], r.target or "", r.reason or ""),
+                tone={"text": "good", "skipped": "muted"}.get(r.what, "info"))
     if key in (None, "weather"):
         for r in db.scalars(select(AgentRegistryLog).where(
                 AgentRegistryLog.entry_key == "weather",

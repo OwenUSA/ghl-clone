@@ -195,6 +195,15 @@ def reviews_texts_enabled() -> bool:
     return _flag("REVIEWS_TEXTS_ENABLED", False)
 
 
+DROPPED_CALL_OFF_SENTENCE = ("The text to callers who left an AI call is switched off on this "
+                             "server (DROPPED_CALL_TEXTS_ENABLED is not set).")
+
+
+def dropped_call_texts_enabled() -> bool:
+    """The server's gate on app/dropped_call.py (2026-10-22)."""
+    return _flag("DROPPED_CALL_TEXTS_ENABLED", False)
+
+
 def api_key() -> str:
     key = os.getenv("ZUPER_API_KEY", "").strip()
     if key:

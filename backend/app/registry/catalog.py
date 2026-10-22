@@ -346,6 +346,27 @@ ENTRIES: tuple[Entry, ...] = (
                "Send an address or a name to the weather service"),
         owner_hint="Luis", tags=("settings",),
     ),
+    Entry(
+        key="dropped_call_text", name="Dropped-call text", kind="agent", role=1,
+        purpose="When a caller leaves Anisa's call before being helped - hung up right away "
+                "or mid-conversation, said nothing, or a transfer nobody answered - texts them "
+                "\"Sorry we couldn't take your call, we will call you back as soon as "
+                "possible.\" The AI decides from the call's summary.",
+        covers="Every inbound call an AI agent answered.",
+        channels=("Text from the Zuper line (954) 420-7373 (Zuper customers)",
+                  "Text from the CRM line (callers Zuper does not know)"),
+        runs_on="CRM", provider="DeepSeek", hours="8 AM-8 PM Mon-Sat (night calls: 8 AM)",
+        actions=(
+            Action("send_text", AUTO, (NEVER, SHADOW, AUTO),
+                   "Live for everyone (the owner, 2026-10-22). Also needs "
+                   "DROPPED_CALL_TEXTS_ENABLED."),
+            Action("ai_read", AUTO, (), "Decides from the call's summary whether the caller "
+                                        "left before being helped."),
+        ),
+        never=("Text a call a person took", "Text twice in a day", "Text after STOP",
+               "Text someone the team already called back"),
+        owner_hint="Luis",
+    ),
     # ------------------------------------------------------------------ automations
     Entry(
         key="dispatch_flags", name="Dispatch items and bell", kind="automation", role=10,
