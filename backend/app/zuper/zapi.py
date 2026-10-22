@@ -384,6 +384,18 @@ def job_notes(job_uid: str) -> list[dict]:
     return rows_of(request("GET", path("job_notes", uid=job_uid)))
 
 
+def job_albums(job_uid: str) -> dict[str, int]:
+    """A job's photo albums -> how many pictures each holds (2026-10-22). Albums are copied
+    onto a job when it is CREATED from Settings -> Jobs -> Gallery Settings, so an older job has
+    only the albums that existed then."""
+    out: dict[str, int] = {}
+    for row in rows_of(request("GET", path("job_folders"), params={
+            "filter.module": "JOB", "filter.module_uid": job_uid})):
+        if isinstance(row, dict) and row.get("folder_name"):
+            out[str(row["folder_name"]).strip()] = int(row.get("attachment_count") or 0)
+    return out
+
+
 def create_note(job_uid: str, body: dict) -> str:
     return create_first_accepted("note", path("job_notes", uid=job_uid), [
         ("flat", dict(body)), ("note", {"note": dict(body)})], "note_uid")

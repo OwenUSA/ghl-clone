@@ -40,6 +40,11 @@ REQUIRED = {
     "inspection": ("leak_location", "tools_materials", "time_estimate", "photos", "video"),
     "repair": ("photos", "video"),
 }
+# The albums an inspection must fill (2026-10-22, the user): at least one picture in each one
+# the job HAS - a job created before an album existed is never asked for it. "Leaks" is not
+# required. Matched without case.
+INSPECTION_ALBUMS = ("360 Roof", "360 Ground", "360 Attic", "For the Owner")
+ALBUM = "album:"
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".3gp", ".webm", ".avi", ".mkv")
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic")
 EMPTY = {"", "-", "n/a", "na", "none", "no", "tbd", "?", "null"}
@@ -57,6 +62,7 @@ class Evidence:
     details: dict[str, Found] = field(default_factory=dict)
     photos: int = 0
     videos: int = 0
+    albums: dict[str, int] | None = None     # album name -> pictures; None = not read
 
     def add(self, key: str, f: Found) -> None:
         if key in DETAILS and key not in self.details and filled(f.value):
@@ -148,7 +154,18 @@ def missing(kind: str, ev: Evidence) -> list[str]:
                 out.append(need)
         elif need not in ev.details:
             out.append(need)
+    if kind == "inspection":
+        out += empty_albums(ev.albums)
     return out
+
+
+def empty_albums(albums: dict[str, int] | None) -> list[str]:
+    """"album:<name>" for each required album the job has with no picture in it."""
+    if not albums:
+        return []
+    have = {k.strip().lower(): v for k, v in albums.items()}
+    return [ALBUM + name for name in INSPECTION_ALBUMS
+            if name.lower() in have and have[name.lower()] <= 0]
 
 
 def _norm(s: str) -> str:
@@ -162,7 +179,8 @@ def quote_ok(quote: str, sources: str) -> bool:
 
 
 def words(items: list[str]) -> str:
-    names = [LABEL.get(x, x) for x in items]
+    names = [("pictures in " + x[len(ALBUM):]) if x.startswith(ALBUM) else LABEL.get(x, x)
+             for x in items]
     if len(names) <= 1:
         return "".join(names)
     return ", ".join(names[:-1]) + " and " + names[-1]
