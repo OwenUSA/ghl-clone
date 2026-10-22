@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -163,14 +164,19 @@ def insights_ask(body: AskIn, principal: auth.Principal = VIEW, db: Session = De
     return ask.answer(db, body.question, hidden=_hidden(db, principal))
 
 
-class ResultIn(BaseModel):
-    result: dict
-
-
-@router.post("/result.xlsx")
-def insights_result_excel(body: ResultIn, principal: auth.Principal = VIEW):
-    data = excel.result_workbook(body.result)
-    return StreamingResponse(io.BytesIO(data), media_type=XLSX,
+@router.get("/result.xlsx")
+def insights_result_excel(spec: str, principal: auth.Principal = VIEW,
+                          db: Session = Depends(get_db)):
+    """An Ask result (or a pinned KPI) as Excel: the TOOL CALL is sent, never the numbers, and
+    recomputed here for this reader - hidden boards stay hidden."""
+    try:
+        parsed = json.loads(spec)
+    except ValueError:
+        raise HTTPException(422, "spec is not JSON") from None
+    if not isinstance(parsed, dict) or parsed.get("tool") not in ("kpis", "breakdown", "trend"):
+        raise HTTPException(422, "only a result from Ask can be downloaded")
+    res = ask.run_spec(db, parsed, hidden=_hidden(db, principal), today=_today())
+    return StreamingResponse(io.BytesIO(excel.result_workbook(res)), media_type=XLSX,
                              headers={"Content-Disposition": 'attachment; filename="KPI.xlsx"'})
 
 

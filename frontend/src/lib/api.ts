@@ -2759,13 +2759,6 @@ export const insightsAsk = (question: string) =>
 export const insightsPin = (name: string, spec: InsightSpec) =>
   send<{ id: number }>('/api/insights/saved', 'POST', { name, spec })
 export const insightsUnpin = (id: number) => send<{ deleted: boolean }>(`/api/insights/saved/${id}`, 'DELETE')
-/** One Ask result as an Excel file (a POST, so it is fetched and handed over as a blob). */
-export async function insightsResultExcel(result: InsightResult): Promise<Blob> {
-  const r = await fetch(BASE + '/api/insights/result.xlsx', {
-    method: 'POST', credentials: 'include',
-    headers: { 'X-CSRF-Token': cookie('ghl_csrf') ?? '', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ result }),
-  })
-  if (!r.ok) throw await failed(r)
-  return r.blob()
-}
+/** An Ask result / pinned KPI as Excel: the tool call goes, the server recomputes it. */
+export const insightsResultExcelUrl = (spec: InsightSpec) =>
+  `${BASE}/api/insights/result.xlsx?spec=${encodeURIComponent(JSON.stringify(spec))}`

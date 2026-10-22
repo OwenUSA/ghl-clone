@@ -231,6 +231,9 @@ def test_the_api_access_pin_and_excel(world):
     x = d.get("/api/insights/report.xlsx", params={"range": "month"})
     wb = load_workbook(io.BytesIO(x.content))
     assert "Summary" in wb.sheetnames and "Technicians" in wb.sheetnames
+    spec = json.dumps({"tool": "trend", "args": {"series": "leads", "range": "week"}})
+    one = d.get("/api/insights/result.xlsx", params={"spec": spec})
+    assert load_workbook(io.BytesIO(one.content)).sheetnames == ["Result"]
     csv = d.get("/api/insights/table/callbacks.csv").content.decode("utf-8-sig")
     assert csv.splitlines()[0]
     assert d.delete("/api/insights/saved/%d" % rep["pinned"][0]["id"]).json()["deleted"]

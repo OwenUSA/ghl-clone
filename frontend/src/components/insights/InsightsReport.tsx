@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
-  insightsAsk, insightsCsvUrl, insightsExcelUrl, insightsPin, insightsReport, insightsResultExcel,
+  insightsAsk, insightsCsvUrl, insightsExcelUrl, insightsPin, insightsReport, insightsResultExcelUrl,
   insightsUnpin, type InsightFilters, type InsightResult, type InsightSpec,
 } from '../../lib/api'
 import { toCsv } from '../../lib/csv'
@@ -121,7 +121,7 @@ export function InsightsReport() {
 
           {r.pinned.length > 0 && (
             <Section title="Pinned KPIs">
-              {r.pinned.map((p) => <Pinned key={p.id} id={p.id} name={p.name} result={p.result} />)}
+              {r.pinned.map((p) => <Pinned key={p.id} id={p.id} name={p.name} result={p.result} spec={p.spec} />)}
             </Section>
           )}
 
@@ -233,24 +233,18 @@ function ResultView({ result }: { result: InsightResult }) {
   )
 }
 
-function downloads(result: InsightResult, name: string) {
+function downloads(result: InsightResult, name: string, spec: InsightSpec) {
   return (
     <span className="flex gap-3" style={{ fontSize: 13 }}>
       <button style={{ color: BLUE }} onClick={() => downloadCsv(`${name}.csv`, toCsv(result.columns,
         result.rows))}>CSV</button>
-      <button style={{ color: BLUE }} onClick={async () => {
-        const blob = await insightsResultExcel(result)
-        const a = document.createElement('a')
-        a.href = URL.createObjectURL(blob)
-        a.download = `${name}.xlsx`
-        a.click()
-        URL.revokeObjectURL(a.href)
-      }}>Excel</button>
+      <a href={insightsResultExcelUrl(spec)} download style={{ color: BLUE }}>Excel</a>
     </span>
   )
 }
 
-function Pinned({ id, name, result }: { id: number; name: string; result: InsightResult }) {
+function Pinned({ id, name, result, spec }: { id: number; name: string; result: InsightResult;
+  spec: InsightSpec }) {
   const qc = useQueryClient()
   const unpin = useMutation({ mutationFn: () => insightsUnpin(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }) })
@@ -259,7 +253,7 @@ function Pinned({ id, name, result }: { id: number; name: string; result: Insigh
       <div className="flex items-center gap-3" style={{ marginBottom: 6 }}>
         <div style={{ fontWeight: 500, color: INK }}>{name}</div>
         <div style={{ marginLeft: 'auto' }} className="flex gap-3">
-          {downloads(result, name)}
+          {downloads(result, name, spec)}
           <button style={{ color: GREY, fontSize: 13 }} onClick={() => unpin.mutate()}>Unpin</button>
         </div>
       </div>
@@ -298,7 +292,7 @@ function Ask() {
           {answer.result && (
             <>
               <div className="flex items-center gap-3" style={{ marginBottom: 6 }}>
-                {downloads(answer.result, 'KPI')}
+                {answer.spec && downloads(answer.result, 'KPI', answer.spec)}
                 {answer.spec && (
                   <button style={{ color: BLUE, fontSize: 13 }} disabled={pin.isPending || pin.isSuccess}
                     onClick={() => pin.mutate({ name: answer.q.slice(0, 200), spec: answer.spec! })}>
