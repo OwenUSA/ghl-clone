@@ -239,3 +239,24 @@ def test_the_ai_only_picks_approved_guides_and_they_reach_the_pdf(world, report)
     finally:
         db.close()
     assert text.startswith(b"%PDF") and len(text) > 1000
+
+
+def test_nothing_internal_reaches_the_homeowner():
+    """2026-10-23 (#681): the report said "The technician's notes identify the job as new
+    gutters" and "No active leak is documented in the technician's notes"."""
+    d = rules.accept({**GOOD, "summary": "The photos show worn patching at the wall. No active "
+                                         "leak is documented in the technician's notes.",
+                      "findings": ["Dark patching at the roof-to-wall joint.",
+                                   ("The technician's notes identify the job as new gutters; the "
+                                   "photos show roof conditions rather than gutter details.")]},
+                     candidates=3, max_photos=6)
+    assert d.summary == "The photos show worn patching at the wall."
+    assert d.findings == ["Dark patching at the roof-to-wall joint."]
+    assert len(d.dropped) == 2
+    from app.inspection_report import pdf
+    assert pdf.clean_address("3 BALFOUR CT, PALM BEACH GARDENS, FL 33418 - 7021") == \
+        "3 BALFOUR CT, PALM BEACH GARDENS, FL 33418"
+    assert pdf.clean_address("8216 171ST TERSW, MIAMI, FL 33157-4729") == \
+        "8216 171ST TERSW, MIAMI, FL 33157"
+    assert pdf.clean_address("1 Main St, Bradenton") == "1 Main St, Bradenton"
+
