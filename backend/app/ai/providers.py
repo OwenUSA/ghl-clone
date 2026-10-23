@@ -198,7 +198,10 @@ class Provider:
         self.base_url = base_url
 
     def complete(self, *, system: str, messages: list[dict], tools: list[ToolSpec],
-                 model: str, max_tokens: int = 4096) -> Turn:
+                 model: str, max_tokens: int = 4096, think: bool = True) -> Turn:
+        """`think=False` (2026-10-23): a short classification that needs no reasoning - DeepSeek
+        gets `thinking: disabled`, OpenAI `reasoning_effort: none`; cheaper, faster, and the
+        whole limit goes to the answer. Ignored where a provider has no such switch."""
         raise NotImplementedError
 
     def list_models(self) -> list[str]:
@@ -258,7 +261,8 @@ class AnthropicProvider(Provider):
                     for r in m["results"]]})
         return out
 
-    def complete(self, *, system, messages, tools, model, max_tokens=4096) -> Turn:
+    def complete(self, *, system, messages, tools, model, max_tokens=4096,
+                 think: bool = True) -> Turn:
         kwargs = {
             "model": model,
             "max_tokens": max_tokens,
@@ -336,8 +340,16 @@ class OpenAIProvider(Provider):
                            for r in m["results"])
         return out
 
-    def complete(self, *, system, messages, tools, model, max_tokens=4096) -> Turn:
+    thinking_switch = False      # DeepSeek: `thinking: {"type": "disabled"}`
+
+    def complete(self, *, system, messages, tools, model, max_tokens=4096,
+                 think: bool = True) -> Turn:
         kwargs: dict = {"model": model, "messages": self._messages(system, messages)}
+        if not think:
+            if self.thinking_switch:
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            elif not self.compatible:
+                kwargs["reasoning_effort"] = "none"
         # OpenAI's own current models take max_completion_tokens; most compatible servers
         # still only understand max_tokens.
         kwargs["max_tokens" if self.compatible else "max_completion_tokens"] = max_tokens
@@ -353,14 +365,15 @@ class OpenAIProvider(Provider):
                 self.echo_reasoning = False
                 try:
                     return self.complete(system=system, messages=messages, tools=tools,
-                                         model=model, max_tokens=max_tokens)
+                                         model=model, max_tokens=max_tokens, think=think)
                 finally:
                     self.echo_reasoning = True
             # Some reasoning models (gpt-6-luna, live 2026-10-01) refuse function tools on
             # chat.completions unless reasoning is off: "Function tools with reasoning_effort
             # are not supported ... set reasoning_effort to 'none'". Only that refusal, only
             # with tools, retried ONCE with reasoning off; every other request is unchanged.
-            if not (tools and "reasoning_effort" in str(e) and not self.compatible):
+            if "reasoning_effort" in kwargs or not (
+                    tools and "reasoning_effort" in str(e) and not self.compatible):
                 raise _sentence(e, self.who, model, self.api_key) from None
             try:
                 resp = self._client().chat.completions.create(
@@ -427,6 +440,7 @@ class CompatibleProvider(OpenAIProvider):
 class DeepSeekProvider(CompatibleProvider):
     who = "DeepSeek"
     echo_reasoning = True
+    thinking_switch = True
 
     def __init__(self, api_key: str, base_url: str | None = None):
         super().__init__(api_key, base_url or DEEPSEEK_BASE_URL)

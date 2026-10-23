@@ -244,6 +244,7 @@ def read_reply(db: Session, text: str, now: datetime) -> tuple[int | None, bool,
     try:
         prov, model = dai.provider_for(db, now, entry=c.KEY)
         turn = prov.complete(system=READ_SYSTEM, tools=[], model=model, max_tokens=REASONING_ROOM,
+                             think=False,
                              messages=[{"role": "user", "content": text[:1500]}])
     except (dai.Unavailable, providers.ProviderError) as e:
         log.info("a review reply was not read: %s", e)

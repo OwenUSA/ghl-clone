@@ -157,7 +157,7 @@ def tag(db: Session, now: datetime, s: c.Settings) -> dict:
                             "text": it.text[:3000]} for i, it in enumerate(batch)}
         try:
             turn = prov.complete(system=SYSTEM, tools=[], model=model,
-                                 max_tokens=REASONING_ROOM * 2,
+                                 max_tokens=REASONING_ROOM * 2, think=False,
                                  messages=[{"role": "user", "content": json.dumps(
                                      payload, ensure_ascii=False)}])
         except providers.ProviderError as e:

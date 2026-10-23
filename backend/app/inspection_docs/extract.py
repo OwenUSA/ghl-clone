@@ -60,6 +60,7 @@ def find(db: Session, sources: list[tuple[str, str]], wanted: list[str],
     joined = joined[:MAX_SOURCE_CHARS]
     try:
         turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=REASONING_ROOM,
+                             think=False,
                              messages=[{"role": "user", "content": json.dumps(
                                  {"find": wanted, "sources": joined}, ensure_ascii=False)}])
     except providers.ProviderError as e:

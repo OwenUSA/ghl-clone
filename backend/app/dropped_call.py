@@ -144,6 +144,7 @@ def decide(db: Session, ai: dict, now: datetime) -> tuple[bool | None, str]:
     try:
         prov, model = dai.provider_for(db, now, entry=KEY)
         turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=REASONING_ROOM,
+                             think=False,
                              messages=[{"role": "user", "content": json.dumps(facts)}])
     except (dai.Unavailable, providers.ProviderError) as e:
         return None, "the AI could not decide: %s" % e
