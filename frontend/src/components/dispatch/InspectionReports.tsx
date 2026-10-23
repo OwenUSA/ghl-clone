@@ -69,7 +69,8 @@ function Review({ id, isAdmin }: { id: number; isAdmin: boolean }) {
   const fail = (e: Error) => setError(e.message)
   const save = useMutation({ mutationFn: () => editInspectionReport(id, {
     title: draft?.title ?? '', summary: draft?.summary ?? '', findings: draft?.findings ?? [],
-    photos: (draft?.photos ?? []).map((p) => ({ sha: p.sha, caption: p.caption ?? '' })) }),
+    photos: (draft?.photos ?? []).map((p) => ({ sha: p.sha, caption: p.caption ?? '' })),
+    guides: (draft?.guides ?? []).map((g) => g.key) }),
   onSuccess: done, onError: fail })
   const approve = useMutation({ mutationFn: () => approveInspectionReport(id), onSuccess: done, onError: fail })
   const discard = useMutation({ mutationFn: () => discardInspectionReport(id), onSuccess: done, onError: fail })
@@ -148,6 +149,7 @@ function Review({ id, isAdmin }: { id: number; isAdmin: boolean }) {
           </figure>
         ))}
       </div>
+      <Guides draft={draft} editable={editable} onChange={(guides) => set({ guides })} />
       {editable && unused.length > 0 && <>
         <div style={{ fontSize: 12, color: MUTED }}>Other pictures from the visit — click to add</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -164,3 +166,43 @@ function Review({ id, isAdmin }: { id: number; isAdmin: boolean }) {
     </article>
   )
 }
+
+const MAX_GUIDES = 3
+
+/** "Understanding your roof" (2026-10-22): the approved guides at the end of the report. The AI
+ *  picks them; a reviewer adds or removes them here (at most 3). The text is the library's,
+ *  never edited per report; a newly added guide's text shows after "Save changes". */
+function Guides({ draft, editable, onChange }: { draft: InspectionReportDetail; editable: boolean
+  onChange: (g: InspectionReportDetail['guides']) => void }) {
+  const chosen = draft.guides ?? []
+  const has = (k: string) => chosen.some((g) => g.key === k)
+  const toggle = (k: string, title: string) => onChange(has(k) ? chosen.filter((g) => g.key !== k)
+    : [...chosen, { key: k, title, body: '' }])
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontSize: 12, color: MUTED }}>Understanding your roof — guides at the end of
+        the report ({chosen.length}/{MAX_GUIDES})</div>
+      {chosen.map((g) => (
+        <div key={g.key} style={{ borderLeft: `3px solid ${COPPER}`, paddingLeft: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>{g.title}</div>
+          <div style={{ fontSize: 13, color: g.body ? INK : MUTED }}>
+            {g.body || 'Added — its text appears after Save changes.'}</div>
+        </div>
+      ))}
+      {!chosen.length && <div style={{ fontSize: 13, color: MUTED }}>No guide in this report.</div>}
+      {editable && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {(draft.guide_catalog ?? []).map((g) => (
+          <label key={g.key} title={g.about} style={{ fontSize: 12, display: 'inline-flex',
+            alignItems: 'center', gap: 4, border: `1px solid ${LINE}`, borderRadius: 4,
+            padding: '3px 8px', color: INK }}>
+            <input type="checkbox" checked={has(g.key)}
+              disabled={!has(g.key) && chosen.length >= MAX_GUIDES}
+              onChange={() => toggle(g.key, g.title)} />
+            {g.title}
+          </label>
+        ))}
+      </div>}
+    </section>
+  )
+}
+

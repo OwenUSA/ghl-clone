@@ -118,6 +118,7 @@ def build(db: Session, r: InspectionReport, j: DispatchJob, s: c.Settings,
                  "taken_at": cands[i].taken_at.isoformat() if cands[i].taken_at else None}
                 for i, cap in d.photos]
     r.title, r.summary, r.findings = d.title or None, d.summary or None, d.findings
+    r.guides = d.guides
     r.model, r.input_tokens, r.output_tokens = res.model, res.input_tokens, res.output_tokens
     r.cost_micros = res.cost_micros
     r.state, r.error, r.updated_at = "draft", None, now

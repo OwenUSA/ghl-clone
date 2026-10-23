@@ -210,3 +210,32 @@ def test_the_review_api(world, report):
     assert d.post("/api/inspection-reports/%d/rebuild" % rid).status_code == 403
     assert d.post("/api/inspection-reports/%d/approve" % rid).json()["state"] == "approved"
     assert d.patch("/api/inspection-reports/%d" % rid, json={"title": "x"}).status_code == 409
+
+
+# ------------------------------------------------------------------------- the guides
+
+def test_the_ai_only_picks_approved_guides_and_they_reach_the_pdf(world, report):
+    """2026-10-22: "Understanding your roof" - the AI picks guide KEYS (never writes the text),
+    unknown keys are dropped, at most 3; the text is the library's, in the report's language;
+    a reviewer can change them; the PDF carries the section."""
+    from app.inspection_report import guides
+    d = rules.accept({**GOOD, "guides": ["tiles", "made_up", "tiles", "flashing", "debris",
+                                         "small_leaks"]}, candidates=3, max_photos=6)
+    assert d.guides == ["tiles", "flashing", "debris"]
+    es = guides.render(["tiles"], "es")[0]
+    assert es["title"] == "Tejas agrietadas, rotas o desplazadas" and "filtración" in es["body"]
+    rid, _sha, _other = report
+    c = world.client("dispatcher")
+    r = c.patch("/api/inspection-reports/%d" % rid, json={"guides": ["small_leaks", "nope"]})
+    body = r.json()
+    assert [g["key"] for g in body["guides"]] == ["small_leaks"]
+    assert body["guides"][0]["body"] == guides.GUIDES["small_leaks"]["en"][1]
+    assert len(body["guide_catalog"]) == len(guides.GUIDES)
+    from app.db import SessionLocal
+    from app.inspection_report import pdf
+    db = SessionLocal()
+    try:
+        text = pdf.build(db.get(InspectionReport, rid))
+    finally:
+        db.close()
+    assert text.startswith(b"%PDF") and len(text) > 1000
