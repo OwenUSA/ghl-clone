@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..ai import providers
+from ..ai.providers import REASONING_ROOM
 from ..dispatch import ai as dai
 from ..dispatch import config as dc
 from ..dispatch.comms import NOT_SENT, summary_of
@@ -155,7 +156,8 @@ def tag(db: Session, now: datetime, s: c.Settings) -> dict:
         payload = {str(i): {"kind": it.kind, "from": "customer" if it.inbound else "company",
                             "text": it.text[:3000]} for i, it in enumerate(batch)}
         try:
-            turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=1500,
+            turn = prov.complete(system=SYSTEM, tools=[], model=model,
+                                 max_tokens=REASONING_ROOM * 2,
                                  messages=[{"role": "user", "content": json.dumps(
                                      payload, ensure_ascii=False)}])
         except providers.ProviderError as e:

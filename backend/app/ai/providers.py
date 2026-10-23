@@ -113,6 +113,13 @@ class TestResult:
     details: dict = field(default_factory=dict)
 
 
+# Room for a REASONING model to think AND answer (2026-10-23): DeepSeek's flash model spent a
+# 1,500-token limit on its thinking and returned an empty answer - every insights batch and
+# two of three dropped-call decisions came back blank. The limit is a ceiling, not a cost:
+# only the tokens used are billed. Callers that need a short answer still ask for one in words.
+REASONING_ROOM = 4000
+
+
 class ProviderError(Exception):
     def __init__(self, sentence: str, *, status: int | None = None):
         super().__init__(sentence)

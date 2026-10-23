@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from sqlalchemy.orm import Session
 
 from ..ai import providers
+from ..ai.providers import REASONING_ROOM
 from ..dispatch import ai as dai
 from ..dispatch import config as dc
 from . import metrics
@@ -120,7 +121,7 @@ def answer(db: Session, question: str, *, hidden: set[str], now: datetime | None
     for _ in range(STEPS):
         try:
             turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
-                                 max_tokens=700)
+                                 max_tokens=REASONING_ROOM)
         except providers.ProviderError as e:
             dai._record(db, "insights", model, None, error=str(e))
             db.commit()

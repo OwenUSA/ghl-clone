@@ -32,6 +32,7 @@ from .. import crmlink
 from .. import kpi_report as kr
 from ..ai import engine as ai_engine
 from ..ai import providers
+from ..ai.providers import REASONING_ROOM
 from ..autoreply import rules as arules
 from ..dispatch import ai as dai
 from ..dispatch import alerts
@@ -242,7 +243,7 @@ def read_reply(db: Session, text: str, now: datetime) -> tuple[int | None, bool,
         return None, False, ""
     try:
         prov, model = dai.provider_for(db, now, entry=c.KEY)
-        turn = prov.complete(system=READ_SYSTEM, tools=[], model=model, max_tokens=200,
+        turn = prov.complete(system=READ_SYSTEM, tools=[], model=model, max_tokens=REASONING_ROOM,
                              messages=[{"role": "user", "content": text[:1500]}])
     except (dai.Unavailable, providers.ProviderError) as e:
         log.info("a review reply was not read: %s", e)

@@ -16,6 +16,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from ..ai import providers
+from ..ai.providers import REASONING_ROOM
 from ..dispatch import ai as dai
 from . import rules
 
@@ -58,7 +59,7 @@ def find(db: Session, sources: list[tuple[str, str]], wanted: list[str],
     joined = "\n\n".join("[%s]\n%s" % (label, text) for label, text in sources)
     joined = joined[:MAX_SOURCE_CHARS]
     try:
-        turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=600,
+        turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=REASONING_ROOM,
                              messages=[{"role": "user", "content": json.dumps(
                                  {"find": wanted, "sources": joined}, ensure_ascii=False)}])
     except providers.ProviderError as e:
