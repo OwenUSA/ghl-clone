@@ -22,7 +22,7 @@ import logging
 import threading
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -112,6 +112,47 @@ def view(db: Session, a: PaymentAgreement, s: c.Settings, today: date) -> list[d
 
 
 # ------------------------------------------------------------------------- 1. due items
+
+def for_customer(db: Session, *, job_uids: set[str], phones: set[str], names: set[str],
+                 today: date) -> list[dict] | None:
+    """Collections for ONE customer, for the Dispatch assistant's customer look-up (2026-10-23,
+    the user: "give more context when we ask about a customer"). READS ONLY: each agreement on
+    their jobs, numbers or name - agreed / quoted, each part with its status, owed now, and what
+    waits for a person (a suggested payment, a screenshot to check). None = no agreement."""
+    from ..models import PaymentProof, PaymentSuggestion
+    s = settings(db)
+    names = {" ".join(n.lower().split()) for n in names if n}
+    rows = [a for a in db.scalars(select(PaymentAgreement).order_by(PaymentAgreement.id))
+            if (a.job_uid and a.job_uid in job_uids) or (a.phone and a.phone in phones)
+            or (a.customer_name and " ".join(a.customer_name.lower().split()) in names)]
+    if not rows:
+        return None
+    out = []
+    for a in rows:
+        parts = view(db, a, s, today)
+        owed = sum(p["amount_cents"] for p in parts if p["status"] in ("due", "overdue"))
+        waiting = db.scalar(select(func.count(PaymentSuggestion.id)).where(
+            PaymentSuggestion.agreement_id == a.id, PaymentSuggestion.state == "open")) or 0
+        proofs = db.scalar(select(func.count(PaymentProof.id)).where(
+            PaymentProof.agreement_id == a.id, PaymentProof.state == "to_review")) or 0
+        out.append({
+            "job": "#%s" % a.job_number if a.job_number else None, "state": a.state,
+            "what_for": a.description, "terms": a.terms,
+            "quoted": rules.money(a.quoted_cents) if a.quoted_cents is not None else None,
+            "agreed": rules.money(a.agreed_cents) if a.agreed_cents is not None else None,
+            "parts": ["%s %s - %s%s%s" % (
+                p["label"], rules.money(p["amount_cents"]), p["status"],
+                " (due %s)" % p["due_on"] if p.get("due_on") and p["status"] != "paid" else "",
+                " (paid %s by %s)" % (p.get("paid_on"), p.get("method") or "?")
+                if p["status"] == "paid" else "") for p in parts],
+            "owed_now": rules.money(owed) if owed else None,
+            "waiting_for_a_person": ("%d suggested payment%s to confirm" % (
+                waiting, "" if waiting == 1 else "s") if waiting else None)
+            or ("%d payment screenshot%s to check" % (proofs, "" if proofs == 1 else "s")
+                if proofs else None),
+            "notes": a.notes})
+    return out
+
 
 def _items(db: Session, s: c.Settings, now: datetime, out: dict) -> None:
     today = dc.local(now).date()

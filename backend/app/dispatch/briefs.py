@@ -1401,6 +1401,16 @@ def _line(e: dict) -> str:
     return " ".join(text.split())[:cap if cap > LINE_MAX else 240]
 
 
+def _payments(db: Session, now: datetime, seed, phones) -> list[dict] | None:
+    try:
+        from ..payments import service as pay
+        return pay.for_customer(db, job_uids={j.job_uid for j in seed}, phones=set(phones),
+                                names={j.customer_name or "" for j in seed},
+                                today=c.local(now).date())
+    except Exception:  # noqa: BLE001 - Collections never breaks the customer look-up
+        return None
+
+
 def customer_profile(db: Session, now: datetime, hidden: set[str] | None = None, *,
                      query: str) -> dict:
     """Everything about ONE customer, gathered once: every job (open and closed) on their
@@ -1521,6 +1531,8 @@ def customer_profile(db: Session, now: datetime, hidden: set[str] | None = None,
                 "why": verdict[j.job_number]["why"]})} for j in open_jobs
                 if j.job_number in verdict]},
         "flags": flags[:25] or None,
+        # Collections (2026-10-23): what they agreed to pay, what is paid, due or overdue.
+        "payments": _payments(db, now, seed, phones),
         "timeline_oldest_first": timeline,
         "covers": "calls and texts of the last %d days on every number above (Quo, the CRM "
                   "line, Zuper Connect summaries); Zuper's jobs, stage history and notes"
