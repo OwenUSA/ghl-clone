@@ -37,6 +37,7 @@ class Draft:
     title: str = ""
     summary: str = ""
     findings: list[str] = field(default_factory=list)
+    guides: list[str] = field(default_factory=list)      # keys of guides.GUIDES
     dropped: list[str] = field(default_factory=list)
 
 
@@ -80,6 +81,8 @@ def accept(answer: dict | None, *, candidates: int, max_photos: int) -> Draft | 
             d.dropped.append("finding: " + f)
             continue
         d.findings.append(f)
+    from .guides import valid
+    d.guides = valid(answer.get("guides"))
     if not d.photos:
         return None
     return d

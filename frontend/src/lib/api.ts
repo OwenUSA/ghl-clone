@@ -2657,15 +2657,20 @@ export type InspectionReportRow = {
   error: string | null; photo_count: number; created_at: string | null; approved_at: string | null
 }
 export type ReportPhoto = { sha: string; caption?: string | null; url: string; taken_at?: string | null }
+export type ReportGuide = { key: string; title: string; body: string }
 export type InspectionReportDetail = InspectionReportRow & {
   summary: string | null; findings: string[]; photos: ReportPhoto[]; candidates: ReportPhoto[]
   model: string | null; pdf_url: string
+  // 2026-10-22: the approved guides at the end ("Understanding your roof"), in the report's
+  // language, and the whole library to choose from.
+  guides: ReportGuide[]; guide_catalog: { key: string; title: string; about: string }[]
 }
 export const inspectionReports = (state?: string) =>
   get<{ reports: InspectionReportRow[] }>('/api/inspection-reports' + (state ? `?state=${encodeURIComponent(state)}` : ''))
 export const inspectionReport = (id: number) => get<InspectionReportDetail>(`/api/inspection-reports/${id}`)
 export const editInspectionReport = (id: number, body: {
   title?: string; summary?: string; findings?: string[]; photos?: { sha: string; caption: string }[]
+  guides?: string[]
 }) => send<InspectionReportDetail>(`/api/inspection-reports/${id}`, 'PATCH', body)
 export const approveInspectionReport = (id: number) =>
   send<InspectionReportDetail>(`/api/inspection-reports/${id}/approve`, 'POST')

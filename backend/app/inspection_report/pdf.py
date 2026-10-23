@@ -21,10 +21,11 @@ FOLD = {chr(0x2018): "'", chr(0x2019): "'", chr(0x201C): '"', chr(0x201D): '"',
         chr(0x2013): "-", chr(0x2014): "-", chr(0x2026): "...", chr(0xA0): " "}
 LABELS = {
     "en": {"report": "Roof inspection report", "for": "Prepared for", "date": "Inspection date",
-           "summary": "Summary", "findings": "What we found", "photos": "Photos"},
+           "summary": "Summary", "findings": "What we found", "photos": "Photos",
+           "guides": "Understanding your roof"},
     "es": {"report": "Informe de inspeccion del techo", "for": "Preparado para",
            "date": "Fecha de inspeccion", "summary": "Resumen", "findings": "Lo que encontramos",
-           "photos": "Fotos"},
+           "photos": "Fotos", "guides": "Entienda su techo"},
 }
 
 
@@ -95,4 +96,22 @@ def build(r: InspectionReport) -> bytes:
         pdf.set_text_color(*MUTED)
         pdf.multi_cell(w, 5, _t("%d. %s" % (i + 1, p.get("caption") or "")),
                        new_x="LMARGIN", new_y="NEXT")
+
+    # The approved guides (2026-10-22): one section at the end.
+    from .guides import render
+    shown = render(r.guides, r.language or "en")
+    if shown:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 15)
+        pdf.set_text_color(*SLATE)
+        pdf.cell(w, 8, _t(lab["guides"]), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+        for g in shown:
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.set_text_color(*COPPER)
+            pdf.multi_cell(w, 6, _t(g["title"]), new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 11)
+            pdf.set_text_color(*INK)
+            pdf.multi_cell(w, 5.6, _t(g["body"]), new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(3)
     return bytes(pdf.output())

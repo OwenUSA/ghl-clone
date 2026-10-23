@@ -2530,6 +2530,8 @@ class InspectionReport(Base):
     # [{sha, caption, taken_at}] in report order; `candidates` = every picture it looked at.
     photos: Mapped[list | None] = mapped_column(NullableJSONType)
     candidates: Mapped[list | None] = mapped_column(NullableJSONType)
+    # The approved guides shown at the end (2026-10-22): keys of inspection_report/guides.py.
+    guides: Mapped[list | None] = mapped_column(NullableJSONType)
     # building | draft | approved | discarded | failed
     state: Mapped[str] = mapped_column(String(12), default="building",
                                        server_default="building", index=True)

@@ -28,8 +28,11 @@ SYSTEM = (
     "understands, in {language}.\n"
     "Rules: describe only what the pictures and the notes show. Never mention prices, money, "
     "insurance or AHS approval, never promise a date or a result, never invent measurements.\n"
+    "Finally pick 1-3 GUIDES, by key, that explain the findings to the homeowner (you never "
+    "write guide text; only choose keys from this list):\n{guides}\n"
     "Answer with JSON only: {{\"photos\": [{{\"index\": 0, \"caption\": \"...\"}}], "
-    "\"title\": \"...\", \"summary\": \"...\", \"findings\": [\"...\"]}}")
+    "\"title\": \"...\", \"summary\": \"...\", \"findings\": [\"...\"], "
+    "\"guides\": [\"key\"]}}")
 LANG = {"en": "English", "es": "Spanish"}
 
 
@@ -90,8 +93,11 @@ def write(db: Session, s: c.Settings, pictures: list[bytes], written: str,
     for i, jpeg in enumerate(pictures):
         content.append({"type": "text", "text": "Picture %d:" % i})
         content.append(_image_block(conn.provider, jpeg))
+    from .guides import catalog
     system = SYSTEM.format(n=min(s.max_photos, len(pictures)),
-                           language=LANG.get(language, "English"))
+                           language=LANG.get(language, "English"),
+                           guides="\n".join("  %s: %s" % (g["key"], g["about"])
+                                            for g in catalog()))
     try:
         turn = prov.complete(system=system, tools=[], model=model, max_tokens=1500,
                              messages=[{"role": "user", "content": content}])

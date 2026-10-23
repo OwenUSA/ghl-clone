@@ -44,7 +44,9 @@ def _out(r: InspectionReport, *, full: bool) -> dict:
            "approved_at": _iso(r.approved_at)}
     if full:
         url = "/api/inspection-reports/%d/photos/%%s" % r.id
+        from .guides import catalog, render
         out.update(summary=r.summary, findings=r.findings or [],
+                   guides=render(r.guides, r.language or "en"), guide_catalog=catalog(),
                    photos=[dict(p, url=url % p["sha"]) for p in (r.photos or [])],
                    candidates=[dict(p, url=url % p["sha"]) for p in (r.candidates or [])],
                    model=r.model, pdf_url="/api/inspection-reports/%d/report.pdf" % r.id)
@@ -78,6 +80,7 @@ class ReportIn(BaseModel):
     summary: str | None = Field(None, max_length=3000)
     findings: list[str] | None = None
     photos: list[PhotoIn] | None = None
+    guides: list[str] | None = None          # keys of guides.GUIDES, in order
 
 
 @router.patch("/{report_id}")
@@ -92,6 +95,9 @@ def inspection_report_edit(report_id: int, body: ReportIn, db: Session = Depends
         r.summary = body.summary.strip() or None
     if body.findings is not None:
         r.findings = [" ".join(f.split())[:300] for f in body.findings if f and f.strip()][:12]
+    if body.guides is not None:
+        from .guides import valid
+        r.guides = valid(body.guides)
     if body.photos is not None:
         known = {p["sha"]: p for p in (r.candidates or []) + (r.photos or [])}
         if any(p.sha not in known for p in body.photos):
