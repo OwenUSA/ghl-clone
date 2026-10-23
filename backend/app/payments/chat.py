@@ -20,6 +20,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..ai import providers
+from ..ai.providers import REASONING_ROOM
 from ..dispatch import ai as dai
 from ..dispatch import config as dc
 from ..models import Contact, DispatchJob, PaymentAgreement, PaymentMilestone
@@ -246,7 +247,7 @@ def answer(db: Session, history: list[dict], *, user_id: int | None,
     for _ in range(STEPS):
         try:
             turn = prov.complete(system=system, messages=convo, tools=TOOLS, model=model,
-                                 max_tokens=800)
+                                 max_tokens=REASONING_ROOM)
         except providers.ProviderError as e:
             dai._record(db, "payments", model, None, user_id=user_id, error=str(e))
             db.commit()

@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from . import automations, number_threads
 from .ai import providers
+from .ai.providers import REASONING_ROOM
 from .autoreply import rules as arules
 from .dispatch import ai as dai
 from .dispatch import comms as dcomms
@@ -142,7 +143,8 @@ def decide(db: Session, ai: dict, now: datetime) -> tuple[bool | None, str]:
              "transfer": ai.get("transfer") or None, "seconds": _seconds(ai)}
     try:
         prov, model = dai.provider_for(db, now, entry=KEY)
-        turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=120,
+        turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=REASONING_ROOM,
+                             think=False,
                              messages=[{"role": "user", "content": json.dumps(facts)}])
     except (dai.Unavailable, providers.ProviderError) as e:
         return None, "the AI could not decide: %s" % e

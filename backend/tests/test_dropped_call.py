@@ -127,3 +127,12 @@ def test_off_without_the_server_switch(db, dc, monkeypatch):
     db.add(ev)
     db.flush()
     assert dropped_call.maybe_enqueue(db, ev, "+1" + PHONE) == "off"
+
+
+def test_the_decision_asks_deepseek_without_thinking(db, dc, script):
+    """2026-10-23: DeepSeek spent the whole limit thinking and answered nothing; a yes/no needs
+    no reasoning, so the request switches it off (cheaper, and the answer always fits)."""
+    script.responses = [verdict(True)]
+    dropped_call._run(db, call(db, LEFT), NOW)
+    body = script.requests[0]["body"]
+    assert body["thinking"] == {"type": "disabled"} and body["max_tokens"] >= 4000

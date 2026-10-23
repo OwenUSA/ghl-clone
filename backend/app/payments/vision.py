@@ -10,6 +10,7 @@ from datetime import date
 from sqlalchemy.orm import Session
 
 from ..ai import providers
+from ..ai.providers import REASONING_ROOM
 from ..inspection_report import photos as rphotos
 from ..inspection_report import vision as rvision
 from . import config as c
@@ -31,7 +32,8 @@ def read(db: Session, s: c.Settings, data: bytes) -> dict:
     conn, prov, model = rvision._connection(db, rs)
     jpeg = rphotos.to_jpeg(data, 1024)
     try:
-        turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=200, messages=[
+        turn = prov.complete(system=SYSTEM, tools=[], model=model,
+                             max_tokens=REASONING_ROOM, messages=[
             {"role": "user", "content": [rvision._image_block(conn.provider, jpeg)]}])
     except providers.ProviderError as e:
         raise rvision.Unavailable("the vision model did not answer: %s" % e.sentence) from None

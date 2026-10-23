@@ -9,7 +9,7 @@ POLL_SECONDS = 3600            # tag every hour; the snapshot once a day
 NIGHT_HOUR = 3                 # with tag_hourly off, the reading runs once, in this hour
 LOOKBACK_DAYS = 3              # a call or text older than this is never read for the first time
 PER_RUN = 200                  # at most this many calls / texts read in one pass
-BATCH = 20                     # read together in one AI request
+BATCH = 10                     # read together in one AI request
 MIN_CHARS = 20                 # shorter than this says nothing worth reading
 
 TAGS = {

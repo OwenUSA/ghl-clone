@@ -12,6 +12,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from ..ai import providers
+from ..ai.providers import REASONING_ROOM
 from ..dispatch import ai as dai
 
 KIND = "briefing"
@@ -38,7 +39,7 @@ def suggest(db: Session, jobs: list[dict], now: datetime) -> tuple[dict[str, str
         return {}, meta
     meta["model"] = model
     try:
-        turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=500,
+        turn = prov.complete(system=SYSTEM, tools=[], model=model, max_tokens=REASONING_ROOM,
                              messages=[{"role": "user", "content": json.dumps(
                                  jobs, ensure_ascii=False)}])
     except providers.ProviderError as e:
