@@ -6,6 +6,10 @@ the agent's first run (no backlog).
 
 The model's answer keeps only what passes: photo indexes that exist, once each, at most the
 maximum; short captions; findings that name no money, no approval, no date, no promise.
+Nothing internal reaches the homeowner (2026-10-23, the owner, after the #681 test said "the
+technician's notes identify the job as new gutters"): a sentence about our technician, our
+notes, the job, the work order, what was booked, or our systems is dropped - from the summary
+sentence by sentence, a finding or caption whole.
 """
 from __future__ import annotations
 
@@ -20,6 +24,24 @@ FORBIDDEN = re.compile(
     r"|\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\btomorrow\b"
     r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d"
     r"|\b\d{1,2}/\d{1,2}\b", re.IGNORECASE)
+
+
+INTERNAL = re.compile(
+    r"\btechnician'?s?\b|\btech'?s?\b|\binspector'?s?\b|\bnotes?\b|\bwork order|\bjob\b"
+    r"|\bbooked\b|\bscheduled\b|\bdispatch|\bticket\b|\bzuper\b|\bcrm\b|\bahs\b"
+    r"|\bhome ?warranty\b|\bour (?:records|system|team noted)\b|\bnot documented\b"
+    r"|\bno (?:active )?leak (?:is|was) (?:documented|recorded|noted)\b", re.IGNORECASE)
+SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def customer_safe(text: str) -> tuple[str, list[str]]:
+    """(the text without its internal sentences, the sentences dropped)."""
+    keep, dropped = [], []
+    for s in SENTENCE.split(text or ""):
+        if not s.strip():
+            continue
+        (dropped if INTERNAL.search(s) else keep).append(s.strip())
+    return " ".join(keep), dropped
 
 
 def ready(*, kind: str, photo_count: int, last_photo_at: datetime | None, now: datetime,
@@ -58,7 +80,7 @@ def accept(answer: dict | None, *, candidates: int, max_photos: int) -> Draft | 
         if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < candidates or i in seen:
             continue
         cap = _clean(p.get("caption"), MAX_CAPTION)
-        if FORBIDDEN.search(cap):
+        if FORBIDDEN.search(cap) or INTERNAL.search(cap):
             d.dropped.append("caption: " + cap)
             cap = ""
         seen.add(i)
@@ -66,18 +88,20 @@ def accept(answer: dict | None, *, candidates: int, max_photos: int) -> Draft | 
         if len(d.photos) >= max_photos:
             break
     d.title = _clean(answer.get("title"), 120)
-    if FORBIDDEN.search(d.title):
+    if FORBIDDEN.search(d.title) or INTERNAL.search(d.title):
         d.dropped.append("title: " + d.title)
         d.title = ""
     d.summary = _clean(answer.get("summary"), 1200)
     if FORBIDDEN.search(d.summary):
         d.dropped.append("summary: " + d.summary)
         d.summary = ""
+    d.summary, gone = customer_safe(d.summary)
+    d.dropped += ["summary sentence: " + s for s in gone]
     for f in answer.get("findings") or []:
         f = _clean(f, MAX_FINDING)
         if not f:
             continue
-        if FORBIDDEN.search(f):
+        if FORBIDDEN.search(f) or INTERNAL.search(f):
             d.dropped.append("finding: " + f)
             continue
         d.findings.append(f)

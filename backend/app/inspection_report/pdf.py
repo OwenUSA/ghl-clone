@@ -5,6 +5,7 @@ accents survive; curly quotes and dashes become plain ones)."""
 from __future__ import annotations
 
 import io
+import re
 
 from fpdf import FPDF
 
@@ -27,6 +28,18 @@ LABELS = {
            "date": "Fecha de inspeccion", "summary": "Resumen", "findings": "Lo que encontramos",
            "photos": "Fotos", "guides": "Entienda su techo"},
 }
+
+
+ZIP4 = re.compile(r"(\b\d{5})\s*-\s*\d{4}\b")
+TAIL = re.compile(r"\s*-\s*\d{4}\s*$")
+
+
+def clean_address(address: str | None) -> str:
+    """For the customer's eyes: "..., FL 33418 - 7021" -> "..., FL 33418" (Zuper's ZIP+4 and the
+    stray 4-digit tails it is sometimes typed with)."""
+    a = " ".join(str(address or "").split())
+    a = ZIP4.sub(r"\1", a)
+    return TAIL.sub("", a).strip(" ,-")
 
 
 def _t(text) -> str:
@@ -56,7 +69,8 @@ def build(r: InspectionReport) -> bytes:
     pdf.set_text_color(*MUTED)
     when = dc.local(r.visit_at).strftime("%B %d, %Y") if r.visit_at else ""
     pdf.multi_cell(w, 5, _t("%s: %s%s\n%s: %s" % (
-        lab["for"], r.customer_name or "", (" - " + r.address) if r.address else "",
+        lab["for"], r.customer_name or "",
+        (" - " + clean_address(r.address)) if r.address else "",
         lab["date"], when)), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
@@ -79,16 +93,22 @@ def build(r: InspectionReport) -> bytes:
         pdf.ln(2)
 
     photos = [p for p in (r.photos or []) if isinstance(p, dict) and p.get("sha")]
+    img_h = 105
+    titled = False
     for i, p in enumerate(photos):
         data = attachments.read("%s/%s" % (p["sha"][:2], p["sha"]))
         if not data:
             continue
-        if i % 2 == 0:
+        # Pictures follow the text on the same page while one fits (2026-10-23: page 1 was
+        # mostly empty), then two to a page.
+        need = img_h + 14 + (0 if titled else 9)
+        if pdf.get_y() + need > pdf.h - pdf.b_margin:
             pdf.add_page()
+        if not titled:
             pdf.set_font("Helvetica", "B", 13)
             pdf.set_text_color(*SLATE)
             pdf.cell(w, 7, _t(lab["photos"]), new_x="LMARGIN", new_y="NEXT")
-        img_h = 105
+            titled = True
         y = pdf.get_y() + 2
         pdf.image(io.BytesIO(data), x=pdf.l_margin, y=y, w=w, h=img_h, keep_aspect_ratio=True)
         pdf.set_y(y + img_h + 2)
