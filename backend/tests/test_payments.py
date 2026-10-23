@@ -269,3 +269,16 @@ def test_the_api_access_and_a_proof_must_be_a_picture(world):
     assert undo["undoable"] is True
     assert d.post("/api/payments/changes/%d/undo" % undo["id"]).status_code == 200
     assert d.get("/api/payments/%d" % body["id"]).json()["parts"][0]["status"] != "paid"
+
+
+def test_the_customer_look_up_carries_collections(db, pay):
+    """2026-10-23: asking the Dispatch assistant about a customer includes what they agreed to
+    pay and what is owed - read only."""
+    out = service.for_customer(db, job_uids={"job-1"}, phones=set(), names=set(), today=TODAY)
+    assert len(out) == 1 and out[0]["job"] == "#701" and out[0]["agreed"] == "$3,000.00"
+    assert any("Deposit" in p and "overdue" in p for p in out[0]["parts"])
+    assert out[0]["owed_now"] == "$1,500.00"
+    assert service.for_customer(db, job_uids=set(), phones={"9415550101"}, names=set(),
+                                today=TODAY)
+    assert service.for_customer(db, job_uids={"other"}, phones=set(), names={"Bob"},
+                                today=TODAY) is None

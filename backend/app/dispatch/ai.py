@@ -490,7 +490,8 @@ TOOLS = [
                        "history, notes, fields and what it needs now; one timeline of every "
                        "call and text on every number they use (family too), each in one "
                        "line; flags (money, complaints, quotes asked, how to contact, family, "
-                       "access, AHS claims, warranty); and the last standing. customer: a "
+                       "access, AHS claims, warranty); Collections - what they agreed to pay, "
+                       "what is paid, due or overdue; and the last standing. customer: a "
                        "name, a job number or a phone. Use it for 'tell me about X', 'a resume "
                        "of the conversations with X', 'what is going on with X'.",
                        {"type": "object", "properties": {"customer": {"type": "string"}},
