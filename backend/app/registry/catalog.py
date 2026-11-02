@@ -367,6 +367,23 @@ ENTRIES: tuple[Entry, ...] = (
                "Text someone the team already called back"),
         owner_hint="Luis",
     ),
+    Entry(
+        key="owen_ai", name="Owen AI (owner's assistant)", kind="agent", role=10,
+        purpose="The owner's own assistant on his Claude plan: reads Zuper (jobs, proposals, "
+                "templates, products, settings, Zuper Connect texts and calls) and Quo (calls, "
+                "transcripts, texts) and answers in a chat only he can open. Separate from "
+                "every other agent here.",
+        covers="Everything in Zuper and Quo, for the owner only.",
+        channels=("Owen AI page (owner only)",),
+        runs_on="CRM, owen_ai container (Claude Code on the owner's plan)",
+        provider="Anthropic (Claude plan)", hours="When the owner asks",
+        actions=(
+            Action("ai_chat", AUTO, (NEVER, AUTO), "Answers the owner in the Owen AI chat."),
+        ),
+        never=("Write anything in Zuper (phase 1)", "Text or call anyone",
+               "Answer anyone but the owner"),
+        owner_hint="Owen",
+    ),
     # ------------------------------------------------------------------ automations
     Entry(
         key="dispatch_flags", name="Dispatch items and bell", kind="automation", role=10,

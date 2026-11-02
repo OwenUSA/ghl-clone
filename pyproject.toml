@@ -38,6 +38,7 @@ dependencies = [
     "pillow>=11",
     "pillow-heif>=0.21",
     "fpdf2>=2.8",
+    "claude-agent-sdk==0.2.170",
 ]
 
 [project.scripts]

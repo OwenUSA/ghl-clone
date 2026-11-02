@@ -2771,3 +2771,37 @@ export const insightsResultExcelUrl = (spec: InsightSpec) =>
 // ---- speak instead of type in the AI chats (2026-10-22, app/speech.py) -------------------
 export const transcribeSpeech = (audio: Blob) =>
   upload<{ text: string }>('/api/speech/transcribe', new File([audio], 'speech', { type: audio.type }))
+
+// ---- Owen AI (2026-11-02, app/owen_ai) — the owner's own assistant ------------------------
+// Every route answers 404 unless the signed-in user is THE owner; the browser draws the module
+// only once GET /status succeeded (components/owenAi/useOwenAiStatus.ts).
+export type OwenAiStatus = {
+  enabled: boolean; claude_login: boolean; zuper: boolean; quo: boolean; model: string
+  last_answer_at: string | null; sentence: string | null
+}
+export type OwenAiThreadKind = 'daily' | 'job' | 'task'
+export type OwenAiThread = {
+  id: number; kind: OwenAiThreadKind; title: string; job_uid: string | null; job_number: string | null
+  day: string | null; archived: boolean; busy: boolean; created_at: string | null; updated_at: string | null
+}
+export type OwenAiStep = { tool: string; input: unknown; result?: unknown; error?: string | null }
+export type OwenAiMessage = {
+  id: number; role: 'user' | 'assistant'; content: string
+  status: 'queued' | 'running' | 'done' | 'error'; steps: OwenAiStep[]; error: string | null
+  model: string | null; cost_usd: number | null; duration_ms: number | null; num_turns: number | null
+  created_at: string | null; finished_at: string | null
+}
+export type OwenAiThreadDetail = OwenAiThread & { messages: OwenAiMessage[] }
+export const owenAiStatus = () => get<OwenAiStatus>('/api/owen-ai/status')
+export const owenAiThreads = (archived = false, kind?: OwenAiThreadKind) => {
+  const p = new URLSearchParams({ archived: String(archived) })
+  if (kind) p.set('kind', kind)
+  return get<OwenAiThread[]>(`/api/owen-ai/threads?${p}`)
+}
+export const owenAiOpenThread = (body: { kind: OwenAiThreadKind; title?: string; job_uid?: string
+  job_number?: string }) => send<OwenAiThread>('/api/owen-ai/threads', 'POST', body)
+export const owenAiThread = (id: number) => get<OwenAiThreadDetail>(`/api/owen-ai/threads/${id}`)
+export const owenAiEditThread = (id: number, body: { title?: string; archived?: boolean }) =>
+  send<OwenAiThread>(`/api/owen-ai/threads/${id}`, 'PATCH', body)
+export const owenAiSend = (id: number, content: string) =>
+  send<OwenAiMessage>(`/api/owen-ai/threads/${id}/messages`, 'POST', { content })

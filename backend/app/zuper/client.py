@@ -98,6 +98,24 @@ def ahs_create():
         _AHS_CREATE.reset(token)
 
 
+_OWEN_AI_READ: ContextVar[bool] = ContextVar("zuper_owen_ai_read", default=False)
+
+
+@contextlib.contextmanager
+def owen_ai_read():
+    """Owen AI's reads (2026-11-02, app/owen_ai). Inside this scope ANY GET the denylist does
+    not refuse is allowed — the owner's assistant must be able to look at all of Zuper (proposal
+    templates, products, settings) without a PATHS entry per screen — and every non-GET is
+    refused, as in `read_only`. The denylist still applies to GETs: messaging stays out."""
+    token = _OWEN_AI_READ.set(True)
+    ro = _READ_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _READ_ONLY.reset(ro)
+        _OWEN_AI_READ.reset(token)
+
+
 _DISPATCH_WRITE: ContextVar[bool] = ContextVar("zuper_dispatch_write", default=False)
 _PROPOSAL_LINES: ContextVar[bool] = ContextVar("zuper_proposal_lines", default=False)
 
@@ -574,7 +592,8 @@ def request(method: str, path: str, *, params: dict | None = None,
     why = None if autoreply_send else denied(method, path)
     if why:
         raise ZuperError("refused", "%s %s is never called: %s" % (method, path, why))
-    if not (autoreply_send or allowed(method, path)):
+    owen_ai_get = method == "GET" and _OWEN_AI_READ.get()
+    if not (autoreply_send or owen_ai_get or allowed(method, path)):
         raise ZuperError("refused", "%s %s is not on the sync's allowlist" % (method, path))
     if not (config.env_enabled() or _OPERATOR.get()):
         raise ZuperError("off")

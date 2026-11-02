@@ -43,6 +43,10 @@ COPY cli ./cli
 RUN uv sync --frozen --no-dev
 
 COPY backend ./backend
+# Owen AI's workspace (2026-11-02): the CLAUDE.md, knowledge and skills its Claude Code reads.
+# Only the owen_ai container uses it; its Claude login and sessions live in a volume.
+COPY owen-ai ./owen-ai
+ENV OWEN_AI_WORKSPACE=/app/owen-ai     CLAUDE_CONFIG_DIR=/var/lib/owen-ai/claude
 
 ENV PATH="/app/.venv/bin:$PATH"
 

@@ -17,6 +17,7 @@ import {
 import { logout } from '../lib/auth'
 import { navKeys } from '../lib/access'
 import { canOpenAiAgents } from '../lib/aiAgents'
+import { useOwenAiStatus } from './owenAi/useOwenAiStatus'
 
 const PRIMARY = [
   { key: 'dashboard', label: 'Dashboard', Icon: IconGrid },
@@ -60,6 +61,9 @@ export function Sidebar({
   // "Only assigned data" (2026-09-15): Dashboard and Reporting are not drawn at all for
   // a restricted user — they show money and other people's work, and the API refuses.
   const shown = navKeys(user, PRIMARY.map((p) => p.key))
+  // Owen AI (2026-11-02): only when GET /api/owen-ai/status succeeds — a 404 (anyone but the
+  // owner) hides the row. Same cached query as App.tsx's view gate.
+  const owenAi = useOwenAiStatus({ enabled: !!user })
   return (
     <aside
       className="relative flex flex-col shrink-0"
@@ -218,6 +222,26 @@ export function Sidebar({
           >
             <IconCollections size={18} color="#fff" />
             Collections
+          </button>
+        )}
+        {owenAi.visible && (
+          <button
+            onClick={() => onNavigate('owen-ai')}
+            className="flex w-full items-center gap-3 text-left"
+            style={{
+              height: 36,
+              borderRadius: 6,
+              paddingLeft: 16,
+              paddingRight: 16,
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 500,
+              lineHeight: '20px',
+              backgroundColor: active === 'owen-ai' ? 'rgb(26,32,44)' : 'transparent',
+            }}
+          >
+            <IconSparkle size={18} color="#fff" />
+            Owen AI
           </button>
         )}
 
