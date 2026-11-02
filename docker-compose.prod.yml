@@ -166,6 +166,8 @@ volumes:
   # the message threads — no database, no secrets, no configuration — and it is the one
   # thing in this stack that a backup has to include beyond Postgres.
   media:
+  # Owen AI's Claude Code home (2026-11-02): its login and conversation sessions.
+  owen_ai_home:
 
 networks:
   ghl-net:
