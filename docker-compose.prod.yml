@@ -53,6 +53,12 @@ services:
   api:
     <<: *api-base
     container_name: ghl_clone_api
+    volumes:
+      - media:/var/lib/ghl-clone/media
+      - /opt/santiagoproperties/ghl-clone-kpi/input:/var/lib/ghl-clone/kpi/input:ro
+      - /opt/santiagoproperties/ghl-clone-kpi/reports:/var/lib/ghl-clone/kpi/reports
+      # Read-only, only so /api/owen-ai/status can say whether Owen AI has a Claude login.
+      - owen_ai_home:/var/lib/owen-ai:ro
     expose: ["8000"]
     networks: [ghl-net, traefik-public]
     healthcheck:
@@ -101,6 +107,24 @@ services:
     deploy:
       resources:
         limits: { cpus: '0.5', memory: 384M }
+
+  # Owen AI (2026-11-02, app/owen_ai): the owner's assistant. Runs Claude Code (bundled with the
+  # Claude Agent SDK) on the owner's plan — CLAUDE_CODE_OAUTH_TOKEN in .env.prod. Its sessions
+  # persist in the owen_ai_home volume so a conversation resumes across deploys.
+  owen_ai:
+    <<: *api-base
+    container_name: ghl_clone_owen_ai
+    command: ["python", "-m", "app.owen_ai.runner"]
+    healthcheck:
+      disable: true
+    networks: [ghl-net]
+    volumes:
+      - owen_ai_home:/var/lib/owen-ai
+    depends_on:
+      api: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: '1', memory: 1536M }
 
   web:
     build:

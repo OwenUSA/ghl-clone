@@ -17,6 +17,8 @@ import { SettingsPage } from './pages/SettingsPage'
 import { AiAgentsPage } from './pages/AiAgentsPage'
 import { DispatchPage } from './pages/DispatchPage'
 import { CollectionsPage } from './pages/CollectionsPage'
+import { OwenAiPage } from './pages/OwenAiPage'
+import { useOwenAiStatus } from './components/owenAi/useOwenAiStatus'
 import { AiAlertBell } from './components/AiAlertBell'
 import { LiveAgentCall } from './components/LiveAgentCall'
 import { canOpenAiAgents } from './lib/aiAgents'
@@ -123,6 +125,11 @@ export default function App() {
     staleTime: Infinity,
   })
 
+  // Owen AI (2026-11-02): drawn only for the one user GET /api/owen-ai/status answers for (the
+  // server 404s everyone else; a 404 is not retried). Asked once signed in; the Sidebar reads
+  // the same cached query.
+  const owenAi = useOwenAiStatus({ enabled: !!session.data?.user })
+
   // api.ts fires this when a request 401s and the token could not be renewed —
   // for instance after "log out everywhere" from another browser.
   useEffect(() => {
@@ -200,6 +207,8 @@ export default function App() {
         <DispatchPage user={user} />
       ) : view === 'collections' && canOpenAiAgents(user) ? (
         <CollectionsPage user={user} />
+      ) : view === 'owen-ai' && owenAi.visible ? (
+        <OwenAiPage />
       ) : view === 'ai-agents' && canOpenAiAgents(user) ? (
         // AI Agents (2026-09-15) is ADMIN / DISPATCHER only, never a restricted user: anyone
         // else asking for it (a pasted /ai-agents link) falls through to the landing view.

@@ -178,6 +178,11 @@ app.include_router(insights_api.router)
 from . import speech  # noqa: E402
 
 app.include_router(speech.router)
+# Owen AI (2026-11-02, app/owen_ai): the owner's own assistant on his Claude plan. One person
+# (OWEN_AI_OWNER_EMAIL); everyone else 404. Answers come from the owen_ai container.
+from .owen_ai import api as owen_ai_api  # noqa: E402
+
+app.include_router(owen_ai_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.

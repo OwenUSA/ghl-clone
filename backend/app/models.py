@@ -2828,3 +2828,47 @@ class WeatherAlert(Base):
     first_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
 
+
+
+class OwenAiThread(Base):
+    """One conversation with Owen AI, the owner's own assistant (2026-11-02, app/owen_ai).
+    `kind`: daily (one per day), job (one per Zuper job, `job_uid`), task (anything else).
+    `session_id` is the Claude Code session the next message resumes."""
+    __tablename__ = "owen_ai_threads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="task", server_default="task")
+    title: Mapped[str] = mapped_column(String(200), default="New chat",
+                                       server_default="New chat")
+    job_uid: Mapped[str | None] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    day: Mapped[date | None] = mapped_column(Date, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(80))
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+
+
+class OwenAiMessage(Base):
+    """A message in an Owen AI thread. A user message is QUEUED until the runner claims it
+    (RUNNING), then DONE or ERROR; the answer is its own `assistant` row, with every tool call
+    (`steps`: tool, input, result excerpt), cost and duration."""
+    __tablename__ = "owen_ai_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[int] = mapped_column(Integer, index=True)
+    role: Mapped[str] = mapped_column(String(20))                 # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(10), default="done", server_default="done",
+                                        index=True)              # queued|running|done|error
+    steps: Mapped[list | None] = mapped_column(NullableJSONType)
+    error: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(120))
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    num_turns: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
