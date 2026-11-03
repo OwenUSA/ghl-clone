@@ -65,3 +65,21 @@ def cli_path() -> str | None:
 
 def quo_key() -> str:
     return (os.getenv("OWEN_AI_QUO_API_KEY") or "").strip()
+
+
+# The scheduled audit sweep (2026-11-03): at these Florida times, Mon-Sat, every open job on the
+# board is audited (one fresh Claude session per job). Empty = no sweep.
+SWEEP_WEEKDAYS = (0, 1, 2, 3, 4, 5)
+
+
+def sweep_times() -> tuple[str, ...]:
+    out = []
+    for part in (os.getenv("OWEN_AI_SWEEP_TIMES") or "").replace(" ", "").split(","):
+        h, _, m = part.partition(":")
+        if h.isdigit() and m.isdigit() and int(h) < 24 and int(m) < 60:
+            out.append("%02d:%02d" % (int(h), int(m)))
+    return tuple(sorted(set(out)))
+
+
+def sweep_board() -> str:
+    return (os.getenv("OWEN_AI_SWEEP_BOARD") or "AHS Simple Flow").strip()

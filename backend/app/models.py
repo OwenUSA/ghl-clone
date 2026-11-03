@@ -2868,7 +2868,37 @@ class OwenAiMessage(Base):
     cost_usd: Mapped[float | None] = mapped_column(Float)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     num_turns: Mapped[int | None] = mapped_column(Integer)
+    # chat = the owner's message (resumes the thread's Claude session); audit = one job of a
+    # scheduled sweep (always a FRESH session, never saved on the thread) (2026-11-03).
+    kind: Mapped[str] = mapped_column(String(10), default="chat", server_default="chat")
+    job_uid: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OwenAiAlert(Base):
+    """Something wrong with a job that Owen AI found (2026-11-03): a customer not called, a
+    visit not confirmed the day before, a proposal not sent... One OPEN row per (job, rule):
+    a later sweep that finds it again only refreshes `last_seen_at` and the evidence; one that
+    finds it fixed resolves it. `rule_id` is the playbook's (owen-ai/knowledge/
+    ahs-simple-flow-playbook.md). Severity: urgent | today | watch."""
+    __tablename__ = "owen_ai_alerts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    rule_id: Mapped[str] = mapped_column(String(40), index=True)
+    severity: Mapped[str] = mapped_column(String(10))
+    title: Mapped[str] = mapped_column(String(300))
+    evidence: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(10), default="open", server_default="open",
+                                        index=True)              # open | resolved | dismissed
+    resolution: Mapped[str | None] = mapped_column(Text)
+    times_seen: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

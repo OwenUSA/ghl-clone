@@ -56,7 +56,10 @@ export function AiAlertBell({ user }: { user: Me }) {
     if (!a.read) read.mutate(a.id)
     if (!canOpenRecords()) return
     setOpen(false)
-    if (a.opportunity_id != null) openRecord('opportunities', a.opportunity_id)
+    // Owen AI's audit findings (2026-11-03) open the Owen AI page's Alerts view, through the same
+    // shell path as a record (App's openRecord sets the view; the id is only a fresh request).
+    if (a.kind === 'owen_ai_issue') openRecord('owen-ai', a.id)
+    else if (a.opportunity_id != null) openRecord('opportunities', a.opportunity_id)
     else if (a.contact_id != null) openRecord('contacts', a.contact_id)
   }
 

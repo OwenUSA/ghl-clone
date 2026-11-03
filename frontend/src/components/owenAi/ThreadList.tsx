@@ -1,19 +1,22 @@
 import { useState } from 'react'
-import type { OwenAiThread } from '../../lib/api'
-import { groupThreads, jobNumber } from '../../lib/owenAi'
-import { BLUE, INK, LINE, MUTED, RED, SIDEBAR_BG, chipBtn } from './tokens'
+import type { OwenAiAlertSeverity, OwenAiThread } from '../../lib/api'
+import { SEVERITIES, SEVERITY_LABEL, alertsBadge, groupThreads, jobNumber, type OwenAiTab } from '../../lib/owenAi'
+import { BLUE, INK, LINE, MUTED, RED, SEVERITY_COLORS, SIDEBAR_BG, chipBtn } from './tokens'
 
 /**
- * The left column: Today / Job… / New chat, then every open conversation grouped Daily / Jobs /
- * Other, newest first. On a narrow screen it is a drawer over the chat (like the Dispatch
+ * The left column: Chats | Alerts on top (2026-11-03); under Chats, Today / Job… / New chat, then
+ * every open conversation grouped Daily / Jobs / Other / Audits, newest first. Under Alerts, the
+ * open counts per severity (the alerts themselves fill the right side). On a narrow screen it is a drawer over the chat (like the Dispatch
  * assistant's chat list).
  */
 export function ThreadList({ threads, loading, error, activeId, onOpen, onToday, onJob, onNew, onArchive,
-  opening, problem, narrow, onClose }: {
+  opening, problem, narrow, onClose, tab, onTab, openCounts }: {
   threads: OwenAiThread[]; loading: boolean; error: string | null; activeId: number | null
   onOpen: (id: number) => void; onToday: () => void; onJob: (jobNumber: string) => void; onNew: () => void
   onArchive: (id: number) => void; opening: boolean; problem: string | null
   narrow: boolean; onClose: () => void
+  tab: OwenAiTab; onTab: (t: OwenAiTab) => void
+  openCounts: Record<OwenAiAlertSeverity, number> | undefined
 }) {
   const [jobOpen, setJobOpen] = useState(false)
   const [job, setJob] = useState('')
@@ -25,6 +28,7 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
     setJobOpen(false)
   }
   const groups = groupThreads(threads)
+  const badge = alertsBadge(openCounts)
   return (
     <aside aria-label="Owen AI conversations" style={{ width: 260, flexShrink: 0, background: SIDEBAR_BG,
       borderRight: `1px solid ${LINE}`, display: 'flex', flexDirection: 'column', minHeight: 0,
@@ -33,11 +37,42 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
       <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {narrow && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>Conversations</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>Owen AI</span>
             <button type="button" onClick={onClose} aria-label="Close conversations"
               style={{ ...chipBtn, borderRadius: 10 }}>Close</button>
           </div>
         )}
+        <div role="tablist" aria-label="Owen AI view" style={{ display: 'flex', padding: 2, borderRadius: 10,
+          background: 'rgb(228,231,236)', marginBottom: 4 }}>
+          <button type="button" role="tab" aria-selected={tab === 'chats'} onClick={() => onTab('chats')}
+            style={tabBtn(tab === 'chats')}>Chats</button>
+          <button type="button" role="tab" aria-selected={tab === 'alerts'} onClick={() => onTab('alerts')}
+            aria-label={badge.n ? `Alerts: ${badge.n} open for today or sooner` : 'Alerts'}
+            style={tabBtn(tab === 'alerts')}>
+            Alerts
+            {badge.n > 0 && (
+              <span aria-hidden="true" style={{ marginLeft: 6, minWidth: 18, height: 18, padding: '0 5px',
+                borderRadius: 9, fontSize: 11, fontWeight: 600, lineHeight: '18px', display: 'inline-block',
+                color: badge.red ? '#fff' : 'rgb(181,71,8)',
+                background: badge.red ? 'rgb(240,68,56)' : 'rgb(254,240,199)' }}>{badge.n}</span>
+            )}
+          </button>
+        </div>
+        {tab === 'alerts' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 2px' }}>
+            {SEVERITIES.map((sv) => (
+              <div key={sv} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: INK }}>
+                <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 4,
+                  background: SEVERITY_COLORS[sv].dot }} />
+                <span style={{ flex: 1 }}>{SEVERITY_LABEL[sv]}</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums', color: MUTED }}>{openCounts?.[sv] ?? 0} open</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+              Found by the scheduled audit. An alert closes when the next audit sees it fixed, or when you
+              dismiss it.</div>
+          </div>
+        ) : (<>
         <div style={{ display: 'flex', gap: 6 }}>
           <button type="button" onClick={onToday} disabled={opening} className="hover:bg-[rgb(249,250,251)]"
             style={startBtn}>Today</button>
@@ -58,9 +93,10 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
                 borderRadius: 8, padding: '0 10px' }}>Open</button>
           </form>
         )}
+        </>)}
         {problem && <div role="alert" style={{ color: RED, fontSize: 12 }}>{problem}</div>}
       </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
+      {tab === 'chats' && <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 8px' }}>
         {loading && <div style={{ color: MUTED, fontSize: 12, padding: '4px 8px' }}>Loading…</div>}
         {error && <div style={{ color: RED, fontSize: 12, padding: '4px 8px' }}>Could not load conversations: {error}</div>}
         {!loading && !error && threads.length === 0 && (
@@ -101,10 +137,14 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
             })}
           </div>
         ))}
-      </div>
+      </div>}
     </aside>
   )
 }
 
 const startBtn: React.CSSProperties = { flex: 1, textAlign: 'center', fontSize: 13, fontWeight: 500, color: INK,
   border: `1px solid ${LINE}`, borderRadius: 10, padding: '7px 6px', background: '#fff', whiteSpace: 'nowrap' }
+
+const tabBtn = (on: boolean): React.CSSProperties => ({ flex: 1, display: 'flex', alignItems: 'center',
+  justifyContent: 'center', fontSize: 13, fontWeight: 500, color: on ? INK : MUTED, borderRadius: 8, padding: '5px 6px',
+  background: on ? '#fff' : 'transparent', boxShadow: on ? '0 1px 2px rgba(16,24,40,0.08)' : undefined })

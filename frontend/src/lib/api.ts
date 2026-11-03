@@ -2779,7 +2779,9 @@ export type OwenAiStatus = {
   enabled: boolean; claude_login: boolean; zuper: boolean; quo: boolean; model: string
   last_answer_at: string | null; sentence: string | null
 }
-export type OwenAiThreadKind = 'daily' | 'job' | 'task'
+export type OwenAiThreadKind = 'daily' | 'job' | 'task' | 'audit'
+/** What the owner may open himself; 'audit' threads are made only by the scheduled sweep. */
+export type OwenAiOpenKind = Exclude<OwenAiThreadKind, 'audit'>
 export type OwenAiThread = {
   id: number; kind: OwenAiThreadKind; title: string; job_uid: string | null; job_number: string | null
   day: string | null; archived: boolean; busy: boolean; created_at: string | null; updated_at: string | null
@@ -2787,6 +2789,8 @@ export type OwenAiThread = {
 export type OwenAiStep = { tool: string; input: unknown; result?: unknown; error?: string | null }
 export type OwenAiMessage = {
   id: number; role: 'user' | 'assistant'; content: string
+  /** 'audit' in the sweep's threads: the user side is a machine prompt, not the owner. */
+  kind?: 'chat' | 'audit'; job_uid?: string | null
   status: 'queued' | 'running' | 'done' | 'error'; steps: OwenAiStep[]; error: string | null
   model: string | null; cost_usd: number | null; duration_ms: number | null; num_turns: number | null
   created_at: string | null; finished_at: string | null
@@ -2798,10 +2802,29 @@ export const owenAiThreads = (archived = false, kind?: OwenAiThreadKind) => {
   if (kind) p.set('kind', kind)
   return get<OwenAiThread[]>(`/api/owen-ai/threads?${p}`)
 }
-export const owenAiOpenThread = (body: { kind: OwenAiThreadKind; title?: string; job_uid?: string
+export const owenAiOpenThread = (body: { kind: OwenAiOpenKind; title?: string; job_uid?: string
   job_number?: string }) => send<OwenAiThread>('/api/owen-ai/threads', 'POST', body)
 export const owenAiThread = (id: number) => get<OwenAiThreadDetail>(`/api/owen-ai/threads/${id}`)
 export const owenAiEditThread = (id: number, body: { title?: string; archived?: boolean }) =>
   send<OwenAiThread>(`/api/owen-ai/threads/${id}`, 'PATCH', body)
 export const owenAiSend = (id: number, content: string) =>
   send<OwenAiMessage>(`/api/owen-ai/threads/${id}/messages`, 'POST', { content })
+
+// The scheduled audit's findings (2026-11-03): one open alert per job + rule until the audit
+// sees it fixed (resolved) or the owner dismisses it. Sorted urgent → watch, newest first.
+export type OwenAiAlertSeverity = 'urgent' | 'today' | 'watch'
+export type OwenAiAlertStatus = 'open' | 'resolved' | 'dismissed'
+export type OwenAiAlert = {
+  id: number; job_uid: string; job_number: string | null; rule_id: string; severity: OwenAiAlertSeverity
+  title: string; evidence: string | null; action: string | null; status: OwenAiAlertStatus
+  resolution: string | null; times_seen: number; first_seen_at: string | null; last_seen_at: string | null
+  closed_at: string | null
+}
+export type OwenAiAlerts = { alerts: OwenAiAlert[]; open_counts: Record<OwenAiAlertSeverity, number> }
+export const owenAiAlerts = (status: OwenAiAlertStatus = 'open', jobUid?: string) => {
+  const p = new URLSearchParams({ status })
+  if (jobUid) p.set('job_uid', jobUid)
+  return get<OwenAiAlerts>(`/api/owen-ai/alerts?${p}`)
+}
+export const owenAiDismissAlert = (id: number, why: string) =>
+  send<OwenAiAlert>(`/api/owen-ai/alerts/${id}/dismiss`, 'POST', { why })

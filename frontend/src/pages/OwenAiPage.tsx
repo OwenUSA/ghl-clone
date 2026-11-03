@@ -1,20 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PAGE_BG } from '../components/ai/aiUi'
+import { AlertsView } from '../components/owenAi/AlertsView'
 import { Conversation } from '../components/owenAi/Conversation'
 import { StatusStrip } from '../components/owenAi/StatusStrip'
 import { ThreadList } from '../components/owenAi/ThreadList'
 import { OWEN_AI_STATUS_KEY, useOwenAiStatus } from '../components/owenAi/useOwenAiStatus'
 import { INK, MUTED, NARROW, chipBtn } from '../components/owenAi/tokens'
 import {
-  ApiError, owenAiEditThread, owenAiOpenThread, owenAiSend, owenAiThread, owenAiThreads,
-  type OwenAiThreadDetail, type OwenAiThreadKind,
+  ApiError, owenAiAlerts, owenAiDismissAlert, owenAiEditThread, owenAiOpenThread, owenAiSend, owenAiThread,
+  owenAiThreads, type OwenAiAlert, type OwenAiAlertStatus, type OwenAiOpenKind, type OwenAiThreadDetail,
 } from '../lib/api'
-import { threadBusy } from '../lib/owenAi'
+import type { Focus } from '../lib/focus'
+import { threadBusy, type OwenAiTab } from '../lib/owenAi'
 
 const THREADS_KEY = ['owen-ai-threads'] as const
 const threadKey = (id: number | null) => ['owen-ai-thread', id] as const
 const REMEMBER = 'owen-ai:thread'
+const ALERTS_KEY = ['owen-ai-alerts'] as const
+let handledFocus: number | null = null
+const alertsKey = (status: OwenAiAlertStatus) => ['owen-ai-alerts', status] as const
 
 /**
  * Owen AI (2026-11-02): the owner's own assistant, on his Claude plan (backend app/owen_ai).
@@ -25,8 +30,13 @@ const REMEMBER = 'owen-ai:thread'
  * screen), the chat on the right. An answer is produced by a separate runner, so a sent
  * question comes back QUEUED; the open conversation is polled every 2 s until nothing in it
  * is queued or running, then polling stops.
+ *
+ * Alerts (2026-11-03): the scheduled audit's findings, behind the left column's Chats | Alerts
+ * switch. The open list is polled every 60 s while the page is open (it also feeds the tab's
+ * count); a bell alert of kind "owen_ai_issue" lands here through `focus` (App's openRecord)
+ * and opens the Alerts view.
  */
-export function OwenAiPage() {
+export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
   const qc = useQueryClient()
   const status = useOwenAiStatus({ poll: true })
   const narrow = useNarrow()
@@ -35,6 +45,19 @@ export function OwenAiPage() {
   const [problem, setProblem] = useState<string | null>(null)
   const [sendError, setSendError] = useState<{ id: number; message: string } | null>(null)
   const setActiveId = (id: number | null) => { setActiveIdState(id); remember(id) }
+  const [tab, setTab] = useState<OwenAiTab>('chats')
+  const [alertStatus, setAlertStatus] = useState<OwenAiAlertStatus>('open')
+  const [dismissError, setDismissError] = useState<{ id: number; message: string } | null>(null)
+
+  // The bell asked for Owen AI (a new request each time: `n` moves) — show the open alerts.
+  // App keeps the last focus, so a request already answered is not replayed on a later visit.
+  const focusN = focus?.n
+  useEffect(() => {
+    if (focusN == null || focusN === handledFocus) return
+    handledFocus = focusN
+    setTab('alerts')
+    setAlertStatus('open')
+  }, [focusN])
 
   const threads = useQuery({
     queryKey: THREADS_KEY, queryFn: () => owenAiThreads(false), enabled: status.visible,
@@ -46,6 +69,16 @@ export function OwenAiPage() {
     retry: (n, e) => !(e instanceof ApiError && e.status === 404) && n < 2,
     refetchInterval: (q) => (threadBusy(q.state.data) ? 2000 : false),
   })
+
+  const openAlerts = useQuery({
+    queryKey: alertsKey('open'), queryFn: () => owenAiAlerts('open'), enabled: status.visible,
+    refetchInterval: 60_000,
+  })
+  const closedAlerts = useQuery({
+    queryKey: alertsKey(alertStatus), queryFn: () => owenAiAlerts(alertStatus),
+    enabled: status.visible && tab === 'alerts' && alertStatus !== 'open',
+  })
+  const shownAlerts = alertStatus === 'open' ? openAlerts : closedAlerts
 
   // A remembered conversation that is gone opens nothing instead of an error.
   useEffect(() => {
@@ -70,9 +103,9 @@ export function OwenAiPage() {
   }
 
   const start = useMutation({
-    mutationFn: (body: { kind: OwenAiThreadKind; job_number?: string }) => owenAiOpenThread(body),
+    mutationFn: (body: { kind: OwenAiOpenKind; job_number?: string; job_uid?: string }) => owenAiOpenThread(body),
     onMutate: () => setProblem(null),
-    onSuccess: (t) => { qc.invalidateQueries({ queryKey: THREADS_KEY }); open(t.id) },
+    onSuccess: (t) => { qc.invalidateQueries({ queryKey: THREADS_KEY }); setTab('chats'); open(t.id) },
     onError: (e) => setProblem((e as Error).message),
   })
   const archive = useMutation({
@@ -84,6 +117,20 @@ export function OwenAiPage() {
     },
     onError: (e) => setProblem((e as Error).message),
   })
+  const dismiss = useMutation({
+    mutationFn: (v: { id: number; why: string }) => owenAiDismissAlert(v.id, v.why),
+    onMutate: () => setDismissError(null),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ALERTS_KEY }),
+    onError: (e, v) => setDismissError({ id: v.id, message: (e as Error).message || 'Could not dismiss it.' }),
+  })
+  const openJob = (a: OwenAiAlert) => start.mutate({ kind: 'job', job_uid: a.job_uid,
+    ...(a.job_number ? { job_number: a.job_number } : {}) })
+  const switchTab = (t: OwenAiTab) => {
+    setTab(t)
+    setProblem(null)
+    if (t === 'alerts' && narrow) setDrawer(false)
+  }
+
   const ask = useMutation({
     mutationFn: (v: { id: number; content: string }) => owenAiSend(v.id, v.content),
     onMutate: () => setSendError(null),
@@ -127,17 +174,28 @@ export function OwenAiPage() {
             onJob={(n) => start.mutate({ kind: 'job', job_number: n })}
             onNew={() => start.mutate({ kind: 'task' })}
             onArchive={(id) => archive.mutate(id)} opening={start.isPending} problem={problem}
-            narrow={narrow} onClose={() => setDrawer(false)} />
+            narrow={narrow} onClose={() => setDrawer(false)}
+            tab={tab} onTab={switchTab} openCounts={openAlerts.data?.open_counts} />
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 0' }}>
             <button type="button" onClick={() => setDrawer(!drawer)} aria-expanded={drawer} style={chipBtn}>
               {drawer ? 'Hide conversations' : 'Conversations'}</button>
-            {title && activeId != null && (
+            {tab === 'alerts' ? (
+              <span style={{ fontSize: 13, color: MUTED }}>Alerts</span>
+            ) : title && activeId != null && (
               <span style={{ fontSize: 13, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap', minWidth: 0 }}>{title}</span>)}
           </div>
-          {activeId == null ? (
+          {tab === 'alerts' ? (
+            <AlertsView status={alertStatus} onStatus={setAlertStatus}
+              alerts={shownAlerts.data?.alerts ?? []} loading={shownAlerts.isLoading}
+              error={shownAlerts.isError ? (shownAlerts.error as Error).message : null}
+              onOpenJob={openJob} opening={start.isPending}
+              onDismiss={(a, why) => dismiss.mutateAsync({ id: a.id, why }).then(() => true, () => false)}
+              dismissingId={dismiss.isPending ? (dismiss.variables?.id ?? null) : null}
+              dismissError={dismissError} problem={problem} />
+          ) : activeId == null ? (
             <div className="flex flex-1 flex-col items-center justify-center" style={{ padding: 24, textAlign: 'center' }}>
               <div style={{ fontSize: 22, color: INK, marginBottom: 8 }}>What do you want to know?</div>
               <div style={{ fontSize: 14, color: MUTED, maxWidth: 420 }}>

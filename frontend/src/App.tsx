@@ -208,7 +208,7 @@ export default function App() {
       ) : view === 'collections' && canOpenAiAgents(user) ? (
         <CollectionsPage user={user} />
       ) : view === 'owen-ai' && owenAi.visible ? (
-        <OwenAiPage />
+        <OwenAiPage focus={focusFor('owen-ai')} />
       ) : view === 'ai-agents' && canOpenAiAgents(user) ? (
         // AI Agents (2026-09-15) is ADMIN / DISPATCHER only, never a restricted user: anyone
         // else asking for it (a pasted /ai-agents link) falls through to the landing view.
