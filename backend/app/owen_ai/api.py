@@ -16,13 +16,14 @@ from sqlalchemy.orm import Session
 
 from .. import auth
 from ..db import get_db
-from ..models import OwenAiMessage, OwenAiThread, Role
+from ..models import OwenAiAlert, OwenAiMessage, OwenAiThread, Role
 from ..zuper import config as zuper_config
-from . import config
+from . import alerts, config
 
 router = APIRouter(prefix="/api/owen-ai", tags=["owen-ai"])
 NY = ZoneInfo("America/New_York")
-KINDS = ("daily", "job", "task")
+KINDS = ("daily", "job", "task")          # the owner creates these
+LISTED = (*KINDS, "audit")                # audit threads are made by the sweep
 
 
 def owner(principal: auth.Principal | None = Depends(auth.current_principal)) -> auth.Principal:
@@ -52,6 +53,7 @@ def _thread(th: OwenAiThread, busy: bool = False) -> dict:
 
 def _message(m: OwenAiMessage) -> dict:
     return {"id": m.id, "role": m.role, "content": m.content, "status": m.status,
+            "kind": m.kind, "job_uid": m.job_uid,
             "steps": m.steps or [], "error": m.error, "model": m.model,
             "cost_usd": m.cost_usd, "duration_ms": m.duration_ms, "num_turns": m.num_turns,
             "created_at": _iso(m.created_at), "finished_at": _iso(m.finished_at)}
@@ -86,7 +88,7 @@ def threads(kind: str | None = None, archived: bool = False, p: auth.Principal =
             db: Session = Depends(get_db)) -> list[dict]:
     q = select(OwenAiThread).where(OwenAiThread.user_id == p.user_id,
                                    OwenAiThread.archived.is_(archived))
-    if kind in KINDS:
+    if kind in LISTED:
         q = q.where(OwenAiThread.kind == kind)
     busy = _busy_ids(db)
     return [_thread(t, t.id in busy) for t in
@@ -191,3 +193,39 @@ def send(thread_id: int, body: NewMessage, p: auth.Principal = OWNER,
     db.commit()
     db.refresh(m)
     return _message(m)
+
+
+# ------------------------------------------------------------------------------- alerts
+
+@router.get("/alerts")
+def list_alerts(status: str = "open", job_uid: str | None = None, p: auth.Principal = OWNER,
+                db: Session = Depends(get_db)) -> dict:
+    q = select(OwenAiAlert)
+    if status in ("open", "resolved", "dismissed"):
+        q = q.where(OwenAiAlert.status == status)
+    if job_uid:
+        q = q.where(OwenAiAlert.job_uid == job_uid)
+    rows = list(db.scalars(q.order_by(OwenAiAlert.last_seen_at.desc()).limit(500)))
+    rows.sort(key=lambda a: alerts.RANK.get(a.severity, 9))
+    counts = dict.fromkeys(alerts.SEVERITIES, 0)
+    for a in db.scalars(select(OwenAiAlert).where(OwenAiAlert.status == "open")):
+        counts[a.severity] = counts.get(a.severity, 0) + 1
+    return {"alerts": [alerts.out(a) for a in rows], "open_counts": counts}
+
+
+class Dismiss(BaseModel):
+    why: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/alerts/{alert_id}/dismiss")
+def dismiss_alert(alert_id: int, body: Dismiss, p: auth.Principal = OWNER,
+                  db: Session = Depends(get_db)) -> dict:
+    """The owner says it is not a problem (or handled). The next audit may raise it again only
+    as a NEW alert if the problem is really still there."""
+    a = db.get(OwenAiAlert, alert_id)
+    if a is None:
+        raise HTTPException(404, "Not Found")
+    if a.status == "open":
+        alerts.close(db, a, "dismissed", "Dismissed by %s: %s" % (p.name or p.email, body.why))
+        db.commit()
+    return alerts.out(a)

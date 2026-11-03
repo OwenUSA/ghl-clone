@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { MicButton } from '../MicButton'
 import type { OwenAiMessage, OwenAiStep, OwenAiThreadDetail } from '../../lib/api'
-import { busySince, elapsed, excerpt, prettyJson, runFooter, threadBusy, toolsLabel } from '../../lib/owenAi'
+import { auditPromptLabel, busySince, elapsed, excerpt, prettyJson, runFooter, threadBusy, toolsLabel } from '../../lib/owenAi'
 import { Markdown } from './Markdown'
 import { BLUE, INK, LINE, MONO, MUTED, RED } from './tokens'
 
@@ -9,6 +9,9 @@ import { BLUE, INK, LINE, MONO, MUTED, RED } from './tokens'
  * One Owen AI conversation: the messages, "Owen AI is working…" while an answer is queued or
  * running (the page polls the thread every 2 s meanwhile), and the composer. Sending is
  * disabled while busy — the server refuses a second question with a 409 anyway.
+ *
+ * An audit conversation (2026-11-03, made by the scheduled sweep) is read-only: no composer, and
+ * its machine prompts shrink to one grey line ("Audit #801") that opens to the full prompt.
  */
 export function Conversation({ thread, loading, error, onSend, sending, sendError, disabledReason }: {
   thread: OwenAiThreadDetail | undefined; loading: boolean; error: string | null
@@ -22,6 +25,7 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
   const busy = threadBusy(thread)
   const since = busySince(messages)
   const now = useNow(busy)
+  const audit = thread?.kind === 'audit'
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) },
     [messages.length, busy, thread?.id, sendError])
@@ -43,13 +47,14 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
           {error && <div role="alert" style={{ color: RED, fontSize: 13 }}>Could not load this conversation: {error}</div>}
           {thread && !loading && messages.length === 0 && (
             <div style={{ color: MUTED, fontSize: 14, textAlign: 'center', marginTop: 40 }}>
-              {thread.kind === 'daily' ? 'Ask about today — the jobs, the calls, what needs doing.'
+              {audit ? 'This audit has not written anything yet.'
+                : thread.kind === 'daily' ? 'Ask about today — the jobs, the calls, what needs doing.'
                 : thread.kind === 'job' ? `Ask anything about job #${thread.job_number ?? thread.job_uid ?? ''}.`
                   : 'Ask Owen AI anything.'}
             </div>
           )}
           {messages.map((m) => m.role === 'user'
-            ? <UserBubble key={m.id} m={m} />
+            ? (audit || m.kind === 'audit' ? <AuditPrompt key={m.id} m={m} /> : <UserBubble key={m.id} m={m} />)
             : <AssistantMessage key={m.id} m={m} />)}
           {busy && (
             <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '18px 0',
@@ -66,13 +71,18 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
           <div ref={bottom} />
         </div>
       </div>
-      <div style={{ padding: '8px 12px 18px', background: 'linear-gradient(transparent, rgb(249,250,251) 30%)' }}>
-        <div style={{ maxWidth: 980, margin: '0 auto' }}>
-          <Composer value={draft} onChange={setDraft} onSend={send} blocked={blocked}
-            placeholder={disabledReason ?? (busy ? 'Owen AI is working — wait for the answer…'
-              : messages.length ? 'Reply to Owen AI…' : 'How can I help?')} />
+      {audit ? (
+        <div style={{ padding: '8px 12px 14px', fontSize: 12, color: MUTED, textAlign: 'center' }}>
+          A scheduled audit — read only. Open a job's chat from Alerts to ask about it.</div>
+      ) : (
+        <div style={{ padding: '8px 12px 18px', background: 'linear-gradient(transparent, rgb(249,250,251) 30%)' }}>
+          <div style={{ maxWidth: 980, margin: '0 auto' }}>
+            <Composer value={draft} onChange={setDraft} onSend={send} blocked={blocked}
+              placeholder={disabledReason ?? (busy ? 'Owen AI is working — wait for the answer…'
+                : messages.length ? 'Reply to Owen AI…' : 'How can I help?')} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -103,6 +113,22 @@ function UserBubble({ m }: { m: OwenAiMessage }) {
       {m.status === 'error' && m.error && (
         <div role="alert" style={{ ...errorBox, maxWidth: '80%' }}>{m.error}</div>
       )}
+    </div>
+  )
+}
+
+/** A scheduled audit's machine prompt: one small grey line, the whole prompt on click. */
+function AuditPrompt({ m }: { m: OwenAiMessage }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ margin: '16px 0 4px', fontSize: 12, color: MUTED, minWidth: 0 }}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? undefined : m.content}
+        style={{ fontSize: 12, color: MUTED, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 3, background: 'rgb(208,213,221)' }} />
+        {auditPromptLabel(m.content)}
+      </button>
+      {open && <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</div>}
+      {m.status === 'error' && m.error && <div role="alert" style={errorBox}>{m.error}</div>}
     </div>
   )
 }
