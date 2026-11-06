@@ -1,7 +1,8 @@
 """The tools Owen AI's Claude may call — Phase 1: reads only (2026-11-02).
 
 Each tool is a plain sync function (`job_dossier`, `board_snapshot` — compact answers built in
-`dossier.py`, the ones Claude should reach for first — and the raw `zuper_get`, `zuper_connect`,
+`dossier.py`, the ones Claude should reach for first; `job_photos` in `photos.py`, which saves a
+job's pictures for Claude's Read tool — and the raw `zuper_get`, `zuper_connect`,
 `quo_get`, whose answers lose their null / empty values before any cut) returning text, so
 tests call them directly; `server()` wraps them as an in-process MCP server for the Claude Agent
 SDK (imported lazily — the API container never needs the SDK). Claude sees them as
@@ -17,7 +18,7 @@ import json
 from typing import Any
 
 from ..zuper import client as zc
-from . import alerts, config, dossier, quo
+from . import alerts, config, dossier, photos, quo
 
 SERVER_NAME = "owen"
 
@@ -115,6 +116,25 @@ SPECS = (
       "Then call job_dossier on the jobs that need a closer look."),
      {"type": "object", "properties": {"board": {"type": "string"}}},
      lambda a: dossier.board_snapshot(str(a.get("board") or dossier.SIMPLE_FLOW))),
+    ("job_photos",
+     ("LOOK at one job's pictures (read-only) — when reviewing or drafting a proposal, or "
+      "checking what the technician found or did. `job` = job number or uid. `which` = "
+      "\"inspection\" (default: photos up to the first proposal, nearest the inspection, "
+      "leak / failure-point / roof albums first), \"repair\" (after the proposal was "
+      "accepted) or \"all\"; `max_photos` (default 24, at most 40); `since` = a date "
+      "(YYYY-MM-DD) to ignore older photos. Gathers notes, albums and checklist photo answers, "
+      "saves each picked picture as a 1024 px JPEG and returns JSON: counts and per photo its "
+      "absolute local `path`, time (America/New_York), source, album, who and the note text. "
+      "THEN use the Read tool on each `path` to see the image — the JSON alone does not show "
+      "the pictures. A second call reuses the files already saved."),
+     {"type": "object", "properties": {"job": {"type": "string"},
+                                       "max_photos": {"type": "integer"},
+                                       "since": {"type": "string"},
+                                       "which": {"type": "string",
+                                                 "enum": list(photos.WHICH)}},
+      "required": ["job"]},
+     lambda a: photos.job_photos(str(a["job"]), a.get("max_photos") or photos.MAX_PHOTOS,
+                                 a.get("since"), a.get("which") or "inspection")),
     ("zuper_get",
      ("GET any Zuper REST path (read-only). `path` like /jobs/{uid}, /jobs?filter.keyword=701, "
      "/estimate?count=20, /invoice_estimate/proposal_template?count=50, /jobs/category. "

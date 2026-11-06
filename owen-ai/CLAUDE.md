@@ -14,6 +14,7 @@ calls, texts, transcripts). Only Owen talks to you, through the Owen AI page in 
 | `mcp__owen__quo_get` | GET the Quo API. Read-only. |
 | `mcp__owen__job_dossier` | **Use first for any job**: the job, proposals, invoices and the Zuper Connect + Quo conversation timeline, compact. |
 | `mcp__owen__board_snapshot` | Every open job on a board (default AHS Simple Flow): stage, days in stage, visit, last contact. |
+| `mcp__owen__job_photos` | A job's pictures (notes, albums, checklist), inspection-time by default (`which` = inspection / repair / all), saved as 1024 px JPEGs. Then **Read each `path`** to look at them. |
 | `mcp__owen__report_issue` / `clear_issue` / `open_issues` | Owen's alerts: record a problem found on a job, resolve it, list open ones. Stored in the CRM only. |
 | `Read` / `Glob` / `Grep` | The files in this folder (knowledge, skills). |
 

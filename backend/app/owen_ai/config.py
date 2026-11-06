@@ -58,6 +58,20 @@ def workspace() -> Path:
     return Path(os.getenv("OWEN_AI_WORKSPACE") or _DEFAULT_WORKSPACE)
 
 
+def photo_dir() -> Path:
+    """Where `job_photos` keeps a job's downscaled pictures for Claude's Read tool (2026-11-06):
+    OWEN_AI_PHOTO_DIR, else `photos/` beside the Claude config dir (the owen_ai_home volume),
+    else the system temp dir. Always absolute; agent.py hands it to the CLI as an --add-dir."""
+    raw = (os.getenv("OWEN_AI_PHOTO_DIR") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    conf = (os.getenv("CLAUDE_CONFIG_DIR") or "").strip()
+    if conf:
+        return (Path(conf).resolve().parent / "photos")
+    import tempfile
+    return Path(tempfile.gettempdir()).resolve() / "owen-ai-photos"
+
+
 def cli_path() -> str | None:
     """None = the Claude Code CLI bundled with the SDK. Set to use a separately installed one."""
     return (os.getenv("OWEN_AI_CLI_PATH") or "").strip() or None
