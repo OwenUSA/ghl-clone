@@ -8,7 +8,9 @@ tests call them directly; `server()` wraps them as an in-process MCP server for 
 SDK (imported lazily — the API container never needs the SDK). Claude sees them as
 `mcp__owen__<name>`.
 
-Nothing here writes: Zuper goes through `client.owen_ai_read()` (GET only, denylist applies),
+Nothing here writes to Zuper or contacts anyone (alerts go to the CRM's database;
+`make_inspection_report` saves an HTML/PDF draft in the reports folder for Owen): Zuper goes
+through `client.owen_ai_read()` (GET only, denylist applies),
 Zuper Connect through `client.connect_read` (its five reads), Quo through `quo.get` (GET only).
 """
 from __future__ import annotations
@@ -18,7 +20,7 @@ import json
 from typing import Any
 
 from ..zuper import client as zc
-from . import alerts, config, dossier, photos, quo
+from . import alerts, config, dossier, photos, quo, report
 
 SERVER_NAME = "owen"
 
@@ -165,6 +167,9 @@ SPECS = (
 
 # Owen's alerts (2026-11-03): the only thing Claude writes, and only in the CRM's database.
 SPECS = SPECS + alerts.SPECS
+# The customer inspection report (2026-11-07): an HTML/PDF draft saved for Owen to download;
+# its facts (customer, address, date, prices) are read from Zuper by the tool, not typed.
+SPECS = SPECS + report.SPECS
 
 TOOL_NAMES = tuple("mcp__%s__%s" % (SERVER_NAME, name) for name, *_ in SPECS)
 

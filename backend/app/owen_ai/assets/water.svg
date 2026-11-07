@@ -1,0 +1,29 @@
+<svg viewBox="0 0 640 250" role="img" aria-label="How water travels from the roof to the ceiling">
+ <rect x="0" y="0" width="640" height="250" fill="#f8fafc"/>
+ <polygon points="40,40 600,150 600,166 40,56" fill="#d9b48a" stroke="#a07a45"/>
+ <polygon points="40,32 600,142 600,150 40,40" fill="#334155"/>
+ <g fill="#c2410c" stroke="#7c2d12">
+  <path d="M150 50 q18 -26 36 6 q18 -18 36 10 l0 -6 q-18 -20 -36 -6 q-18 -26 -36 -6z"/>
+  <path d="M260 72 q18 -26 36 6 q18 -18 36 10 l0 -6 q-18 -20 -36 -6 q-18 -26 -36 -6z"/>
+  <path d="M370 94 q18 -26 36 6 q18 -18 36 10 l0 -6 q-18 -20 -36 -6 q-18 -26 -36 -6z"/>
+  <path d="M480 116 q18 -26 36 6 q18 -18 36 10 l0 -6 q-18 -20 -36 -6 q-18 -26 -36 -6z"/>
+ </g>
+ <rect x="40" y="18" width="70" height="30" fill="#6b7280" opacity=".35"/>
+ <rect x="40" y="200" width="600" height="14" fill="#e5e7eb" stroke="#9ca3af"/>
+ <defs><marker id="ar" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+  <path d="M0 0 L10 5 L0 10z" fill="#2563eb"/></marker></defs>
+ <g stroke="#2563eb" stroke-width="4" fill="none" stroke-linecap="round" marker-end="url(#ar)">
+  <path d="M75 16 L75 50"/><path d="M90 62 L300 104"/><path d="M330 112 L470 140"/><path d="M490 150 L490 196"/>
+ </g>
+ <ellipse cx="490" cy="216" rx="34" ry="7" fill="#b08968" opacity=".7"/>
+ <g font-family="Segoe UI,system-ui,sans-serif" font-size="15" font-weight="700">
+  <circle cx="128" cy="20" r="13" fill="#dc2626"/><text x="123" y="25" fill="#fff">1</text>
+  <circle cx="300" cy="140" r="13" fill="#2563eb"/><text x="295" y="145" fill="#fff">2</text>
+  <circle cx="355" cy="240" r="13" fill="#b45309"/><text x="350" y="245" fill="#fff">3</text>
+ </g>
+ <g font-family="Segoe UI,system-ui,sans-serif" font-size="17" fill="#111827">
+  <text x="148" y="25">Water gets in at the worn corner</text>
+  <text x="322" y="180">It runs downhill on the wood</text>
+  <text x="375" y="246">It drips where it can — your ceiling</text>
+ </g>
+</svg>
