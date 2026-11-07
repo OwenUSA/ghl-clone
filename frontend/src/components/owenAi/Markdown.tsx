@@ -1,6 +1,6 @@
 import { blocks, cellLines, type Inline } from '../../lib/dispatch'
-import { codeSpans, splitFences } from '../../lib/owenAi'
-import { LINE, MONO, MUTED } from './tokens'
+import { codeSpans, linkSpans, splitFences } from '../../lib/owenAi'
+import { BLUE, LINE, MONO, MUTED } from './tokens'
 
 /**
  * An answer's Markdown, as React elements — never as HTML, so an answer cannot inject markup.
@@ -31,8 +31,34 @@ function Parts({ parts }: { parts: Inline[] }) {
           return <code key={key} style={{ fontFamily: MONO, fontSize: '0.88em', background: 'rgb(243,244,246)',
             borderRadius: 4, padding: '1px 4px', fontWeight: p.bold ? 600 : undefined }}>{c.text}</code>
         }
-        return p.bold ? <strong key={key}>{c.text}</strong> : <span key={key}>{c.text}</span>
+        return <Links key={key} text={c.text} bold={p.bold} />
       }))}
+    </>
+  )
+}
+
+/** Links (2026-11-07): an inspection report on this server is a download button; an https URL
+    opens in a new tab; any other target is shown as its label only (lib/owenAi `linkSpans`). */
+function Links({ text, bold }: { text: string; bold: boolean }) {
+  return (
+    <>
+      {linkSpans(text).map((s, i) => {
+        if (s.kind === 'report') {
+          return (
+            <a key={i} href={s.href} download
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: '2px 6px 2px 0',
+                padding: '5px 12px', borderRadius: 8, background: BLUE, color: '#fff', fontSize: 13,
+                fontWeight: 600, textDecoration: 'none', lineHeight: '18px' }}>
+              <span aria-hidden="true">⤓</span>{s.text}
+            </a>
+          )
+        }
+        if (s.kind === 'link') {
+          return <a key={i} href={s.href} target="_blank" rel="noopener noreferrer"
+            style={{ color: BLUE, fontWeight: bold ? 600 : undefined }}>{s.text}</a>
+        }
+        return bold ? <strong key={i}>{s.text}</strong> : <span key={i}>{s.text}</span>
+      })}
     </>
   )
 }

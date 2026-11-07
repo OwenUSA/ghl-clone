@@ -115,6 +115,10 @@ ignore = [
 # rule means hand-editing files whose whole value is that they are mechanical.
 "backend/migrations/versions/**" = ["E501"]
 
+# Owen AI's inspection report keeps the approved sample's HTML markup verbatim (one element
+# per line, as in owen-ai-analysis/inspection-report-samples), so a diff against it stays readable.
+"backend/app/owen_ai/report.py" = ["E501"]
+
 # Tests unpack fixtures and assert on values that are deliberately unused.
 "**/tests/**" = ["RUF059"]
 

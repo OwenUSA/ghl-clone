@@ -7,9 +7,11 @@ QUEUED and answered by the runner; the page polls the thread.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -18,7 +20,7 @@ from .. import auth
 from ..db import get_db
 from ..models import OwenAiAlert, OwenAiMessage, OwenAiThread, Role
 from ..zuper import config as zuper_config
-from . import alerts, config
+from . import alerts, config, report
 
 router = APIRouter(prefix="/api/owen-ai", tags=["owen-ai"])
 NY = ZoneInfo("America/New_York")
@@ -229,3 +231,26 @@ def dismiss_alert(alert_id: int, body: Dismiss, p: auth.Principal = OWNER,
         alerts.close(db, a, "dismissed", "Dismissed by %s: %s" % (p.name or p.email, body.why))
         db.commit()
     return alerts.out(a)
+
+
+# ------------------------------------------------------------------------------- reports
+
+@router.get("/reports")
+def list_reports(job_uid: str | None = None, p: auth.Principal = OWNER) -> dict:
+    """The inspection reports make_inspection_report saved (newest first), for one job or all."""
+    return {"reports": report.list_reports((job_uid or "").strip() or None)}
+
+
+@router.get("/reports/{report_id}/{file}")
+def report_file(report_id: str, file: str, p: auth.Principal = OWNER) -> FileResponse:
+    """One report's report.html or report.pdf, as a download named for the customer. Any other
+    name, a malformed id or a path outside the reports folder is 404."""
+    path = report.file_path(report_id, file)
+    if path is None:
+        raise HTTPException(404, "Not Found")
+    meta = report.read_meta(report_id) or {"job_number": report_id.split("-", 1)[0]}
+    name = report.friendly_name(meta, file)          # ASCII letters, digits, spaces, - and '
+    return FileResponse(path, media_type=report.FILES[file], headers={
+        "Content-Disposition": "attachment; filename=\"%s\"; filename*=utf-8''%s"
+                               % (name, quote(name)),
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})

@@ -1,0 +1,44 @@
+<style>
+img.zoom{cursor:zoom-in}
+.tip{font-size:9pt;color:#2563eb;margin:2px 0 6px}
+#lb{position:fixed;inset:0;background:rgba(10,12,16,.94);display:none;z-index:99;touch-action:none;user-select:none}
+#lb.on{display:block}#lb img{position:absolute;left:50%;top:50%;max-width:none;transform-origin:0 0;cursor:grab;will-change:transform}
+#lb .bar{position:absolute;left:0;right:0;bottom:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px;align-items:center;
+ background:linear-gradient(transparent,rgba(0,0,0,.7));color:#fff;font:14px "Segoe UI",system-ui,sans-serif}
+#lb .cap{flex:1;min-width:0}#lb button{background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;
+ min-width:42px;height:42px;font-size:20px;cursor:pointer}#lb .x{position:absolute;top:calc(10px + env(safe-area-inset-top));right:12px}
+@media print{#lb,.tip{display:none!important}}
+</style>
+<div id="lb" role="dialog" aria-label="Photo viewer"><img alt="">
+ <button class="x" title="Close (Esc)">✕</button>
+ <div class="bar"><button data-a="prev" title="Previous (←)">‹</button><div class="cap"></div>
+  <button data-a="out" title="Zoom out (−)">−</button><button data-a="fit" title="Fit">⤢</button><button data-a="in" title="Zoom in (+)">+</button>
+  <button data-a="next" title="Next (→)">›</button></div></div>
+<script>
+(()=>{const pics=[...document.querySelectorAll('img.zoom')],lb=document.getElementById('lb'),im=lb.querySelector('img'),cap=lb.querySelector('.cap');
+let i=0,s=1,x=0,y=0,fit=1;const pts=new Map();let last=null,pinch=null;
+const apply=()=>{im.style.transform=`translate(${x}px,${y}px) scale(${s})`};
+function fitIt(){const W=innerWidth,H=innerHeight-70;fit=Math.min(W/im.naturalWidth,H/im.naturalHeight,4);s=fit;
+ x=(W-im.naturalWidth*s)/2-W/2;y=(H-im.naturalHeight*s)/2-innerHeight/2;apply()}
+function open(n){i=(n+pics.length)%pics.length;im.onload=fitIt;im.src=pics[i].src;cap.textContent=`${i+1} / ${pics.length} · ${pics[i].alt}`;lb.classList.add('on')}
+function zoomAt(f,cx,cy){const ns=Math.min(Math.max(s*f,fit*.5),fit*12);const px=cx-innerWidth/2,py=cy-innerHeight/2;
+ x=px-(px-x)*(ns/s);y=py-(py-y)*(ns/s);s=ns;apply()}
+pics.forEach((p,n)=>p.addEventListener('click',()=>open(n)));
+lb.querySelector('.x').onclick=()=>lb.classList.remove('on');
+lb.querySelector('.bar').addEventListener('click',e=>{const a=e.target.dataset.a;if(!a)return;
+ if(a==='prev')open(i-1);if(a==='next')open(i+1);if(a==='fit')fitIt();
+ if(a==='in')zoomAt(1.5,innerWidth/2,innerHeight/2);if(a==='out')zoomAt(1/1.5,innerWidth/2,innerHeight/2)});
+lb.addEventListener('wheel',e=>{e.preventDefault();zoomAt(e.deltaY<0?1.2:1/1.2,e.clientX,e.clientY)},{passive:false});
+im.addEventListener('dblclick',e=>zoomAt(s>fit*1.5?fit/s:2.5,e.clientX,e.clientY));
+im.addEventListener('pointerdown',e=>{im.setPointerCapture(e.pointerId);pts.set(e.pointerId,[e.clientX,e.clientY]);last=[e.clientX,e.clientY];
+ if(pts.size===2){const [a,b]=[...pts.values()];pinch=Math.hypot(a[0]-b[0],a[1]-b[1])}});
+im.addEventListener('pointermove',e=>{if(!pts.has(e.pointerId))return;pts.set(e.pointerId,[e.clientX,e.clientY]);
+ if(pts.size===2&&pinch){const [a,b]=[...pts.values()],d=Math.hypot(a[0]-b[0],a[1]-b[1]);zoomAt(d/pinch,(a[0]+b[0])/2,(a[1]+b[1])/2);pinch=d}
+ else if(pts.size===1&&last){x+=e.clientX-last[0];y+=e.clientY-last[1];last=[e.clientX,e.clientY];apply()}});
+const up=e=>{pts.delete(e.pointerId);if(pts.size<2)pinch=null;last=pts.size?[...pts.values()][0]:null};
+im.addEventListener('pointerup',up);im.addEventListener('pointercancel',up);
+addEventListener('keydown',e=>{if(!lb.classList.contains('on'))return;if(e.key==='Escape')lb.classList.remove('on');
+ if(e.key==='ArrowRight')open(i+1);if(e.key==='ArrowLeft')open(i-1);if(e.key==='+'||e.key==='=')zoomAt(1.5,innerWidth/2,innerHeight/2);
+ if(e.key==='-')zoomAt(1/1.5,innerWidth/2,innerHeight/2)});
+addEventListener('resize',()=>{if(lb.classList.contains('on'))fitIt()});})();
+</script>

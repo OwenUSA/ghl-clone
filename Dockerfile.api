@@ -27,9 +27,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_ROOT=/var/lib/ghl-clone/media
 
 # curl is for the container healthcheck, nothing else.
+# chromium + fonts-dejavu-core (2026-11-07): Owen AI's make_inspection_report prints its HTML
+# report to PDF headless (`chromium --headless --print-to-pdf`, app/owen_ai/report.py) and draws
+# the photo labels in DejaVu Sans Bold. Only the owen_ai container runs it; the image is shared,
+# so it costs every container ~300 MB of disk (no extra memory unless a report is printed).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends curl chromium fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
 
 WORKDIR /app
 

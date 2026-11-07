@@ -58,6 +58,20 @@ def workspace() -> Path:
     return Path(os.getenv("OWEN_AI_WORKSPACE") or _DEFAULT_WORKSPACE)
 
 
+def photo_dir() -> Path:
+    """Where `job_photos` keeps a job's downscaled pictures for Claude's Read tool (2026-11-06):
+    OWEN_AI_PHOTO_DIR, else `photos/` beside the Claude config dir (the owen_ai_home volume),
+    else the system temp dir. Always absolute; agent.py hands it to the CLI as an --add-dir."""
+    raw = (os.getenv("OWEN_AI_PHOTO_DIR") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    conf = (os.getenv("CLAUDE_CONFIG_DIR") or "").strip()
+    if conf:
+        return (Path(conf).resolve().parent / "photos")
+    import tempfile
+    return Path(tempfile.gettempdir()).resolve() / "owen-ai-photos"
+
+
 def cli_path() -> str | None:
     """None = the Claude Code CLI bundled with the SDK. Set to use a separately installed one."""
     return (os.getenv("OWEN_AI_CLI_PATH") or "").strip() or None
@@ -83,3 +97,38 @@ def sweep_times() -> tuple[str, ...]:
 
 def sweep_board() -> str:
     return (os.getenv("OWEN_AI_SWEEP_BOARD") or "AHS Simple Flow").strip()
+
+
+# ------------------------------------------------------------------ inspection reports (2026-11-07)
+
+REPORT_KEEP_DAYS = 90
+PLACEHOLDER = "[placeholder]"
+
+
+def report_dir() -> Path:
+    """Where make_inspection_report writes <id>/report.html|pdf: OWEN_AI_REPORT_DIR, else
+    `reports/` beside the Claude config dir (the owen_ai_home volume, which the api container
+    mounts read-only at the same path), else the system temp dir. Always absolute."""
+    raw = (os.getenv("OWEN_AI_REPORT_DIR") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    conf = (os.getenv("CLAUDE_CONFIG_DIR") or "").strip()
+    if conf:
+        return Path(conf).resolve().parent / "reports"
+    import tempfile
+    return Path(tempfile.gettempdir()).resolve() / "owen-ai-reports"
+
+
+def report_setting(name: str) -> str | None:
+    """OWEN_AI_REPORT_PHONE / _LICENSE / _CITY / _INSPECTOR_DEFAULT; None when unset."""
+    return (os.getenv("OWEN_AI_REPORT_" + name) or "").strip() or None
+
+
+def chromium() -> str | None:
+    """The browser that prints the PDF: OWEN_AI_CHROMIUM (a path), else `chromium` /
+    `chromium-browser` on PATH (Dockerfile.api installs Debian's `chromium`). None = HTML only."""
+    import shutil
+    raw = (os.getenv("OWEN_AI_CHROMIUM") or "").strip()
+    if raw:
+        return raw if Path(raw).is_file() else shutil.which(raw)
+    return shutil.which("chromium") or shutil.which("chromium-browser")

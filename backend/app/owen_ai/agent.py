@@ -63,8 +63,13 @@ async def _run(prompt: str, session_id: str | None, note: str) -> TurnResult:
         query,
     )
 
+    # job_photos saves pictures here; Read may open them (and nothing else outside the
+    # workspace). The CLI wants the folder to exist.
+    photo_dir = config.photo_dir()
+    photo_dir.mkdir(parents=True, exist_ok=True)
     options = ClaudeAgentOptions(
         cwd=str(config.workspace()),
+        add_dirs=[str(photo_dir)],
         setting_sources=["project"],               # the workspace's CLAUDE.md and skills
         system_prompt={"type": "preset", "preset": "claude_code", "append": note},
         tools=BUILTIN_TOOLS,

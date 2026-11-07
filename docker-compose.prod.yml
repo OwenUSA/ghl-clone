@@ -57,7 +57,8 @@ services:
       - media:/var/lib/ghl-clone/media
       - /opt/santiagoproperties/ghl-clone-kpi/input:/var/lib/ghl-clone/kpi/input:ro
       - /opt/santiagoproperties/ghl-clone-kpi/reports:/var/lib/ghl-clone/kpi/reports
-      # Read-only, only so /api/owen-ai/status can say whether Owen AI has a Claude login.
+      # Read-only: /api/owen-ai/status checks the Claude login there, and /api/owen-ai/reports
+      # serves the inspection reports the owen_ai container writes to /var/lib/owen-ai/reports.
       - owen_ai_home:/var/lib/owen-ai:ro
     expose: ["8000"]
     networks: [ghl-net, traefik-public]
