@@ -41,6 +41,7 @@ ACTIONS: dict[str, dict] = {
                      "customer": False},
     "zuper_tasks": {"label": "Create and update tasks in Zuper", "customer": False},
     "zuper_files": {"label": "Attach files to proposals in Zuper", "customer": False},
+    "zuper_proposals": {"label": "Create proposal drafts in Zuper", "customer": False},
     "zuper_routes": {"label": "Build technician routes in Zuper", "customer": False},
     "crm_write": {"label": "Change CRM records", "customer": False},
     "suggest": {"label": "Suggest changes to the office", "customer": False},
@@ -379,9 +380,14 @@ ENTRIES: tuple[Entry, ...] = (
         provider="Anthropic (Claude plan)", hours="When the owner asks",
         actions=(
             Action("ai_chat", AUTO, (NEVER, AUTO), "Answers the owner in the Owen AI chat."),
+            Action("zuper_proposals", APPROVE, (NEVER, APPROVE),
+                   "Owner lift 2026-11-09: a Good/Better/Best proposal DRAFT, created in Zuper "
+                   "only when the owner presses Approve on the Proposals tab. Also needs "
+                   "OWEN_AI_PROPOSALS_ENABLED on the server."),
         ),
-        never=("Write anything in Zuper (phase 1)", "Text or call anyone",
-               "Answer anyone but the owner"),
+        never=("Send a proposal to a customer",
+               "Write anything else in Zuper (only an approved proposal draft)",
+               "Text or call anyone", "Answer anyone but the owner"),
         owner_hint="Owen",
     ),
     # ------------------------------------------------------------------ automations

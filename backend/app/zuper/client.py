@@ -116,6 +116,32 @@ def owen_ai_read():
         _OWEN_AI_READ.reset(token)
 
 
+_OWEN_AI_PROPOSAL: ContextVar[frozenset | None] = ContextVar("zuper_owen_ai_proposal",
+                                                             default=None)
+
+
+@contextlib.contextmanager
+def owen_ai_proposal_write(fill_uids=()):
+    """Owen AI's proposal DRAFT, created only when the owner pressed Approve (2026-11-09, a
+    scoped lift of "Zuper is read-only"; app/owen_ai/proposals.py and nothing else opens it).
+
+    Inside this scope the ONLY non-GETs are
+      POST /estimate          a new proposal (no estimate_uid in it)
+      PUT  /estimate/{uid}    filling a draft — and only a uid in `fill_uids`, the ones the
+                              draft row recorded as its target or as the one it created
+    and only with a body `_owen_ai_proposal_body_ok` accepts: {"estimate": {...}} with
+    is_proposal true, no status but DRAFT, nothing that sends, emails or notifies, no picture
+    (option_image and every other *image key), no query string. Everything else, /send and
+    /email included, is refused before a connection; nothing at all while
+    OWEN_AI_PROPOSALS_ENABLED is off. GETs are allowed as in `owen_ai_read` (the denylist still
+    applies), so the read-back happens inside the same scope."""
+    token = _OWEN_AI_PROPOSAL.set(frozenset(str(u) for u in fill_uids if u))
+    try:
+        yield
+    finally:
+        _OWEN_AI_PROPOSAL.reset(token)
+
+
 _DISPATCH_WRITE: ContextVar[bool] = ContextVar("zuper_dispatch_write", default=False)
 _PROPOSAL_LINES: ContextVar[bool] = ContextVar("zuper_proposal_lines", default=False)
 
@@ -577,10 +603,77 @@ def _autoreply_allowed(method: str, path: str, body: Any = None) -> bool:
     return any(m == method and re.match(rx, path) for m, rx in AUTOREPLY_WRITES)
 
 
+# Owen AI's proposal draft (2026-11-09): exactly these two writes, inside its own scope only.
+OWEN_AI_PROPOSAL_POST = ("POST", r"^/estimate$")
+OWEN_AI_PROPOSAL_PUT = ("PUT", r"^/estimate/([^/]+)$")
+# A key matching this, anywhere in the body, refuses the request: a status, a send, an email,
+# a notification, a reminder, a picture. Two exceptions, checked by position: the estimate's
+# own `estimate_status` when it is exactly "DRAFT", and a signer's `email` in signatures[].
+_PROPOSAL_FORBIDDEN_KEY = re.compile(r"status|send|sent|mail|notif|remind|image|subject|"
+                                     r"^(to|cc|bcc|attachments)$", re.IGNORECASE)
+
+
+def _proposal_keys_ok(value: Any, where: str) -> bool:
+    if isinstance(value, list):
+        return all(_proposal_keys_ok(v, where) for v in value)
+    if not isinstance(value, dict):
+        return True
+    for k, v in value.items():
+        key = str(k)
+        if where == "estimate" and key == "estimate_status":
+            if v != "DRAFT":
+                return False
+            continue
+        if where == "signature" and key == "email":
+            continue
+        if _PROPOSAL_FORBIDDEN_KEY.search(key):
+            return False
+        inner = "signatures" if where == "estimate" and key == "signatures" else "nested"
+        if inner == "signatures":
+            if not isinstance(v, list) or not all(
+                    isinstance(s, dict) and _proposal_keys_ok(s, "signature") for s in v):
+                return False
+            continue
+        if not _proposal_keys_ok(v, inner):
+            return False
+    return True
+
+
+def _owen_ai_proposal_body_ok(method: str, path: str, body: Any, params: Any) -> bool:
+    allowed_uids = _OWEN_AI_PROPOSAL.get()
+    if allowed_uids is None or not config.owen_ai_proposals_enabled() or params:
+        return False
+    if not (isinstance(body, dict) and set(body) == {"estimate"}
+            and isinstance(body["estimate"], dict)):
+        return False
+    est = body["estimate"]
+    if est.get("is_proposal") is not True or not _proposal_keys_ok(est, "estimate"):
+        return False
+    if method == OWEN_AI_PROPOSAL_POST[0] and re.match(OWEN_AI_PROPOSAL_POST[1], path):
+        return "estimate_uid" not in est
+    m = re.match(OWEN_AI_PROPOSAL_PUT[1], path)
+    if method == OWEN_AI_PROPOSAL_PUT[0] and m:
+        uid = m.group(1)
+        return uid in allowed_uids and est.get("estimate_uid") == uid
+    return False
+
+
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None) -> Any:
     method = method.upper()
     path = "/" + path.lstrip("/")
+    in_proposal = _OWEN_AI_PROPOSAL.get() is not None
+    # Inside Owen AI's proposal scope only its two checked writes exist; the denylist's
+    # estimate rule is the one thing they get past, and only in that exact shape.
+    if method != "GET" and in_proposal and not _owen_ai_proposal_body_ok(method, path, body,
+                                                                         params):
+        raise ZuperError("refused", "%s %s is not an Owen AI proposal draft write%s" % (
+            method, path, "" if config.owen_ai_proposals_enabled()
+            else " (" + config.OWEN_AI_PROPOSALS_OFF_SENTENCE + ")"))
+    proposal_write = method != "GET" and in_proposal   # passed the check above
+    if proposal_write and (_READ_ONLY.get() or _DISPATCH_WRITE.get()
+                           or _PROPOSAL_LINES.get() or _send_scope()[0]):
+        raise ZuperError("refused", "an Owen AI proposal write cannot run inside another scope")
     # Inside the auto-reply scope only its own two writes exist (the send is the ONE way past
     # the denylist, and only in its exact shape); nothing at all while the server gate is off.
     inside, gate_on, off_sentence, scope_name = _send_scope()
@@ -589,11 +682,11 @@ def request(method: str, path: str, *, params: dict | None = None,
             method, path, scope_name, "" if gate_on else " (" + off_sentence + ")"))
     autoreply_send = (inside and method == AUTOREPLY_SEND[0]
                       and re.match(AUTOREPLY_SEND[1], path) is not None)
-    why = None if autoreply_send else denied(method, path)
+    why = None if (autoreply_send or proposal_write) else denied(method, path)
     if why:
         raise ZuperError("refused", "%s %s is never called: %s" % (method, path, why))
-    owen_ai_get = method == "GET" and _OWEN_AI_READ.get()
-    if not (autoreply_send or owen_ai_get or allowed(method, path)):
+    owen_ai_get = method == "GET" and (_OWEN_AI_READ.get() or in_proposal)
+    if not (autoreply_send or proposal_write or owen_ai_get or allowed(method, path)):
         raise ZuperError("refused", "%s %s is not on the sync's allowlist" % (method, path))
     if not (config.env_enabled() or _OPERATOR.get()):
         raise ZuperError("off")
@@ -613,7 +706,8 @@ def request(method: str, path: str, *, params: dict | None = None,
                                     "job_uid, products and job_total)%s" % (
                                         method, path, "" if config.proposal_lines_enabled()
                                         else "; ZUPER_PROPOSAL_LINES is off"))
-    if method != "GET" and config.pull_only() and not _mirror_write_allowed(path) \
+    if method != "GET" and config.pull_only() and not proposal_write \
+            and not _mirror_write_allowed(path) \
             and not _ahs_create_allowed(method, path) \
             and not _dispatch_write_allowed(method, path) \
             and not _proposal_lines_allowed(method, path, body) \

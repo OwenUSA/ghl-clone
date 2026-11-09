@@ -10,13 +10,15 @@ import { BLUE, INK, LINE, MUTED, RED, SEVERITY_COLORS, SIDEBAR_BG, chipBtn } fro
  * assistant's chat list).
  */
 export function ThreadList({ threads, loading, error, activeId, onOpen, onToday, onJob, onNew, onArchive,
-  opening, problem, narrow, onClose, tab, onTab, openCounts }: {
+  opening, problem, narrow, onClose, tab, onTab, openCounts, pendingProposals = 0 }: {
   threads: OwenAiThread[]; loading: boolean; error: string | null; activeId: number | null
   onOpen: (id: number) => void; onToday: () => void; onJob: (jobNumber: string) => void; onNew: () => void
   onArchive: (id: number) => void; opening: boolean; problem: string | null
   narrow: boolean; onClose: () => void
   tab: OwenAiTab; onTab: (t: OwenAiTab) => void
   openCounts: Record<OwenAiAlertSeverity, number> | undefined
+  /** Proposal drafts waiting for the owner (2026-11-09). */
+  pendingProposals?: number
 }) {
   const [jobOpen, setJobOpen] = useState(false)
   const [job, setJob] = useState('')
@@ -57,8 +59,22 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
                 background: badge.red ? 'rgb(240,68,56)' : 'rgb(254,240,199)' }}>{badge.n}</span>
             )}
           </button>
+          <button type="button" role="tab" aria-selected={tab === 'proposals'} onClick={() => onTab('proposals')}
+            aria-label={pendingProposals ? `Proposals: ${pendingProposals} waiting for you` : 'Proposals'}
+            style={tabBtn(tab === 'proposals')}>
+            Proposals
+            {pendingProposals > 0 && (
+              <span aria-hidden="true" style={{ marginLeft: 6, minWidth: 18, height: 18, padding: '0 5px',
+                borderRadius: 9, fontSize: 11, fontWeight: 600, lineHeight: '18px', display: 'inline-block',
+                color: '#fff', background: BLUE }}>{pendingProposals}</span>
+            )}
+          </button>
         </div>
-        {tab === 'alerts' ? (
+        {tab === 'proposals' ? (
+          <div style={{ fontSize: 12, color: MUTED, padding: '4px 2px' }}>
+            Good / Better / Best proposals Owen AI prepared. Approve creates one in Zuper as a draft — never
+            sent to the customer. Reject tells Owen AI why.</div>
+        ) : tab === 'alerts' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 2px' }}>
             {SEVERITIES.map((sv) => (
               <div key={sv} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: INK }}>

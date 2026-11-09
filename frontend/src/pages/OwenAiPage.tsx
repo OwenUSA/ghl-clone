@@ -2,14 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PAGE_BG } from '../components/ai/aiUi'
 import { AlertsView } from '../components/owenAi/AlertsView'
+import { ProposalsView } from '../components/owenAi/ProposalsView'
 import { Conversation } from '../components/owenAi/Conversation'
 import { StatusStrip } from '../components/owenAi/StatusStrip'
 import { ThreadList } from '../components/owenAi/ThreadList'
 import { OWEN_AI_STATUS_KEY, useOwenAiStatus } from '../components/owenAi/useOwenAiStatus'
 import { INK, MUTED, NARROW, chipBtn } from '../components/owenAi/tokens'
 import {
-  ApiError, owenAiAlerts, owenAiDismissAlert, owenAiEditThread, owenAiOpenThread, owenAiSend, owenAiThread,
-  owenAiThreads, type OwenAiAlert, type OwenAiAlertStatus, type OwenAiOpenKind, type OwenAiThreadDetail,
+  ApiError, owenAiAlerts, owenAiApproveProposal, owenAiDismissAlert, owenAiEditThread, owenAiOpenThread,
+  owenAiProposals, owenAiRejectProposal, owenAiSend, owenAiThread, owenAiThreads, type OwenAiAlert, type OwenAiAlertStatus, type OwenAiOpenKind, type OwenAiThreadDetail,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
 import { threadBusy, type OwenAiTab } from '../lib/owenAi'
@@ -20,6 +21,7 @@ const REMEMBER = 'owen-ai:thread'
 const ALERTS_KEY = ['owen-ai-alerts'] as const
 let handledFocus: number | null = null
 const alertsKey = (status: OwenAiAlertStatus) => ['owen-ai-alerts', status] as const
+const PROPOSALS_KEY = ['owen-ai-proposals'] as const
 
 /**
  * Owen AI (2026-11-02): the owner's own assistant, on his Claude plan (backend app/owen_ai).
@@ -35,6 +37,11 @@ const alertsKey = (status: OwenAiAlertStatus) => ['owen-ai-alerts', status] as c
  * switch. The open list is polled every 60 s while the page is open (it also feeds the tab's
  * count); a bell alert of kind "owen_ai_issue" lands here through `focus` (App's openRecord)
  * and opens the Alerts view.
+ *
+ * Proposals (2026-11-09): the Good / Better / Best drafts Owen AI prepared, polled every 30 s
+ * (the tab shows how many wait). Approve creates one in Zuper as a DRAFT, never sent; the
+ * server answers with the DTR number or Zuper's error. Approve / Reject also post a note into
+ * the conversation the draft came from.
  */
 export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
   const qc = useQueryClient()
@@ -48,6 +55,7 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
   const [tab, setTab] = useState<OwenAiTab>('chats')
   const [alertStatus, setAlertStatus] = useState<OwenAiAlertStatus>('open')
   const [dismissError, setDismissError] = useState<{ id: number; message: string } | null>(null)
+  const [proposalError, setProposalError] = useState<{ id: number; message: string } | null>(null)
 
   // The bell asked for Owen AI (a new request each time: `n` moves) — show the open alerts.
   // App keeps the last focus, so a request already answered is not replayed on a later visit.
@@ -79,6 +87,10 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
     enabled: status.visible && tab === 'alerts' && alertStatus !== 'open',
   })
   const shownAlerts = alertStatus === 'open' ? openAlerts : closedAlerts
+  const drafts = useQuery({
+    queryKey: PROPOSALS_KEY, queryFn: () => owenAiProposals(), enabled: status.visible,
+    refetchInterval: tab === 'proposals' ? 10_000 : 30_000,
+  })
 
   // A remembered conversation that is gone opens nothing instead of an error.
   useEffect(() => {
@@ -123,12 +135,36 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ALERTS_KEY }),
     onError: (e, v) => setDismissError({ id: v.id, message: (e as Error).message || 'Could not dismiss it.' }),
   })
+  const decided = (threadId: number | null) => {
+    qc.invalidateQueries({ queryKey: PROPOSALS_KEY })
+    if (threadId != null) qc.invalidateQueries({ queryKey: threadKey(threadId) })
+  }
+  const approve = useMutation({
+    mutationFn: (id: number) => owenAiApproveProposal(id),
+    onMutate: () => setProposalError(null),
+    onSuccess: (p) => {
+      decided(p.thread_id)
+      if (p.status === 'failed') setProposalError({ id: p.id, message: p.error ?? 'Zuper refused it.' })
+    },
+    onError: (e, id) => {
+      setProposalError({ id, message: (e as Error).message || 'Could not approve it.' })
+      qc.invalidateQueries({ queryKey: PROPOSALS_KEY })
+    },
+  })
+  const rejectDraft = useMutation({
+    mutationFn: (v: { id: number; why: string }) => owenAiRejectProposal(v.id, v.why),
+    onMutate: () => setProposalError(null),
+    onSuccess: (p) => decided(p.thread_id),
+    onError: (e, v) => setProposalError({ id: v.id, message: (e as Error).message || 'Could not reject it.' }),
+  })
+  const proposalBusy = approve.isPending ? (approve.variables ?? null)
+    : rejectDraft.isPending ? (rejectDraft.variables?.id ?? null) : null
   const openJob = (a: OwenAiAlert) => start.mutate({ kind: 'job', job_uid: a.job_uid,
     ...(a.job_number ? { job_number: a.job_number } : {}) })
   const switchTab = (t: OwenAiTab) => {
     setTab(t)
     setProblem(null)
-    if (t === 'alerts' && narrow) setDrawer(false)
+    if (t !== 'chats' && narrow) setDrawer(false)
   }
 
   const ask = useMutation({
@@ -175,19 +211,26 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
             onNew={() => start.mutate({ kind: 'task' })}
             onArchive={(id) => archive.mutate(id)} opening={start.isPending} problem={problem}
             narrow={narrow} onClose={() => setDrawer(false)}
-            tab={tab} onTab={switchTab} openCounts={openAlerts.data?.open_counts} />
+            tab={tab} onTab={switchTab} openCounts={openAlerts.data?.open_counts}
+            pendingProposals={drafts.data?.pending ?? 0} />
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 0' }}>
             <button type="button" onClick={() => setDrawer(!drawer)} aria-expanded={drawer} style={chipBtn}>
               {drawer ? 'Hide conversations' : 'Conversations'}</button>
-            {tab === 'alerts' ? (
-              <span style={{ fontSize: 13, color: MUTED }}>Alerts</span>
+            {tab !== 'chats' ? (
+              <span style={{ fontSize: 13, color: MUTED }}>{tab === 'alerts' ? 'Alerts' : 'Proposals'}</span>
             ) : title && activeId != null && (
               <span style={{ fontSize: 13, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap', minWidth: 0 }}>{title}</span>)}
           </div>
-          {tab === 'alerts' ? (
+          {tab === 'proposals' ? (
+            <ProposalsView proposals={drafts.data?.proposals ?? []} loading={drafts.isLoading}
+              error={drafts.isError ? (drafts.error as Error).message : null} sentence={drafts.data?.sentence ?? null}
+              onApprove={(p) => approve.mutateAsync(p.id).then((r) => r.status === 'created', () => false)}
+              onReject={(p, why) => rejectDraft.mutateAsync({ id: p.id, why }).then(() => true, () => false)}
+              busyId={proposalBusy} actionError={proposalError} />
+          ) : tab === 'alerts' ? (
             <AlertsView status={alertStatus} onStatus={setAlertStatus}
               alerts={shownAlerts.data?.alerts ?? []} loading={shownAlerts.isLoading}
               error={shownAlerts.isError ? (shownAlerts.error as Error).message : null}

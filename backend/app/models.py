@@ -2902,3 +2902,35 @@ class OwenAiAlert(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now())
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OwenAiProposalDraft(Base):
+    """A Good/Better/Best proposal Owen AI prepared for one Zuper job (2026-11-09,
+    app/owen_ai/proposals.py). Nothing reaches Zuper until the owner presses Approve: then, and
+    only then, the server creates it as a DRAFT (`target` "new") or fills the empty draft Zuper
+    made for the job (`target` "fill:<estimate_uid>"), reads it back and records it. It is
+    never sent. Status: pending | approved | creating | created | rejected | failed. `options`:
+    [{name, option_description, is_recommended, price, deposit, warranty, scope_html,
+    product{code, uid, name, type, uom}}]; `spec`: what Claude sent plus the Zuper facts the
+    body is built from (customer, property, addresses, layout)."""
+    __tablename__ = "owen_ai_proposal_drafts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    template_key: Mapped[str] = mapped_column(String(20))         # tile|flat|custom|replacement
+    template_uid: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(300))
+    options: Mapped[list] = mapped_column(JSONType)
+    spec: Mapped[dict] = mapped_column(JSONType)
+    status: Mapped[str] = mapped_column(String(10), default="pending", server_default="pending",
+                                        index=True)
+    target: Mapped[str] = mapped_column(String(80), default="new", server_default="new")
+    estimate_uid: Mapped[str | None] = mapped_column(String(64))
+    estimate_number: Mapped[str | None] = mapped_column(String(40))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(200))
+    thread_id: Mapped[int | None] = mapped_column(Integer, index=True)
