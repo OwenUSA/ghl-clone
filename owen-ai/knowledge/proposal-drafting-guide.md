@@ -57,7 +57,7 @@ in `scope_html`, built in this order:
   <li><strong>Step Title:</strong> what we do …</li>      <!-- 5-8 steps -->
   …
 </ul>
-<p>Workmanship Warranty: 3 Months This warranty covers workmanship on … for 3 months from completion.</p>
+<p>Workmanship Warranty: 1 Month This warranty covers workmanship on … for 1 month from completion.</p>
 <p>Payment Terms: 50% Upfront ($X.XX) – due upon acceptance of proposal. 50% Upon Completion ($X.XX) – due after final inspection and customer approval. (AHS portion billed directly to AHS).</p>
 ```
 
@@ -73,7 +73,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | double sealing of seams, flashing, transition | all penetrations, vents and boots resealed; multi-layer elastomeric; **roof maintenance / tune-up** |
 | Materials | reinstall the original tiles; matching replacements for cracked pieces | matching replacement tiles as needed | tile bonding / structural reinstall |
 | Close-out | cleanup + magnetic sweep + final inspection | same | **photo documentation** of the completed work |
-| Warranty | **3 months** | **6 months** | **1 year** |
+| Warranty | **1 month** (default) | **1 month** (default) | **1 month** (default) |
 | Usual extra findings | — | fascia board, hip re-mortar of the adjacent run, pipe boots, flat-junction recoat | full valley system, skylight or chimney re-flash, full flat recoat |
 
 Within the 35 three-tier proposals, BETTER most often added: plywood (25), expanded area (24), premium
@@ -129,7 +129,13 @@ Option names are exactly `GOOD`, `BETTER`, `BEST`. Exactly one option is `is_rec
 (42 of 42 three-tier proposals). Make BETTER the recommended one instead when the photos make BETTER the minimum
 correct fix (visible rot, two leak zones, curb lap needed), and say so to Owen.
 
-### 2.3 Warranty (exact texts; the period grows by tier)
+### 2.3 Warranty — DEFAULT 1 MONTH ON EVERY OPTION (owner, 2026-11-09)
+
+Every option (Good, Better and Best) gets **1 month** of workmanship warranty unless Owen gives another period for
+this proposal. Text: `Workmanship Warranty: 1 Month This warranty covers workmanship on <the work in THIS option>
+for 1 month from completion.` Leaving `warranty` out gives that default. The history below is for reference only.
+
+#### History (do not use as the default)
 
 | Tier | Text (adapt the "covers" list so it names only work that is in THIS option's scope) |
 |---|---|
@@ -137,7 +143,7 @@ correct fix (visible rot, two leak zones, curb lap needed), and say so to Owen.
 | BETTER | `Workmanship Warranty: 6 Months This warranty covers workmanship on expanded transition leak remediation, plywood replacement, better underlayment installation, seam waterproofing, and tile reinstallation for 6 months from completion.` |
 | BEST | `Workmanship Warranty: 1 Year This warranty covers workmanship on 2x expanded repair, double underlayment installation, plywood replacement, transition sealing, and full material reinstallation for 1 full year from completion.` |
 
-The current standard is 3 months / 6 months / 1 year (the most common values since Oct 14). Older variants exist, and you
+Until Nov 9 the most common values were 3 months / 6 months / 1 year; the owner replaced them with 1 month on every option. Older variants exist, and you
 should NOT copy them: 30 days on GOOD and BETTER (DTR-34, 38, 40, 97, 135, 137), 90 days on all three tiers
 (DTR-22, 24), 180 days, 9 months (DTR-74), and BETTER at 3 months (DTR-136). A $0 GOOD also gets 3 months unless
 Owen says 30 days (open question).
@@ -332,7 +338,7 @@ fascia (294, 627, 711, 730). Rot found on repair day with only GOOD sold means a
   write them only when a photo shows them.
 - **Tier label vs content:** no "Everything in the Better Option" in GOOD (DTR-104). No "Everything in the Good
   Option" when there is no GOOD (job 681). No BETTER text in the GOOD slot (DTR-107).
-- **Flat warranty / no growth:** the warranty grows 3 mo → 6 mo → 1 yr and names only work in that option (DTR-16
+- **Warranty covers only this option's work:** the period is 1 month by default (owner) and the text names only work in that option (DTR-16
   BEST covered "ponding area restoration" that was not in its scope).
 - **Weak ladder:** BEST $10 above BETTER (DTR-71, 74). Different prices for identical scope on the same job.
   Different AHS credits across tiers or versions (DTR-38 vs 40).
@@ -386,7 +392,7 @@ known.
 - [ ] Price block: P = price; M = P + C; S = R − P; R > M; the same C in every option; C came from the job or Owen.
 - [ ] $0 GOOD only when AHS covers the whole GOOD scope.
 - [ ] Ladder: BETTER − GOOD ≥ $500, BEST − BETTER ≥ $1,000; rounded to $25 / $50.
-- [ ] Warranty 3 mo / 6 mo / 1 yr, covering only this option's work.
+- [ ] Warranty 1 month on every option (unless Owen gave another), covering only this option's work.
 - [ ] `deposit` = 50%; payment halves = P/2 with two decimals; "billed directly to AHS"; $0 text on a $0 option.
 - [ ] Exactly one `is_recommended`.
 - [ ] Title follows §7.

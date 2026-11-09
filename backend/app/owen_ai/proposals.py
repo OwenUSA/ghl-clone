@@ -72,6 +72,10 @@ PROPOSALS_READ_MAX = 10       # the job's newest proposals read in full
 PRICE_MAX = 500_000
 # Text a template's own placeholder description carries (live: DTR-CUSTOM-* products).
 PLACEHOLDER_MARKERS = ("(write the scope", "(state warranty")
+# Owner, 2026-11-09: every option's workmanship warranty is 1 month by default (Good, Better and
+# Best alike). Claude uses another period only when Owen gives one for that proposal.
+DEFAULT_WARRANTY = ("Workmanship Warranty: 1 Month This warranty covers workmanship on the repair "
+                    "work in this option for 1 month from completion.")
 DASH = chr(0x2013)  # the en dash Luis's payment terms use
 WAITING = ("Waiting for Owen to approve on the Proposals tab — nothing was created in Zuper "
            "yet.")
@@ -127,7 +131,9 @@ def sanitize(value: str) -> str:
     <strong>/<em> are taken as <b>/<i> (Zuper's own descriptions use them)."""
     s = re.sub(r"<(/?)strong>", r"<\1b>", str(value), flags=re.IGNORECASE)
     s = re.sub(r"<(/?)em>", r"<\1i>", s, flags=re.IGNORECASE)
-    s = html.escape(s, quote=False)
+    # Decode first: Claude often sends "&amp;" already, and escaping it again showed
+    # "Prep &amp; Access" in Zuper (2026-11-09).
+    s = html.escape(html.unescape(s), quote=False)
     s = _TAG_OK.sub(lambda m: "<%s%s>" % (m.group(1), m.group(2).lower()), s)
     return _BR_OK.sub("<br>", s)
 
@@ -249,7 +255,7 @@ def validate(spec: Any) -> dict:
         if rec is not None and not isinstance(rec, bool):
             problems.append("%s.recommended must be true or false" % where)
         otitle = _text(o, "title", where, problems, 200)
-        warranty = _text(o, "warranty", where, problems, 400)
+        warranty = _text(o, "warranty", where, problems, 400, required=False) or DEFAULT_WARRANTY
         scope = _text(o, "scope_html", where, problems, 8000)
         terms = _text(o, "payment_terms", where, problems, 600, required=False)
         if price is None or not otitle or not warranty or not scope or name not in OPTION_NAMES:
@@ -515,7 +521,7 @@ def input_schema() -> dict:
                                                          "price block</li><li>steps…</li></ul>"},
         "payment_terms": {"type": "string", "description": "default: 50% upfront / 50% on "
                                                             "completion, with the amounts"}},
-        "required": ["name", "title", "price", "warranty", "scope_html"]}
+        "required": ["name", "title", "price", "scope_html"]}
     return {"type": "object", "properties": {
         "job": {"type": "string", "description": "job number (701) or job uid"},
         "template": {"type": "string", "enum": [SHORT],
@@ -535,7 +541,8 @@ DESCRIPTION = (
     "job); it is never sent to the customer. It ALWAYS uses the owner's template 'DTR - Tile Leak "
     "Repair - Short Proposal (Good / Better / Best)'. Spec: job; title (proposal_title); "
     "options[1-3] {name GOOD|BETTER|BEST, title (short option title), price (customer pays), "
-    "deposit? (default 50%), recommended? (default BEST), warranty, scope_html (Luis's "
+    "deposit? (default 50%), recommended? (default BEST), warranty? (default 1 month for every "
+    "option - change it only when Owen gives another), scope_html (Luis's "
     "convention: a price-block bullet, then the scope bullets; allowed tags <p> <b> <i> <ul> "
     "<li> <br>, everything else is escaped; warranty and payment terms are added if missing), "
     "payment_terms?}; allow_second? (only if Owen wants a second proposal on the same "

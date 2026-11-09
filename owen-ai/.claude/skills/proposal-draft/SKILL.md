@@ -30,7 +30,7 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
 5. **Scopes per tier** (guide §2, §5.2): GOOD = targeted fix of each leak area. BETTER = everything in GOOD plus the
    expanded area, plywood and self-adhered underlayment, plus the BETTER findings. BEST = everything in BETTER plus
    the 2x area, double underlayment, tune-up and photo documentation. Use 5-8 steps in Luis's canonical wording. Put
-   the warranty (3 mo / 6 mo / 1 yr) and the payment terms in each option. Every finding goes either into a tier or
+   the warranty (1 month on every option by default, unless Owen says otherwise) and the payment terms in each option. Every finding goes either into a tier or
    into `notes_for_owen` as "seen, not priced".
 6. **Prices:** use Owen's prices, or the estimate from guide §4: base row + adders → round ($25 / $50) → check the
    ladder. Then build the price block: P = price, M = P + C, R = the tier anchor, S = R − P. Deposit = 50%.
