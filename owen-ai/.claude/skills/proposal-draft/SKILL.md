@@ -50,3 +50,19 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
 
 **Never say the proposal was created, sent, or is in Zuper.** It is a pending draft. Only Owen's approval creates it
 in Zuper, and then only as a Zuper DRAFT that nobody sends. Edits later: change the spec and call the tool again.
+
+## Step pictures (optional, only on a created proposal)
+
+`mcp__owen__proposal_step_pictures {proposal: <draft id or DTR-N>, action: generate | attach | discard}` draws one
+step-by-step banner per option from the proposal's own scope and, when Owen says so, puts them on the Zuper draft.
+
+- **Generate only when Owen asks** ("add the step pictures to DTR-160"). Never offer to do it on your own.
+- **Only on a proposal that is created** (approved and in Zuper as a draft). A pending draft is refused — tell Owen
+  to approve it first.
+- **Mention the cost** before or with the result: about $0.17 per option, ~$0.51 for Good/Better/Best (OpenAI).
+- After `generate`, **show Owen the preview links exactly as the tool returned them** (they render as pictures in
+  the chat) and ask whether to put them on.
+- **Attach only when he says so** — after he has seen them, or when he explicitly asked to generate AND put them on
+  in one go ("make the step pictures and put them on DTR-160"). `discard` if he does not want them.
+- Attach changes only the option pictures; prices and wording stay, it stays a DRAFT, nothing is sent. Never say it
+  was sent. If a step fails, repeat the tool's sentence; do not retry on your own.

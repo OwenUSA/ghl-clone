@@ -1,5 +1,6 @@
 import { blocks, cellLines, type Inline } from '../../lib/dispatch'
 import { codeSpans, linkSpans, splitFences } from '../../lib/owenAi'
+import { PictureThumb } from './PictureZoom'
 import { BLUE, LINE, MONO, MUTED } from './tokens'
 
 /**
@@ -37,8 +38,9 @@ function Parts({ parts }: { parts: Inline[] }) {
   )
 }
 
-/** Links (2026-11-07): an inspection report on this server is a download button; an https URL
-    opens in a new tab; any other target is shown as its label only (lib/owenAi `linkSpans`). */
+/** Links (2026-11-07): an inspection report on this server is a download button; a proposal's
+    step-picture preview (2026-11-09) is a thumbnail that zooms; an https URL opens in a new tab;
+    any other target is shown as its label only (lib/owenAi `linkSpans`). */
 function Links({ text, bold }: { text: string; bold: boolean }) {
   return (
     <>
@@ -53,6 +55,7 @@ function Links({ text, bold }: { text: string; bold: boolean }) {
             </a>
           )
         }
+        if (s.kind === 'picture') return <PictureThumb key={i} src={s.href} label={s.text} />
         if (s.kind === 'link') {
           return <a key={i} href={s.href} target="_blank" rel="noopener noreferrer"
             style={{ color: BLUE, fontWeight: bold ? 600 : undefined }}>{s.text}</a>

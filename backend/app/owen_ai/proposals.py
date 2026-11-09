@@ -781,4 +781,6 @@ def out(row: OwenAiProposalDraft, full: bool = True) -> dict:
                     for o in row.options or []]
     if full:
         d["existing"] = spec.get("existing") or []
+    from . import pictures  # the optional step pictures (2026-11-09)
+    d.update(pictures.out(row))
     return d

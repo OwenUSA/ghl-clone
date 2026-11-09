@@ -1295,7 +1295,8 @@ AUDITED = {
     **dict.fromkeys((
         "status", "threads", "create_thread", "thread", "edit_thread", "send", "list_alerts",
         "dismiss_alert", "list_reports", "report_file", "list_proposals", "get_proposal",
-        "approve_proposal", "reject_proposal"), "ADMIN (never restricted)"),
+        "approve_proposal", "reject_proposal", "generate_pictures", "attach_pictures",
+        "discard_pictures", "picture_file"), "ADMIN (never restricted)"),
 }
 
 

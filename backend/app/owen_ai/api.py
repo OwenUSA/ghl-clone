@@ -20,7 +20,7 @@ from .. import auth
 from ..db import get_db
 from ..models import OwenAiAlert, OwenAiMessage, OwenAiProposalDraft, OwenAiThread, Role
 from ..zuper import config as zuper_config
-from . import alerts, config, proposals, report
+from . import alerts, config, pictures, proposals, report
 
 router = APIRouter(prefix="/api/owen-ai", tags=["owen-ai"])
 NY = ZoneInfo("America/New_York")
@@ -269,8 +269,10 @@ def list_proposals(status: str | None = None, p: auth.Principal = OWNER,
     rows.sort(key=lambda r: r.status != "pending")
     pending = db.scalar(select(func.count()).select_from(OwenAiProposalDraft).where(
         OwenAiProposalDraft.status == "pending")) or 0
+    why = pictures.refusal(db)
     return {"proposals": [proposals.out(r) for r in rows], "pending": pending,
-            "enabled": proposals.refusal(db) is None, "sentence": proposals.refusal(db)}
+            "enabled": proposals.refusal(db) is None, "sentence": proposals.refusal(db),
+            "pictures_enabled": why is None, "pictures_sentence": why}
 
 
 def _draft(db: Session, draft_id: int) -> OwenAiProposalDraft:
@@ -315,3 +317,52 @@ def reject_proposal(draft_id: int, body: Reject, p: auth.Principal = OWNER,
     except proposals.Refused as exc:
         raise HTTPException(409, str(exc)) from None
     return proposals.out(row)
+
+
+# ----------------------------------------------------------------- step pictures (2026-11-09)
+
+def _pictures_call(fn, db: Session, draft_id: int, p: auth.Principal) -> dict:
+    _draft(db, draft_id)
+    try:
+        row = fn(db, draft_id, p.name or p.email or "the owner")
+    except pictures.Refused as exc:
+        raise HTTPException(409, str(exc)) from None
+    except LookupError:
+        raise HTTPException(404, "Not Found") from None
+    return proposals.out(row)
+
+
+@router.post("/proposals/{draft_id}/pictures")
+def generate_pictures(draft_id: int, p: auth.Principal = OWNER,
+                      db: Session = Depends(get_db)) -> dict:
+    """Make the optional step-picture banners for a CREATED proposal, for preview (OpenAI only —
+    nothing reaches Zuper). 409 unless created, both server switches and the registry allow it,
+    and no other generation is running for this row. An OpenAI failure is a 200 with
+    pictures_status "failed" and a sentence."""
+    return _pictures_call(pictures.generate, db, draft_id, p)
+
+
+@router.post("/proposals/{draft_id}/pictures/attach")
+def attach_pictures(draft_id: int, p: auth.Principal = OWNER,
+                    db: Session = Depends(get_db)) -> dict:
+    """Put the previewed banners on the proposal: uploads + ONE PUT /estimate/{its uid} that
+    changes only option_image, then a read-back. Never retried; never sent to the customer."""
+    return _pictures_call(pictures.attach, db, draft_id, p)
+
+
+@router.post("/proposals/{draft_id}/pictures/discard")
+def discard_pictures(draft_id: int, p: auth.Principal = OWNER,
+                     db: Session = Depends(get_db)) -> dict:
+    """Throw the previews away. Writes nothing to Zuper."""
+    return _pictures_call(pictures.discard, db, draft_id, p)
+
+
+@router.get("/proposals/{draft_id}/pictures/{name}")
+def picture_file(draft_id: int, name: str, p: auth.Principal = OWNER,
+                 db: Session = Depends(get_db)) -> FileResponse:
+    """One current banner of this draft (owner only). Any other name is 404."""
+    path = pictures.file_path(_draft(db, draft_id), name)
+    if path is None:
+        raise HTTPException(404, "Not Found")
+    return FileResponse(path, media_type="image/jpeg", headers={
+        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})

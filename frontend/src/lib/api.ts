@@ -2846,9 +2846,16 @@ export type OwenAiProposal = {
   thread_id: number | null; created_at: string | null; decided_at: string | null; decided_by: string | null
   total: number; options: OwenAiProposalOption[]
   existing?: { number: string | null; uid: string; status: string; same_template: boolean }[]
+  // Optional step pictures on a CREATED proposal (2026-11-09): made only when the owner asks,
+  // previewed here, put on the proposal (option_image only) or discarded.
+  pictures_status: OwenAiPicturesStatus | null; pictures_error: string | null
+  pictures_cost_usd: number | null; pictures_at: string | null; pictures_estimate_usd: number
+  pictures: { name: 'GOOD' | 'BETTER' | 'BEST'; url: string }[]
 }
+export type OwenAiPicturesStatus = 'generating' | 'ready' | 'attaching' | 'attached' | 'failed' | 'discarded'
 export type OwenAiProposals = {
   proposals: OwenAiProposal[]; pending: number; enabled: boolean; sentence: string | null
+  pictures_enabled: boolean; pictures_sentence: string | null
 }
 export const owenAiProposals = (status?: OwenAiProposalStatus) =>
   get<OwenAiProposals>(`/api/owen-ai/proposals${status ? `?status=${status}` : ''}`)
@@ -2856,3 +2863,5 @@ export const owenAiApproveProposal = (id: number) =>
   send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/approve`, 'POST', {})
 export const owenAiRejectProposal = (id: number, why: string) =>
   send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/reject`, 'POST', { why })
+export const owenAiProposalPictures = (id: number, action: 'generate' | 'attach' | 'discard') =>
+  send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/pictures${action === 'generate' ? '' : `/${action}`}`, 'POST', {})

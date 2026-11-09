@@ -383,7 +383,9 @@ ENTRIES: tuple[Entry, ...] = (
             Action("zuper_proposals", APPROVE, (NEVER, APPROVE),
                    "Owner lift 2026-11-09: a Good/Better/Best proposal DRAFT, created in Zuper "
                    "only when the owner presses Approve on the Proposals tab. Also needs "
-                   "OWEN_AI_PROPOSALS_ENABLED on the server."),
+                   "OWEN_AI_PROPOSALS_ENABLED on the server. Optional step pictures on a "
+                   "created draft (option_image only) when the owner asks — also needs "
+                   "OWEN_AI_PROPOSAL_PICTURES_ENABLED."),
         ),
         never=("Send a proposal to a customer",
                "Write anything else in Zuper (only an approved proposal draft)",

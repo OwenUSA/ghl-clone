@@ -153,21 +153,27 @@ export function codeSpans(text: string): { text: string; code: boolean }[] {
   return out.length ? out : [{ text, code: false }]
 }
 
-/** A run of answer text split at Markdown links (2026-11-07). Only two kinds become links:
+/** A run of answer text split at Markdown links (2026-11-07). Only three kinds become links:
     an inspection report file on this server (`/api/owen-ai/reports/<id>/report.html|pdf`,
-    drawn as a download button) and an absolute https URL. Any other target (javascript:,
+    drawn as a download button), a proposal's step-picture preview on this server
+    (`/api/owen-ai/proposals/<id>/pictures/<tier>-<hex>.jpg`, drawn as a thumbnail that zooms)
+    and an absolute https URL. Any other target (javascript:,
     http:, another /api path, a relative path) stays plain text: its label only. */
 export type LinkSpan =
   | { kind: 'text'; text: string }
   | { kind: 'report'; text: string; href: string; file: 'html' | 'pdf' }
+  | { kind: 'picture'; text: string; href: string }
   | { kind: 'link'; text: string; href: string }
 
 export const REPORT_LINK = /^\/api\/owen-ai\/reports\/[A-Za-z0-9]{1,20}-\d{8}-\d{6}\/report\.(html|pdf)$/
+/** A proposal's step-picture preview on this server (2026-11-09): drawn as a thumbnail. */
+export const PICTURE_LINK = /^\/api\/owen-ai\/proposals\/\d{1,9}\/pictures\/(good|better|best)-[0-9a-f]{8}\.jpg$/
 
-export function safeLink(href: string): { kind: 'report'; file: 'html' | 'pdf' } | { kind: 'link' } | null {
+export function safeLink(href: string): { kind: 'report'; file: 'html' | 'pdf' } | { kind: 'picture' } | { kind: 'link' } | null {
   const h = href.trim()
   const r = REPORT_LINK.exec(h)
   if (r) return { kind: 'report', file: r[1] as 'html' | 'pdf' }
+  if (PICTURE_LINK.test(h)) return { kind: 'picture' }
   if (/^https:\/\/[^\s/?#]+([/?#][^\s]*)?$/i.test(h)) {
     try { if (new URL(h).protocol === 'https:') return { kind: 'link' } } catch { /* not a URL */ }
   }
@@ -189,6 +195,7 @@ export function linkSpans(text: string): LinkSpan[] {
     push(text.slice(last, m.index))
     const ok = safeLink(m[2])
     if (ok?.kind === 'report') out.push({ kind: 'report', text: m[1], href: m[2].trim(), file: ok.file })
+    else if (ok?.kind === 'picture') out.push({ kind: 'picture', text: m[1], href: m[2].trim() })
     else if (ok) out.push({ kind: 'link', text: m[1], href: m[2].trim() })
     else push(m[1])
     last = m.index + m[0].length

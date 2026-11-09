@@ -132,3 +132,23 @@ def chromium() -> str | None:
     if raw:
         return raw if Path(raw).is_file() else shutil.which(raw)
     return shutil.which("chromium") or shutil.which("chromium-browser")
+
+
+# ------------------------------------------------------------ proposal step pictures (2026-11-09)
+
+def picture_dir() -> Path:
+    """Where the step-picture banners for a created proposal are saved (<draft id>/<name>.jpg):
+    OWEN_AI_PICTURE_DIR, else `pictures/` beside the reports folder. Both the api (the owner's
+    button and the preview) and the owen_ai runner (the chat tool) WRITE here, so production sets
+    OWEN_AI_PICTURE_DIR to the owen_ai_pictures volume mounted read-write in both containers
+    (docker-compose.prod.yml) — the reports folder's volume is read-only in the api."""
+    raw = (os.getenv("OWEN_AI_PICTURE_DIR") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    return report_dir().parent / "pictures"
+
+
+def picture_openai_key() -> str:
+    """OWEN_AI_OPENAI_API_KEY. Empty = fall back to an OpenAI AI connection
+    (pictures.openai_key)."""
+    return (os.getenv("OWEN_AI_OPENAI_API_KEY") or "").strip()
