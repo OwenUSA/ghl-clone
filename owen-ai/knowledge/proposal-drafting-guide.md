@@ -18,23 +18,23 @@ is labelled as an estimate.
 
 ---
 
-## 1. Pick the template from the roof in the photos
+## 1. Template: ALWAYS the Short Proposal template (owner, 2026-11-09)
 
-The template's product names appear on the customer's PDF (for example "BEST - Maximum Protection **Tile** Leak
-Repair"), so the template must match the roof where the leak is.
+Every draft uses **"DTR - Tile Leak Repair - Short Proposal (Good / Better / Best)"**
+(`short`, uid `0e5d788e-656e-40f5-a4af-cb03ffc92fc0`). The tool forces it, whatever you send. It has the same options
+as the Tile template, DTR-CUSTOM-GOOD / DTR-CUSTOM-BETTER / DTR-TILE-BEST, on the short layout "DTR Proposal - Short"
+(no logo, financing, CertainTeed, comparison or letter pages).
 
-| What the photos show at the leak | Template (`template`) | uid | Line products G / B / B |
-|---|---|---|---|
-| Concrete or clay tile, including a tile-to-wall or tile-to-flat junction where the tiles are lifted | `tile`: DTR - Tile Leak Repair | `eb322d43-0d4b-4d36-93de-2ac528a8d25e` | DTR-CUSTOM-GOOD / DTR-CUSTOM-BETTER / DTR-TILE-BEST |
-| Flat or low-slope roof: modified-bitumen cap sheet, roll roofing, coated membrane, manufactured-home roof. Also a mixed house where **the failure is on the flat side** (open cap-sheet seam, bubbled flat seam, ponding at a curb) | `flat`: DTR - Flat Roof Leak Repair | `784d8985-ef0d-4d49-ae08-113a8c9b7ff9` | DTR-FLAT-GOOD / -BETTER / -BEST (BEST also has the experimental checklist LOOKUP line "Repair items needed") |
-| Asphalt shingle (3-tab or architectural), metal panel, balcony, anything else or mixed | `custom`: DTR - Custom | `7c697c78-8760-4049-93b8-9a4050c9eeab` | DTR-CUSTOM-GOOD / -BETTER / -BEST |
-| Owen asks for a replacement, or the roof is beyond repair **and Owen agrees** | `replacement`: DTR - Roof Replacement | `06ce5f36-651f-4009-b34c-1194a06cb8c8` | DTR-CUSTOM-GOOD / DTR-SHINGLE-RR-BETTER (architectural shingles) / DTR-CUSTOM-BEST. It also has an empty '5" Gutters' option. Never estimate replacement prices: there is 1 historical example. Ask Owen. |
+The other four DTR templates (Tile, Flat, Custom, Roof Replacement) still exist. Read old proposals with them, but
+never draft on them.
 
-**The history's mistake (forbidden):** the Tile template was used on about 20 non-tile roofs. On shingle: DTR-31,
-41, 49, 77, 78, 135, 137, 60. On flat or flat-metal: DTR-45, 62, 81, 124, 126, 128, 130, 133, 136. On metal: DTR-119.
-That put `DTR-TILE-BEST` "Tile Leak Repair" on shingle, flat and metal roofs. Also the Flat template on shingle
-(DTR-15, 16), and Roof Replacement "Architectural Shingles" on a tile valley repair (DTR-68). **Never use `tile` or a
-DTR-TILE-* line unless the leak is on tile.**
+**Because the BEST line's product is "Tile Leak Repair", the roof type still matters in your TEXT:**
+- Write the scope for the real roof material at the leak: tile, flat / modified bitumen, shingle, metal. The history
+  put tile wording on about 20 non-tile roofs (DTR-31, 41, 45, 49, 62, 77, 78, 81, 119, 124, 126, 128, 130, 133,
+  135, 136, 137, 60). Never write tile steps on a non-tile roof.
+- When the leak is NOT on tile, say so in `note` for Owen: "Roof is <material>; the Short template's BEST product
+  is named Tile Leak Repair — rename the line in Zuper if needed."
+- A roof replacement: never estimate a price; ask Owen.
 
 - **Mixed roofs: choose by where the failure is.** Tile lifted at a tile/flat junction → `tile`, plus a flat
   tie-in line. The patch is on the flat cap sheet → `flat`. Shingle slope dying into a flat section with the leak at
