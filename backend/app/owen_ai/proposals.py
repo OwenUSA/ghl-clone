@@ -49,8 +49,14 @@ from . import config, dossier
 TZ = ZoneInfo("America/New_York")
 ACTION = "zuper_proposals"            # registry action on the owen_ai entry
 
-# The four DTR templates (verified live, read-only, 2026-11-09). key -> template_uid.
+# The DTR templates (verified live, read-only, 2026-11-09). key -> template_uid.
+# Owner (2026-11-09): EVERY draft uses the 5th template, "DTR - Tile Leak Repair - Short Proposal
+# (Good / Better / Best)" - the Tile options on the short layout ("DTR Proposal - Short": no logo,
+# financing, CertainTeed, comparison or letter pages). The others stay listed for reading old
+# proposals and for the fill check, but the tool always drafts on SHORT.
+SHORT = "short"
 TEMPLATES = {
+    SHORT: "0e5d788e-656e-40f5-a4af-cb03ffc92fc0",
     "flat": "784d8985-ef0d-4d49-ae08-113a8c9b7ff9",
     "tile": "eb322d43-0d4b-4d36-93de-2ac528a8d25e",
     "replacement": "06ce5f36-651f-4009-b34c-1194a06cb8c8",
@@ -202,8 +208,9 @@ def validate(spec: Any) -> dict:
     if not job:
         problems.append("job is required (a job number like 701, or the job uid)")
     template = spec.get("template")
-    if template not in TEMPLATES:
+    if template not in (None, *TEMPLATES):
         problems.append("template must be one of %s" % ", ".join(TEMPLATES))
+    template = SHORT                               # owner's rule: always the Short template
     title = _text(spec, "title", "spec", problems, 200)
     allow_second = spec.get("allow_second", False)
     if not isinstance(allow_second, bool):
@@ -511,21 +518,22 @@ def input_schema() -> dict:
         "required": ["name", "title", "price", "warranty", "scope_html"]}
     return {"type": "object", "properties": {
         "job": {"type": "string", "description": "job number (701) or job uid"},
-        "template": {"type": "string", "enum": list(TEMPLATES)},
+        "template": {"type": "string", "enum": [SHORT],
+                     "description": "always 'short' (the owner's Short Proposal template)"},
         "title": {"type": "string", "description": "proposal_title, e.g. 'Active Leak Repair - "
                                                    "<street>'"},
         "options": {"type": "array", "items": option, "minItems": 1, "maxItems": 3},
         "allow_second": {"type": "boolean"},
         "note": {"type": "string", "description": "one line for Owen: why these options"}},
-        "required": ["job", "template", "title", "options"]}
+        "required": ["job", "title", "options"]}
 
 
 DESCRIPTION = (
     "PREPARE a Good/Better/Best proposal for one Zuper job, for Owen to APPROVE on the Proposals "
     "tab. It writes NOTHING to Zuper: it stores a pending draft. Only when Owen presses Approve "
     "does the server create it in Zuper as a DRAFT (or fill the empty draft Zuper made for the "
-    "job); it is never sent to the customer. Spec: job; template tile|flat|custom|replacement "
-    "(the DTR template whose package products the options use); title (proposal_title); "
+    "job); it is never sent to the customer. It ALWAYS uses the owner's template 'DTR - Tile Leak "
+    "Repair - Short Proposal (Good / Better / Best)'. Spec: job; title (proposal_title); "
     "options[1-3] {name GOOD|BETTER|BEST, title (short option title), price (customer pays), "
     "deposit? (default 50%), recommended? (default BEST), warranty, scope_html (Luis's "
     "convention: a price-block bullet, then the scope bullets; allowed tags <p> <b> <i> <ul> "

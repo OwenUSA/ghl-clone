@@ -22,8 +22,9 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    photo: number, time, what it shows. Drop duplicates, checks, other houses and blurry frames. You need an
    overview, a leak close-up and the interior stain. If there is no roof photo, stop and tell Owen
    "needs inspection photos" (guide §5.1).
-3. **Template:** decide by the roof material **at the leak**: tile → `tile`, flat or low-slope → `flat`, shingle,
-   metal or other → `custom`, replacement only when Owen asks → `replacement`. Never `tile` on a non-tile roof.
+3. **Template:** always the **Short Proposal** template (`short`; the tool forces it). Still identify the roof
+   material at the leak: write the scope for that material, and if it is not tile, warn Owen in `note` that the
+   BEST product is named "Tile Leak Repair".
 4. **Findings:** list the distinct defects with photo refs, the number of leak areas, the stories, and rot seen or
    not seen. Use the inspector's own marks.
 5. **Scopes per tier** (guide §2, §5.2): GOOD = targeted fix of each leak area. BETTER = everything in GOOD plus the

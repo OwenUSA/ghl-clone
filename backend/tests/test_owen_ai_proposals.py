@@ -28,7 +28,7 @@ from tests.zuper_support import zuper_env  # noqa: F401  (fixture)
 OWNER = "owner@dtr.test"
 JOB = "6abd527f-31a6-43e9-bb0a-6fe557dac596"
 CUST = "2dbd7187-a6e8-4452-8600-c3d029599d75"
-TILE = proposals.TEMPLATES["tile"]
+TILE = proposals.TEMPLATES["short"]    # the owner's Short Proposal template, used for every draft
 PRODUCTS = {"GOOD": ("27e6e30d-ca23-4f92-a61b-f1f67a5402f5", "DTR-CUSTOM-GOOD", 750),
             "BETTER": ("38af9766-a840-43a8-a865-e18b5ecd18b3", "DTR-CUSTOM-BETTER", 815),
             "BEST": ("ac78d138-ab66-4781-814d-9e95662318b4", "DTR-TILE-BEST", 2000)}
@@ -47,8 +47,9 @@ def template() -> dict:
                                                  "price": price, "product_type": "SERVICE",
                                                  "uom": "Job",
                                                  "product_description": PLACEHOLDER}}]})
-    return {"template_uid": TILE, "template_name": "DTR - Tile Leak Repair (Good / Better / Best)",
-            "layout_template_uid": "e9b8add9-8fb8-44a4-9406-d8b9b7bec422",
+    return {"template_uid": TILE,
+            "template_name": "DTR - Tile Leak Repair - Short Proposal (Good / Better / Best)",
+            "layout_template_uid": "f1432264-7dcb-4906-bdb9-ba9845eae6c0",   # DTR Proposal - Short
             "proposal_options": opts}
 
 
@@ -496,3 +497,15 @@ def test_a_newer_draft_replaces_an_older_pending_one(db, people):
     new = propose(db, people, z)
     db.refresh(old)
     assert old.status == "rejected" and "Replaced" in old.error and new.status == "pending"
+
+
+def test_every_draft_uses_the_short_proposal_template():
+    """Owner, 2026-11-09: whatever template Claude names (or none), the draft is on the 5th DTR
+    template, 'DTR - Tile Leak Repair - Short Proposal (Good / Better / Best)'."""
+    assert proposals.TEMPLATES[proposals.SHORT] == "0e5d788e-656e-40f5-a4af-cb03ffc92fc0"
+    base = {"job": "701", "title": "T", "options": [{"name": "GOOD", "title": "G", "price": 600,
+                                                    "warranty": "3 months",
+                                                    "scope_html": "<ul><li>x</li></ul>"}]}
+    for tpl in (None, "tile", "flat", "custom", "replacement", "short"):
+        s = dict(base, **({"template": tpl} if tpl else {}))
+        assert proposals.validate(s)["template"] == proposals.SHORT
