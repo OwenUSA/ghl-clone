@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PAGE_BG } from '../components/ai/aiUi'
 import { AlertsView } from '../components/owenAi/AlertsView'
-import { ProposalsView } from '../components/owenAi/ProposalsView'
+import { ProposalsView, type PicturesAction } from '../components/owenAi/ProposalsView'
 import { Conversation } from '../components/owenAi/Conversation'
 import { StatusStrip } from '../components/owenAi/StatusStrip'
 import { ThreadList } from '../components/owenAi/ThreadList'
@@ -10,7 +10,7 @@ import { OWEN_AI_STATUS_KEY, useOwenAiStatus } from '../components/owenAi/useOwe
 import { INK, MUTED, NARROW, chipBtn } from '../components/owenAi/tokens'
 import {
   ApiError, owenAiAlerts, owenAiApproveProposal, owenAiDismissAlert, owenAiEditThread, owenAiOpenThread,
-  owenAiProposals, owenAiRejectProposal, owenAiSend, owenAiThread, owenAiThreads, type OwenAiAlert, type OwenAiAlertStatus, type OwenAiOpenKind, type OwenAiThreadDetail,
+  owenAiProposalPictures, owenAiProposals, owenAiRejectProposal, owenAiSend, owenAiThread, owenAiThreads, type OwenAiAlert, type OwenAiAlertStatus, type OwenAiOpenKind, type OwenAiThreadDetail,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
 import { threadBusy, type OwenAiTab } from '../lib/owenAi'
@@ -157,6 +157,22 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
     onSuccess: (p) => decided(p.thread_id),
     onError: (e, v) => setProposalError({ id: v.id, message: (e as Error).message || 'Could not reject it.' }),
   })
+  // Step pictures on a created proposal (2026-11-09): generate -> preview -> attach / discard.
+  const pictures = useMutation({
+    mutationFn: (v: { id: number; action: PicturesAction }) => owenAiProposalPictures(v.id, v.action),
+    onMutate: () => setProposalError(null),
+    onSuccess: (p, v) => {
+      decided(v.action === 'attach' ? p.thread_id : null)
+      if ((v.action === 'generate' && p.pictures_status === 'failed')
+        || (v.action === 'attach' && p.pictures_status !== 'attached')) {
+        setProposalError({ id: p.id, message: p.pictures_error ?? 'The step pictures did not work.' })
+      }
+    },
+    onError: (e, v) => {
+      setProposalError({ id: v.id, message: (e as Error).message || 'Could not do that.' })
+      qc.invalidateQueries({ queryKey: PROPOSALS_KEY })
+    },
+  })
   const proposalBusy = approve.isPending ? (approve.variables ?? null)
     : rejectDraft.isPending ? (rejectDraft.variables?.id ?? null) : null
   const openJob = (a: OwenAiAlert) => start.mutate({ kind: 'job', job_uid: a.job_uid,
@@ -229,7 +245,10 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
               error={drafts.isError ? (drafts.error as Error).message : null} sentence={drafts.data?.sentence ?? null}
               onApprove={(p) => approve.mutateAsync(p.id).then((r) => r.status === 'created', () => false)}
               onReject={(p, why) => rejectDraft.mutateAsync({ id: p.id, why }).then(() => true, () => false)}
-              busyId={proposalBusy} actionError={proposalError} />
+              busyId={proposalBusy} actionError={proposalError}
+              picturesSentence={drafts.data?.pictures_sentence ?? null}
+              onPictures={(p, action) => pictures.mutateAsync({ id: p.id, action }).then(() => true, () => false)}
+              picturesBusy={pictures.isPending ? (pictures.variables ?? null) : null} />
           ) : tab === 'alerts' ? (
             <AlertsView status={alertStatus} onStatus={setAlertStatus}
               alerts={shownAlerts.data?.alerts ?? []} loading={shownAlerts.isLoading}

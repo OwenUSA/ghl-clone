@@ -21,7 +21,7 @@ import json
 from typing import Any
 
 from ..zuper import client as zc
-from . import alerts, config, dossier, photos, proposals, quo, report
+from . import alerts, config, dossier, photos, pictures, proposals, quo, report
 
 SERVER_NAME = "owen"
 
@@ -174,6 +174,9 @@ SPECS = SPECS + report.SPECS
 # Proposal drafts (2026-11-09): stored PENDING in the CRM; Zuper is written only when the owner
 # approves one on the Proposals tab (proposals.approve), never by this tool.
 SPECS = SPECS + proposals.SPECS
+# Step pictures on a CREATED proposal (2026-11-09): only when Owen asks; generate talks to OpenAI
+# only, attach goes through client.owen_ai_proposal_pictures (option_image only, read back).
+SPECS = SPECS + pictures.SPECS
 
 TOOL_NAMES = tuple("mcp__%s__%s" % (SERVER_NAME, name) for name, *_ in SPECS)
 

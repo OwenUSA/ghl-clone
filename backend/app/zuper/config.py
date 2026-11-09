@@ -113,6 +113,19 @@ def owen_ai_proposals_enabled() -> bool:
     return _flag("OWEN_AI_PROPOSALS_ENABLED", False)
 
 
+OWEN_AI_PROPOSAL_PICTURES_OFF_SENTENCE = (
+    "Step pictures are switched off on this server (OWEN_AI_PROPOSAL_PICTURES_ENABLED is not "
+    "true), so nothing is generated or attached.")
+
+
+def owen_ai_proposal_pictures_enabled() -> bool:
+    """The server's gate on Owen AI's optional step pictures for a CREATED proposal draft
+    (2026-11-09, app/owen_ai/pictures.py): the OpenAI spend that makes them and the attach that
+    puts them on the proposal. Off unless the deployment says so; with it off
+    `client.owen_ai_proposal_pictures` allows nothing. OWEN_AI_PROPOSALS_ENABLED must be on too."""
+    return _flag("OWEN_AI_PROPOSAL_PICTURES_ENABLED", False)
+
+
 def dispatch_writes_enabled() -> bool:
     """The server's gate on the Dispatch page's "let the agent do it" (phase 3, 2026-10-01).
 

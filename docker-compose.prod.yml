@@ -60,6 +60,12 @@ services:
       # Read-only: /api/owen-ai/status checks the Claude login there, and /api/owen-ai/reports
       # serves the inspection reports the owen_ai container writes to /var/lib/owen-ai/reports.
       - owen_ai_home:/var/lib/owen-ai:ro
+      # Read-WRITE (2026-11-09): the step-picture banners for a created proposal. The owner's
+      # button (here) and Owen AI's chat tool (owen_ai) both make them; this container serves
+      # the preview. A volume of its own because owen_ai_home is read-only here.
+      - owen_ai_pictures:/var/lib/owen-ai-pictures
+    environment:
+      OWEN_AI_PICTURE_DIR: /var/lib/owen-ai-pictures
     expose: ["8000"]
     networks: [ghl-net, traefik-public]
     healthcheck:
@@ -121,6 +127,9 @@ services:
     networks: [ghl-net]
     volumes:
       - owen_ai_home:/var/lib/owen-ai
+      - owen_ai_pictures:/var/lib/owen-ai-pictures
+    environment:
+      OWEN_AI_PICTURE_DIR: /var/lib/owen-ai-pictures
     depends_on:
       api: { condition: service_healthy }
     deploy:
@@ -169,6 +178,8 @@ volumes:
   media:
   # Owen AI's Claude Code home (2026-11-02): its login and conversation sessions.
   owen_ai_home:
+  # The step-picture banners (2026-11-09): written by api and owen_ai, served by api.
+  owen_ai_pictures:
 
 networks:
   ghl-net:

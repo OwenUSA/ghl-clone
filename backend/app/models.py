@@ -2934,3 +2934,12 @@ class OwenAiProposalDraft(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[str | None] = mapped_column(String(200))
     thread_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    # Optional step pictures (2026-11-09, app/owen_ai/pictures.py), only on a CREATED draft and
+    # only when the owner asks: generating | ready | attaching | attached | failed | discarded.
+    # `pictures`: {files {GOOD: name}, plan, calls [{option, tokens, cost_usd}], uploaded {GOOD:
+    # url}}. The cost is what OpenAI charged for the last generation, in US dollars.
+    pictures_status: Mapped[str | None] = mapped_column(String(12))
+    pictures: Mapped[dict | None] = mapped_column(JSONType)
+    pictures_cost_usd: Mapped[float | None] = mapped_column(Float)
+    pictures_error: Mapped[str | None] = mapped_column(Text)
+    pictures_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

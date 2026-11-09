@@ -28,6 +28,7 @@ constant in `PATHS` and every response is unwrapped in one place (`data_of`, `ui
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import re
 import threading
@@ -140,6 +141,100 @@ def owen_ai_proposal_write(fill_uids=()):
         yield
     finally:
         _OWEN_AI_PROPOSAL.reset(token)
+
+
+_OWEN_AI_PICTURES: ContextVar[dict | None] = ContextVar("zuper_owen_ai_pictures", default=None)
+PICTURES_MAX_UPLOADS = 3            # one banner per option, GOOD / BETTER / BEST
+PICTURES_MAX_BYTES = 5 * 1024 * 1024
+
+
+@contextlib.contextmanager
+def owen_ai_proposal_pictures(estimate_uid: str):
+    """Owen AI's optional step pictures on ONE proposal it already created as a DRAFT
+    (2026-11-09, app/owen_ai/pictures.py and nothing else opens it; the owner pressed "Put on
+    the proposal").
+
+    Inside this scope the ONLY non-GETs are
+      POST /misc/upload        multipart: exactly one `attachment` (a JPEG, at most 5 MB) and
+                               the form {"attachment_type": "ATTACHMENT"}; at most 3, all
+                               before the PUT
+      PUT  /estimate/{uid}     THIS uid only, once, with exactly {"estimate": {estimate_uid,
+                               is_proposal: true, proposal_title, proposal_options}} where the
+                               title and every option are the ones this scope last READ from
+                               GET /estimate/{uid} (a DRAFT) with ONLY `option_image` added or
+                               changed - a changed price, line, deposit or anything else is
+                               refused before a connection
+    no query string on either. GETs are allowed as in `owen_ai_read` (the denylist applies);
+    the read of /estimate/{uid} is what the PUT is compared with. Nothing at all unless both
+    OWEN_AI_PROPOSALS_ENABLED and OWEN_AI_PROPOSAL_PICTURES_ENABLED are on."""
+    state = {"uid": str(estimate_uid or ""), "baseline": None, "uploads": 0, "puts": 0}
+    token = _OWEN_AI_PICTURES.set(state)
+    try:
+        yield state
+    finally:
+        _OWEN_AI_PICTURES.reset(token)
+
+
+def only_option_images_changed(before: Any, after: Any) -> list[str]:
+    """Every difference between two proposal_options lists other than an option's
+    `option_image` (which must be an https URL in `after`). Empty = only pictures changed."""
+    if not isinstance(before, list) or not isinstance(after, list):
+        return ["proposal_options is not a list"]
+    if len(before) != len(after):
+        return ["%d options instead of %d" % (len(after), len(before))]
+    out = []
+    for i, (b, a) in enumerate(zip(before, after, strict=True)):
+        if not isinstance(b, dict) or not isinstance(a, dict):
+            out.append("option %d is not an object" % i)
+            continue
+        name = str(b.get("option_name") or i)
+        for k in sorted(set(b) | set(a)):
+            if k == "option_image":
+                continue
+            if k not in a:
+                out.append("%s.%s was dropped" % (name, k))
+            elif k not in b:
+                out.append("%s.%s was added" % (name, k))
+            elif a[k] != b[k]:
+                out.append("%s.%s changed" % (name, k))
+        img = a.get("option_image")
+        if not (isinstance(img, str) and img.startswith("https://") and len(img) < 2000):
+            out.append("%s.option_image is not an https URL" % name)
+    return out
+
+
+def _pictures_ok(method: str, path: str, body: Any, params: Any, files: Any, form: Any) -> bool:
+    st = _OWEN_AI_PICTURES.get()
+    if st is None or not (config.owen_ai_proposals_enabled()
+                          and config.owen_ai_proposal_pictures_enabled()) or params:
+        return False
+    if method == "POST" and path == "/misc/upload":
+        if body is not None or form != {"attachment_type": "ATTACHMENT"} or st["puts"]:
+            return False
+        if st["uploads"] >= PICTURES_MAX_UPLOADS or not isinstance(files, dict) \
+                or set(files) != {"attachment"}:
+            return False
+        f = files["attachment"]
+        return (isinstance(f, tuple) and len(f) == 3 and isinstance(f[1], bytes)
+                and f[2] == "image/jpeg" and f[1][:3] == b"\xff\xd8\xff"
+                and 0 < len(f[1]) <= PICTURES_MAX_BYTES)
+    if method == "PUT" and st["uid"] and path == "/estimate/" + st["uid"]:
+        base = st["baseline"]
+        if files is not None or form is not None or st["puts"] or not isinstance(base, dict):
+            return False
+        if not (isinstance(body, dict) and set(body) == {"estimate"}
+                and isinstance(body["estimate"], dict)):
+            return False
+        est = body["estimate"]
+        if set(est) != {"estimate_uid", "is_proposal", "proposal_title", "proposal_options"}:
+            return False
+        return (est["estimate_uid"] == st["uid"] and est["is_proposal"] is True
+                and base.get("estimate_uid") == st["uid"]
+                and str(base.get("estimate_status") or "").upper() == "DRAFT"
+                and est["proposal_title"] == base.get("proposal_title")
+                and not only_option_images_changed(base.get("proposal_options"),
+                                                   est["proposal_options"]))
+    return False
 
 
 _DISPATCH_WRITE: ContextVar[bool] = ContextVar("zuper_dispatch_write", default=False)
@@ -659,9 +754,28 @@ def _owen_ai_proposal_body_ok(method: str, path: str, body: Any, params: Any) ->
 
 
 def request(method: str, path: str, *, params: dict | None = None,
-            body: dict | list | None = None) -> Any:
+            body: dict | list | None = None, files: dict | None = None,
+            form: dict | None = None) -> Any:
+    """`files` / `form` (a multipart upload) exist for ONE caller: the step-pictures scope's
+    POST /misc/upload. Anywhere else a request carrying them is refused."""
     method = method.upper()
     path = "/" + path.lstrip("/")
+    pictures = _OWEN_AI_PICTURES.get()
+    if (files is not None or form is not None) and pictures is None:
+        raise ZuperError("refused", "a multipart upload is only made by the step-pictures scope")
+    if pictures is not None and method != "GET":
+        if not _pictures_ok(method, path, body, params, files, form):
+            off = (config.OWEN_AI_PROPOSALS_OFF_SENTENCE if not config.owen_ai_proposals_enabled()
+                   else config.OWEN_AI_PROPOSAL_PICTURES_OFF_SENTENCE
+                   if not config.owen_ai_proposal_pictures_enabled() else None)
+            raise ZuperError("refused", "%s %s is not a step-pictures write%s" % (
+                method, path, " (%s)" % off if off else ""))
+        if (_READ_ONLY.get() or _DISPATCH_WRITE.get() or _PROPOSAL_LINES.get()
+                or _OWEN_AI_PROPOSAL.get() is not None or _send_scope()[0]):
+            raise ZuperError("refused", "a step-pictures write cannot run inside another scope")
+    if pictures is not None and method == "GET" and (files is not None or form is not None):
+        raise ZuperError("refused", "a GET carries no upload")
+    pictures_write = pictures is not None and method != "GET"     # passed the check above
     in_proposal = _OWEN_AI_PROPOSAL.get() is not None
     # Inside Owen AI's proposal scope only its two checked writes exist; the denylist's
     # estimate rule is the one thing they get past, and only in that exact shape.
@@ -682,11 +796,13 @@ def request(method: str, path: str, *, params: dict | None = None,
             method, path, scope_name, "" if gate_on else " (" + off_sentence + ")"))
     autoreply_send = (inside and method == AUTOREPLY_SEND[0]
                       and re.match(AUTOREPLY_SEND[1], path) is not None)
-    why = None if (autoreply_send or proposal_write) else denied(method, path)
+    why = None if (autoreply_send or proposal_write or pictures_write) else denied(method, path)
     if why:
         raise ZuperError("refused", "%s %s is never called: %s" % (method, path, why))
-    owen_ai_get = method == "GET" and (_OWEN_AI_READ.get() or in_proposal)
-    if not (autoreply_send or proposal_write or owen_ai_get or allowed(method, path)):
+    owen_ai_get = method == "GET" and (_OWEN_AI_READ.get() or in_proposal
+                                       or pictures is not None)
+    if not (autoreply_send or proposal_write or pictures_write or owen_ai_get
+            or allowed(method, path)):
         raise ZuperError("refused", "%s %s is not on the sync's allowlist" % (method, path))
     if not (config.env_enabled() or _OPERATOR.get()):
         raise ZuperError("off")
@@ -706,7 +822,7 @@ def request(method: str, path: str, *, params: dict | None = None,
                                     "job_uid, products and job_total)%s" % (
                                         method, path, "" if config.proposal_lines_enabled()
                                         else "; ZUPER_PROPOSAL_LINES is off"))
-    if method != "GET" and config.pull_only() and not proposal_write \
+    if method != "GET" and config.pull_only() and not proposal_write and not pictures_write \
             and not _mirror_write_allowed(path) \
             and not _ahs_create_allowed(method, path) \
             and not _dispatch_write_allowed(method, path) \
@@ -725,7 +841,7 @@ def request(method: str, path: str, *, params: dict | None = None,
             with httpx.Client(base_url=base, transport=TRANSPORT,
                               timeout=TIMEOUT_SECONDS) as client:
                 resp = client.request(method, base + path, params=params, json=body,
-                                      headers=headers)
+                                      files=files, data=form, headers=headers)
         except httpx.HTTPError as exc:
             if method == "GET" and attempt < RETRIES_ON_5XX:
                 attempt += 1
@@ -764,6 +880,15 @@ def request(method: str, path: str, *, params: dict | None = None,
             if isinstance(payload, dict) else None
         raise ZuperError("rejected", str(message or "HTTP %d" % resp.status_code)[:300],
                          resp.status_code)
+    if pictures is not None:
+        # The PUT is compared with what this scope last read of the proposal.
+        if method == "GET" and pictures["uid"] and path == "/estimate/" + pictures["uid"]:
+            rec = data_of(payload)
+            pictures["baseline"] = copy.deepcopy(rec) if isinstance(rec, dict) else None
+        elif method == "POST":
+            pictures["uploads"] += 1
+        elif method == "PUT":
+            pictures["puts"] += 1
     return payload
 
 

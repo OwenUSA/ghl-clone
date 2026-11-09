@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { OwenAiProposal, OwenAiProposalOption } from '../../lib/api'
+import { PictureThumb } from './PictureZoom'
 import { PROPOSAL_STATUS_LABEL, proposalTarget, relativeDay, safeScopeHtml, usd } from '../../lib/owenAi'
 import { BLUE, INK, LINE, MONO, MUTED, RED, chipBtn } from './tokens'
 
@@ -9,14 +10,26 @@ import { BLUE, INK, LINE, MONO, MUTED, RED, chipBtn } from './tokens'
  * draft Zuper made for the job), reads it back and says which DTR number it got. It is never
  * sent. Pending drafts show the whole Good / Better / Best preview; decided ones fold to a line
  * (created ones link to the proposal in Zuper, failed ones show Zuper's message).
+ *
+ * Step pictures (2026-11-09, optional): a created proposal offers "Add step pictures" — the server
+ * draws one banner per option from the proposal's own scope (OpenAI, a few cents each), the owner
+ * looks at them here, then "Put on the proposal" (only option_image changes; still a draft, never
+ * sent) or "Discard". Nothing is automatic.
  */
-export function ProposalsView({ proposals, loading, error, sentence, onApprove, onReject, busyId, actionError }: {
+export type PicturesAction = 'generate' | 'attach' | 'discard'
+
+export function ProposalsView({ proposals, loading, error, sentence, onApprove, onReject, busyId, actionError,
+  picturesSentence = null, onPictures, picturesBusy = null }: {
   proposals: OwenAiProposal[]; loading: boolean; error: string | null
   /** Why Approve would be refused right now (the server switch or the registry), or null. */
   sentence: string | null
   onApprove: (p: OwenAiProposal) => Promise<boolean>
   onReject: (p: OwenAiProposal, why: string) => Promise<boolean>
   busyId: number | null; actionError: { id: number; message: string } | null
+  /** Why step pictures are switched off on this server, or null. */
+  picturesSentence?: string | null
+  onPictures?: (p: OwenAiProposal, action: PicturesAction) => Promise<boolean>
+  picturesBusy?: { id: number; action: PicturesAction } | null
 }) {
   const pending = proposals.filter((p) => p.status === 'pending')
   const rest = proposals.filter((p) => p.status !== 'pending')
@@ -53,7 +66,11 @@ export function ProposalsView({ proposals, loading, error, sentence, onApprove, 
           <section aria-label="Decided" style={{ marginTop: 18 }}>
             <div style={sectionHead}>Decided</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {rest.map((p) => <DecidedCard key={p.id} p={p} />)}
+              {rest.map((p) => (
+                <DecidedCard key={p.id} p={p} picturesSentence={picturesSentence} onPictures={onPictures}
+                  picturesBusy={picturesBusy?.id === p.id ? picturesBusy.action : null}
+                  actionError={actionError?.id === p.id ? actionError.message : null} />
+              ))}
             </div>
           </section>
         )}
@@ -170,7 +187,11 @@ function OptionPreview({ o }: { o: OwenAiProposalOption }) {
   )
 }
 
-function DecidedCard({ p }: { p: OwenAiProposal }) {
+function DecidedCard({ p, picturesSentence, onPictures, picturesBusy, actionError }: {
+  p: OwenAiProposal; picturesSentence: string | null
+  onPictures?: (p: OwenAiProposal, action: PicturesAction) => Promise<boolean>
+  picturesBusy: PicturesAction | null; actionError: string | null
+}) {
   const [open, setOpen] = useState(false)
   const color = p.status === 'created' ? 'rgb(6,118,71)' : p.status === 'failed' ? RED : MUTED
   return (
@@ -199,6 +220,95 @@ function DecidedCard({ p }: { p: OwenAiProposal }) {
           {p.options.map((o) => <OptionPreview key={o.name} o={o} />)}
         </div>
       )}
+      {p.status === 'created' && onPictures && (
+        <StepPictures p={p} sentence={picturesSentence} busy={picturesBusy} error={actionError}
+          run={(a) => onPictures(p, a)} />
+      )}
     </article>
+  )
+}
+
+const usd2 = (n: number) => `$${n.toFixed(2)}`
+
+/** The optional step pictures of a created proposal: offer -> making -> preview -> on DTR-N. */
+function StepPictures({ p, sentence, busy, error, run }: {
+  p: OwenAiProposal; sentence: string | null; busy: PicturesAction | null; error: string | null
+  run: (a: PicturesAction) => Promise<boolean>
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const st = p.pictures_status
+  const making = busy === 'generate' || st === 'generating'
+  const attaching = busy === 'attach' || st === 'attaching'
+  const where = p.estimate_number ?? 'the proposal'
+  const box: React.CSSProperties = { marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${LINE}`, fontSize: 13,
+    color: INK }
+  const problem = error ?? p.pictures_error
+  if (st === 'attached') {
+    return (
+      <div style={box}>
+        <span style={{ color: 'rgb(6,118,71)', fontWeight: 600 }}>Pictures on {where}</span>
+        <div style={{ marginTop: 4 }}>
+          {p.pictures.map((x) => <PictureThumb key={x.name} src={x.url} label={x.name} width={150} />)}
+        </div>
+      </div>
+    )
+  }
+  if (making) {
+    return (
+      <div style={box} role="status">
+        <span aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12,
+          border: `2px solid ${LINE}`, borderTopColor: BLUE, borderRadius: '50%', marginRight: 8,
+          verticalAlign: '-2px', animation: 'owen-ai-pictures-spin 0.9s linear infinite' }} />
+        Making the step pictures… this takes a minute or two.
+        <style>{'@keyframes owen-ai-pictures-spin { to { transform: rotate(360deg) } }'}</style>
+      </div>
+    )
+  }
+  if (st === 'ready' || st === 'attaching') {
+    return (
+      <div style={box}>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 4 }}>
+          Step pictures — preview only, not on {where} yet
+          {p.pictures_cost_usd != null && <> · OpenAI cost {usd2(p.pictures_cost_usd)}</>}</div>
+        <div>{p.pictures.map((x) => <PictureThumb key={x.name} src={x.url} label={x.name} />)}</div>
+        {!confirming ? (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+            <button type="button" disabled={!!sentence || attaching || busy !== null} onClick={() => setConfirming(true)}
+              title={sentence ?? undefined}
+              style={{ fontSize: 13, color: '#fff', background: sentence || attaching ? 'rgb(152,162,179)' : BLUE,
+                borderRadius: 8, padding: '5px 14px' }}>{attaching ? `Putting them on ${where}…` : 'Put on the proposal'}</button>
+            <button type="button" disabled={attaching || busy !== null} onClick={() => { void run('discard') }}
+              style={chipBtn}>{busy === 'discard' ? 'Discarding…' : 'Discard'}</button>
+          </div>
+        ) : (
+          <div role="group" aria-label="Confirm pictures" style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8,
+            background: 'rgb(239,244,255)', border: '1px solid rgb(178,204,255)' }}>
+            Put these {p.pictures.length} pictures on <strong>{where}</strong>? Only the option pictures change — prices
+            and wording stay as they are, it stays a draft, and nothing is sent to the customer.
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <button type="button" disabled={attaching}
+                onClick={() => { void run('attach').then(() => setConfirming(false)) }}
+                style={{ fontSize: 13, color: '#fff', background: BLUE, borderRadius: 8, padding: '5px 14px' }}>
+                {attaching ? 'Putting them on…' : 'Yes, put them on'}</button>
+              <button type="button" disabled={attaching} onClick={() => setConfirming(false)}
+                style={{ fontSize: 12, color: MUTED, padding: '0 6px' }}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {problem && <div role="alert" style={{ color: RED, fontSize: 12, marginTop: 6 }}>{problem}</div>}
+      </div>
+    )
+  }
+  // None yet, discarded, or the last try failed.
+  return (
+    <div style={box}>
+      <button type="button" disabled={!!sentence || busy !== null} onClick={() => { void run('generate') }}
+        title={sentence ?? "Draws one picture per option from this proposal's scope, for you to look at first"}
+        style={{ ...chipBtn, color: sentence ? MUTED : BLUE, borderColor: sentence ? LINE : 'rgb(178,204,255)' }}>
+        {st === 'failed' ? 'Try the step pictures again' : 'Add step pictures'} (optional, ~{usd2(p.pictures_estimate_usd)})
+      </button>
+      {sentence && <span style={{ fontSize: 12, color: MUTED, marginLeft: 8 }}>{sentence}</span>}
+      {problem && <div role="alert" style={{ color: RED, fontSize: 12, marginTop: 6 }}>{problem}</div>}
+    </div>
   )
 }
