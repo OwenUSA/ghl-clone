@@ -736,18 +736,36 @@ def _img(p: Photo, alt: str, cache_: dict) -> str:
     return '<img class="zoom" src="%s" alt="%s">' % (cache_[key], esc(alt))
 
 
+def _refs(fd: Finding) -> str:
+    refs = fd.refs or ", ".join(str(p.num) for p in fd.photos)
+    word = "Photos" if re.search(r"[,\u2013\-\u00b7&]| and ", refs) else "Photo"
+    return "%s %s" % (word, refs)
+
+
 def card(n: int, fd: Finding, imgs: dict) -> str:
+    """A finding as PHOTOS FIRST (owner, 2026-11-09): number, title, severity, the photos big and
+    full width, and what we saw right under them. The explanations come later, all together
+    (explain_card), so the report reads in sections."""
     label, cls = SEV[fd.severity]
     pics = "".join(_img(p, fd.title, imgs) for p in fd.photos)
-    refs = fd.refs or ", ".join(str(p.num) for p in fd.photos)
-    word = "Photos" if re.search(r"[,\u2013\-·&]| and ", refs) else "Photo"
+    saw = ('<p class="saw"><b>What we saw:</b> %s</p>' % rich(fd.saw)) if fd.saw else ""
+    return f"""<section class="card fcard">
+ <header><span class="num">{n}</span><h3>{esc(fd.title)}</h3><span class="pill {cls}">{label}</span></header>
+ <div class="bigph n{len(fd.photos)}">{pics}</div>
+ <p class="refs">{esc(_refs(fd))} · click a photo to zoom</p>
+ {saw}
+</section>"""
+
+
+def explain_card(n: int, fd: Finding) -> str:
+    label, cls = SEV[fd.severity]
     rows = "".join("<dt>%s</dt><dd>%s</dd>" % (head, rich(getattr(fd, key))) for head, key in (
-        ("What we saw", "saw"), ("What it means", "means"), ("Why it happens", "why"),
+        ("What it means", "means"), ("Why it happens", "why"),
         ("Think of it like this", "like"), ("How we fix it", "fix"),
         ("How to prevent it", "prevent")) if getattr(fd, key))
-    return f"""<section class="card">
+    return f"""<section class="card ecard">
  <header><span class="num">{n}</span><h3>{esc(fd.title)}</h3><span class="pill {cls}">{label}</span></header>
- <div class="cg"><div class="ph n{len(fd.photos)}">{pics}<p class="refs">{word} {esc(refs)} · click a photo to zoom</p></div><dl>{rows}</dl></div>
+ <dl>{rows}</dl>
 </section>"""
 
 
@@ -907,11 +925,14 @@ def inside_block(ins: Inside, imgs: dict) -> str:
 
 def findings_html(s: Spec, imgs: dict) -> str:
     parts = ['<div class="pgbreak"></div><h2 style="margin-top:0">What we found</h2>\n']
-    after = (s.inside.after_finding or len(s.findings)) if s.inside else None
     for n, fd in enumerate(s.findings, 1):
         parts.append(card(n, fd, imgs))
-        if after is not None and n == min(after, len(s.findings)):
-            parts.append(inside_block(s.inside, imgs))
+    if s.inside:
+        parts.append(inside_block(s.inside, imgs))
+    parts.append('<div class="pgbreak"></div><h2 style="margin-top:0">What it means and how we '
+                 'fix it</h2>\n')
+    for n, fd in enumerate(s.findings, 1):
+        parts.append(explain_card(n, fd))
     return "".join(parts)
 
 
