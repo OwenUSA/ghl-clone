@@ -44,7 +44,7 @@ tool's warnings to Owen in the chat**. Owen downloads it from the chat and decid
 | Part | What you provide | Notes |
 |---|---|---|
 | Header | — | Logo, company, phone/license (settings), customer name + service address, job #, date: **the tool fetches these from Zuper**. |
-| Badge | `severity` + one sentence | Worst finding's level. "Water has gotten into your home. The most likely cause is … and it can be repaired." |
+| Badge | `severity` + one sentence (or `severity: "hide"` = no badge at all — when Owen asks to remove it, use hide, never "none", which prints "No repair needed") | Worst finding's level. "Water has gotten into your home. The most likely cause is … and it can be repaired." |
 | What happened | 3–5 short sentences | Story order: where → what's wrong → how water gets in ("we believe") → what it caused inside → "we'll confirm when we open it". |
 | Hero | cause photo + inside photo | Best close-up of the main cause (with marks) next to the worst interior stain. |
 | Location | one wide photo + one sentence | A photo that shows WHERE on the house (street/house visible). |

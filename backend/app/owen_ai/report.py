@@ -167,8 +167,9 @@ class Photo(_Strict):
 
 
 class Badge(_Strict):
-    severity: Literal["now", "soon", "watch", "none"]
-    text: Rich(300)
+    # "hide" = no badge on the page at all (owner, 2026-11-09: "just remove that part").
+    severity: Literal["now", "soon", "watch", "none", "hide"]
+    text: Rich(300) = ""
 
 
 class Hero(_Strict):
@@ -781,7 +782,12 @@ def _not_done_clause(not_done: str) -> str:
 
 
 def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
-    label, cls = SEV[s.badge.severity]
+    if s.badge.severity == "hide":
+        badge = ""
+    else:
+        label, cls = SEV[s.badge.severity]
+        badge = '<div class="badge%s"><b>%s</b><p>%s</p></div>\n' % (
+            "" if cls == "red" else " " + cls, label, rich(s.badge.text))
     meta = [
         '<div><span>Customer:</span> %s</div><div><span>Job:</span> #%s</div>'
         '<div><span>Date:</span> %s</div>' % (_ph(f.customer), esc(f.job_number),
@@ -804,9 +810,13 @@ def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
         figs.append('<figure>%s<figcaption>%s</figcaption></figure>' % (
             _img(s.hero.inside_photo, s.hero.captions[1].rstrip("."), imgs),
             esc(s.hero.captions[1])))
-    if s.badge.severity in ("now", "soon"):
+    sev = s.badge.severity
+    if sev == "hide":                   # no badge: the call to action follows the worst finding
+        found = {fd.severity for fd in s.findings}
+        sev = next((x for x in ("now", "soon", "watch") if x in found), "none")
+    if sev in ("now", "soon"):
         when = ("<b>within the next 2 weeks</b> — every rain adds more water to the wood and the "
-                "ceiling" if s.badge.severity == "now" else "<b>in the next few months</b>")
+                "ceiling" if sev == "now" else "<b>in the next few months</b>")
         if has_options:
             cta = ('<b>What to do next:</b> choose a repair option in <b>"Your repair options"</b> '
                    '(near the end). We recommend fixing this %s. Until then, see <b>"Until '
@@ -834,8 +844,7 @@ def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
 <div class="meta">
  {meta}
 </div>
-<div class="badge{bcls}"><b>{blabel}</b><p>{btext}</p></div>
-<p class="legend"><i class="r">Fix now</i> = water is getting in · <i class="o">Fix soon</i> = fix in the next few months ·
+{badge}<p class="legend"><i class="r">Fix now</i> = water is getting in · <i class="o">Fix soon</i> = fix in the next few months ·
 <i class="b">Watch</i> = check at your next service visit</p>
 <p class="what"><b>What happened.</b> {what}</p>
 <div class="hero">
@@ -844,8 +853,8 @@ def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
 <div class="cta">{cta}</div>
 <p class="tip">Tip: click or tap any photo to zoom in.</p>
 """.format(logo=logo_uri(), contact=contact,
-           meta="\n ".join(meta), bcls="" if cls == "red" else " " + cls, blabel=label,
-           btext=rich(s.badge.text), what=rich(s.what_happened), figs="\n ".join(figs), cta=cta)
+           meta="\n ".join(meta), badge=badge, what=rich(s.what_happened),
+           figs="\n ".join(figs), cta=cta)
 
 
 def page2(s: Spec, imgs: dict) -> str:
@@ -1171,7 +1180,7 @@ DESCRIPTION = (
     "MAKE the customer inspection report for one job (Dream Team design: logo header, severity "
     "badge, annotated photos, finding cards, the proposal's options table, legal text) as a "
     "DRAFT for Owen to download — it is never sent to anyone. Follow the inspection-report "
-    "skill. Input = the spec: job_uid; badge {severity now|soon|watch|none, text}; "
+    "skill. Input = the spec: job_uid; badge {severity now|soon|watch|none|hide, text} (hide = no badge at all: use it when Owen asks to remove the badge, never "none"); "
     "what_happened; hero {cause_photo, inside_photo?, captions[1-2]}; location? {photo, "
     "where_text, caption?, entry_label?}; findings[1-8] {severity now|soon|watch, title, "
     "photos[1-2], refs, saw, means, why, like, fix, prevent}; inside? {title?, photo?, caption?, "

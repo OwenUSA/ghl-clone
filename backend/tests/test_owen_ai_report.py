@@ -485,3 +485,11 @@ def test_marks_are_drawn_where_the_fractions_say(env):
     assert im.size == (1024, 768)
     r, g, b = im.getpixel((round(0.63 * 1024), round(0.38 * 768) + 3))   # top of the ellipse
     assert r > 180 and g < 90
+
+
+def test_the_badge_can_be_hidden_completely(env):
+    """Owner, 2026-11-09: "remove that part" means no badge at all, not "No repair needed"."""
+    s = spec(env, badge={"severity": "hide"})
+    page = Path(report.write(s)["html_path"]).read_text("utf-8")
+    assert 'class="badge' not in page and "No repair needed" not in page
+    assert "within the next 2 weeks" in page            # the call to action follows finding 1
