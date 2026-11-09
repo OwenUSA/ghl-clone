@@ -745,9 +745,12 @@ turns it on. `engine.may_create_in_zuper` decides, from the CARD: the switch, `c
 email"` + its `ahs_job_id`, and still on the pipeline `CATEGORIES` maps to **AHS - Inspection**.
 `client.ahs_create()` is the only scope a write gets through, and only three POSTs are on
 `AHS_CREATE_WRITES` — customer, job, note. **No PUT and no DELETE anywhere on that list**, no
-status is ever named (so the job lands in the board's first column, "Work Order Received"), and
-the visit and tasks are not sent. Any other card still answers with the pull-only sentence.
-See the 2026-09-28 amendment in `DECISIONS.md`; `tests/test_ahs_email_creates_job.py` pins it.
+status is ever named, and the visit and tasks are not sent. Any other card still answers with
+the pull-only sentence. **Since 2026-11-06 the job is created on "AHS Simple Flow"**
+(`ZUPER_AHS_EMAIL_BOARD`, found by name; missing = nothing created), so it lands in that board's
+NEW column "Got a job from AHS"; each field carries its Zuper group. The CRM's AHS pipeline still
+mirrors AHS - Inspection. See the 2026-09-28 and 2026-11-06 amendments in `DECISIONS.md`;
+`tests/test_ahs_email_creates_job.py` pins it.
 
 **Six regional boards (2026-09-24)** — Miami / Sarasota repair, roof replacement and gutters —
 are in `mapping.MIRROR_ONLY_CATEGORIES`: `mirror --phase boards` makes a CRM pipeline for each

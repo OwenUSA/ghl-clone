@@ -9,6 +9,7 @@ no delete, no other card, and no visit or task even on the card that is allowed.
 Behaviour, read back from the fake Zuper's own records: what was created, on which board, in
 which column, and — the point of most of these — what never left at all.
 """
+import pytest
 from app import ahs_jobs
 from app.db import SessionLocal
 from app.models import Appointment, Calendar, Opportunity, OpportunityTask, Pipeline, Stage
@@ -32,6 +33,26 @@ ORDER = {
     "message_id": "<abc@dispatch.me>",
     "received_at": "2026-09-14T13:05:00+00:00",
 }
+
+
+SIMPLE_FLOW = "AHS Simple Flow"
+# The board as live (2026-11-06): seven columns, the NEW one first.
+SIMPLE_FLOW_COLUMNS = (("Got a job from AHS", "NEW"), ("Day of Inspection", "SCHEDULED"),
+                       ("Proposal Creation", "ESTIMATING"), ("Handoff Meeting", "SCHEDULED"),
+                       ("Repair Day", "STARTED"), ("Quality Call", "FOLLOW_UP"),
+                       ("Job Completed", "COMPLETED"))
+
+
+@pytest.fixture(autouse=True)
+def simple_flow(fake):
+    """The team's "AHS Simple Flow" board, made in Zuper by a person (2026-10-31) — the CRM
+    never creates it, so the fake account has it from the start."""
+    uid = "cat-simple-flow"
+    fake.categories[uid] = {"category_uid": uid, "category_name": SIMPLE_FLOW}
+    fake.statuses[uid] = [{"status_uid": "st-sf-%d" % i, "status_name": name,
+                           "status_type": kind}
+                          for i, (name, kind) in enumerate(SIMPLE_FLOW_COLUMNS)]
+    return uid
 
 
 def one_way(monkeypatch, *, ahs_creates: bool = True) -> None:
@@ -76,26 +97,84 @@ def card_of(result) -> int:
 
 # ------------------------------------------------------------------ it creates the job
 
-def test_an_emailed_work_order_creates_its_job_on_the_ahs_inspection_board(armed, fake,
-                                                                          monkeypatch):
+def test_an_emailed_work_order_creates_its_job_on_the_ahs_simple_flow_board(armed, fake,
+                                                                           monkeypatch):
+    """2026-11-06: the team moved every emailed job from AHS - Inspection to "AHS Simple Flow"
+    by hand, so the job now starts there. The CRM's own AHS pipeline still mirrors AHS -
+    Inspection — only the create's board changed."""
     one_way(monkeypatch)
     deliver(armed, fake)
     job = zuper_job(fake)
-    assert board_of(fake, job) == mapping.CATEGORIES[AHS] == "AHS - Inspection"
+    assert board_of(fake, job) == SIMPLE_FLOW
+    assert mapping.CATEGORIES[AHS] == "AHS - Inspection", "the mirror's link is unchanged"
     assert job["job_title"]
     assert job.get("customer", {}).get("customer_uid"), "the customer went with it"
 
 
-def test_the_job_lands_in_the_boards_first_column_because_nothing_sets_a_status(armed, fake,
-                                                                               monkeypatch):
-    """"In the AHS - Inspection item by default" — the CRM never names a status, so the job
-    takes whatever Zuper opens a new job in, which is that board's first column."""
+def test_the_job_lands_in_got_a_job_from_ahs_because_nothing_sets_a_status(armed, fake,
+                                                                          monkeypatch):
+    """The CRM never names a status, so the job takes whatever Zuper opens a new job in: the
+    board's NEW column, which on Simple Flow is its first, "Got a job from AHS"."""
     one_way(monkeypatch)
     deliver(armed, fake)
     job = zuper_job(fake)
-    first = fake.statuses[(job["job_category"] or {})["category_uid"]][0]["status_name"]
-    assert column_of(fake, job) == first
+    assert column_of(fake, job) == "Got a job from AHS"
     assert fake.calls("PUT", r"/jobs/[^/]+/status") == [], "no status was ever moved"
+    posted = next(w for w in fake.writes() if w.path == "/jobs").body["job"]
+    assert "status_uid" not in posted and "job_status" not in posted, posted
+
+
+def test_the_board_is_another_one_if_the_server_names_it(armed, fake, monkeypatch):
+    one_way(monkeypatch)
+    monkeypatch.setenv("ZUPER_AHS_EMAIL_BOARD", "AHS - Inspection")
+    deliver(armed, fake)
+    assert board_of(fake, zuper_job(fake)) == "AHS - Inspection"
+
+
+def test_a_board_missing_from_zuper_creates_no_job_anywhere(armed, fake, monkeypatch,
+                                                            simple_flow):
+    """Renamed or deleted in Zuper: nothing is created — never a job on some other board."""
+    one_way(monkeypatch)
+    del fake.categories[simple_flow]
+    result = deliver(armed, fake)
+    assert not [j for j in fake.jobs.values() if not j.get("is_deleted")]
+    assert fake.calls("POST", r"^/jobs$") == []
+    with SessionLocal() as s:
+        m = mapping.mapping_for(s, "opportunity", card_of(result))
+        assert m is not None and m.state == "failed", m and m.state
+        assert SIMPLE_FLOW in (m.last_error or ""), m.last_error
+
+
+def test_every_field_goes_in_its_zuper_group(armed, fake, monkeypatch):
+    """Sent as a bare {label, value}, the fields showed under no group (2026-11-06, #821); a job
+    made in Zuper's own screen carries each field's type and group. A label Zuper has no
+    definition for (AHS Job ID) still goes, ungrouped."""
+    one_way(monkeypatch)
+    group = {"group_name": "CRM", "group_uid": "grp-crm"}
+    fake.custom_field_defs = {"JOB": [
+        {"field_name": "CRM Opportunity ID", "field_type": "SINGLE_LINE", "group": group},
+        {"field_name": "CRM Link", "field_type": "SINGLE_LINE", "group": group},
+        {"field_name": "Service address verified", "field_type": "SINGLE_ITEM",
+         "group": {"group_name": "Checklist", "group_uid": "grp-checklist"}},
+    ]}
+    deliver(armed, fake)
+    fields = {f["label"]: f for f in zuper_job(fake)["custom_fields"]}
+    crm_id = fields["CRM Opportunity ID"]
+    assert (crm_id["group_name"], crm_id["group_uid"], crm_id["type"]) == \
+        ("CRM", "grp-crm", "SINGLE_LINE")
+    assert crm_id["value"], "the value is still sent"
+    assert fields["Service address verified"]["group_uid"] == "grp-checklist"
+    assert fields["AHS Job ID"]["value"] == ORDER["ahs_job_id"]
+    assert "group_uid" not in fields["AHS Job ID"]
+
+
+def test_unreadable_field_definitions_still_create_the_job(armed, fake, monkeypatch):
+    one_way(monkeypatch)
+    fake.custom_field_defs = None                       # the definitions answer 404
+    deliver(armed, fake)
+    job = zuper_job(fake)
+    assert board_of(fake, job) == SIMPLE_FLOW
+    assert {f["label"] for f in job["custom_fields"]} >= {"CRM Opportunity ID", "AHS Job ID"}
 
 
 def test_the_work_order_goes_with_it_as_a_note(armed, fake, monkeypatch):

@@ -68,12 +68,24 @@ def ahs_email_creates_jobs() -> bool:
     by a record event — so an AHS work order that arrives as an email can reach Zuper no other
     way than the CRM creating it. This flag permits exactly that and nothing more: the
     `create` half of one AHS-email card (its customer, the job, the work order as a note), on
-    the board `mapping.CATEGORIES` names for the AHS pipeline, in whatever status Zuper makes
-    a new job in. No update, no status move, no delete, no other card — `pull_only()` still
-    answers for all of those, and `client.ahs_create()` is the only scope in which the
-    exception applies.
+    the board `ahs_email_board()` names (AHS Simple Flow since 2026-11-06), in whatever status
+    Zuper makes a new job in. No update, no status move, no delete, no other card —
+    `pull_only()` still answers for all of those, and `client.ahs_create()` is the only scope
+    in which the exception applies.
     """
     return _flag("ZUPER_AHS_EMAIL_CREATES_JOBS", False)
+
+
+# The Zuper board an emailed AHS work order's job is created on (2026-11-06). It was AHS -
+# Inspection until the team built "AHS Simple Flow" and began moving every new AHS job there by
+# hand; now the job starts there. Still no status is named, so it lands in the board's NEW
+# column ("Got a job from AHS"). Found BY NAME each time; a board of that name not in Zuper
+# creates nothing (never a fallback to another board).
+AHS_EMAIL_BOARD_DEFAULT = "AHS Simple Flow"
+
+
+def ahs_email_board() -> str:
+    return (os.environ.get("ZUPER_AHS_EMAIL_BOARD") or "").strip() or AHS_EMAIL_BOARD_DEFAULT
 
 
 DISPATCH_WRITES_OFF_SENTENCE = (
