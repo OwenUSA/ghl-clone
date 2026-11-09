@@ -18,9 +18,9 @@ from sqlalchemy.orm import Session
 
 from .. import auth
 from ..db import get_db
-from ..models import OwenAiAlert, OwenAiMessage, OwenAiThread, Role
+from ..models import OwenAiAlert, OwenAiMessage, OwenAiProposalDraft, OwenAiThread, Role
 from ..zuper import config as zuper_config
-from . import alerts, config, report
+from . import alerts, config, proposals, report
 
 router = APIRouter(prefix="/api/owen-ai", tags=["owen-ai"])
 NY = ZoneInfo("America/New_York")
@@ -254,3 +254,64 @@ def report_file(report_id: str, file: str, p: auth.Principal = OWNER) -> FileRes
         "Content-Disposition": "attachment; filename=\"%s\"; filename*=utf-8''%s"
                                % (name, quote(name)),
         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+# ------------------------------------------------------------------------------ proposals
+
+@router.get("/proposals")
+def list_proposals(status: str | None = None, p: auth.Principal = OWNER,
+                   db: Session = Depends(get_db)) -> dict:
+    """Owen AI's proposal drafts (2026-11-09): pending first, then newest."""
+    q = select(OwenAiProposalDraft)
+    if status in proposals.STATUSES:
+        q = q.where(OwenAiProposalDraft.status == status)
+    rows = list(db.scalars(q.order_by(OwenAiProposalDraft.id.desc()).limit(300)))
+    rows.sort(key=lambda r: r.status != "pending")
+    pending = db.scalar(select(func.count()).select_from(OwenAiProposalDraft).where(
+        OwenAiProposalDraft.status == "pending")) or 0
+    return {"proposals": [proposals.out(r) for r in rows], "pending": pending,
+            "enabled": proposals.refusal(db) is None, "sentence": proposals.refusal(db)}
+
+
+def _draft(db: Session, draft_id: int) -> OwenAiProposalDraft:
+    row = db.get(OwenAiProposalDraft, draft_id)
+    if row is None:
+        raise HTTPException(404, "Not Found")
+    return row
+
+
+@router.get("/proposals/{draft_id}")
+def get_proposal(draft_id: int, p: auth.Principal = OWNER, db: Session = Depends(get_db)) -> dict:
+    return proposals.out(_draft(db, draft_id))
+
+
+@router.post("/proposals/{draft_id}/approve")
+def approve_proposal(draft_id: int, p: auth.Principal = OWNER,
+                     db: Session = Depends(get_db)) -> dict:
+    """Create it in Zuper as a DRAFT (or fill the empty draft), read it back. Never sends.
+    Refused (409, nothing sent) unless it is pending, OWEN_AI_PROPOSALS_ENABLED is on and the
+    registry allows it. A Zuper failure is a 200 with status "failed" and Zuper's message."""
+    _draft(db, draft_id)
+    try:
+        row = proposals.approve(db, draft_id, p.name or p.email or "the owner")
+    except proposals.Refused as exc:
+        raise HTTPException(409, str(exc)) from None
+    except LookupError:
+        raise HTTPException(404, "Not Found") from None
+    return proposals.out(row)
+
+
+class Reject(BaseModel):
+    why: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/proposals/{draft_id}/reject")
+def reject_proposal(draft_id: int, body: Reject, p: auth.Principal = OWNER,
+                    db: Session = Depends(get_db)) -> dict:
+    """Writes nothing to Zuper."""
+    _draft(db, draft_id)
+    try:
+        row = proposals.reject(db, draft_id, p.name or p.email or "the owner", body.why)
+    except proposals.Refused as exc:
+        raise HTTPException(409, str(exc)) from None
+    return proposals.out(row)

@@ -100,6 +100,19 @@ def proposal_lines_enabled() -> bool:
     return _flag("ZUPER_PROPOSAL_LINES", False)
 
 
+OWEN_AI_PROPOSALS_OFF_SENTENCE = (
+    "Owen AI may not create proposal drafts in Zuper on this server "
+    "(OWEN_AI_PROPOSALS_ENABLED is not true).")
+
+
+def owen_ai_proposals_enabled() -> bool:
+    """The server's gate on Owen AI's approved proposal DRAFTS (2026-11-09, app/owen_ai/
+    proposals.py). Off unless the deployment says so; with it off `client.owen_ai_proposal_write`
+    allows nothing, whatever the registry says. Owen AI can still PREPARE a draft for the
+    Proposals tab — that writes only to the CRM's database."""
+    return _flag("OWEN_AI_PROPOSALS_ENABLED", False)
+
+
 def dispatch_writes_enabled() -> bool:
     """The server's gate on the Dispatch page's "let the agent do it" (phase 3, 2026-10-01).
 

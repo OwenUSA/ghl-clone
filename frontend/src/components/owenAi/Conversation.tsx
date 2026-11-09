@@ -55,6 +55,7 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
           )}
           {messages.map((m) => m.role === 'user'
             ? (audit || m.kind === 'audit' ? <AuditPrompt key={m.id} m={m} /> : <UserBubble key={m.id} m={m} />)
+            : m.role === 'system' ? <SystemNote key={m.id} m={m} />
             : <AssistantMessage key={m.id} m={m} />)}
           {busy && (
             <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '18px 0',
@@ -114,6 +115,15 @@ function UserBubble({ m }: { m: OwenAiMessage }) {
         <div role="alert" style={{ ...errorBox, maxWidth: '80%' }}>{m.error}</div>
       )}
     </div>
+  )
+}
+
+/** A note the CRM posted (a proposal draft approved / rejected): one grey line. Owen AI reads
+    it with the owner's next message. */
+function SystemNote({ m }: { m: OwenAiMessage }) {
+  return (
+    <div role="note" style={{ margin: '14px auto', maxWidth: '90%', fontSize: 12, lineHeight: '18px', color: MUTED,
+      textAlign: 'center', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</div>
   )
 }
 

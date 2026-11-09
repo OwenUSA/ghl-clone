@@ -2342,7 +2342,8 @@ export type DispatchChatSummary = {
 export type DispatchChatStep = { tool: string; args: Record<string, unknown>; result: string }
 export type DispatchChatFeedback = { rating: 1 | -1; note: string | null }
 export type DispatchChatMessage = {
-  id: number; role: 'user' | 'assistant'; content: string; steps: DispatchChatStep[]
+  /** 'system': a note the CRM posted (a proposal draft approved / rejected, 2026-11-09). */
+  id: number; role: 'user' | 'assistant' | 'system'; content: string; steps: DispatchChatStep[]
   error: boolean; model: string | null; feedback: DispatchChatFeedback | null
   suggestions: DispatchSuggestion[]; created_at: string
   /** On a user message: the spreadsheets attached to it. Missing on older servers — treat as []. */
@@ -2788,7 +2789,8 @@ export type OwenAiThread = {
 }
 export type OwenAiStep = { tool: string; input: unknown; result?: unknown; error?: string | null }
 export type OwenAiMessage = {
-  id: number; role: 'user' | 'assistant'; content: string
+  /** 'system': a note the CRM posted (a proposal draft approved / rejected, 2026-11-09). */
+  id: number; role: 'user' | 'assistant' | 'system'; content: string
   /** 'audit' in the sweep's threads: the user side is a machine prompt, not the owner. */
   kind?: 'chat' | 'audit'; job_uid?: string | null
   status: 'queued' | 'running' | 'done' | 'error'; steps: OwenAiStep[]; error: string | null
@@ -2828,3 +2830,29 @@ export const owenAiAlerts = (status: OwenAiAlertStatus = 'open', jobUid?: string
 }
 export const owenAiDismissAlert = (id: number, why: string) =>
   send<OwenAiAlert>(`/api/owen-ai/alerts/${id}/dismiss`, 'POST', { why })
+
+// Owen AI's proposal drafts (2026-11-09): prepared by Owen AI, created in Zuper as a DRAFT only
+// when the owner presses Approve (never sent). Pending first, then newest.
+export type OwenAiProposalStatus = 'pending' | 'approved' | 'creating' | 'created' | 'rejected' | 'failed'
+export type OwenAiProposalOption = {
+  name: 'GOOD' | 'BETTER' | 'BEST'; option_description: string; is_recommended: boolean
+  price: number; deposit: number; warranty: string; scope_html?: string; product_code: string | null
+}
+export type OwenAiProposal = {
+  id: number; job_uid: string; job_number: string | null; customer_name: string | null
+  template_key: string; template_name: string | null; title: string; status: OwenAiProposalStatus
+  target: string; target_number: string | null; estimate_uid: string | null; estimate_number: string | null
+  estimate_url: string | null; job_url: string | null; error: string | null; note: string | null
+  thread_id: number | null; created_at: string | null; decided_at: string | null; decided_by: string | null
+  total: number; options: OwenAiProposalOption[]
+  existing?: { number: string | null; uid: string; status: string; same_template: boolean }[]
+}
+export type OwenAiProposals = {
+  proposals: OwenAiProposal[]; pending: number; enabled: boolean; sentence: string | null
+}
+export const owenAiProposals = (status?: OwenAiProposalStatus) =>
+  get<OwenAiProposals>(`/api/owen-ai/proposals${status ? `?status=${status}` : ''}`)
+export const owenAiApproveProposal = (id: number) =>
+  send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/approve`, 'POST', {})
+export const owenAiRejectProposal = (id: number, why: string) =>
+  send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/reject`, 'POST', { why })

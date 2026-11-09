@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..models import OwenAiMessage, OwenAiThread
 from ..registry import service as registry
-from . import agent, alerts, config
+from . import agent, alerts, config, proposals
 
 log = logging.getLogger("owen_ai")
 NY = ZoneInfo("America/New_York")
@@ -79,7 +79,17 @@ def answer(db: Session, m: OwenAiMessage, turn: TurnFn) -> OwenAiMessage:
     else:
         note = agent.context_note(th.kind, th.title, th.job_uid, th.job_number,
                                   datetime.now(NY).date().isoformat())
-        result = turn(m.content, th.session_id, note)
+        # What the owner decided on the Proposals tab since his last message: Claude's session
+        # never saw those notes, so they ride along with this one.
+        crm = proposals.notes_for(db, m)
+        prompt = m.content if not crm else (
+            "[From the CRM since your last answer]\n%s\n\n%s" % (
+                "\n".join("- " + n for n in crm), m.content))
+        proposals.CURRENT_THREAD = th.id
+        try:
+            result = turn(prompt, th.session_id, note)
+        finally:
+            proposals.CURRENT_THREAD = None
     now = _now()
     reply = OwenAiMessage(
         thread_id=m.thread_id, role="assistant",

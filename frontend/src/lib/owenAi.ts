@@ -200,7 +200,7 @@ export function linkSpans(text: string): LinkSpan[] {
 // ---- the audit sweep's alerts (2026-11-03) -----------------------------------------------
 
 /** The page's left-column switch. */
-export type OwenAiTab = 'chats' | 'alerts'
+export type OwenAiTab = 'chats' | 'alerts' | 'proposals'
 
 export type Severity = 'urgent' | 'today' | 'watch'
 export const SEVERITIES: readonly Severity[] = ['urgent', 'today', 'watch']
@@ -243,4 +243,30 @@ export function relativeDay(iso: string | null | undefined, now: number = Date.n
 export function auditPromptLabel(content: string): string {
   const m = /#\s*([\w-]+)/.exec(content ?? '')
   return m ? `Audit #${m[1]}` : 'Audit run'
+}
+
+// ---- proposal drafts (2026-11-09) --------------------------------------------------------
+
+/** "$1,450" / "$725.50". */
+export function usd(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  const cents = Math.round(v * 100) % 100 !== 0
+  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 })
+}
+
+/** Where Approve will put it: "New draft" or "Fill DTR-150". */
+export function proposalTarget(p: { target: string; target_number: string | null }): string {
+  if (p.target.startsWith('fill:')) return `Fill ${p.target_number ?? 'the empty draft'} (Zuper made it for this job)`
+  return 'New draft in Zuper'
+}
+
+export const PROPOSAL_STATUS_LABEL: Record<string, string> = {
+  pending: 'Waiting for you', approved: 'Approved', creating: 'Creating in Zuper…', created: 'Created in Zuper',
+  rejected: 'Rejected', failed: 'Failed',
+}
+
+/** The scope HTML the server already sanitized, filtered once more: only bare <b> <i> <ul> <li>
+    <p> <br> survive; any other tag (or one with attributes) is dropped, its text kept. */
+export function safeScopeHtml(html: string | null | undefined): string {
+  return (html ?? '').replace(/<(?!\/?(?:b|i|ul|li|p)>|br\s*\/?>)[^>]*>?/gi, '')
 }
