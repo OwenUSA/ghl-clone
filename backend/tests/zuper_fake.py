@@ -259,7 +259,7 @@ class FakeZuper:
             (r"/commissions", ("GET", lambda p, b: self.page(self.commissions, p))),
             (r"/settings/custom_fields", ("GET", lambda p, b: self.not_found()
                                           if self.custom_field_defs is None else self.ok(
-                self.custom_field_defs.get(p.get("module", ""), [])))),
+                self.custom_field_defs.get(p.get("module_name", ""), [])))),
             (r"/settings/lead_sources", ("GET", lambda p, b: self.not_found()
                                          if self.lead_sources is None else self.ok(
                 self.lead_sources))),
@@ -424,7 +424,10 @@ class FakeZuper:
                     updated_by={"user_uid": "u-sync"})
         statuses = self.statuses.get(cat or "", [])
         if statuses:
-            self._job_status(data, statuses[0]["status_uid"])
+            # Live, a job created with no status lands in the board's NEW-type column, which
+            # need not be the first one (measured 2026-10-01); a board with none typed: the first.
+            first = next((x for x in statuses if x.get("status_type") == "NEW"), statuses[0])
+            self._job_status(data, first["status_uid"])
         self.jobs[uid] = data
         return self.ok({"job_uid": uid})
 

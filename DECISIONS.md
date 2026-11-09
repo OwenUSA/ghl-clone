@@ -7993,3 +7993,38 @@ The job:
 - recorded in `agent_registry_log` (entry `dropped_call_text`) BEFORE the send, never retried.
 Off unless DROPPED_CALL_TEXTS_ENABLED; the registry's "Text customers" is Automatic by default.
 
+
+## AMENDMENT (2026-11-06): an emailed AHS work order's job starts on "AHS Simple Flow"
+
+**Asked by the user:** "only the new jobs from AHS that arrive to get to the AHS Simple Flow
+instead", with all its checklist and fields. The team built "AHS Simple Flow" in Zuper on
+2026-10-31 and since then moved every emailed job there by hand (36 of the 40 since 2026-10-20,
+all of them first in AHS - Inspection / Work Order Received).
+
+**What changed:** only the board of the one create the one-way mirror makes (2026-09-28). Still the
+same three POSTs in `client.ahs_create()`, still no status named — Zuper puts the job in the
+board's NEW column, on Simple Flow its first, "Got a job from AHS".
+- The board is `config.ahs_email_board()` (`ZUPER_AHS_EMAIL_BOARD`, default "AHS Simple Flow"),
+  found BY NAME in Zuper's categories at each create. Missing = the send fails with a sentence
+  and nothing is created — never a fallback to another board.
+- Only on the production path (`pull_only()` and `may_create_in_zuper`); the CRM's AHS pipeline
+  still mirrors AHS - Inspection (`mapping.CATEGORIES` unchanged), and every other job keeps its
+  board.
+- **Fields go in their groups.** Sent as a bare `{label, value}`, the 24 fields showed under no
+  group (measured on #821); a job made in Zuper's screen carries `type`, `group_name`, `group_uid`
+  (#818). `mapping.grouped_fields` copies them from Zuper's definitions; a label without exactly
+  one definition goes as before ("AHS Job ID" has none); unreadable definitions never stop the job.
+- `zapi.custom_field_defs` asks with `module_name` — the live API answers 400 to `?module=JOB`
+  (measured 2026-11-06), so the setup check's field reading never worked live either.
+
+**Checked read-only before building (2026-11-06):** Simple Flow's checklists belong to its columns
+(15 questions on "Got a job from AHS", 75 on the board), so a created job has them like any other.
+No active Zuper workflow triggers on a job's creation. The team's "Add Appointments for Inspection
+and Production" fires on a STATUS CHANGE into "Got a job from AHS" (it makes service tasks and
+appointments); a job CREATED there probably does not fire it — unverified, to be confirmed on the
+first real job. The field groups CRM / Checklist / AHS / KPI are not attached to Simple Flow in
+Zuper's settings; attaching them is a Zuper change for a person (owner's OK).
+
+**Not changed:** the Dispatch page, routes, the mirror's pipelines and `zuper_tasks` do not know
+Simple Flow — a new emailed job no longer passes through AHS - Inspection, so Dispatch's "new job"
+bell does not ring for it.

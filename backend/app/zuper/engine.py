@@ -498,6 +498,34 @@ def _job_body(ctx: Ctx, o: Opportunity, view: dict) -> dict:
         assigned_user_uid=ctx.zuper_user_for(view.get("owner_email")))
 
 
+def _ahs_email_job(body: dict) -> dict:
+    """An emailed AHS work order's job, as created (2026-11-06): on `config.ahs_email_board()`
+    and with every field in its own group.
+
+    The board is looked up by name, and a board of that name missing from Zuper refuses the
+    create — the job is never put on another board instead. Still no status: Zuper puts a new
+    job in the board's NEW column. The fields carry the `group_name` / `group_uid` / `type` of
+    their Zuper definition, as a job made in Zuper's own screen does; sent with only a label
+    and a value they showed under no group. A field Zuper has no single definition for (AHS
+    Job ID has none) goes as before, and so does every field when the definitions cannot be
+    read — the job matters more than its grouping. Reads only: both lookups are GETs.
+    """
+    board = config.ahs_email_board()
+    uid = next((zapi.category_uid(c) for c in zapi.categories()
+                if (zapi.category_name(c) or "").strip() == board), None)
+    if not uid:
+        raise ZuperError("rejected", "Zuper has no board named “%s” (ZUPER_AHS_EMAIL_BOARD), "
+                                     "so the AHS job was not created." % board)
+    out = {**body, "job_category": uid}
+    try:
+        defs = zapi.custom_field_defs("JOB")
+    except ZuperError as exc:
+        log.warning("AHS email job: field definitions unreadable (%s); fields go ungrouped", exc)
+        defs = []
+    out["custom_fields"] = mapping.grouped_fields(body.get("custom_fields") or [], defs)
+    return out
+
+
 def write_zuper(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping, merged: dict,
                 record: dict, to_zuper: dict) -> None:
     if config.pull_only():
@@ -713,7 +741,12 @@ def create_in_zuper(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping | None) -> st
         uid = zapi.create_customer(mapping.customer_payload(
             obj, view, sources_by_name=ctx.sources_by_name))
     elif kind == "opportunity":
-        uid = zapi.create_job(_job_body(ctx, obj, view))
+        body = _job_body(ctx, obj, view)
+        if config.pull_only() and may_create_in_zuper(db, obj):
+            # The one-way mirror's AHS-email create (2026-11-06): its own board, grouped fields.
+            # A two-way sync keeps the pipeline's board, whose statuses it then moves.
+            body = _ahs_email_job(body)
+        uid = zapi.create_job(body)
     elif kind == "appointment":
         uid = zapi.create_appointment(mapping.appointment_payload(view, parent_uid))
     elif kind == "note":

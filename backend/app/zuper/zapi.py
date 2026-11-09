@@ -522,7 +522,9 @@ def job_attachments(job_uid: str) -> list[dict]:
 # ------------------------------------------------------------------ settings the setup check reads
 
 def custom_field_defs(module: str) -> list[dict]:
-    return rows_of(request("GET", path("custom_fields"), params={"module": module}))
+    # `module_name`, measured live 2026-11-06: `?module=JOB` answers 400, `?module_name=JOB`
+    # returns every definition (84, one page), each with its `group` {group_name, group_uid}.
+    return rows_of(request("GET", path("custom_fields"), params={"module_name": module}))
 
 
 def lead_sources() -> list[dict]:

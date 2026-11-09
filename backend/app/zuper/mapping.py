@@ -217,6 +217,26 @@ def custom_list(values: dict[str, Any]) -> list[dict]:
             for label, value in values.items()]
 
 
+def grouped_fields(fields: list[dict], defs: list[dict]) -> list[dict]:
+    """`fields` ({label, value}) with each one's `type`, `group_name` and `group_uid` from its
+    Zuper definition (2026-11-06) — the shape a job made in Zuper's own screen carries. A
+    label with no definition, or with more than one, is left as it was rather than guessed."""
+    by_name: dict[str, list[dict]] = {}
+    for d in defs:
+        name = str(d.get("field_name") or d.get("label") or "").strip()
+        if name:
+            by_name.setdefault(name, []).append(d)
+    out = []
+    for f in fields:
+        found = by_name.get(f.get("label") or "", [])
+        group = found[0].get("group") if len(found) == 1 else None
+        if isinstance(group, dict) and group.get("group_uid"):
+            f = {**f, "type": found[0].get("field_type"),
+                 "group_name": group.get("group_name"), "group_uid": group["group_uid"]}
+        out.append(f)
+    return out
+
+
 def uid(record: dict, *keys: str) -> str | None:
     for key in keys:
         value = record.get(key)
