@@ -4,8 +4,9 @@ How Owen AI writes the customer inspection report after a visit. Built from two 
 #728, Nov 2026) and two independent reviews of them. Read with `roof-leak-playbook.md` (diagnosis, cause cards,
 analogies, severity, legal wording). **When the two differ, this file wins.**
 
-The report is a **draft for Owen**. You never send it to anyone; the tool marks it "Draft for Owen — review before
-sending". Owen downloads it from the chat and decides.
+The report is for **Owen to review**. You never send it to anyone. The page itself is clean (no draft banner, no
+"[placeholder]"): a missing header value (phone, license, city, inspector) is simply left out, so **always list the
+tool's warnings to Owen in the chat**. Owen downloads it from the chat and decides.
 
 ---
 
@@ -49,7 +50,7 @@ sending". Owen downloads it from the chat and decides.
 | Location | one wide photo + one sentence | A photo that shows WHERE on the house (street/house visible). |
 | Findings | 1–8 cards, worst first | Each: title, severity, 1–2 photos with marks, refs (all photo numbers), saw / means / why / like / fix / prevent. |
 | Inside | photo + Yes/No/Not checked list | Honest list incl. "Not checked — attic". |
-| Options | — | **Tool builds it from the proposal** (includes, warranty, regular → member → AHS credit → you pay, 50/50). |
+| Options | — | **Not in the report** (owner, 2026-11-09): no price table and no signature line. The proposal goes to the customer separately; "How we fix it" may still name which option includes the fix, never a price. |
 | Until it's fixed / legal | optional overrides | Defaults come from the playbook §4 and §8. |
 
 ## 3. Writing style
@@ -92,7 +93,7 @@ sending". Owen downloads it from the chat and decides.
 - [ ] Every "How we fix it" is in a priced option, or labeled "ask us for a price".
 - [ ] Room names match the job; conflicts reported to Owen in chat.
 - [ ] Not-done checks listed; inside checklist honest.
-- [ ] No prices typed by me (the tool fills them).
+- [ ] No prices anywhere in my text (the report has no price table).
 
 ## 7. After the tool returns
 

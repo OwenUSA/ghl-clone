@@ -255,22 +255,27 @@ def test_the_street_is_cleaned(street, city, state, zp, want):
                                  "zip_code": zp}) == want
 
 
-def test_the_html_has_the_logo_customer_prices_and_the_draft_banner(env):
+def test_the_html_has_the_logo_customer_prices_and_no_draft_banner(env):
     out = report.write(spec(env))
     page = Path(out["html_path"]).read_text("utf-8")
     assert report.logo_uri() in page and 'alt="Dream Team Roofing"' in page
     for text in ("Brett Edelson", "7236 Via Luria, Greenacres, FL 33467", "#728",
-                 "Tue, Oct 13, 2026", "Luis Tech", "Best — recommended", "$2,500", "$8,500",
-                 "$1,600", "$4,000", MINUS + "$1,000", "<b>$600</b>", "<b>$3,000</b>", "3 months",
-                 "1 year", "50% to start ($300), 50% when done", "proposal DTR-129",
-                 "DRAFT FOR OWEN — review before sending", "[placeholder]",
+                 "Tue, Oct 13, 2026", "Luis Tech",
                  "We did not inspect the attic or do a water test", "on Oct 13, 2026",
                  "Inside (Photo 5)."):
         assert text in page, text
+    assert "$3,000" not in page and "proposal DTR-129" not in page      # no options table
+    table, _ = options_table(env, spec(env))
+    for text in ("Best — recommended", "$2,500", "$8,500", "$1,600", "$4,000", MINUS + "$1,000",
+                 "<b>$600</b>", "<b>$3,000</b>", "3 months", "1 year",
+                 "50% to start ($300), 50% when done", "proposal DTR-129"):
+        assert text in table, text
     assert page.count('class="zoom"') == 5 and 'id="lb"' in page      # every photo zoomable
     assert "EE. UU." not in page and "BRETT" not in page
-    final = report.write(spec(env, final=True))
-    assert "DRAFT FOR OWEN" not in Path(final["html_path"]).read_text("utf-8")
+    # The customer's copy never shows a draft banner or "[placeholder]" (owner, 2026-11-09):
+    # missing header values are left out and reported to Owen as warnings instead.
+    assert "DRAFT" not in page and "[placeholder]" not in page and "Phone:" not in page
+    assert any("OWEN_AI_REPORT_PHONE" in w for w in out["warnings"])
 
 
 def test_settings_fill_the_header(env, monkeypatch):
@@ -293,11 +298,25 @@ def test_text_is_escaped(env):
     assert "x &lt; y; &#x27;quote&#x27; &amp; &quot;double&quot;" in page
 
 
+def options_table(env, s: dict) -> tuple[str, list[str]]:
+    """The options table is not in the customer's page any more (owner, 2026-11-09); its parsing
+    still guards the numbers Claude sees, so test options_html directly."""
+    f = report.fetch_facts(s["job_uid"], s.get("proposal"))
+    return report.options_html(report.validate(s, env["photos"]), f), f.warnings
+
+
+def test_the_page_has_no_options_table_and_no_signature(env):
+    page = Path(report.write(spec(env))["html_path"]).read_text("utf-8")
+    assert '<table class="t">' not in page and "Your repair options" not in page
+    assert "Inspector signature" not in page and "Questions? Call" not in page
+    assert "review the repair proposal we send you" in page
+
+
 def test_an_unparseable_price_is_a_dash_and_a_warning_never_a_guess(env):
     env["router"].est = estimate([option("GOOD", 900, 0, 0, "", text="Fix it. No numbers here."),
                                   option("BETTER", 1400, 4500, 2400, "6 Months")])
-    out = report.write(spec(env))
-    page = Path(out["html_path"]).read_text("utf-8")
+    page, warnings = options_table(env, spec(env))
+    out = {"warnings": warnings}
     good = re.findall(r"<tr><th>(?:Regular price|AHS member price|AHS credit|Warranty "
                       r"\(workmanship\))</th><td[^>]*>([^<]*)</td>", page)
     assert good == ["—", "—", "—", "—"]
@@ -309,8 +328,8 @@ def test_an_unparseable_price_is_a_dash_and_a_warning_never_a_guess(env):
 def test_spec_option_text_overrides_wording_not_numbers(env):
     s = spec(env, option_text={"good": {"fixes": "The <b>main</b> leak", "includes": "Lift tiles"},
                                "EXTRA": {"fixes": "x"}})
-    out = report.write(s)
-    page = Path(out["html_path"]).read_text("utf-8")
+    page, warnings = options_table(env, s)
+    out = {"warnings": warnings}
     assert "<td>The <b>main</b> leak</td>" in page and "<td>Lift tiles</td>" in page
     assert "<td>Repair package BETTER</td>" in page                    # the proposal's own
     assert any("EXTRA" in w for w in out["warnings"])
@@ -321,7 +340,6 @@ def test_no_proposal_means_no_table_and_a_warning(env):
     out = report.write(spec(env))
     page = Path(out["html_path"]).read_text("utf-8")
     assert '<table class="t">' not in page and "About AHS" not in page
-    assert "call us to go over the repair" in page
     assert any("no options" in w for w in out["warnings"])
 
 

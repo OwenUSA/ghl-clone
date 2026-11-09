@@ -22,8 +22,9 @@ Who writes what:
 `render(spec, photos_dir, facts)` is pure (no network). `write(spec)` validates, fetches, renders
 and saves `<report_dir>/<id>/report.html` (+ `report.pdf` when a Chromium is available: the same
 HTML printed headless, @page/print CSS), `meta.json` beside them; folders older than 90 days are
-removed on every write. The API serves the files to the owner only (api.py). Every report
-carries a "Draft for Owen — review before sending" banner unless spec.final is true.
+removed on every write. The API serves the files to the owner only (api.py). The page itself is
+clean — no draft banner, no "[placeholder]" (owner, 2026-11-09); a missing header value is left
+out and named in the warnings Claude passes to Owen.
 """
 from __future__ import annotations
 
@@ -231,7 +232,7 @@ class Spec(_Strict):
     job_uid: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{20,64}$")]
     proposal: Annotated[str, StringConstraints(pattern=r"^[A-Za-z-]{0,10}\d{1,8}$")] | None = \
         Field(None, description="e.g. DTR-129; default = the job's newest proposal")
-    final: bool = Field(False, description="true only when Owen says it is final: removes the "
+    final: bool = Field(False, description="kept for compatibility; the page never shows a "
                         "draft banner")
     badge: Badge
     what_happened: Rich(1500)
@@ -787,8 +788,9 @@ def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
                                               _date_long(f.date)),
         '<div style="grid-column:span 2"><span>Property:</span> %s</div>'
         '<div><span>Weather:</span> %s</div>' % (_ph(f.address), esc(s.weather)),
-        '<div><span>Inspector:</span> %s</div>' % _ph(f.inspector),
     ]
+    if f.inspector:
+        meta.append('<div><span>Inspector:</span> %s</div>' % esc(f.inspector))
     if s.roof:
         meta.append('<div style="grid-column:span 2"><span>Roof:</span> %s</div>' % esc(s.roof))
     how = s.inspected_how.rstrip()
@@ -810,23 +812,24 @@ def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
                    '(near the end). We recommend fixing this %s. Until then, see <b>"Until '
                    'it\'s fixed"</b> right after the options.' % when)
         else:
-            cta = ('<b>What to do next:</b> call us to go over the repair. We recommend fixing '
+            cta = ('<b>What to do next:</b> review the repair proposal we send you. We recommend fixing '
                    'this %s. Until then, see <b>"Until it\'s fixed"</b> near the end.' % when)
     else:
         cta = ("<b>What to do next:</b> nothing urgent. We recommend checking these items at your "
                "next service visit.")
     if s.next_steps:
         cta += " " + rich(s.next_steps)
-    draft = ""
-    if not s.final:
-        draft = ('<div class="sample">DRAFT FOR OWEN — review before sending. Not sent to anyone.'
-                 + (" Items marked %s still need a value." % config.PLACEHOLDER
-                    if any(config.PLACEHOLDER in w for w in f.warnings) else "") + "</div>")
+    # No draft banner and no "[placeholder]" text in the customer's copy (owner, 2026-11-09):
+    # a missing value is left out; the warnings go to Owen in the chat only.
+    contact = "<br>".join(x for x in (
+        ("Phone: " + esc(f.phone)) if f.phone else "",
+        ("License #: " + esc(f.license)) if f.license else "",
+        ("Office: " + esc(f.city)) if f.city else "") if x)
     return """
 <div class="top">
  <img class="logo" src="{logo}" alt="Dream Team Roofing">
  <div class="brandtxt"><b>Dream Team Roofing</b><span>Roof Inspection Report</span></div>
- <small>Phone: {phone}<br>License #: {lic}<br>Office: {city}</small>
+ <small>{contact}</small>
 </div>
 <div class="meta">
  {meta}
@@ -840,11 +843,9 @@ def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
 </div>
 <div class="cta">{cta}</div>
 <p class="tip">Tip: click or tap any photo to zoom in.</p>
-{draft}
-""".format(logo=logo_uri(), phone=_ph(f.phone), lic=_ph(f.license), city=_ph(f.city),
+""".format(logo=logo_uri(), contact=contact,
            meta="\n ".join(meta), bcls="" if cls == "red" else " " + cls, blabel=label,
-           btext=rich(s.badge.text), what=rich(s.what_happened), figs="\n ".join(figs), cta=cta,
-           draft=draft)
+           btext=rich(s.badge.text), what=rich(s.what_happened), figs="\n ".join(figs), cta=cta)
 
 
 def page2(s: Spec, imgs: dict) -> str:
@@ -985,19 +986,20 @@ def page4(s: Spec, f: Facts) -> str:
     lis = "\n".join("  <li>%s</li>" % esc(x) for x in until)
     ahs = any(o.credit is not None for o in f.options)
     ahs_txt = ("<b>About AHS.</b> Whether AHS pays for part of a repair depends on your AHS "
-               "contract and AHS's decision. The credit above is what AHS authorized for this "
-               "claim. We cannot promise coverage for anything else.<br>\n" if ahs else "")
+               "contract and AHS's decision. We cannot promise coverage beyond what AHS "
+               "authorizes.<br>\n" if ahs else "")
     day = _date_short(f.date)
     on = ("on %s" % day) if day else "on the day of our visit"
     nd = _not_done_clause(s.not_done)
     walls = ("%s could not see inside walls or under tiles we did not remove." % nd) if nd else \
         "We could not see inside walls or under tiles we did not remove."
-    return f"""{options_html(s, f)}<div style="margin-top:4mm"><h2 style="margin-top:0">Until it's fixed</h2><ol class="chk">
+    # No "Your repair options" table and no signature line in the customer's copy (owner,
+    # 2026-11-09): the proposal goes to the customer on its own. options_html stays for reuse.
+    return f"""<div style="margin-top:6mm"><h2 style="margin-top:0">Until it's fixed</h2><ol class="chk">
 {lis}</ol></div>
 <div class="legal">{ahs_txt}<b>About this report.</b> This was a visual inspection of the areas we could safely reach {on}. {walls} Some leaks only happen in certain
 weather. This report describes what we found that day; it is not a promise that the roof will never leak. Anything new we find
 during the repair will be shown to you with photos before extra work is done.</div>
-<div class="sig"><div>Inspector signature</div><div>Questions? Call {_ph(f.phone)}</div></div>
 """
 
 
@@ -1006,7 +1008,7 @@ def render(spec: Spec | dict, photos_dir: Path | str | None, facts: Facts) -> st
     embedded, the zoom viewer inline). `photos_dir` bounds where photo paths may point."""
     s = validate(spec, photos_dir)
     imgs: dict[str, str] = {}
-    body = page1(s, facts, imgs, bool(facts.options)) + page2(s, imgs) + findings_html(s, imgs) \
+    body = page1(s, facts, imgs, False) + page2(s, imgs) + findings_html(s, imgs) \
         + page4(s, facts)
     title = "Roof Inspection Report — Job %s" % esc(facts.job_number)
     return ("<!doctype html><html lang='en'><meta charset='utf-8'>"
@@ -1152,8 +1154,7 @@ def make_inspection_report(args: dict) -> str:
     lines = ["Report %s for job #%s%s%s — %s." % (
         out["id"], out["job_number"], ", " + out["customer"] if out["customer"] else "",
         ", options from " + out["proposal"] if out["proposal"] else "",
-        "FINAL (no draft banner)" if out["final"] else
-        "a DRAFT for Owen (banner: review before sending)"),
+        "ready for Owen to review and download (nothing was sent)"),
         "Give Owen these links exactly as written (markdown):",
         "[Download report (.html)](%s)" % out["html_url"]]
     if out["pdf_url"]:
