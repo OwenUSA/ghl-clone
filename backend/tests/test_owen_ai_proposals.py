@@ -509,3 +509,21 @@ def test_every_draft_uses_the_short_proposal_template():
     for tpl in (None, "tile", "flat", "custom", "replacement", "short"):
         s = dict(base, **({"template": tpl} if tpl else {}))
         assert proposals.validate(s)["template"] == proposals.SHORT
+
+
+def test_every_option_defaults_to_a_one_month_warranty():
+    """Owner, 2026-11-09: 1 month on Good, Better and Best unless Owen gives another period."""
+    opts = [{"name": n, "title": n.title(), "price": p, "scope_html": "<ul><li>x</li></ul>"}
+            for n, p in (("GOOD", 600), ("BETTER", 1400), ("BEST", 3000))]
+    clean = proposals.validate({"job": "701", "title": "T", "options": opts})
+    for o in clean["options"]:
+        assert o["warranty"] == proposals.DEFAULT_WARRANTY and "1 Month" in o["scope_html"]
+    opts[2]["warranty"] = "Workmanship Warranty: 1 Year"
+    best = proposals.validate({"job": "701", "title": "T", "options": opts})["options"][2]
+    assert best["warranty"].startswith("Workmanship Warranty: 1 Year")
+
+
+def test_an_ampersand_is_escaped_once_whatever_claude_sends():
+    for raw in ("Prep & Access", "Prep &amp; Access"):
+        assert proposals.sanitize("<b>%s</b>" % raw) == "<b>Prep &amp; Access</b>"
+    assert proposals.sanitize("<script>x</script>") == "&lt;script&gt;x&lt;/script&gt;"
