@@ -406,6 +406,18 @@ def _status(db: Session, v: View) -> dict:
             if st.test_only:
                 return {"state": "test", "sentence": "On for test customers only: %s." % words}
             return {"state": "on", "sentence": "On for every customer: %s." % words}
+        if v.key == "followups":
+            from ..cadences import service as cdsvc
+            gate = cdsvc.closed_gate()
+            if gate:
+                return {"state": "off", "sentence": gate}
+            st = cdsvc.settings(db)
+            words = "texts %s, AI calls %s" % (
+                cat.LEVEL_LABEL[level(db, v.key, "send_text")].lower(),
+                cat.LEVEL_LABEL[level(db, v.key, "place_calls")].lower())
+            if st.test_only:
+                return {"state": "test", "sentence": "On for test customers only: %s." % words}
+            return {"state": "on", "sentence": "On for every customer: %s." % words}
         if v.key == "inspection_docs":
             from ..inspection_docs import service as isvc
             if not zconf.inspection_docs_enabled():
@@ -565,6 +577,7 @@ def entry_out(db: Session, v: View, now: datetime) -> dict:
 
 # Entries with settings a person may edit, and how each is read and checked.
 def _settings_kinds():
+    from ..cadences import config as cdconf
     from ..followup import config as fconf
     from ..insights import config as nconf
     from ..inspection_docs import config as iconf
@@ -583,6 +596,8 @@ def _settings_kinds():
                                   rconf.validate),
             "call_followup": (lambda raw: fconf.Settings.from_config(raw).as_dict(),
                               fconf.validate),
+            "followups": (lambda raw: cdconf.Settings.from_config(raw).as_dict(),
+                          cdconf.validate),
             "inspection_docs": (lambda raw: iconf.Settings.from_config(raw).as_dict(),
                                 iconf.validate)}
 
@@ -764,6 +779,18 @@ def activity(db: Session, *, key: str | None = None, limit: int = 100) -> list[d
             add("call_followup", r.created_at, "started", "%s did not answer our call (%s%s). "
                 "Now: %s" % (who, r.trigger_source or "?", ", %s" % r.staff if r.staff else "",
                              r.reason or r.state), tone="muted")
+    if key in (None, "followups"):
+        from ..models import Followup, FollowupEvent
+        rows = db.execute(select(FollowupEvent, Followup).join(
+            Followup, Followup.id == FollowupEvent.followup_id).where(
+            FollowupEvent.kind.in_(("text", "ai_call", "started", "stopped", "closed")))
+            .order_by(FollowupEvent.id.desc()).limit(limit)).all()
+        for e, f in rows:
+            name = f.customer_name or "%s-%s-%s" % (f.phone[:3], f.phone[3:6], f.phone[6:])
+            tone = {"failed": "bad", "sent": "good", "requested": "good"}.get(e.state or "",
+                                                                             "info")
+            add("followups", e.at, e.kind, "%s: %s" % (name, e.text or e.kind), tone=tone,
+                ref=f.id)
     if key in (None, "inspection_report"):
         from ..models import InspectionReport
         for r in db.scalars(select(InspectionReport).order_by(InspectionReport.id.desc())

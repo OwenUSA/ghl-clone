@@ -17,6 +17,8 @@ import {
   type DispatchTechnician, type DispatchWrites,
 } from '../lib/api'
 import type { Me } from '../lib/auth'
+import { followupsSummary } from '../lib/api'
+import { openRecord } from '../lib/openRecord'
 import { canOpenAiAgents, isAiAdmin } from '../lib/aiAgents'
 import { checkedLabel, dueLabel, formatPhone, queueLabel, slotLabel } from '../lib/dispatch'
 
@@ -66,6 +68,8 @@ export function DispatchPage({ user }: { user: Me }) {
   useEffect(() => { writeActiveChat(activeChatId) }, [activeChatId])
   const summary = useQuery({ queryKey: ['dispatch-summary'], queryFn: dispatchSummary,
     enabled: allowed, refetchInterval: 60000, refetchOnWindowFocus: true })
+  const fu = useQuery({ queryKey: ['followups-summary'], queryFn: followupsSummary,
+    enabled: allowed, refetchInterval: 60000 })
   const sugs = useQuery({ queryKey: ['dispatch-suggestions'], queryFn: () => dispatchSuggestions(),
     enabled: allowed, refetchInterval: 60000 })
   const isQueue = ![SUGGESTIONS, ASK, SETTINGS, CHECK, TOBOOK, PIPELINE, REPORTS].includes(tab)
@@ -104,6 +108,9 @@ export function DispatchPage({ user }: { user: Me }) {
           Last read failed: {s.heartbeat.last_error}</span>}
         {!!s?.heartbeat.unknown_stages.length && <span>
           Stages this page does not know yet: {s.heartbeat.unknown_stages.join(', ')}</span>}
+        {fu.data && <button type="button" onClick={() => openRecord('followups', 0)}
+          style={{ color: fu.data.due ? 'rgb(181,71,8)' : MUTED, textDecoration: 'underline' }}>
+          Follow-ups: {fu.data.due} call{fu.data.due === 1 ? '' : 's'} to make · {fu.data.open} open</button>}
         {s && <span className="ml-auto">Last 30 days: {s.accuracy_30d.done} done ·{' '}
           {s.accuracy_30d.wrong} marked wrong</span>}
       </div>

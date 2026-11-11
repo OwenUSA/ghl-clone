@@ -148,14 +148,32 @@ def autoreply_enabled() -> bool:
 
 
 FOLLOWUP_OFF_SENTENCE = ("The call follow-up is switched off on this server "
-                         "(CALL_FOLLOWUP_ENABLED is not set).")
+                         "(CALL_FOLLOWUP_ENABLED is not set, or FOLLOWUPS_ENABLED is also set).")
 
 
 def followup_enabled() -> bool:
     """The server's gate on the call follow-up (2026-10-21, app/followup): a text, then an AI
     call, after the team's call to a customer went unanswered. Off unless the deployment says
-    so; then `client.followup_write()` allows NOTHING and the pass reads nothing."""
-    return _flag("CALL_FOLLOWUP_ENABLED", False)
+    so; then `client.followup_write()` allows NOTHING and the pass reads nothing. Never
+    together with Follow-ups (app/cadences): with both gates set, NEITHER runs."""
+    return _flag("CALL_FOLLOWUP_ENABLED", False) and not _flag("FOLLOWUPS_ENABLED", False)
+
+
+FOLLOWUPS_OFF_SENTENCE = ("Follow-ups are switched off on this server "
+                          "(FOLLOWUPS_ENABLED is not set).")
+FOLLOWUPS_CLASH_SENTENCE = ("Follow-ups refuse to run while the old automatic call follow-up "
+                            "is on (CALL_FOLLOWUP_ENABLED): one customer would get two texts.")
+
+
+def followups_enabled() -> bool:
+    """The server's gate on Follow-ups (2026-11-11, app/cadences): the sequences people
+    schedule after a customer does not answer. Off unless the deployment says so. It never runs
+    together with the old call follow-up - either gate on alone; both on = neither sends."""
+    return _flag("FOLLOWUPS_ENABLED", False) and not _flag("CALL_FOLLOWUP_ENABLED", False)
+
+
+def followups_clash() -> bool:
+    return _flag("FOLLOWUPS_ENABLED", False) and _flag("CALL_FOLLOWUP_ENABLED", False)
 
 
 INSPECTION_DOCS_OFF_SENTENCE = ("The inspection documentation agent is switched off on this "

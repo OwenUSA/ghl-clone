@@ -25,6 +25,7 @@ import {
 import { Chip } from './ZuperMoneyPanel'
 import { ReminderLanguageRow } from './ZuperRemindersCard'
 import { canOpenAiAgents } from '../lib/aiAgents'
+import { FollowUpButton } from './FollowUpButton'
 
 /**
  * Contact Details panel.
@@ -505,6 +506,10 @@ export function ContactDetailsPanel({
                 {/* Appointment reminders from Zuper (2026-10-08): which language they go in. */}
                 {c.phone && canOpenAiAgents(user) && (
                   <ReminderLanguageRow phone={c.phone} labelStyle={LABEL} valueStyle={VALUE} />
+                )}
+                {/* Follow-ups (2026-11-11): follow this customer up until they answer. */}
+                {c.phone && canOpenAiAgents(user) && (
+                  <div style={{ marginTop: 12 }}><FollowUpButton phone={c.phone} allowed /></div>
                 )}
                 <Row
                   label="Owner"

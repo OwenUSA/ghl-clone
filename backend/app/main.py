@@ -183,6 +183,11 @@ app.include_router(speech.router)
 from .owen_ai import api as owen_ai_api  # noqa: E402
 
 app.include_router(owen_ai_api.router)
+# Follow-ups (2026-11-11, app/cadences): Hatch-style sequences after a customer does not
+# answer. The page reads and works them; only the worker's pass sends (FOLLOWUPS_ENABLED).
+from .cadences import api as followups_api  # noqa: E402
+
+app.include_router(followups_api.router)
 
 # Postgres schema belongs to Alembic (`uv run alembic upgrade head`) — one source of
 # truth, so a model edit without a revision fails loudly instead of half-applying.
