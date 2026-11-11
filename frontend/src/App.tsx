@@ -17,6 +17,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { AiAgentsPage } from './pages/AiAgentsPage'
 import { DispatchPage } from './pages/DispatchPage'
 import { CollectionsPage } from './pages/CollectionsPage'
+import { FollowupsPage } from './pages/FollowupsPage'
 import { OwenAiPage } from './pages/OwenAiPage'
 import { useOwenAiStatus } from './components/owenAi/useOwenAiStatus'
 import { AiAlertBell } from './components/AiAlertBell'
@@ -207,6 +208,9 @@ export default function App() {
         <DispatchPage user={user} />
       ) : view === 'collections' && canOpenAiAgents(user) ? (
         <CollectionsPage user={user} />
+      ) : view === 'followups' && canOpenAiAgents(user) ? (
+        // Follow-ups (2026-11-11, app/cadences): the Dispatch audience.
+        <FollowupsPage user={user} focus={focusFor('followups')} />
       ) : view === 'owen-ai' && owenAi.visible ? (
         <OwenAiPage focus={focusFor('owen-ai')} />
       ) : view === 'ai-agents' && canOpenAiAgents(user) ? (

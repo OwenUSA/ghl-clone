@@ -1288,6 +1288,13 @@ AUDITED = {
         "insights_ask", "insights_result_excel", "insights_saved", "insights_pin",
         "insights_unpin"),
         "DISPATCH_VIEW: restricted refused 403"),
+    # Follow-ups (app/cadences/api.py, 2026-11-11): Dispatch's rule; sequences are ADMIN.
+    # Pinned by tests/test_cadences_service.py.
+    **dict.fromkeys((
+        "followups_list", "followups_summary", "followups_status", "followups_staff",
+        "followups_for_phone", "followups_sequences", "followups_get", "followups_create",
+        "followups_action", "followups_create_sequence", "followups_update_sequence"),
+        "DISPATCH_VIEW: restricted refused 403"),
     # Speak instead of type in the AI chats (app/speech.py, 2026-10-22): Dispatch's rule.
     "speech_transcribe": "DISPATCH_VIEW: restricted refused 403",
     # Owen AI (app/owen_ai/api.py, 2026-11-02; proposal drafts 2026-11-09): ONE user, the owner,

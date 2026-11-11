@@ -2943,3 +2943,85 @@ class OwenAiProposalDraft(Base):
     pictures_cost_usd: Mapped[float | None] = mapped_column(Float)
     pictures_error: Mapped[str | None] = mapped_column(Text)
     pictures_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---- Follow-ups (2026-11-11, app/cadences) ---------------------------------------------------
+#
+# Hatch-style follow-up of a customer who did not answer: a SEQUENCE of steps (text, call me,
+# AI call) runs per phone number until the customer texts or calls back, someone reaches them,
+# or a person stops it. Never deleted: a stopped one is history.
+
+
+class FollowupSequence(Base):
+    """A saved series of steps. `board` names the Zuper board it is the default for (None = the
+    general one). `steps`: [{"type": "text"|"call_me"|"ai_call", "delay_minutes": int} or
+    {..., "delay_days": int, "at": "HH:MM"}, "template": str (text steps)}]. Only an ADMIN edits
+    one; a running follow-up keeps the copy it started with."""
+    __tablename__ = "followup_sequences"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    board: Mapped[str | None] = mapped_column(String(120))
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    steps: Mapped[list] = mapped_column(JSONType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Followup(Base):
+    """One customer (one phone number, last ten digits) being followed up. At most one OPEN per
+    number. `step_index` is the next step to run; == len(steps) means every step ran and it is
+    waiting out the last grace period before closing as "No response"."""
+    __tablename__ = "followups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone: Mapped[str] = mapped_column(String(10), index=True)
+    # open | paused | stopped | no_response
+    state: Mapped[str] = mapped_column(String(12), default="open", server_default="open",
+                                       index=True)
+    stop_reason: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(10), default="manual", server_default="manual")
+    # The unanswered call that opened it ("phone|source|iso time"); NULL for a manual one.
+    trigger_key: Mapped[str | None] = mapped_column(String(160), unique=True)
+    customer_uid: Mapped[str | None] = mapped_column(String(64))
+    customer_name: Mapped[str | None] = mapped_column(String(200))
+    job_uid: Mapped[str | None] = mapped_column(String(64))
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    board: Mapped[str | None] = mapped_column(String(120), index=True)
+    contact_id: Mapped[int | None] = mapped_column(Integer)
+    sequence_id: Mapped[int | None] = mapped_column(Integer)
+    sequence_name: Mapped[str | None] = mapped_column(String(120))
+    steps: Mapped[list] = mapped_column(JSONType)
+    step_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    # When the current "call me" step came due and the assignee was told (once per step).
+    due_alerted_step: Mapped[int | None] = mapped_column(Integer)
+    assigned_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    assigned_label: Mapped[str | None] = mapped_column(String(120))
+    note: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str | None] = mapped_column(String(120))
+    # The Connect conversation last read for this number, and its newest activity then.
+    connect_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FollowupEvent(Base):
+    """The follow-up's timeline: every attempt (ours, the team's, the AI's), every reply, every
+    step and every change a person made. `key` makes evidence read twice land once. `state` on a
+    send: shadow | sending | sent | failed | skipped | requested."""
+    __tablename__ = "followup_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    followup_id: Mapped[int] = mapped_column(Integer, index=True)
+    key: Mapped[str | None] = mapped_column(String(200), unique=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    state: Mapped[str | None] = mapped_column(String(12))
+    step: Mapped[int | None] = mapped_column(Integer)
+    text: Mapped[str | None] = mapped_column(Text)
+    who: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())

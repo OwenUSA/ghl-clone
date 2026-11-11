@@ -1,3 +1,5 @@
+import { FollowUpButton } from './FollowUpButton'
+import { canOpenAiAgents } from '../lib/aiAgents'
 import { useState } from 'react'
 import { AddContactDialog, type NewContactFields } from './AddContactDialog'
 import { IconPlus } from './Icon'
@@ -121,6 +123,10 @@ export function NumberDetailsPanel({
         <div style={{ fontSize: 14, fontWeight: 500, color: 'rgb(16,24,40)' }}>Number</div>
         <div style={{ ...LABEL, marginTop: 12 }}>Phone</div>
         <div style={{ ...VALUE, marginTop: 4 }}>{phone || '--'}</div>
+        {/* Follow-ups (2026-11-11): follow this number up until they answer. */}
+        <div style={{ marginTop: 12 }}>
+          <FollowUpButton phone={row.contact_phone ?? row.phone_display} allowed={canOpenAiAgents(user)} />
+        </div>
         {row.quo_name && (
           <>
             <div style={{ ...LABEL, marginTop: 16 }}>Name in Quo</div>

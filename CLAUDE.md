@@ -1025,3 +1025,20 @@ posts them here only while `CRM_LINK_AHS_AUTHORIZATIONS_ENABLED=true` over there
   number) and never required: not found still rings, with the AHS number in the item.
 - **A Dispatch pass never resolves these items** (`rules.FED_KINDS`); Done / Wrong close them.
   See the 2026-10-01 amendment in `DECISIONS.md`.
+
+
+## Follow-ups: Hatch-style sequences after a no-answer (2026-11-11, OFF until switched on)
+
+`backend/app/cadences/` (read `__init__.py` first) and Follow-ups in the left menu. A customer a
+person called who did not answer (any line) is followed up by a SEQUENCE - Text / Call (me) / AI
+call - until they text or call back, someone reaches them, or a person stops it. A CSR's text is
+recorded, never a stop. The owner approved automatic texts, AI calls and Zuper notes **for this
+module only**. Every rule: the 2026-11-11 Follow-ups amendment in `DECISIONS.md`.
+
+- **Off unless `FOLLOWUPS_ENABLED=true`**, and never together with the old `CALL_FOLLOWUP_ENABLED`
+  (both set = neither sends). Registry entry `followups`: texts and AI calls start at **Shadow**,
+  test customers only. Sends only from the worker's pass; the page never sends.
+- One open follow-up per phone number. Sequences are ADMIN-edited; a running one keeps its copy.
+- Zuper writes only inside `client.followups_write()` (the send + a private note). Right before
+  each send the Connect conversation is read again. `tests/test_cadences_*.py` pin it.
+

@@ -8028,3 +8028,54 @@ Zuper's settings; attaching them is a Zuper change for a person (owner's OK).
 **Not changed:** the Dispatch page, routes, the mirror's pipelines and `zuper_tasks` do not know
 Simple Flow — a new emailed job no longer passes through AHS - Inspection, so Dispatch's "new job"
 bell does not ring for it.
+
+
+## AMENDMENT (2026-11-11): Follow-ups - Hatch-style sequences after a customer does not answer
+
+**Asked by the user** (design grilled the same day): a module to follow up a customer who did not
+answer, "just like Hatch does it" - a CSR calls from Zuper Connect, nobody answers, the customer is
+tracked; a person sets when to follow up and how (text, or a call by an AI agent); a CSR's text
+after the no-answer is recorded; a text or a call back from the customer stops it.
+
+**Owner's approval:** automatic texts (Zuper Connect, 954-420-7373), AI calls (Anisa through
+owen-main) and a private Zuper job note per send are approved **for this module only**, lifting
+"no automatic texts" and Zuper's read-only rule for exactly these three things. Every other module
+keeps both rules.
+
+**Decisions (the user's answers, Q1-Q26):**
+- A NEW module, `backend/app/cadences/` and the Follow-ups page; the older automatic call
+  follow-up (`app/followup`, off) is left alone. **They never run together:** with both
+  `FOLLOWUPS_ENABLED` and `CALL_FOLLOWUP_ENABLED` set, neither sends (`zuper.config`).
+- Entry: automatically for every unanswered call a PERSON made (Quo, the CRM line, Zuper
+  Connect) to a Zuper customer with an open job (not cancelled / paid / lost) - plus anyone added
+  by hand (the page, or the "Follow up" button on a contact or a number-only thread). One open
+  follow-up per phone number (last ten digits); a later unanswered call is an attempt on it.
+- **Stops:** the customer texts in; the customer calls in (answered, or missed - then it is a call
+  to return); a call the customer answers (a person's or the AI's); a person stops it with a
+  reason. **A CSR's text or unanswered call is recorded as an attempt and does not stop it.**
+- Plans are Hatch-style SEQUENCES an ADMIN builds: steps Text / Call (me) / AI call, each a delay
+  after the previous step (minutes, or days at a time of day). Defaults per board - AHS Simple
+  Flow (added at build time: most AHS jobs are there since 2026-11-06), AHS - Inspection,
+  AHS - Repair & Review, Retail, and General: text +5 min, call (me) next day 10 AM, AI call next
+  day 2 PM, text +2 days 11 AM, call (me) +3 days 10 AM, then 24 h grace and "No response".
+  A running follow-up keeps the steps it started with.
+- Texts and AI calls go by themselves; a "Call (me)" step rings the assignee once (bell +
+  desktop alert) and WAITS until a person's call to the number is seen on any line, or Skip.
+- Assigned to the person who made the call (matched by name), else the office; reassignable.
+- Safety: registry entry `followups`, both send actions start at **Shadow**; test customers only
+  until test-only is switched off; 8 AM-8 PM Mon-Sat New York, no holidays; never a number marked
+  DND or blocked in Connect; at most 2 AI calls per number per day; 40 texts and 20 AI calls a day
+  overall; "never two automatic texts to one number in 24 hours" is shared with the auto-reply
+  and the old follow-up; "Pause all AI agents" holds the AI calls.
+- **Right before every text or AI call the Connect conversation is read again**, so a reply that
+  arrived since the last pass stops it. Every send is recorded BEFORE it leaves, never retried.
+- Zuper: reads Connect texts (`client.connect_read`, the auto-reply's verified reads) and the
+  Dispatch reader's copy of jobs and calls; writes only the send and the private note, inside
+  `client.followups_write()`. Never moves a column.
+- Access: ADMIN + unrestricted DISPATCHER (`dispatch.api.VIEW`); a board hidden by pipeline
+  permissions hides its follow-ups (404). Sequences: ADMIN.
+
+**Unverified until it runs live:** whether a CSR's Connect text carries the CSR's name
+(`user.first_name`) - the timeline says "The team texted them" otherwise; and the AI call outcome
+(reached vs voicemail) is read from the call owen-main reports back on the CRM line, matched by
+time like the old follow-up.

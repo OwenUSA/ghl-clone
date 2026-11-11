@@ -278,6 +278,7 @@ _FOLLOWUP: ContextVar[bool] = ContextVar("zuper_followup", default=False)
 _PAYMENTS: ContextVar[bool] = ContextVar("zuper_payments", default=False)
 _REVIEWS: ContextVar[bool] = ContextVar("zuper_reviews", default=False)
 _DROPPED: ContextVar[bool] = ContextVar("zuper_dropped_call", default=False)
+_FOLLOWUPS: ContextVar[bool] = ContextVar("zuper_followups", default=False)
 
 
 @contextlib.contextmanager
@@ -350,6 +351,18 @@ def dropped_call_write():
         _DROPPED.reset(token)
 
 
+@contextlib.contextmanager
+def followups_write():
+    """Follow-ups' texts and job notes (2026-11-11; app/cadences): the SAME send and private
+    note, in the auto-reply's exact shape, under its own server gate FOLLOWUPS_ENABLED (which is
+    closed while the old call follow-up's gate is on). Opened by app/cadences/zconnect.py only."""
+    token = _FOLLOWUPS.set(True)
+    try:
+        yield
+    finally:
+        _FOLLOWUPS.reset(token)
+
+
 def _send_scope() -> tuple[bool, bool, str, str]:
     """(inside a send scope, its server gate is on, its off-sentence, its name)."""
     if _AUTOREPLY.get():
@@ -366,6 +379,8 @@ def _send_scope() -> tuple[bool, bool, str, str]:
     if _DROPPED.get():
         return (True, config.dropped_call_texts_enabled(), config.DROPPED_CALL_OFF_SENTENCE,
                 "dropped-call text")
+    if _FOLLOWUPS.get():
+        return True, config.followups_enabled(), config.FOLLOWUPS_OFF_SENTENCE, "follow-ups"
     return False, False, "", ""
 
 

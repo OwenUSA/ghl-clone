@@ -2865,3 +2865,57 @@ export const owenAiRejectProposal = (id: number, why: string) =>
   send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/reject`, 'POST', { why })
 export const owenAiProposalPictures = (id: number, action: 'generate' | 'attach' | 'discard') =>
   send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/pictures${action === 'generate' ? '' : `/${action}`}`, 'POST', {})
+
+// ---- follow-ups (2026-11-11, app/cadences) ---------------------------------------------------
+export type FollowupStepType = 'text' | 'call_me' | 'ai_call'
+export type FollowupRow = {
+  id: number; phone: string; phone_display: string; customer_name: string | null
+  job_number: string | null; job_uid: string | null; board: string | null; contact_id: number | null
+  state: 'open' | 'paused' | 'stopped' | 'no_response'; stop_reason: string | null
+  source: 'auto' | 'manual'; sequence_id: number | null; sequence_name: string | null
+  step_index: number; step_count: number; next_step: string | null
+  next_step_type: FollowupStepType | null; next_at: string | null; due: boolean; overdue: boolean
+  assigned_user_id: number | null; assigned_label: string | null; note: string | null
+  started_at: string | null; closed_at: string | null; created_by: string | null
+  last: { text: string | null; at: string | null; kind: string } | null
+}
+export type FollowupEventRow = {
+  id: number; at: string | null; kind: string; state: string | null; step: number | null
+  text: string | null; who: string | null
+}
+export type FollowupDetail = FollowupRow & {
+  steps: { type: FollowupStepType; label: string; template: string | null
+    status: 'done' | 'current' | 'pending' }[]
+  events: FollowupEventRow[]
+}
+export type FollowupStep = { type: FollowupStepType; delay_minutes?: number; delay_days?: number
+  at?: string; template?: string }
+export type FollowupSequence = { id: number; name: string; board: string | null; is_default: boolean
+  active: boolean; steps: FollowupStep[]; labels: string[]; updated_at: string | null }
+export type FollowupStatus = { running: boolean; sentence: string; clash: boolean; test_only: boolean
+  levels: { send_text: string; place_calls: string }; texts_today: number; ai_calls_today: number
+  texts_per_day: number; ai_calls_per_day: number; is_admin: boolean }
+
+export const followupsList = (show = 'open', mine = false) =>
+  get<{ followups: FollowupRow[] }>(`/api/followups?show=${encodeURIComponent(show)}${mine ? '&mine=true' : ''}`)
+export const followupsSummary = () =>
+  get<{ open: number; due: number; mine_due: number }>('/api/followups/summary')
+export const followupsStatus = () => get<FollowupStatus>('/api/followups/status')
+export const followupsStaff = () => get<{ users: { id: number; name: string }[] }>('/api/followups/staff')
+export const followupForPhone = (phone: string) =>
+  get<{ followup: FollowupRow | null }>(`/api/followups/by-phone?phone=${encodeURIComponent(phone)}`)
+export const followupGet = (id: number) => get<FollowupDetail>(`/api/followups/${id}`)
+export const followupCreate = (body: { phone: string; sequence_id?: number | null
+  start_at?: string | null; note?: string | null; assigned_user_id?: number | null }) =>
+  send<FollowupDetail>('/api/followups', 'POST', body)
+export const followupAction = (id: number, body: { action: 'pause' | 'resume' | 'skip' | 'stop'
+  | 'reassign' | 'restart'; reason?: string; user_id?: number | null; sequence_id?: number | null
+  start_at?: string | null }) =>
+  send<FollowupDetail>(`/api/followups/${id}/action`, 'POST', body)
+export const followupSequences = () =>
+  get<{ sequences: FollowupSequence[]; step_types: { type: FollowupStepType; label: string }[] }>(
+    '/api/followups/sequences')
+export const followupSaveSequence = (id: number | null, body: { name: string; board: string | null
+  is_default: boolean; active: boolean; steps: FollowupStep[] }) =>
+  id == null ? send<FollowupSequence>('/api/followups/sequences', 'POST', body)
+    : send<FollowupSequence>(`/api/followups/sequences/${id}`, 'PUT', body)

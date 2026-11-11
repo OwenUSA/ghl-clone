@@ -165,6 +165,34 @@ ENTRIES: tuple[Entry, ...] = (
         owner_hint="Office", tags=("settings",),
     ),
     Entry(
+        key="followups", name="Follow-ups", kind="agent", role=2,
+        purpose="Follows up a customer who did not answer, the way Hatch does: a sequence of "
+                "texts, reminders for a person to call, and AI calls, until the customer texts "
+                "or calls back, somebody reaches them, or a person stops it.",
+        covers="Every unanswered call a person made to a Zuper customer with an open job, and "
+               "anyone added from the Follow-ups page or the Follow up button. Test customers "
+               "only until an admin switches test-only off in its settings.",
+        channels=("Zuper text from (954) 420-7373", "Anisa's call from the CRM line",
+                  "The bell for the assignee"),
+        runs_on="CRM worker -> Zuper Connect, owen-main (Retell)", provider="Retell (Anisa)",
+        hours="Texts and AI calls 8 AM-8 PM Mon-Sat, never on a holiday; at most 2 AI calls a "
+              "day and one automatic text in 24 hours per number",
+        actions=(
+            Action("send_text", SHADOW, (NEVER, SHADOW, AUTO),
+                   "A sequence's text step. Shadow records the text and sends nothing."),
+            Action("place_calls", SHADOW, (NEVER, SHADOW, AUTO),
+                   "A sequence's AI call step. Needs AGENT_OUTBOUND_ENABLED on owen-main to "
+                   "really dial."),
+            Action("alert_staff", AUTO, (), "The assignee's bell when a call is due or the "
+                   "customer replies."),
+            Action("zuper_note", AUTO, (), "Goes with every text and call it makes."),
+        ),
+        never=("Prices or money", "Saying a claim is approved", "Promising a date",
+               "Texting or calling outside 8 AM-8 PM Mon-Sat",
+               "Running while the old call follow-up is on"),
+        owner_hint="Office", tags=("settings",),
+    ),
+    Entry(
         key="inspection_docs", name="Inspection documentation", kind="agent", role=4,
         purpose="After a technician finishes an inspection or repair, checks the job has where "
                 "the leak is, tools & materials, time to complete, photos and a video - reading "

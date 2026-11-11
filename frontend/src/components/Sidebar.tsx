@@ -12,7 +12,7 @@
  */
 import {
   IconCalendar, IconChart, IconChat, IconGrid, IconImage,
-  IconDispatch, IconCollections, IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
+  IconDispatch, IconCollections, IconFollowups, IconPlay, IconSettings, IconSearch, IconSparkle, IconUser, IconUsers,
 } from './Icon'
 import { logout } from '../lib/auth'
 import { navKeys } from '../lib/access'
@@ -222,6 +222,27 @@ export function Sidebar({
           >
             <IconCollections size={18} color="#fff" />
             Collections
+          </button>
+        )}
+        {/* Follow-ups (2026-11-11): customers who did not answer, followed up until they do. */}
+        {canOpenAiAgents(user) && (
+          <button
+            onClick={() => onNavigate('followups')}
+            className="flex w-full items-center gap-3 text-left"
+            style={{
+              height: 36,
+              borderRadius: 6,
+              paddingLeft: 16,
+              paddingRight: 16,
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 500,
+              lineHeight: '20px',
+              backgroundColor: active === 'followups' ? 'rgb(26,32,44)' : 'transparent',
+            }}
+          >
+            <IconFollowups size={18} color="#fff" />
+            Follow-ups
           </button>
         )}
         {owenAi.visible && (
