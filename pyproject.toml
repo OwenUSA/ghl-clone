@@ -38,6 +38,10 @@ dependencies = [
     "pillow>=11",
     "pillow-heif>=0.21",
     "fpdf2>=2.8",
+    # Reading Frontdoor, AHS's contractor portal (2026-11-12, app/frontdoor): a headless browser
+    # that only reads. In the image it drives Debian's `chromium` (Dockerfile.api); Playwright's
+    # own browser download is never run there. Also in the `capture` group, unchanged.
+    "playwright>=1.49",
     "claude-agent-sdk==0.2.170",
 ]
 

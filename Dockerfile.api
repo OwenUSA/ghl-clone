@@ -42,8 +42,10 @@ WORKDIR /app
 # cli/ghl_cli, so `uv sync` fails without it.
 COPY pyproject.toml uv.lock ./
 COPY cli ./cli
-# --no-dev drops pytest/ruff; the `capture` group (Playwright, a real browser,
-# the live-GHL harness) is not a default group and is never installed here.
+# --no-dev drops pytest/ruff; the `capture` group (the live-GHL harness) is not a default group
+# and is never installed here. Playwright itself IS a main dependency since 2026-11-12 (reading
+# Frontdoor, app/frontdoor): it drives the Debian `chromium` installed above, and
+# `playwright install` (its own browser download) is never run in this image.
 RUN uv sync --frozen --no-dev
 
 COPY backend ./backend

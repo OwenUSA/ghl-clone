@@ -55,6 +55,15 @@ from tests import retell_guard  # noqa: E402
 retell_guard.strip_environment()
 retell_guard.install()
 
+# ---- no test may reach Frontdoor, AHS's contractor portal (2026-11-12) -------------------
+# A test that got through would be a real login as the company. No FRONTDOOR_* setting
+# survives, frontdoorhome.com hosts are refused, and no Chromium can start. See
+# tests/frontdoor_guard.py.
+from tests import frontdoor_guard  # noqa: E402
+
+frontdoor_guard.strip_environment()
+frontdoor_guard.install()
+
 # No test may reach the National Weather Service (2026-10-22): its client's transport refuses
 # every request unless a test installs its own MockTransport.
 import httpx  # noqa: E402
@@ -121,6 +130,16 @@ def _no_retell_network():
     retell_guard.ATTEMPTS.clear()
     assert not attempted, ("this test tried to reach Retell (%s) — the CRM never talks to "
                            "Retell; owen-main does" % ", ".join(attempted))
+
+
+@pytest.fixture(autouse=True)
+def _no_frontdoor_network():
+    frontdoor_guard.ATTEMPTS.clear()
+    yield
+    attempted = list(frontdoor_guard.ATTEMPTS)
+    frontdoor_guard.ATTEMPTS.clear()
+    assert not attempted, ("this test tried to reach Frontdoor (%s) — fake the portal "
+                           "instead (tests/test_frontdoor.py)" % ", ".join(attempted))
 
 
 # ---- rules 3 and 4 are OFF (owner's decision, 2026-09-15) --------------------------------

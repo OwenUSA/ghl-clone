@@ -128,8 +128,13 @@ services:
     volumes:
       - owen_ai_home:/var/lib/owen-ai
       - owen_ai_pictures:/var/lib/owen-ai-pictures
+      # Frontdoor's login (2026-11-12, app/frontdoor): FRONTDOOR_USER / FRONTDOOR_PASSWORD in a
+      # root-only file OUTSIDE the checkout. It must exist before `up`, or Docker makes a
+      # directory there. Reading also needs FRONTDOOR_READ_ENABLED=true in .env.prod.
+      - /opt/santiagoproperties/ghl-clone-secrets/frontdoor.env:/run/secrets/frontdoor.env:ro
     environment:
       OWEN_AI_PICTURE_DIR: /var/lib/owen-ai-pictures
+      FRONTDOOR_CREDENTIALS_FILE: /run/secrets/frontdoor.env
     depends_on:
       api: { condition: service_healthy }
     deploy:

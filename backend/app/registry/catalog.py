@@ -51,6 +51,7 @@ ACTIONS: dict[str, dict] = {
     "call_staff": {"label": "Call the technician", "customer": False},
     "ai_read": {"label": "Read notes and replies with AI", "customer": False},
     "ahs_portal": {"label": "Read and submit in the AHS portal (Frontdoor)", "customer": False},
+    "ahs_read": {"label": "Read the AHS portal (Frontdoor), read-only", "customer": False},
     "ai_vision": {"label": "Look at the pictures with AI and write the draft", "customer": False},
     "send_customer": {"label": "Send the report to the customer", "customer": True},
     "ai_suggest": {"label": "Suggest tools & materials with AI", "customer": False},
@@ -232,10 +233,10 @@ ENTRIES: tuple[Entry, ...] = (
         ),
         never=("Submit anything to AHS without a person", "Change a claim"),
         owner_hint="Marianne",
-        planned="Off - not built. Waiting to confirm access to AHS's contractor portal, "
-                "Frontdoor: an API key if AHS offers one; if not, a logged-in browser session "
-                "(Playwright) that only reads. Until then AHS approvals arrive by email "
-                "(AHS approvals into Dispatch).",
+        planned="Off - not built. READING Frontdoor is built (2026-11-12: app/frontdoor, a "
+                "logged-in browser that only reads, behind FRONTDOOR_READ_ENABLED) and used by "
+                "Owen AI; submitting stays Never. Until this agent is built AHS approvals "
+                "arrive by email (AHS approvals into Dispatch).",
     ),
     Entry(
         key="inspection_report", name="Post-inspection report", kind="agent", role=6,
@@ -399,15 +400,23 @@ ENTRIES: tuple[Entry, ...] = (
     Entry(
         key="owen_ai", name="Owen AI (owner's assistant)", kind="agent", role=10,
         purpose="The owner's own assistant on his Claude plan: reads Zuper (jobs, proposals, "
-                "templates, products, settings, Zuper Connect texts and calls) and Quo (calls, "
-                "transcripts, texts) and answers in a chat only he can open. Separate from "
-                "every other agent here.",
-        covers="Everything in Zuper and Quo, for the owner only.",
+                "templates, products, settings, Zuper Connect texts and calls), Quo (calls, "
+                "transcripts, texts) and AHS's portal Frontdoor (dispatches, authorizations, "
+                "invoices) and answers in a chat only he can open. Separate from every other "
+                "agent here.",
+        covers="Everything in Zuper and Quo, and AHS dispatches in Frontdoor, for the owner "
+               "only.",
         channels=("Owen AI page (owner only)",),
         runs_on="CRM, owen_ai container (Claude Code on the owner's plan)",
         provider="Anthropic (Claude plan)", hours="When the owner asks",
         actions=(
             Action("ai_chat", AUTO, (NEVER, AUTO), "Answers the owner in the Owen AI chat."),
+            Action("ahs_read", AUTO, (NEVER, AUTO),
+                   "2026-11-12: reads Frontdoor (AHS's contractor portal) — dispatch status, what "
+                   "AHS authorized, invoices — through a logged-in browser that can only read; "
+                   "the inspection report takes the AHS credit from it. Also needs "
+                   "FRONTDOOR_READ_ENABLED and the portal login on the server. Submitting to AHS "
+                   "is never possible."),
             Action("zuper_proposals", APPROVE, (NEVER, APPROVE),
                    "Owner lift 2026-11-09: a Good/Better/Best proposal DRAFT, created in Zuper "
                    "only when the owner presses Approve on the Proposals tab. Also needs "
@@ -417,6 +426,7 @@ ENTRIES: tuple[Entry, ...] = (
         ),
         never=("Send a proposal to a customer",
                "Write anything else in Zuper (only an approved proposal draft)",
+               "Submit, update or note anything in Frontdoor (AHS's portal)",
                "Text or call anyone", "Answer anyone but the owner"),
         owner_hint="Owen",
     ),

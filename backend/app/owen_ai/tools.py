@@ -12,14 +12,18 @@ Nothing here writes to Zuper or contacts anyone (alerts and proposal drafts go t
 database — a draft reaches Zuper only through the owner's Approve, `proposals.approve`;
 `make_inspection_report` saves an HTML/PDF draft in the reports folder for Owen): Zuper goes
 through `client.owen_ai_read()` (GET only, denylist applies),
-Zuper Connect through `client.connect_read` (its five reads), Quo through `quo.get` (GET only).
+Zuper Connect through `client.connect_read` (its five reads), Quo through `quo.get` (GET only),
+Frontdoor (AHS's contractor portal, 2026-11-12) through `app.frontdoor` (a guarded browser that
+only reads; off unless FRONTDOOR_READ_ENABLED).
 """
 from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date
 from typing import Any
 
+from ..frontdoor import service as frontdoor
 from ..zuper import client as zc
 from . import alerts, config, dossier, photos, pictures, proposals, quo, report
 
@@ -94,6 +98,31 @@ def quo_get(path: str, params: dict | None = None) -> str:
         return "ERROR from Quo: %s" % exc
 
 
+def _since(value) -> date | None:
+    if not value:
+        return None
+    return date.fromisoformat(str(value)[:10])
+
+
+def frontdoor_read(what: str, dispatch: str | None = None, since: str | None = None,
+                   fresh: bool = False) -> str:
+    """AHS's contractor portal, read-only (app/frontdoor). Off unless FRONTDOOR_READ_ENABLED and
+    the registry lets Owen AI read it."""
+    why = report.frontdoor_refusal()
+    if why:
+        return "ERROR: %s" % why
+    try:
+        if what == "dispatch":
+            return _text(frontdoor.dispatch(dispatch, fresh=fresh))
+        if what == "dispatches":
+            return _text(frontdoor.dispatches(_since(since), fresh=fresh))
+        if what == "invoices":
+            return _text(frontdoor.invoices(_since(since), fresh=fresh))
+        return "ERROR: unknown Frontdoor read %r" % what
+    except Exception as exc:  # noqa: BLE001 — a sentence, never a page's call log
+        return "ERROR from Frontdoor: %s" % frontdoor.sentence(exc)
+
+
 # ------------------------------------------------------------------------- the MCP server
 
 SPECS = (
@@ -164,6 +193,35 @@ SPECS = (
                                        "params": {"type": "object"}},
       "required": ["path"]},
      lambda a: quo_get(a["path"], a.get("params"))),
+    ("frontdoor_dispatch",
+     ("READ one AHS dispatch in Frontdoor, AHS's contractor portal (read-only; ~30 s, cached 15 "
+      "min, `fresh`: true re-reads). `dispatch` = the AHS dispatch number = the Zuper job's "
+      "\"AHS Job ID\" custom field (job_dossier shows it). Returns the dispatch status, invoice "
+      "status, items, plan dates, `authorization` (authorized_to_contractor = what AHS pays us, "
+      "customer_owes = the customer's share on AHS's own estimate, total, authorized_at, "
+      "authorized_by; requested=false = no authorization asked yet), AUTHO numbers and NCC / "
+      "Net Total amounts found in AHS's notes, and the history (update, who, when; no note "
+      "text). No customer name, phone or address — use job_dossier for those."),
+     {"type": "object", "properties": {"dispatch": {"type": "string"},
+                                       "fresh": {"type": "boolean"}},
+      "required": ["dispatch"]},
+     lambda a: frontdoor_read("dispatch", dispatch=str(a["dispatch"]),
+                              fresh=bool(a.get("fresh")))),
+    ("frontdoor_dispatches",
+     ("READ the Frontdoor dispatch list (read-only): every AHS dispatch dated on or after "
+      "`since` (YYYY-MM-DD, default 30 days ago), with date, brand, items, status group "
+      "(New / In Progress / Completed / Cancelled) and status. Then frontdoor_dispatch for the "
+      "money on one of them."),
+     {"type": "object", "properties": {"since": {"type": "string"},
+                                       "fresh": {"type": "boolean"}}},
+     lambda a: frontdoor_read("dispatches", since=a.get("since"), fresh=bool(a.get("fresh")))),
+    ("frontdoor_invoices",
+     ("READ the Frontdoor Invoices page (read-only): the Ready To Invoice, Draft Invoices and "
+      "Submitted Invoices tabs, per row the dispatch number, dates, invoice id, status, total "
+      "and paid total. `since` (YYYY-MM-DD) drops older rows."),
+     {"type": "object", "properties": {"since": {"type": "string"},
+                                       "fresh": {"type": "boolean"}}},
+     lambda a: frontdoor_read("invoices", since=a.get("since"), fresh=bool(a.get("fresh")))),
 )
 
 # Owen's alerts (2026-11-03): the only thing Claude writes, and only in the CRM's database.

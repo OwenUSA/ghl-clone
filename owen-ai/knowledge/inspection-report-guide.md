@@ -35,7 +35,9 @@ tool's warnings to Owen in the chat**. Owen downloads it from the chat and decid
 8. **Rule out look-alikes in one line** when it helps trust: water heater below the stain, bathroom fan, AC line —
    *"No — signs the stains come from the water heater (it sits on the floor, below the stain)."*
 9. **Numbers only from data.** Prices, warranty, deposit, AHS credit come from the proposal (the tool fills the table;
-   you don't type prices). Sizes only if measured; otherwise "about one sheet", "a small area".
+   you don't type prices). When the proposal has no AHS credit and the job has an `AHS Job ID`, the tool takes what
+   AHS authorized from Frontdoor and says so in its warnings — pass that warning to Owen; a proposal whose credit
+   differs from Frontdoor's keeps its own and gets a warning too. Sizes only if measured; otherwise "about one sheet", "a small area".
 10. **One clear next step.** Page 1 ends with ONE call to action and a time frame ("within the next 2 weeks" for Fix
     now). Add the "ask us for a price" item there too if there is unpriced advice.
 
