@@ -1,6 +1,6 @@
 ---
 name: inspection-report
-description: Make or change the customer after-inspection report (HTML + PDF, Dream Team design) for a job — photos with circles, plain-English findings, photo pages, and the Good / Better / Best pages (an AI picture per option, the area it covers on the real photos, the written scope). NO PRICES. A DRAFT for Owen, saved with versions; never sent to the customer. Use for "make the inspection report for job 728", "reporte de inspección", "build the customer report", and for any change to one ("move the BEST area", "change step 3", "redo the BETTER picture").
+description: Make or change the customer after-inspection report (HTML + PDF, Dream Team design) for a job — photos with circles, plain-English findings, photo pages, and the Good / Better / Best pages (an AI picture per option, the area it covers on the real photos, the written scope; prices only when Owen wants them, read from the proposal). A DRAFT for Owen, saved with versions; never sent to the customer. Use for "make the inspection report for job 728", "reporte de inspección", "build the customer report", and for any change to one ("move the BEST area", "change step 3", "redo the BETTER picture").
 ---
 
 # After-inspection report
@@ -22,7 +22,8 @@ Read `knowledge/inspection-report-guide.md` first (the 10 rules) and `knowledge/
 3. **Diagnose:** inside stains → trace upslope → the joints (walls, vents, valleys, pipes) first. How
    many leaks, where, and which is which (e.g. "the bathroom"). If you cannot tell, say so to Owen.
 4. **Match each option:** what each option fixes and adds, from the proposal and
-   `gbb-procedure.md`. No prices anywhere: they come after AHS says how much it covers.
+   `gbb-procedure.md`. Prices: only when Owen wants them. Then set `gbb.show_prices: true` and
+   `proposal` (the DTR number), and the tool reads them from Zuper. Never type a price.
 5. **Write the spec** (guide §2–§5):
    - badge, what_happened, hero, location, findings, inside, not_done, weather, inspected_how;
    - `galleries`: e.g. "Inside the house", "Cracked tiles marked by our technician";
@@ -50,6 +51,10 @@ Read `knowledge/inspection-report-guide.md` first (the 10 rules) and `knowledge/
    page: what it returns is the truth.
 2. Change ONLY what he asked in that spec. Keep everything else exactly as it is, including his edits.
 3. `mcp__owen__update_inspection_report` with `base_version` from step 1 and a short `note`.
+   - "Put prices on it": set `gbb.show_prices: true` and `proposal` to the RIGHT DTR number, with
+     `refresh_facts: true`. If that proposal's prices are wrong or it is not approved yet, tell
+     Owen first.
+   - "Put Antonio as tech": set `inspector: "Antonio Brown"` (the full name as in Zuper).
    - If it says the report changed meanwhile, start again at step 1.
    - Regenerate a picture only when he asked for it, or when its words changed and he wants it
      updated. Each one is about $0.18.

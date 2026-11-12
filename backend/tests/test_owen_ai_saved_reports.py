@@ -98,6 +98,11 @@ def make(world, s=None):
     return saved_reports.create(world["db"], s or full(world["env"]), author="test")
 
 
+def options_part(html: str) -> str:
+    """The Good / Better / Best section itself (page 1's call to action names it too)."""
+    return html[html.index(">Your repair options</h2>"):html.rindex("Until it")]
+
+
 def latest_spec(world, row):
     return saved_reports.load_spec(row.id, saved_reports.version(world["db"], row.id).spec)
 
@@ -145,7 +150,7 @@ def test_the_page_has_the_options_coverage_and_comparison_and_no_price_table(wor
                  "Area covered", "Scope of work", "Compare the options", "Inside the house",
                  "Warranty:</b> 3 months", "Warranty:</b> 1 year", "Time on site"):
         assert text in html, text
-    options = html[html.index("Your repair options"):html.index("Until it")]
+    options = options_part(html)
     assert "You pay" not in html and "AHS member price" not in html and "$" not in options
     assert v.number == 1 and v.source == "ai" and row.current_version == 1
 
@@ -440,3 +445,47 @@ def test_companycam_photos_reads_the_linked_project_plain_and_marked(world, monk
 def test_companycam_off_is_a_sentence(world, monkeypatch):
     monkeypatch.delenv("COMPANYCAM_API_TOKEN", raising=False)
     assert companycam_photos.companycam_photos("728").startswith("ERROR: CompanyCam is not")
+
+
+# ------------------------------------------------------------- prices and inspector (2026-11-12)
+
+def test_prices_show_only_when_switched_on_and_come_from_the_proposal(world):
+    s = full(world["env"])
+    s["gbb"]["show_prices"] = True
+    row, v = make(world, s)
+    html = (saved_reports.report_dir(row.id) / "v1" / "report.html").read_text("utf-8")
+    options = options_part(html)
+    # The proposal's figures (tests' DTR-129: GOOD 600 / BETTER 1,400 / BEST 3,000).
+    for text in ("You pay $600", "You pay $1,400", "You pay $3,000", "$2,500 retail",
+                 "AHS member price $1,600", "50% to start ($300), 50% when done"):
+        assert text in options, text
+    assert ("<tr class=\"gpayrow\"><td>You pay</td><td>$600</td><td>$1,400</td>"
+            "<td>$3,000</td>") in options
+    # Off again: no figure at all.
+    s2 = latest_spec(world, row)
+    s2["gbb"]["show_prices"] = False
+    saved_reports.update(world["db"], row.id, s2, 1, source="page")
+    html2 = (saved_reports.report_dir(row.id) / "v2" / "report.html").read_text("utf-8")
+    assert "$" not in options_part(html2)
+
+
+def test_prices_on_without_a_proposal_warn_and_show_nothing(world):
+    s = full(world["env"])
+    s["gbb"]["show_prices"] = True
+    f = report.fetch_facts(JOB_UID)
+    f.options = []
+    row, v = saved_reports.create(world["db"], s, author="test", facts=f)
+    html = (saved_reports.report_dir(row.id) / "v1" / "report.html").read_text("utf-8")
+    assert "You pay" not in html
+    assert any("no proposal with options" in w for w in v.warnings), v.warnings
+
+
+def test_the_inspector_can_be_named(world):
+    row, _ = make(world)
+    html = (saved_reports.report_dir(row.id) / "v1" / "report.html").read_text("utf-8")
+    assert "Luis Tech" in html                       # read from Zuper (who moved the stage)
+    s = latest_spec(world, row)
+    s["inspector"] = "Antonio Brown"
+    saved_reports.update(world["db"], row.id, s, 1, source="ai")
+    html2 = (saved_reports.report_dir(row.id) / "v2" / "report.html").read_text("utf-8")
+    assert "Antonio Brown" in html2 and "Luis Tech" not in html2

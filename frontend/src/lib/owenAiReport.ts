@@ -28,7 +28,9 @@ export type RFinding = { title: string; saw: string; means: string; fix: string;
 export type RSpec = {
   what_happened: string; weather: string; inspected_how: string; next_steps?: string
   badge: { severity: string; text?: string }; findings: RFinding[]
-  galleries?: RGallery[] | null; gbb?: { intro?: string; options: ROption[]; compare?: RCompare[] } | null
+  inspector?: string; proposal?: string | null
+  galleries?: RGallery[] | null
+  gbb?: { intro?: string; show_prices?: boolean; options: ROption[]; compare?: RCompare[] } | null
   [k: string]: unknown
 }
 

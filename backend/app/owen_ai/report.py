@@ -344,6 +344,10 @@ class CompareRow(_Strict):
 
 class Gbb(_Strict):
     intro: RichWords(600) = ""
+    show_prices: bool = Field(False, description=(
+        "show each option's prices (retail, AHS member price, AHS credit, you pay, payment) - "
+        "Owen's call (2026-11-12: yes once he wants them). They are READ from the proposal in "
+        "Zuper (`proposal`), never typed: a '$' in any text is still refused."))
     options: list[OptionBlock] = Field(min_length=1, max_length=3)
     compare: list[CompareRow] = Field(default_factory=list, max_length=10)
 
@@ -383,6 +387,9 @@ class Spec(_Strict):
     galleries: list[Gallery] | None = Field(None, max_length=4, description=(
         "photo pages after the findings, e.g. 'Inside the house', 'Cracked tiles marked by our "
         "technician'"))
+    inspector: Plain(80) = Field("", description=(
+        "the technician's name to show as Inspector, ONLY when Owen asks for another name than "
+        "the one read from Zuper"))
     gbb: Gbb | None = Field(None, description=(
         "the Good / Better / Best pages: per option its AI picture, the area it covers on real "
         "photos and the written scope; then a comparison. NO PRICES."))
@@ -989,8 +996,9 @@ def page1(s: Spec, f: Facts, imgs: dict, has_options: bool) -> str:
         '<div style="grid-column:span 2"><span>Property:</span> %s</div>'
         '<div><span>Weather:</span> %s</div>' % (_ph(f.address), esc(s.weather)),
     ]
-    if f.inspector:
-        meta.append('<div><span>Inspector:</span> %s</div>' % esc(f.inspector))
+    inspector = s.inspector or f.inspector          # Owen's choice wins over Zuper's (2026-11-12)
+    if inspector:
+        meta.append('<div><span>Inspector:</span> %s</div>' % esc(inspector))
     if s.roof:
         meta.append('<div style="grid-column:span 2"><span>Roof:</span> %s</div>' % esc(s.roof))
     how = s.inspected_how.rstrip()
@@ -1229,6 +1237,11 @@ GBB_CSS = (
     "border:3px solid var(--acc)}.gcov figcaption{font-size:8.6pt;color:var(--mut)}"
     ".gscope{margin:0;padding-left:5mm}.gscope li{font-size:10pt;margin:0 0 4px}"
     ".gintro{font-size:10.5pt;margin:0 0 3mm}"
+    ".gprice{margin-left:auto;text-align:right;font-size:10pt;line-height:1.35}"
+    ".gprice .strike{text-decoration:line-through;color:var(--red)}"
+    ".gprice .gcredit{color:var(--green)}.gprice .gpay{font-size:16pt;color:var(--acc)}"
+    ".gprice .gterms{color:var(--mut);font-size:9pt}"
+    "table.cmp tr.gpayrow td{font-size:13pt;font-weight:900}"
     "table.cmp{width:100%;border-collapse:collapse;font-size:10.5pt}"
     "table.cmp th,table.cmp td{padding:7px 9px;border-bottom:1px solid var(--line);"
     "text-align:center}table.cmp td:first-child{text-align:left;font-weight:700;"
@@ -1239,6 +1252,9 @@ GBB_DEFAULT_INTRO = ("Here are three ways to fix it. <b>Every option stops the l
                      "and Best add more: more of the roof repaired, stronger materials and a "
                      "longer warranty. We will send the prices once AHS tells us how much it "
                      "covers.")
+GBB_PRICED_INTRO = ("Here are three ways to fix it. <b>Every option stops the leak.</b> Better "
+                    "and Best add more: more of the roof repaired, stronger materials and a "
+                    "longer warranty. Each option shows what AHS covers and what you pay.")
 
 
 def _hex(rgb: tuple[int, int, int]) -> str:
@@ -1316,17 +1332,52 @@ def galleries_html(s: Spec, imgs: dict) -> str:
     return "".join(out)
 
 
+def option_fact(o: OptionBlock, f: Facts) -> Option | None:
+    return next((x for x in f.options if x.name.strip().upper() == o.name), None)
+
+
 def option_warranty(o: OptionBlock, f: Facts) -> str:
-    fact = next((x for x in f.options if x.name.strip().upper() == o.name), None)
+    fact = option_fact(o, f)
     return (fact.warranty if fact and fact.warranty else "") or o.warranty
+
+
+def you_pay(x: Option) -> float | None:
+    return x.total if x.total is not None else x.customer_pays
+
+
+def price_box(o: OptionBlock, f: Facts) -> str:
+    """The option's prices, READ from the proposal (Facts), never typed in the spec. A figure
+    the proposal does not give is a dash, never a guess."""
+    x = option_fact(o, f)
+    if x is None:
+        f.warnings.append("%s: the proposal%s has no %s option, so its prices are not shown."
+                          % (o.name, " " + f.proposal if f.proposal else "", o.name))
+        return ""
+    rows = []
+    if x.retail is not None:
+        rows.append('<span class="strike">%s retail</span>' % fmt_money(x.retail))
+    if x.member is not None:
+        rows.append("AHS member price %s" % fmt_money(x.member))
+    if x.credit is not None:
+        rows.append('<span class="gcredit">AHS credit %s</span>' % fmt_money(x.credit, neg=True))
+    rows.append('<b class="gpay">You pay %s</b>' % fmt_money(you_pay(x)))
+    pay = _payment(x)
+    if pay != DASH:
+        rows.append('<span class="gterms">%s</span>' % esc(pay))
+    return '<div class="gprice">%s</div>' % "".join("<div>%s</div>" % r for r in rows)
 
 
 def gbb_html(s: Spec, f: Facts, pictures: dict[str, Path | None]) -> str:
     if not s.gbb:
         return ""
     g = s.gbb
+    priced = g.show_prices and bool(f.options)
+    if g.show_prices and not f.options:
+        f.warnings.append("Prices are switched on but there is no proposal with options to read "
+                          "them from, so none are shown.")
     parts = ['<div class="pgbreak"></div><h2 style="margin-top:0">Your repair options</h2>\n'
-             '<p class="gintro">%s</p>\n' % rich(g.intro or GBB_DEFAULT_INTRO)]
+             '<p class="gintro">%s</p>\n' % rich(
+                 g.intro or (GBB_PRICED_INTRO if priced else GBB_DEFAULT_INTRO))]
     for i, o in enumerate(g.options):
         rgb = TIER_RGB[o.name]
         pic = pictures.get(o.name)
@@ -1344,16 +1395,20 @@ def gbb_html(s: Spec, f: Facts, pictures: dict[str, Path | None]) -> str:
         scope = "".join("<li>%s</li>" % rich(x) for x in o.scope)
         parts.append(
             '%s<section class="gbb" style="--acc:%s"><div class="ghead"><span class="gname">%s'
-            '</span><span class="gsub">%s</span><span class="gmeta">%s</span></div>%s%s'
+            '</span><span class="gsub">%s</span><span class="gmeta">%s</span>%s</div>%s%s'
             '<div class="keep"><h3>Scope of work</h3><ul class="gscope">%s</ul></div>'
             '</section>\n' % (
                 '<div class="pgbreak"></div>' if i else "", _hex(rgb), esc(o.name),
-                esc(o.headline), meta, img, cov, scope))
-    if g.compare:
+                esc(o.headline), meta, price_box(o, f) if priced else "", img, cov, scope))
+    if g.compare or priced:
         names = [o.name for o in g.options]
         head = "".join('<th style="color:%s">%s</th>' % (_hex(TIER_RGB[n]), n) for n in names)
         rows = "".join("<tr><td>%s</td>%s</tr>" % (esc(r.label), "".join(
             "<td>%s</td>" % esc(getattr(r, n)) for n in names)) for r in g.compare)
+        if priced:
+            fx = {o.name: option_fact(o, f) for o in g.options}
+            rows += '<tr class="gpayrow"><td>You pay</td>%s</tr>' % "".join(
+                "<td>%s</td>" % (fmt_money(you_pay(fx[n])) if fx[n] else DASH) for n in names)
         parts.append('<div class="pgbreak"></div><h2 style="margin-top:0">Compare the options'
                      '</h2>\n<table class="cmp"><tr><th></th>%s</tr>%s</table>\n' % (head, rows))
     return "".join(parts)
