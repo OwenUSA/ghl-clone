@@ -489,3 +489,12 @@ def test_the_inspector_can_be_named(world):
     saved_reports.update(world["db"], row.id, s, 1, source="ai")
     html2 = (saved_reports.report_dir(row.id) / "v2" / "report.html").read_text("utf-8")
     assert "Antonio Brown" in html2 and "Luis Tech" not in html2
+
+
+def test_every_report_ends_with_the_pictures_disclaimer(world):
+    """Owner, 2026-11-12: the pictures are for reference only - at the end of every report."""
+    for s in (full(world["env"]), spec(world["env"])):          # with and without the options
+        row, _ = make(world, s)
+        html = (saved_reports.report_dir(row.id) / "v1" / "report.html").read_text("utf-8")
+        legal = html[html.index('<div class="legal">'):]
+        assert "<b>About the pictures.</b> " + report.PICTURES_DISCLAIMER in legal

@@ -843,7 +843,13 @@ DEFAULT_WORDS = [
     ("Hip / ridge", ("the corners and top line of the roof, covered with round cap tiles set "
                      "in mortar.")),
 ]
-WATER_DEFAULT_LABEL = "Water gets in at the worn corner"   # the text in assets/water.svg
+# At the end of EVERY report (owner, 2026-11-12): the drawings and the AI pictures of the work
+# are for reference only.
+PICTURES_DISCLAIMER = ("The illustrations and drawings in this report, including the pictures of "
+                       "each repair option, are for reference only: they show the type of work, "
+                       "not your home, and the final work may look different. The areas marked "
+                       "on the photos of your roof are approximate.")
+WATER_DEFAULT_LABEL ="Water gets in at the worn corner"   # the text in assets/water.svg
 
 
 @cache
@@ -1210,7 +1216,8 @@ def page4(s: Spec, f: Facts) -> str:
 {lis}</ol></div>
 <div class="legal">{ahs_txt}<b>About this report.</b> This was a visual inspection of the areas we could safely reach {on}. {walls} Some leaks only happen in certain
 weather. This report describes what we found that day; it is not a promise that the roof will never leak. Anything new we find
-during the repair will be shown to you with photos before extra work is done.</div>
+during the repair will be shown to you with photos before extra work is done.<br>
+<b>About the pictures.</b> {PICTURES_DISCLAIMER}</div>
 """
 
 
