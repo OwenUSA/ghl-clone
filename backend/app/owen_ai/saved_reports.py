@@ -246,6 +246,7 @@ def _render_files(report_id: int, number: int, s: report.Spec, f: report.Facts,
     d = report_dir(report_id) / ("v%d" % number)
     d.mkdir(parents=True, exist_ok=True)
     html = report.render(s, None, f, _picture_paths(report_id, pics), _roots(report_id))
+    warnings.extend(w for w in f.warnings if w not in warnings)     # e.g. a price not shown
     (d / "report.html").write_text(html, "utf-8")
     why = report.make_pdf(d / "report.html", d / "report.pdf")
     if why:
@@ -556,8 +557,12 @@ MAKE_DESCRIPTION = (
     "written steps), days?, warranty? (only if the proposal has none), coverage[0-3] {photo, "
     "areas[{points [[x,y],...] 0-1 FRACTIONS, kind covered|excluded, label?}], caption?}}, "
     "compare[] {label, GOOD, BETTER, BEST}}; galleries? [{title, photos[{photo, caption}]}]. "
-    "NO PRICES anywhere: they come after AHS says how much it covers. When the picture switch "
-    "is on, one AI picture per option is made (about $0.18 each).")
+    "PRICES: never typed (a '$' in any text is refused). When Owen wants them on the report, "
+    "set gbb.show_prices = true and `proposal` = the DTR number to read them from; the tool "
+    "shows each option's retail, AHS member price, AHS credit, you pay and payment from that "
+    "proposal. `inspector`: only when Owen names a different technician than Zuper's. When "
+    "the picture switch is on, one AI picture per option is made (about $0.18 each); the "
+    "pictures never show prices.")
 GET_DESCRIPTION = (
     "READ a saved inspection report: `report` = its id, or a job number for that job's newest "
     "report. Returns the CURRENT spec (with Owen's own edits from the page), its version, the "
@@ -570,7 +575,9 @@ UPDATE_DESCRIPTION = (
     "spec with only the asked change; `note` = what changed, in a few words; "
     "`regenerate_pictures` = option names whose AI picture to make again (about $0.18 each - "
     "only when Owen asked or a picture's words are wrong); `refresh_facts` = read the "
-    "customer, address, date and the proposal again from Zuper. Never sent to anyone.")
+    "customer, address, date and the proposal (the spec's `proposal`, e.g. a new DTR number) "
+    "again from Zuper - needed after the proposal changed or to show its prices. Never sent "
+    "to anyone.")
 
 SPECS = (
     ("make_inspection_report", MAKE_DESCRIPTION, report.input_schema(), make_inspection_report),

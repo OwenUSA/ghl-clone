@@ -1070,8 +1070,8 @@ owen_ai "ahs_read". **No test reaches Frontdoor** (`tests/frontdoor_guard.py`). 
 Owen AI's `make_inspection_report` now saves the report with versions
 (`backend/app/owen_ai/saved_reports.py`) and adds photo pages and the Good / Better / Best pages.
 Each option has an AI picture (`infographics.py`), the area it covers drawn on real photos, and
-its written scope. **No prices**: a "$" in that part is refused, because prices come after AHS
-says how much it covers.
+its written scope. **Prices:** shown only when switched on (`gbb.show_prices`), and READ from the
+proposal (`proposal`). A typed "$" is refused. The Inspector can be overridden by name.
 
 - **Editing:** anything can be changed afterwards, on Owen AI → **Reports** or by asking Owen AI
   (`get_inspection_report` / `update_inspection_report`). Every save is a new version; a save from

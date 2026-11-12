@@ -1,8 +1,17 @@
 # Good / Better / Best — what we actually do (for the after-inspection report)
 
 Source: Owen, recorded 2026-11-12, and the approved job #292 report. Use this for each option's
-`scope`, its picture `steps` and the `compare` rows. **No prices anywhere in the report.** They are
-shown only after AHS says how much it covers.
+`scope`, its picture `steps` and the `compare` rows.
+
+**Prices (2026-11-12, Owen):** the report MAY show prices, when Owen wants them. Typically that is
+once AHS has said how much it covers. NEVER type a price: set `gbb.show_prices: true` and
+`proposal` = the DTR number. The tool shows each option's retail, AHS member price, AHS credit,
+you pay and payment, read from that proposal in Zuper, and a "You pay" row in the comparison. If
+the proposal is not the right one yet (not approved / old prices), say so instead of showing the
+wrong prices. The pictures never show prices.
+
+**Inspector:** the header shows the technician read from Zuper. When Owen names someone else
+("put Antonio as tech"), set the spec's `inspector` to that full name.
 
 ## The rule
 

@@ -69,6 +69,7 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
   const [loadedSpec, setLoadedSpec] = useState<string>('')
   const [note, setNote] = useState('')
   const [regen, setRegen] = useState<Set<string>>(new Set())
+  const [refreshFacts, setRefreshFacts] = useState(false)
   const [html, setHtml] = useState<string>('')
   const [message, setMessage] = useState<{ text: string; bad: boolean } | null>(null)
   const [conflict, setConflict] = useState(false)
@@ -90,9 +91,9 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
 
   const save = useMutation({
     mutationFn: () => owenAiSaveReport(id, { base_version: loadedVersion ?? d!.current_version, spec: draft!,
-      note: note.trim() || undefined, regenerate: [...regen] }),
+      note: note.trim() || undefined, regenerate: [...regen], refresh_facts: refreshFacts }),
     onSuccess: async (v) => {
-      setNote(''); setRegen(new Set()); setConflict(false)
+      setNote(''); setRegen(new Set()); setRefreshFacts(false); setConflict(false)
       setMessage({ text: `Saved as version ${v.number}.${v.cost_usd ? ` New pictures cost $${v.cost_usd.toFixed(2)}.` : ''}`,
         bad: false })
       setLoadedVersion(null)
@@ -124,7 +125,8 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
       {detail.isError ? (detail.error as Error).message : 'Loading…'}</div>
   }
   const set = (fn: (s: RSpec) => void) => setDraft((old) => { const s = clone(old!); fn(s); return s })
-  const priceWarning = hasPrice(JSON.stringify(draft.gbb ?? {}))
+  // Typed prices are refused; shown prices come from the proposal (show_prices), not the text.
+  const priceWarning = hasPrice(JSON.stringify({ ...(draft.gbb ?? {}), show_prices: undefined }))
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -147,7 +149,8 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexWrap: 'wrap', overflow: 'auto' }}>
         <div style={{ flex: '1 1 420px', minWidth: 0, padding: 12, display: 'grid', gap: 10, alignContent: 'start' }}>
           {showHistory && <History d={d} busy={restore.isPending} onRestore={(n) => restore.mutate(n)} />}
-          <SaveBar note={note} setNote={setNote} dirty={dirty || regen.size > 0} saving={save.isPending}
+          <SaveBar note={note} setNote={setNote} dirty={dirty || regen.size > 0 || refreshFacts} saving={save.isPending}
+            refreshFacts={refreshFacts} setRefreshFacts={setRefreshFacts}
             onSave={() => save.mutate()} onPreview={() => preview.mutate()} previewing={preview.isPending}
             message={message} conflict={conflict} priceWarning={priceWarning}
             onReload={() => { setLoadedVersion(null); setConflict(false); setMessage(null)
@@ -163,6 +166,8 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
             <Field label="Badge text (severity stays as it is)"><TextArea value={draft.badge.text ?? ''} rows={2}
               onChange={(v) => set((s) => { s.badge.text = v })} /></Field>
             <Field label="Weather"><Input value={draft.weather} onChange={(v) => set((s) => { s.weather = v })} /></Field>
+            <Field label="Inspector (leave empty to use the technician from Zuper)"><Input value={String(draft.inspector ?? '')}
+              placeholder="e.g. Antonio Brown" onChange={(v) => set((s) => { s.inspector = v })} /></Field>
             <Field label="How we inspected"><Input value={draft.inspected_how}
               onChange={(v) => set((s) => { s.inspected_how = v })} /></Field>
             <Field label="Extra sentence for 'What to do next'"><Input value={draft.next_steps ?? ''}
@@ -185,7 +190,16 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
               onRegen={(on) => setRegen((r) => { const n = new Set(r); if (on) n.add(o.name); else n.delete(o.name); return n })}
               onChange={(fn) => set((s) => fn(s.gbb!.options[i]))} reportId={id} />))}
           {draft.gbb && (
-            <Section title="Compare the options">
+            <Section title="Prices and comparison">
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, color: INK }}>
+                <input type="checkbox" checked={!!draft.gbb.show_prices}
+                  onChange={(e) => set((s) => { s.gbb!.show_prices = e.target.checked })} />
+                Show prices from the proposal (retail, AHS member price, AHS credit, you pay)</label>
+              <Field label="Proposal to read them from (e.g. DTR-158; empty = the job's newest)">
+                <Input value={String(draft.proposal ?? '')} placeholder="DTR-158"
+                  onChange={(v) => { set((s) => { s.proposal = v.trim() || null }); setRefreshFacts(true) }} /></Field>
+              <div style={{ fontSize: 12, color: MUTED }}>Prices are read from Zuper when you save with "Read Zuper
+                again" ticked. They are never typed here.</div>
               <Field label="Intro above the options (optional)"><TextArea value={draft.gbb.intro ?? ''} rows={3}
                 onChange={(v) => set((s) => { s.gbb!.intro = v })} /></Field>
               {(draft.gbb.compare ?? []).map((r, i) => (
@@ -213,6 +227,7 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
 }
 
 function SaveBar(p: { note: string; setNote: (v: string) => void; dirty: boolean; saving: boolean
+  refreshFacts: boolean; setRefreshFacts: (v: boolean) => void
   onSave: () => void; onPreview: () => void; previewing: boolean; message: { text: string; bad: boolean } | null
   conflict: boolean; onReload: () => void; priceWarning: boolean; regen: string[]; cost: number }) {
   return (
@@ -226,6 +241,9 @@ function SaveBar(p: { note: string; setNote: (v: string) => void; dirty: boolean
           style={{ ...chipBtn, color: '#fff', background: p.dirty ? BLUE : 'rgb(152,162,179)', border: 0 }}>
           {p.saving ? 'Saving…' : 'Save as new version'}</button>
       </div>
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: MUTED }}>
+        <input type="checkbox" checked={p.refreshFacts} onChange={(e) => p.setRefreshFacts(e.target.checked)} />
+        Read Zuper again on save (customer, address, date, technician and the proposal's prices)</label>
       {p.regen.length > 0 && <div style={{ fontSize: 12, color: MUTED }}>
         Saving will make new pictures for {p.regen.join(', ')} (about ${(p.cost * p.regen.length).toFixed(2)}).</div>}
       {p.priceWarning && <div role="alert" style={{ fontSize: 12, color: RED }}>

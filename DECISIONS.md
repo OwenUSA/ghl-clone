@@ -8179,6 +8179,14 @@ to make reports like it. Decided with the user on 2026-11-12:
 - **Who edits:** the Reports tab is Owen AI's, so the owner only (404 for anyone else), like
   the rest of the module. Opening it to ADMINs is an open question.
 
+**Amended the same day (2026-11-12, the user for Owen):**
+- **Prices may be shown.** `gbb.show_prices` turns on, per option, the retail price, AHS member
+  price, AHS credit, you pay and payment, plus a "You pay" row in the comparison. They are READ
+  from the proposal named by `proposal` (Facts, parsed as the old options table did). A typed "$"
+  is still refused, so a price can never be made up. The pictures still show none.
+- **The Inspector can be named.** The spec's `inspector` replaces the technician read from Zuper
+  (asked: "put Antonio as tech" on #777, where Zuper's Technician field was empty).
+
 **Before switching it on in production:** `./deploy.sh --with-migrations` (revision
 `e5b9d3a1c7f4`, two new tables, nothing changed). Then try one report with pictures OFF; set
 `OWEN_AI_REPORT_PICTURES_ENABLED=true` only when the owner wants them.
