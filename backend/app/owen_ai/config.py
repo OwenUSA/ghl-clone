@@ -148,6 +148,28 @@ def picture_dir() -> Path:
     return report_dir().parent / "pictures"
 
 
+# ------------------------------------------------- saved after-inspection reports (2026-11-12)
+
+def report_store_dir() -> Path:
+    """Where SAVED reports keep their files (<id>/lib, pictures, v<n>): OWEN_AI_REPORT_STORE_DIR,
+    else `inspection-reports/` inside the pictures folder — the owen_ai_pictures volume, the one
+    BOTH the api (Owen's edits on the page) and the owen_ai runner (Owen AI's edits) may write."""
+    raw = (os.getenv("OWEN_AI_REPORT_STORE_DIR") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    return picture_dir() / "inspection-reports"
+
+
+REPORT_PICTURES_OFF = ("The option pictures are off on this server "
+                       "(OWEN_AI_REPORT_PICTURES_ENABLED), so none was made.")
+
+
+def report_pictures_enabled() -> bool:
+    """The after-inspection report's AI option pictures (infographics.py). Off by default:
+    each one is a paid OpenAI call (about $0.18)."""
+    return _flag("OWEN_AI_REPORT_PICTURES_ENABLED")
+
+
 def picture_openai_key() -> str:
     """OWEN_AI_OPENAI_API_KEY. Empty = fall back to an OpenAI AI connection
     (pictures.openai_key)."""

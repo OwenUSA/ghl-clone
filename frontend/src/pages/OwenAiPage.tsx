@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PAGE_BG } from '../components/ai/aiUi'
 import { AlertsView } from '../components/owenAi/AlertsView'
 import { ProposalsView, type PicturesAction } from '../components/owenAi/ProposalsView'
+import { ReportsView } from '../components/owenAi/ReportsView'
 import { Conversation } from '../components/owenAi/Conversation'
 import { StatusStrip } from '../components/owenAi/StatusStrip'
 import { ThreadList } from '../components/owenAi/ThreadList'
@@ -235,12 +236,14 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
             <button type="button" onClick={() => setDrawer(!drawer)} aria-expanded={drawer} style={chipBtn}>
               {drawer ? 'Hide conversations' : 'Conversations'}</button>
             {tab !== 'chats' ? (
-              <span style={{ fontSize: 13, color: MUTED }}>{tab === 'alerts' ? 'Alerts' : 'Proposals'}</span>
+              <span style={{ fontSize: 13, color: MUTED }}>{tab === 'alerts' ? 'Alerts' : tab === 'reports' ? 'Reports' : 'Proposals'}</span>
             ) : title && activeId != null && (
               <span style={{ fontSize: 13, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap', minWidth: 0 }}>{title}</span>)}
           </div>
-          {tab === 'proposals' ? (
+          {tab === 'reports' ? (
+            <ReportsView />
+          ) : tab === 'proposals' ? (
             <ProposalsView proposals={drafts.data?.proposals ?? []} loading={drafts.isLoading}
               error={drafts.isError ? (drafts.error as Error).message : null} sentence={drafts.data?.sentence ?? null}
               onApprove={(p) => approve.mutateAsync(p.id).then((r) => r.status === 'created', () => false)}

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -20,7 +20,7 @@ from .. import auth
 from ..db import get_db
 from ..models import OwenAiAlert, OwenAiMessage, OwenAiProposalDraft, OwenAiThread, Role
 from ..zuper import config as zuper_config
-from . import alerts, config, pictures, proposals, report
+from . import alerts, config, infographics, pictures, proposals, report, saved_reports
 
 router = APIRouter(prefix="/api/owen-ai", tags=["owen-ai"])
 NY = ZoneInfo("America/New_York")
@@ -254,6 +254,151 @@ def report_file(report_id: str, file: str, p: auth.Principal = OWNER) -> FileRes
         "Content-Disposition": "attachment; filename=\"%s\"; filename*=utf-8''%s"
                                % (name, quote(name)),
         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+# ------------------------------------------------- saved inspection reports (2026-11-12)
+#
+# The Reports tab: every saved report, its versions, and EVERY part of it editable by Owen — a
+# save is a new version (never an overwrite), restore is a save too, and a save that started
+# from an older version is 409 (Owen AI or another tab saved in between). Nothing here is sent
+# to anyone or written to Zuper; a picture is made only when the save names it (OpenAI only).
+
+def _saved(db: Session, report_id: int):
+    try:
+        return saved_reports.get(db, report_id)
+    except saved_reports.NotFound:
+        raise HTTPException(404, "Not Found") from None
+
+
+def _spec_error(exc: report.SpecError) -> HTTPException:
+    # One sentence (the page shows a string `detail` as it is): every problem, with where.
+    return HTTPException(422, "Fix these before saving: " + "; ".join(exc.problems))
+
+
+@router.get("/inspection-reports")
+def list_saved_reports(job_uid: str | None = None, p: auth.Principal = OWNER,
+                       db: Session = Depends(get_db)) -> dict:
+    return {"reports": saved_reports.list_out(db, (job_uid or "").strip() or None),
+            "pictures_enabled": config.report_pictures_enabled(),
+            "picture_cost_usd": infographics.EST_COST}
+
+
+@router.get("/inspection-reports/{report_id}")
+def get_saved_report(report_id: int, p: auth.Principal = OWNER,
+                     db: Session = Depends(get_db)) -> dict:
+    return {**saved_reports.out(db, _saved(db, report_id), with_spec=True),
+            "pictures_enabled": config.report_pictures_enabled(),
+            "picture_cost_usd": infographics.EST_COST}
+
+
+@router.get("/inspection-reports/{report_id}/versions/{number}")
+def get_saved_version(report_id: int, number: int, p: auth.Principal = OWNER,
+                      db: Session = Depends(get_db)) -> dict:
+    _saved(db, report_id)
+    try:
+        v = saved_reports.version(db, report_id, number)
+    except saved_reports.NotFound:
+        raise HTTPException(404, "Not Found") from None
+    return {**saved_reports.version_out(v), "spec": v.spec}
+
+
+class SaveReport(BaseModel):
+    base_version: int = Field(ge=1)
+    spec: dict
+    note: str = Field("", max_length=300)
+    regenerate: list[str] = Field(default_factory=list, max_length=3)
+    refresh_facts: bool = False
+
+
+def _save_call(fn, db: Session, report_id: int):
+    _saved(db, report_id)
+    try:
+        return fn()
+    except report.SpecError as exc:
+        raise _spec_error(exc) from None
+    except saved_reports.Conflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except saved_reports.NotFound:
+        raise HTTPException(404, "Not Found") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.post("/inspection-reports/{report_id}/versions")
+def save_report(report_id: int, body: SaveReport, p: auth.Principal = OWNER,
+                db: Session = Depends(get_db)) -> dict:
+    """Save Owen's changes as a new version. `regenerate`: option names whose AI picture to make
+    again (paid; only when Owen pressed it). 409 when the report moved past `base_version`."""
+    bad = [x for x in body.regenerate if x.upper() not in report.TIERS]
+    if bad:
+        raise HTTPException(422, "regenerate takes GOOD, BETTER or BEST")
+    v = _save_call(lambda: saved_reports.update(
+        db, report_id, saved_reports.load_spec(report_id, body.spec), body.base_version,
+        source="page", author=p.name or p.email or "the owner", note=body.note,
+        regenerate=body.regenerate, refresh_facts=body.refresh_facts), db, report_id)
+    return saved_reports.version_out(v)
+
+
+class Restore(BaseModel):
+    version: int = Field(ge=1)
+    base_version: int = Field(ge=1)
+
+
+@router.post("/inspection-reports/{report_id}/restore")
+def restore_report(report_id: int, body: Restore, p: auth.Principal = OWNER,
+                   db: Session = Depends(get_db)) -> dict:
+    """Bring an old version back — as a NEW version, so nothing is lost either way."""
+    v = _save_call(lambda: saved_reports.restore(
+        db, report_id, body.version, body.base_version,
+        author=p.name or p.email or "the owner"), db, report_id)
+    return saved_reports.version_out(v)
+
+
+class Preview(BaseModel):
+    spec: dict
+
+
+@router.post("/inspection-reports/{report_id}/preview")
+def preview_report(report_id: int, body: Preview, p: auth.Principal = OWNER,
+                   db: Session = Depends(get_db)) -> dict:
+    """The page as it would look with these changes. Saves nothing, makes no picture."""
+    html = _save_call(lambda: saved_reports.preview(
+        db, report_id, saved_reports.load_spec(report_id, body.spec)), db, report_id)
+    return {"html": html}
+
+
+@router.post("/inspection-reports/{report_id}/uploads")
+async def upload_report_picture(report_id: int, file: UploadFile, p: auth.Principal = OWNER,
+                                db: Session = Depends(get_db)) -> dict:
+    """Owen's own picture for an option (JPEG/PNG, 8 MB). Returns the name to put in the
+    option's `picture_upload`; it shows on the report once he saves."""
+    _saved(db, report_id)
+    data = await file.read(saved_reports.UPLOAD_MAX_BYTES + 1)
+    try:
+        return {"name": saved_reports.save_upload(report_id, data)}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.get("/inspection-reports/{report_id}/files/{folder}/{name}")
+def saved_report_file(report_id: int, folder: str, name: str, p: auth.Principal = OWNER,
+                      db: Session = Depends(get_db)) -> FileResponse:
+    """lib/<photo>, pictures/<picture> or v<n>/report.html|pdf of this report. Anything else,
+    or a path outside the report's folder, is 404."""
+    row = _saved(db, report_id)
+    path = saved_reports.file_path(report_id, "%s/%s" % (folder, name))
+    if path is None:
+        raise HTTPException(404, "Not Found")
+    headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+    if name in report.FILES:
+        meta = {"job_number": row.job_number,
+                "last_name": (row.customer or "").split(" ")[-1] if row.customer else None}
+        fname = report.friendly_name(meta, name)
+        headers["Content-Disposition"] = ("inline" if name.endswith(".html") else "attachment") \
+            + "; filename=\"%s\"; filename*=utf-8''%s" % (fname, quote(fname))
+        return FileResponse(path, media_type=report.FILES[name], headers=headers)
+    media = "image/png" if name.lower().endswith(".png") else "image/jpeg"
+    return FileResponse(path, media_type=media, headers=headers)
 
 
 # ------------------------------------------------------------------------------ proposals

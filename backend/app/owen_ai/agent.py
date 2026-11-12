@@ -63,13 +63,16 @@ async def _run(prompt: str, session_id: str | None, note: str) -> TurnResult:
         query,
     )
 
-    # job_photos saves pictures here; Read may open them (and nothing else outside the
-    # workspace). The CLI wants the folder to exist.
+    # job_photos / companycam_photos save pictures in photo_dir; a saved inspection report keeps
+    # its own photos and its option pictures in the report store (2026-11-12). Read may open
+    # those (and nothing else outside the workspace). The CLI wants the folders to exist.
     photo_dir = config.photo_dir()
     photo_dir.mkdir(parents=True, exist_ok=True)
+    store = config.report_store_dir()
+    store.mkdir(parents=True, exist_ok=True)
     options = ClaudeAgentOptions(
         cwd=str(config.workspace()),
-        add_dirs=[str(photo_dir)],
+        add_dirs=[str(photo_dir), str(store)],
         setting_sources=["project"],               # the workspace's CLAUDE.md and skills
         system_prompt={"type": "preset", "preset": "claude_code", "append": note},
         tools=BUILTIN_TOOLS,

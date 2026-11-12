@@ -2945,6 +2945,51 @@ class OwenAiProposalDraft(Base):
     pictures_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class OwenAiReport(Base):
+    """An after-inspection report Owen AI made for one Zuper job (2026-11-12,
+    app/owen_ai/saved_reports.py). Everything in it can be changed after it is made — on the
+    Owen AI page or by asking Owen AI — and every change is a new OwenAiReportVersion; any
+    version can be restored. `facts`: the Zuper facts (customer, address, date, the proposal's
+    options and warranties) read when it was made, so an edit renders without asking Zuper.
+    Its files (the report's own copies of its photos, the option pictures, each version's
+    HTML/PDF) live in saved_reports.store_dir()/<id>. Never sent to anyone."""
+    __tablename__ = "owen_ai_reports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_uid: Mapped[str] = mapped_column(String(64), index=True)
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    customer: Mapped[str | None] = mapped_column(String(200))
+    current_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    facts: Mapped[dict] = mapped_column(JSONType)
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class OwenAiReportVersion(Base):
+    """One saved state of an OwenAiReport. `spec`: the report's content with photo paths
+    relative to the report's folder ('lib/021-3fa9c1d2.jpg'). `source`: ai | page | restore.
+    `pictures`: per option {file, hash, state current|stale|uploaded|missing}. `cost_usd`:
+    what OpenAI charged for pictures made for this version."""
+    __tablename__ = "owen_ai_report_versions"
+    __table_args__ = (UniqueConstraint("report_id", "number", name="uq_owen_ai_report_version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("owen_ai_reports.id", ondelete="CASCADE"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    spec: Mapped[dict] = mapped_column(JSONType)
+    source: Mapped[str] = mapped_column(String(10))
+    author: Mapped[str | None] = mapped_column(String(200))
+    note: Mapped[str | None] = mapped_column(String(300))
+    pictures: Mapped[dict | None] = mapped_column(NullableJSONType)
+    warnings: Mapped[list | None] = mapped_column(NullableJSONType)
+    has_pdf: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
 # ---- Follow-ups (2026-11-11, app/cadences) ---------------------------------------------------
 #
 # Hatch-style follow-up of a customer who did not answer: a SEQUENCE of steps (text, call me,

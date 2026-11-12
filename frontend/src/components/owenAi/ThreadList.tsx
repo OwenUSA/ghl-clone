@@ -69,8 +69,14 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
                 color: '#fff', background: BLUE }}>{pendingProposals}</span>
             )}
           </button>
+          <button type="button" role="tab" aria-selected={tab === 'reports'} onClick={() => onTab('reports')}
+            style={tabBtn(tab === 'reports')}>Reports</button>
         </div>
-        {tab === 'proposals' ? (
+        {tab === 'reports' ? (
+          <div style={{ fontSize: 12, color: MUTED, padding: '4px 2px' }}>
+            After-inspection reports Owen AI made. Change anything in them here, or ask Owen AI in a chat;
+            every save is a new version you can go back to. Never sent to the customer from here.</div>
+        ) : tab === 'proposals' ? (
           <div style={{ fontSize: 12, color: MUTED, padding: '4px 2px' }}>
             Good / Better / Best proposals Owen AI prepared. Approve creates one in Zuper as a draft — never
             sent to the customer. Reject tells Owen AI why.</div>

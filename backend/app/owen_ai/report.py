@@ -32,6 +32,7 @@ import base64
 import contextlib
 import html
 import io
+import itertools
 import json
 import os
 import re
@@ -148,22 +149,31 @@ class Photo(_Strict):
     @field_validator("path")
     @classmethod
     def _inside(cls, v: str, info: ValidationInfo) -> str:
-        root = Path((info.context or {}).get("photos_dir") or config.photo_dir()).resolve()
+        # `roots`: the folders a photo may come from — job_photos' folder, and for a SAVED
+        # report (saved_reports.py) also that report's own folder. A relative path is tried
+        # against each root in order.
+        ctx = info.context or {}
+        roots = [Path(r).resolve() for r in (ctx.get("roots")
+                                             or [ctx.get("photos_dir") or config.photo_dir()])]
         p = Path(v)
-        p = (p if p.is_absolute() else root / p).resolve()
-        if not p.is_relative_to(root):
-            raise ValueError("photo paths must be files job_photos saved (under %s)" % root)
-        if p.suffix.lower() not in (".jpg", ".jpeg", ".png") or not p.is_file():
-            raise ValueError("no such picture: %s" % v)
-        return str(p)
+        cands = [p.resolve()] if p.is_absolute() else [(r / p).resolve() for r in roots]
+        for c in cands:
+            if any(c.is_relative_to(r) for r in roots) and c.is_file() \
+                    and c.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                return str(c)
+        if not any(c.is_relative_to(r) for c in cands for r in roots):
+            raise ValueError("photo paths must be files job_photos saved (under %s)" % roots[0])
+        raise ValueError("no such picture: %s" % v)
 
     @model_validator(mode="after")
     def _num(self) -> Photo:
         if self.num is None:
-            stem = Path(self.path).stem
-            if not stem.isdigit() or not 1 <= int(stem) <= 9999:
+            # The number in the file name: '007.jpg' -> 7, a saved report's copy
+            # '007-3fa9c1d2.jpg' -> 7, a CompanyCam photo '104a.jpg' -> 104.
+            m = re.match(r"(\d{1,4})(?!\d)", Path(self.path).stem)
+            if not m or not 1 <= int(m.group(1)) <= 9999:
                 raise ValueError("`num` is required when the file name is not a number")
-            self.num = int(stem)
+            self.num = int(m.group(1))
         return self
 
 
@@ -230,6 +240,121 @@ class OptionText(_Strict):
     includes: Rich(500) = ""
 
 
+# --- the after-inspection report's Good / Better / Best part (2026-11-12, job #292's approved
+# draft). NO PRICES anywhere in it: they are shown only after AHS says how much it covers.
+
+TIERS = ("GOOD", "BETTER", "BEST")
+MONEY = re.compile(r"\$\s?\d|\b\d[\d,]*(?:\.\d\d)?\s?(?:dollars|usd)\b", re.IGNORECASE)
+NO_MONEY = ("no prices in the after-inspection report: prices are shown only after AHS says how "
+            "much it covers")
+
+
+def _no_money(v: str) -> str:
+    if MONEY.search(v or ""):
+        raise ValueError(NO_MONEY)
+    return v
+
+
+def Words(n: int):
+    """Plain text with no price in it."""
+    return Annotated[str, StringConstraints(strip_whitespace=True, max_length=n),
+                     AfterValidator(_plain), AfterValidator(_no_money)]
+
+
+def RichWords(n: int):
+    return Annotated[str, StringConstraints(strip_whitespace=True, max_length=n),
+                     AfterValidator(_rich), AfterValidator(_no_money)]
+
+
+class Area(_Strict):
+    points: list[list[float]] = Field(min_length=3, max_length=16, description=(
+        "the area's corners [[x, y], ...] as 0-1 fractions of the picture, in order around it"))
+    kind: Literal["covered", "excluded"] = Field("covered", description=(
+        "covered = this option does the work here (filled in the option's colour); excluded = "
+        "a problem this option leaves alone (dashed grey)"))
+    label: Words(40) = ""
+
+    @model_validator(mode="after")
+    def _points(self) -> Area:
+        for pt in self.points:
+            if len(pt) != 2 or any(not (0.0 <= v <= 1.0) for v in pt):
+                raise ValueError("each point is [x, y] with fractions between 0 and 1")
+        return self
+
+
+class Coverage(_Strict):
+    photo: Photo
+    areas: list[Area] = Field(min_length=1, max_length=6)
+    caption: Words(120) = ""
+
+
+class PictureStep(_Strict):
+    title: Words(40)
+    text: Words(90)
+
+
+class PictureSpec(_Strict):
+    """What the option's AI picture shows (infographics.py). Words only — no customer name,
+    address or price ever goes into it."""
+    steps: list[PictureStep] = Field(min_length=4, max_length=6)
+    callouts: list[Words(45)] = Field(min_length=2, max_length=3, description=(
+        "labels on the finished-roof overview, e.g. 'Tiles Reset & Secured'"))
+    section_title: Words(40) = Field(description="e.g. 'Leak Repair', 'Peel & Stick'")
+    layers: list[Words(40)] = Field(min_length=3, max_length=5, description=(
+        "the cut-away's layers, top to bottom, e.g. 'Barrel Tile', 'Roof Deck (Plywood)'"))
+    top_title: Words(40) = "Repair Area"
+    top_label: Words(50) = Field(description="the top view's label, e.g. 'Leak Area Above the "
+                                 "Bathroom'")
+    roof: Words(240) = Field("", description="the roof to draw, e.g. 'terracotta barrel tile "
+                             "main roof and a flat terrace roof beside the pool'")
+    notes: Words(240) = Field("", description="what NOT to draw, e.g. 'no vent pipe'")
+
+
+class OptionBlock(_Strict):
+    name: Literal["GOOD", "BETTER", "BEST"]
+    headline: Words(70) = Field(description="e.g. 'Targeted Leak Repair Above the Bathroom'")
+    picture: PictureSpec
+    picture_upload: Annotated[str, StringConstraints(
+        pattern=r"^upload-[0-9a-f]{16}\.(jpg|png)$")] | None = Field(None, description=(
+            "set by Owen's page when he uploads his own picture; leave it as it is"))
+    scope: list[RichWords(400)] = Field(min_length=1, max_length=16, description=(
+        "the full written scope, one step per item; may start with '<b>Title:</b> '"))
+    days: Words(30) = Field("", description="time on site, e.g. '1 day', '2 days'")
+    warranty: Words(40) = Field("", description="only when the proposal has none for this "
+                                "option; default = the proposal's warranty")
+    coverage: list[Coverage] = Field(default_factory=list, max_length=3)
+
+
+class GalleryPhoto(_Strict):
+    photo: Photo
+    caption: Words(120) = ""
+
+
+class Gallery(_Strict):
+    title: Words(80)
+    photos: list[GalleryPhoto] = Field(min_length=1, max_length=12)
+
+
+class CompareRow(_Strict):
+    label: Words(40)
+    GOOD: Words(60) = ""
+    BETTER: Words(60) = ""
+    BEST: Words(60) = ""
+
+
+class Gbb(_Strict):
+    intro: RichWords(600) = ""
+    options: list[OptionBlock] = Field(min_length=1, max_length=3)
+    compare: list[CompareRow] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def _order(self) -> Gbb:
+        names = [o.name for o in self.options]
+        if len(set(names)) != len(names) or names != sorted(names, key=TIERS.index):
+            raise ValueError("options are GOOD, BETTER, BEST - each once, in that order")
+        return self
+
+
 class Spec(_Strict):
     job_uid: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{20,64}$")]
     proposal: Annotated[str, StringConstraints(pattern=r"^[A-Za-z-]{0,10}\d{1,8}$")] | None = \
@@ -255,6 +380,12 @@ class Spec(_Strict):
     options_note: Rich(600) = ""
     next_steps: Rich(400) = Field("", description="one extra sentence for page 1's call to "
                                   "action (e.g. unpriced advice: 'ask us for a price')")
+    galleries: list[Gallery] | None = Field(None, max_length=4, description=(
+        "photo pages after the findings, e.g. 'Inside the house', 'Cracked tiles marked by our "
+        "technician'"))
+    gbb: Gbb | None = Field(None, description=(
+        "the Good / Better / Best pages: per option its AI picture, the area it covers on real "
+        "photos and the written scope; then a comparison. NO PRICES."))
 
 
 def _errors(exc: ValidationError) -> list[str]:
@@ -272,14 +403,17 @@ class SpecError(ValueError):
         self.problems = problems
 
 
-def validate(spec: Any, photos_dir: Path | str | None = None) -> Spec:
+def validate(spec: Any, photos_dir: Path | str | None = None,
+             roots: list[Path | str] | None = None) -> Spec:
+    """`roots` (saved reports): every folder a photo may come from; default = photos_dir."""
     if isinstance(spec, Spec):
         return spec
     if not isinstance(spec, dict):
         raise SpecError(["spec: must be a JSON object"])
     try:
         return Spec.model_validate(spec, context={
-            "photos_dir": str(photos_dir or config.photo_dir())})
+            "photos_dir": str(photos_dir or config.photo_dir()),
+            **({"roots": [str(r) for r in roots]} if roots else {})})
     except ValidationError as exc:
         raise SpecError(_errors(exc)) from None
 
@@ -1072,18 +1206,195 @@ during the repair will be shown to you with photos before extra work is done.</d
 """
 
 
-def render(spec: Spec | dict, photos_dir: Path | str | None, facts: Facts) -> str:
+# --- the Good / Better / Best pages (2026-11-12)
+
+TIER_RGB = {"GOOD": (96, 116, 150), "BETTER": (196, 146, 18), "BEST": (122, 62, 168)}
+EXCLUDED_RGB = (235, 238, 242)
+GBB_CSS = (
+    ".keep{break-inside:avoid;page-break-inside:avoid}.gal figure,.gcov figure{"
+    "break-inside:avoid}"
+    ".gal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:2mm 0 4mm}"
+    ".gal figure{margin:0}.gal img{width:100%;height:150px;object-fit:cover;border-radius:6px}"
+    ".gal figcaption{font-size:8.6pt;color:var(--mut);margin-top:2px}"
+    ".gbb{border-top:6px solid var(--acc);padding-top:3mm}"
+    ".ghead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;"
+    "gap:4px 16px;margin-bottom:3mm}.gname{font-size:26pt;font-weight:900;color:var(--acc);"
+    "line-height:1}.gsub{font-size:12pt;font-weight:700;flex:1 1 50%}"
+    ".gmeta{font-size:10pt;color:var(--mut)}.gmeta b{color:var(--ink)}"
+    ".ginfo{width:100%;border:1px solid var(--line);border-radius:6px}"
+    ".gmissing{border:1px dashed var(--line);border-radius:6px;padding:10mm;text-align:center;"
+    "color:var(--mut)}.gbb h3{font-size:12pt;color:var(--brand);margin:4mm 0 2mm}"
+    ".gcov{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.gcov.n1{"
+    "grid-template-columns:1fr}.gcov figure{margin:0}.gcov img{width:100%;border-radius:6px;"
+    "border:3px solid var(--acc)}.gcov figcaption{font-size:8.6pt;color:var(--mut)}"
+    ".gscope{margin:0;padding-left:5mm}.gscope li{font-size:10pt;margin:0 0 4px}"
+    ".gintro{font-size:10.5pt;margin:0 0 3mm}"
+    "table.cmp{width:100%;border-collapse:collapse;font-size:10.5pt}"
+    "table.cmp th,table.cmp td{padding:7px 9px;border-bottom:1px solid var(--line);"
+    "text-align:center}table.cmp td:first-child{text-align:left;font-weight:700;"
+    "color:var(--brand)}table.cmp th{font-size:13pt;font-weight:900}"
+    "@media(max-width:640px){.gal{grid-template-columns:repeat(2,1fr)}.gcov{"
+    "grid-template-columns:1fr}}")
+GBB_DEFAULT_INTRO = ("Here are three ways to fix it. <b>Every option stops the leak.</b> Better "
+                     "and Best add more: more of the roof repaired, stronger materials and a "
+                     "longer warranty. We will send the prices once AHS tells us how much it "
+                     "covers.")
+
+
+def _hex(rgb: tuple[int, int, int]) -> str:
+    return "#%02x%02x%02x" % rgb
+
+
+def draw_coverage(cov: Coverage, rgb: tuple[int, int, int], crop_gps: bool | None = None) -> str:
+    """The real photo with each area filled in the option's colour (or dashed grey for work
+    the option leaves alone), labelled. Points are fractions of the ORIGINAL picture."""
+    from PIL import Image, ImageDraw
+    p = cov.photo
+    with Image.open(p.path) as src:
+        base = src.convert("RGBA")
+    w, h = base.size
+    k = max(w, h) / 1024
+
+    def s(n: float) -> int:
+        return max(1, round(n * k))
+    fill = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    fd = ImageDraw.Draw(fill)
+    polys = [([(x * w, y * h) for x, y in a.points], a) for a in cov.areas]
+    for pts, a in polys:
+        if a.kind == "covered":
+            fd.polygon(pts, fill=(*rgb, 95))
+    im = Image.alpha_composite(base, fill)
+    d = ImageDraw.Draw(im)
+    for pts, a in polys:
+        ring = [*pts, pts[0]]
+        if a.kind == "covered":
+            d.line(ring, fill=(*rgb, 255), width=s(6), joint="curve")
+        else:
+            for (x0, y0), (x1, y1) in itertools.pairwise(ring):
+                n = max(1, int(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 // s(18)))
+                for i in range(0, n, 2):
+                    d.line([(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n),
+                            (x0 + (x1 - x0) * (i + 1) / n, y0 + (y1 - y0) * (i + 1) / n)],
+                           fill=(*EXCLUDED_RGB, 255), width=s(5))
+    f = _font(s(26))
+    for pts, a in polys:
+        if not a.label:
+            continue
+        col = rgb if a.kind == "covered" else (120, 128, 140)
+        tw = d.textlength(a.label, font=f)
+        cx = sum(x for x, _ in pts) / len(pts)
+        y = max(y for _, y in pts) + s(8)
+        x = min(max(s(4), cx - tw / 2 - s(12)), w - tw - s(28))
+        y = min(y, h - s(50))
+        d.rounded_rectangle((x, y, x + tw + s(24), y + s(42)), radius=s(10),
+                            fill=(255, 255, 255, 240), outline=(*col, 255), width=s(4))
+        d.text((x + s(12), y + s(6)), a.label, fill=(22, 24, 33), font=f)
+    crop = s(70) if (p.crop_gps if crop_gps is None else crop_gps) else 0
+    out = im.convert("RGB").crop((0, 0, w, h - crop))
+    buf = io.BytesIO()
+    out.save(buf, "JPEG", quality=84)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _image_uri(path: Path, max_side: int = 1600) -> str:
+    from PIL import Image
+    with Image.open(path) as src:
+        im = src.convert("RGB")
+    im.thumbnail((max_side, max_side))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=86)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def galleries_html(s: Spec, imgs: dict) -> str:
+    out = []
+    for g in s.galleries or []:
+        figs = "".join('<figure>%s<figcaption>%s</figcaption></figure>' % (
+            _img(gp.photo, gp.caption or g.title, imgs), esc(gp.caption)) for gp in g.photos)
+        out.append('<div class="keep"><h2 style="margin-top:6mm">%s</h2>\n<div class="gal">%s'
+                   '</div></div>\n' % (esc(g.title), figs))
+    return "".join(out)
+
+
+def option_warranty(o: OptionBlock, f: Facts) -> str:
+    fact = next((x for x in f.options if x.name.strip().upper() == o.name), None)
+    return (fact.warranty if fact and fact.warranty else "") or o.warranty
+
+
+def gbb_html(s: Spec, f: Facts, pictures: dict[str, Path | None]) -> str:
+    if not s.gbb:
+        return ""
+    g = s.gbb
+    parts = ['<div class="pgbreak"></div><h2 style="margin-top:0">Your repair options</h2>\n'
+             '<p class="gintro">%s</p>\n' % rich(g.intro or GBB_DEFAULT_INTRO)]
+    for i, o in enumerate(g.options):
+        rgb = TIER_RGB[o.name]
+        pic = pictures.get(o.name)
+        img = ('<img class="zoom ginfo" src="%s" alt="%s">' % (_image_uri(pic), esc(o.headline))
+               if pic else "")
+        war = option_warranty(o, f)
+        meta = " · ".join(x for x in (("<b>Warranty:</b> " + esc(war)) if war else "",
+                                      ("<b>Time on site:</b> " + esc(o.days)) if o.days else "")
+                          if x)
+        covs = "".join('<figure><img class="zoom" src="%s" alt="%s"><figcaption>%s</figcaption>'
+                       '</figure>' % (draw_coverage(c, rgb), esc(c.caption or "Area covered"),
+                                      esc(c.caption)) for c in o.coverage)
+        cov = ('<div class="keep"><h3>Area covered</h3><div class="gcov n%d">%s</div></div>'
+               % (len(o.coverage), covs) if o.coverage else "")
+        scope = "".join("<li>%s</li>" % rich(x) for x in o.scope)
+        parts.append(
+            '%s<section class="gbb" style="--acc:%s"><div class="ghead"><span class="gname">%s'
+            '</span><span class="gsub">%s</span><span class="gmeta">%s</span></div>%s%s'
+            '<div class="keep"><h3>Scope of work</h3><ul class="gscope">%s</ul></div>'
+            '</section>\n' % (
+                '<div class="pgbreak"></div>' if i else "", _hex(rgb), esc(o.name),
+                esc(o.headline), meta, img, cov, scope))
+    if g.compare:
+        names = [o.name for o in g.options]
+        head = "".join('<th style="color:%s">%s</th>' % (_hex(TIER_RGB[n]), n) for n in names)
+        rows = "".join("<tr><td>%s</td>%s</tr>" % (esc(r.label), "".join(
+            "<td>%s</td>" % esc(getattr(r, n)) for n in names)) for r in g.compare)
+        parts.append('<div class="pgbreak"></div><h2 style="margin-top:0">Compare the options'
+                     '</h2>\n<table class="cmp"><tr><th></th>%s</tr>%s</table>\n' % (head, rows))
+    return "".join(parts)
+
+
+def render(spec: Spec | dict, photos_dir: Path | str | None, facts: Facts,
+           pictures: dict[str, Path | None] | None = None,
+           roots: list[Path | str] | None = None) -> str:
     """Pure: the spec + the fetched facts -> one self-contained HTML page (photos and logo
-    embedded, the zoom viewer inline). `photos_dir` bounds where photo paths may point."""
-    s = validate(spec, photos_dir)
+    embedded, the zoom viewer inline). `photos_dir` (or `roots`) bounds where photo paths may
+    point; `pictures` = each option's AI picture file (saved_reports.py), None = not made."""
+    s = validate(spec, photos_dir, roots)
     imgs: dict[str, str] = {}
-    body = page1(s, facts, imgs, False) + page2(s, imgs) + findings_html(s, imgs) \
-        + page4(s, facts)
+    body = page1(s, facts, imgs, bool(s.gbb)) + page2(s, imgs) + findings_html(s, imgs) \
+        + galleries_html(s, imgs) + gbb_html(s, facts, pictures or {}) + page4(s, facts)
     title = "Roof Inspection Report — Job %s" % esc(facts.job_number)
     return ("<!doctype html><html lang='en'><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>%s</title><style>%s%s</style><body>%s%s</body></html>") % (
-        title, _asset("report.css"), EXTRA_CSS, body, _asset("lightbox.html"))
+            "<title>%s</title><style>%s%s%s</style><body>%s%s</body></html>") % (
+        title, _asset("report.css"), EXTRA_CSS, GBB_CSS, body, _asset("lightbox.html"))
+
+
+def facts_to_dict(f: Facts) -> dict:
+    """A JSON copy of the facts, kept with a saved report so a later edit renders without
+    asking Zuper again."""
+    from dataclasses import asdict
+    d = asdict(f)
+    d["date"] = f.date.isoformat() if f.date else None
+    d.pop("warnings", None)
+    return d
+
+
+def facts_from_dict(d: dict) -> Facts:
+    d = dict(d or {})
+    opts = [Option(**{k: v for k, v in o.items() if k in Option.__dataclass_fields__})
+            for o in d.pop("options", None) or []]
+    date = d.pop("date", None)
+    f = Facts(**{k: v for k, v in d.items() if k in Facts.__dataclass_fields__}, options=opts)
+    if date:
+        f.date = datetime.fromisoformat(date)
+    return f
 
 
 # ------------------------------------------------------------------------------ files

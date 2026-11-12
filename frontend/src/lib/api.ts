@@ -2866,6 +2866,51 @@ export const owenAiRejectProposal = (id: number, why: string) =>
 export const owenAiProposalPictures = (id: number, action: 'generate' | 'attach' | 'discard') =>
   send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/pictures${action === 'generate' ? '' : `/${action}`}`, 'POST', {})
 
+// Saved after-inspection reports (2026-11-12, app/owen_ai/saved_reports.py): everything in a
+// report can be changed on the Reports tab; every save is a new version (restore is too), and a
+// save from an older version is 409. The spec's photo paths are relative to the report
+// ('lib/021-3fa9c1d2.jpg'), served by owenAiReportFileUrl. Never sent to anyone.
+export type OwenAiPictureState = 'current' | 'stale' | 'uploaded' | 'missing'
+export type OwenAiReportVersion = {
+  number: number; source: 'ai' | 'page' | 'restore'; author: string | null; note: string | null
+  created_at: string | null; cost_usd: number | null; has_pdf: boolean; warnings: string[]
+  pictures: Record<string, { file: string | null; hash: string; state: OwenAiPictureState }>
+  html_url: string; pdf_url: string | null
+}
+export type OwenAiSavedReport = {
+  id: number; job_uid: string; job_number: string | null; customer: string | null
+  current_version: number; created_by: string | null; created_at: string | null
+  updated_at: string | null; latest: OwenAiReportVersion
+}
+export type OwenAiSavedReportDetail = OwenAiSavedReport & {
+  spec: Record<string, unknown>; library: string[]; versions: OwenAiReportVersion[]
+  files_url: string; options: { name: string; warranty: string | null }[]
+  pictures_enabled: boolean; picture_cost_usd: number
+}
+export const owenAiSavedReports = () =>
+  get<{ reports: OwenAiSavedReport[]; pictures_enabled: boolean; picture_cost_usd: number }>(
+    '/api/owen-ai/inspection-reports')
+export const owenAiSavedReport = (id: number) =>
+  get<OwenAiSavedReportDetail>(`/api/owen-ai/inspection-reports/${id}`)
+export const owenAiSaveReport = (id: number, body: { base_version: number
+  spec: Record<string, unknown>; note?: string; regenerate?: string[]; refresh_facts?: boolean }) =>
+  send<OwenAiReportVersion>(`/api/owen-ai/inspection-reports/${id}/versions`, 'POST', body)
+export const owenAiRestoreReport = (id: number, version: number, base_version: number) =>
+  send<OwenAiReportVersion>(`/api/owen-ai/inspection-reports/${id}/restore`, 'POST',
+    { version, base_version })
+export const owenAiPreviewReport = (id: number, spec: Record<string, unknown>) =>
+  send<{ html: string }>(`/api/owen-ai/inspection-reports/${id}/preview`, 'POST', { spec })
+export const owenAiUploadReportPicture = (id: number, file: File) =>
+  upload<{ name: string }>(`/api/owen-ai/inspection-reports/${id}/uploads`, file)
+export const owenAiReportFileUrl = (id: number, rel: string) =>
+  `${BASE}/api/owen-ai/inspection-reports/${id}/files/${rel}`
+/** A saved version's page, as text, for the preview frame (same-origin, the owner's cookie). */
+export async function owenAiReportHtml(url: string): Promise<string> {
+  const r = await fetch(BASE + url, { credentials: 'include' })
+  if (!r.ok) throw await failed(r)
+  return r.text()
+}
+
 // ---- follow-ups (2026-11-11, app/cadences) ---------------------------------------------------
 export type FollowupStepType = 'text' | 'call_me' | 'ai_call'
 export type FollowupRow = {

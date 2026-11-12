@@ -1064,3 +1064,23 @@ uv run python -m app.frontdoor.service invoices
 Tools: `frontdoor_dispatch` / `frontdoor_dispatches` / `frontdoor_invoices`; the inspection report
 fills a missing AHS credit from it and warns on a different one. Also gated by the registry's
 owen_ai "ahs_read". **No test reaches Frontdoor** (`tests/frontdoor_guard.py`). See DECISIONS.md.
+
+## The after-inspection report: Good / Better / Best, editable, no prices (2026-11-12)
+
+Owen AI's `make_inspection_report` now saves the report with versions
+(`backend/app/owen_ai/saved_reports.py`) and adds photo pages and the Good / Better / Best pages.
+Each option has an AI picture (`infographics.py`), the area it covers drawn on real photos, and
+its written scope. **No prices**: a "$" in that part is refused, because prices come after AHS
+says how much it covers.
+
+- **Editing:** anything can be changed afterwards, on Owen AI → **Reports** or by asking Owen AI
+  (`get_inspection_report` / `update_inspection_report`). Every save is a new version; a save from
+  an older version is 409; restore is a save.
+- **Files:** on the owen_ai_pictures volume (`OWEN_AI_REPORT_STORE_DIR`, default
+  `<pictures>/inspection-reports`). Each report keeps its own photo copies.
+- **Pictures:** about $0.18 each, OFF unless `OWEN_AI_REPORT_PICTURES_ENABLED`. Made only on the
+  first save or when a save names them; no customer data in the prompt.
+- **CompanyCam:** `companycam_photos` gives Owen AI a job's CompanyCam photos (marked copies too),
+  GET only.
+- **Tests:** `tests/test_owen_ai_saved_reports.py`, `tests/test_owen_ai_report_ui.py`. Owen's
+  steps: `owen-ai/knowledge/gbb-procedure.md`. See DECISIONS.md.
