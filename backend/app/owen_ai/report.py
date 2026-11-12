@@ -58,6 +58,7 @@ from pydantic import (
     model_validator,
 )
 
+from ..frontdoor import service as frontdoor
 from ..zuper import client as zc
 from ..zuper.mapping import parse_time
 from . import config
@@ -503,12 +504,27 @@ def option_of(o: dict) -> Option:
                   customer_pays=pb.get("customer_pays"), warranty=warranty(t), steps=steps(t))
 
 
-def options_of(rec: dict, number: str, warnings: list[str]) -> list[Option]:
+def options_of(rec: dict, number: str, warnings: list[str],
+               ahs: dict | None = None) -> list[Option]:
+    """`ahs` = what Frontdoor says AHS authorized (`ahs_authorization`): an option whose
+    description has no AHS credit takes `authorized_to_contractor` from it; one whose description
+    has a different credit keeps its own and gets a warning — never overwritten."""
     out = []
+    credit = (ahs or {}).get("authorized_to_contractor")
+    filled: list[str] = []
     for o in rec.get("proposal_options") or []:
         if not isinstance(o, dict) or o.get("is_hidden"):
             continue
         opt = option_of(o)
+        if credit is not None:
+            if opt.credit is None:
+                opt.credit = -abs(credit)
+                filled.append(opt.name)
+            elif abs(abs(opt.credit) - credit) >= 1:
+                warnings.append("%s %s: the description's AHS credit is %s but Frontdoor says AHS "
+                                "authorized %s on dispatch %s; the table shows the description's."
+                                % (number, opt.name, fmt_money(abs(opt.credit)),
+                                   fmt_money(credit), ahs.get("dispatch_id")))
         if opt.total is None:
             warnings.append("%s %s has no total in Zuper; its price is shown as %s."
                             % (number, opt.name, DASH))
@@ -525,7 +541,50 @@ def options_of(rec: dict, number: str, warnings: list[str]) -> list[Option]:
             warnings.append("%s %s: could not read the %s from the description (shown as %s)."
                             % (number, opt.name, ", ".join(missing), DASH))
         out.append(opt)
+    if filled:
+        warnings.append("AHS credit for %s taken from Frontdoor: AHS authorized %s on dispatch %s"
+                        "%s; on AHS's own estimate of %s the customer owes %s." % (
+                            ", ".join(filled), fmt_money(credit), ahs.get("dispatch_id"),
+                            (" on " + ahs["authorized_at"][:10]) if ahs.get("authorized_at")
+                            else "", fmt_money(ahs.get("total")),
+                            fmt_money(ahs.get("customer_owes"))))
     return out
+
+
+AHS_JOB_ID_LABEL = "AHS Job ID"
+FRONTDOOR_ACTION = "ahs_read"        # registry action on the owen_ai entry
+
+
+def frontdoor_refusal() -> str | None:
+    """May Owen AI read Frontdoor now? The server switch and login (app/frontdoor), then the
+    registry's owen_ai "ahs_read" level. Used by the report and by tools.frontdoor_read."""
+    why = frontdoor.refusal()
+    if why:
+        return why
+    from ..db import SessionLocal
+    from ..registry import service as registry
+    with SessionLocal() as db:
+        return registry.level_refusal(db, config.KEY, FRONTDOOR_ACTION)
+
+
+def ahs_authorization(rec: dict, warnings: list[str]) -> dict | None:
+    """What AHS authorized on this job, read from Frontdoor by the job's "AHS Job ID" field.
+    None (and no request) when the job has no AHS Job ID or Frontdoor reading is off; a failed
+    read is a warning, never a failed report."""
+    ahs_id = next((str(f.get("value") or "").strip() for f in rec.get("custom_fields") or []
+                   if isinstance(f, dict) and str(f.get("label") or "").strip().lower()
+                   == AHS_JOB_ID_LABEL.lower() and str(f.get("value") or "").strip()), None)
+    if not ahs_id or frontdoor_refusal():
+        return None
+    try:
+        a = frontdoor.authorization_for(ahs_id)
+    except Exception as exc:  # noqa: BLE001 — Frontdoor must never break the report
+        warnings.append("Could not read AHS's authorization from Frontdoor (dispatch %s): %s"
+                        % (ahs_id, frontdoor.sentence(exc)))
+        return None
+    if a is None:
+        warnings.append("Frontdoor shows no authorization on AHS dispatch %s yet." % ahs_id)
+    return a
 
 
 def _inspection_move(rec: dict) -> dict | None:
@@ -609,7 +668,8 @@ def fetch_facts(job_uid: str, proposal: str | None = None) -> Facts:
         f.proposal = proposal_number(pick) or "the proposal"
         try:
             full = zc.data_of(r.get("/estimate/" + str(pick["estimate_uid"])))
-            f.options = options_of(full if isinstance(full, dict) else {}, f.proposal, warnings)
+            f.options = options_of(full if isinstance(full, dict) else {}, f.proposal, warnings,
+                                   ahs_authorization(rec, warnings))
         except zc.ZuperError as exc:
             warnings.append("Could not read %s (%s): no options table."
                             % (f.proposal, zc.sentence(exc)))

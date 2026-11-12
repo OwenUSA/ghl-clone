@@ -8079,3 +8079,50 @@ keeps both rules.
 (`user.first_name`) - the timeline says "The team texted them" otherwise; and the AI call outcome
 (reached vs voicemail) is read from the call owen-main reports back on the CRM line, matched by
 time like the old follow-up.
+
+## AMENDMENT (2026-11-12): Owen AI READS Frontdoor, AHS's contractor portal
+
+The owner decided (2026-11-11/12) that Owen AI may READ contractor.frontdoorhome.com so the
+after-inspection report and the Good / Better / Best proposal use AHS's own numbers instead of
+the office typing them. Read only. Submitting anything to AHS stays Never (registry).
+
+- **Measured 2026-11-12 with a guarded probe from the laptop:** login is FusionAuth
+  (`login.frontdoorhome.com/oauth2/authorize`, a form POST, then the page's PKCE token POST to
+  `/oauth2/token`); **no MFA, no captcha**, so it works unattended. The portal loads its data as
+  **protobuf** from `prod.apis.frontdoorhome.com` (GET with a `proto_body` query; asking for JSON
+  still answers protobuf), so we read the RENDERED page by its `data-testid` attributes instead.
+  AHS publishes no contractor API we know of.
+- **`app/frontdoor/client.py` is the ONLY code that touches Frontdoor.** A route guard on the
+  whole browser context (`guard.py`, pure, tested): GET / HEAD / OPTIONS go; the login POST only
+  while logging in; the token POST; **every other write to a frontdoorhome.com host is aborted
+  before it leaves and fails the read** (`WriteRefused`); writes to anyone else (Google Analytics,
+  Clarity, Sentry, Qualtrics — the portal's telemetry) are dropped. Clicks go through
+  `safe_click`, which refuses Submit / Accept / Update / Edit / Request / Create / Note / … by
+  whole word ("Submitted Invoices" is a tab and is allowed). The probe and every live read so far
+  logged zero refused writes.
+- **No customer data leaves the page:** the extraction skips every cell whose test id names the
+  customer, a phone, an email, an address or a note; history notes are read only for AHS's figures
+  (AUTHO #, NCC $, Net Total $) and then dropped.
+- **What it reads:** one dispatch (`/dispatches/<id>`: status, invoice status, items, plan dates,
+  the Authorization panel — Authorized To Contractor, Customer Owes, Total, authorized at/by — and
+  the history), the dispatch list (paged), and the three Invoices tabs. The join key is the
+  dispatch number = Zuper's "AHS Job ID" = CRM `custom_fields.ahs_job_id`.
+- **AUTHO # is NOT on the dispatch page** for the dispatches checked (it sits behind "View / Edit
+  Authorization", which is never clicked). It is reported only when an AHS history note carries it.
+- **History times carry their own offset** ("GMT-4" on 2026-11-12, while New York was on EST and
+  the Authorization panel showed the same event an hour earlier); `parse.moment` honours a stated
+  offset and converts to New York.
+- **Off three ways:** `FRONTDOOR_READ_ENABLED` (default off: no Playwright import, no browser, a
+  sentence), no login (`FRONTDOOR_USER` / `FRONTDOOR_PASSWORD`, or `FRONTDOOR_CREDENTIALS_FILE`
+  with the same two lines), and the registry's owen_ai "ahs_read" level. The saved login lives in
+  `FRONTDOOR_STATE_DIR` (default `frontdoor/` in the owen_ai_home volume), mode 600.
+- **Uses:** Owen AI's tools `frontdoor_dispatch` / `frontdoor_dispatches` / `frontdoor_invoices`;
+  `make_inspection_report` fills an option's missing AHS credit from Frontdoor's "Authorized To
+  Contractor" and WARNS when a proposal's credit differs (never overwrites it). A read is ~15-60 s,
+  cached 15 minutes, one at a time, two seconds between page loads.
+- **No test reaches Frontdoor:** `tests/frontdoor_guard.py` strips `FRONTDOOR_*`, refuses
+  frontdoorhome.com lookups and replaces `client.LAUNCH`, so no Chromium can start under pytest.
+- **Not done yet:** Dispatch "AHS authorized" items from Frontdoor (today they still come by email);
+  the Frontdoor-vs-Zuper comparison on dispatch (`/opt/ops/zuper/fdcmp`) moving onto this reader;
+  the server login (needs the owner's OK to put the credential on owen-main); AHS's terms for
+  automated access to the portal, and whether AHS offers an API key (prefer it if it does).

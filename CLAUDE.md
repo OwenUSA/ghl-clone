@@ -1042,3 +1042,25 @@ module only**. Every rule: the 2026-11-11 Follow-ups amendment in `DECISIONS.md`
 - Zuper writes only inside `client.followups_write()` (the send + a private note). Right before
   each send the Connect conversation is read again. `tests/test_cadences_*.py` pin it.
 
+## Frontdoor, AHS's contractor portal: READ only (2026-11-12, OFF on the server)
+
+`backend/app/frontdoor/` (read `__init__.py` first). Owen AI reads contractor.frontdoorhome.com —
+a dispatch's status and what AHS authorized (to us, and what the customer owes on AHS's estimate),
+the dispatch list, the invoices — through a headless Chromium logged in as the company. **Nothing
+is ever submitted.** `client.py` is the ONLY code that touches Frontdoor; its route guard aborts
+every write to a frontdoorhome.com host except the login form and the OAuth token exchange, and
+fails the read if the page tries one. Customer names, phones, addresses and note text never leave
+the page. The join key is the dispatch number = Zuper's "AHS Job ID".
+
+```bash
+FRONTDOOR_READ_ENABLED=true                       # default off: no browser, a sentence
+FRONTDOOR_USER=... FRONTDOOR_PASSWORD=...         # or FRONTDOOR_CREDENTIALS_FILE (root-only)
+uv run python -m app.frontdoor.service check      # from backend/
+uv run python -m app.frontdoor.service dispatch 99913749
+uv run python -m app.frontdoor.service dispatches --since 2026-11-01
+uv run python -m app.frontdoor.service invoices
+```
+
+Tools: `frontdoor_dispatch` / `frontdoor_dispatches` / `frontdoor_invoices`; the inspection report
+fills a missing AHS credit from it and warns on a different one. Also gated by the registry's
+owen_ai "ahs_read". **No test reaches Frontdoor** (`tests/frontdoor_guard.py`). See DECISIONS.md.

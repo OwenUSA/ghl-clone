@@ -181,10 +181,14 @@ anchor, not a cost. Never let M exceed R (DTR-116: M $2,625 > R $2,500).
 
 **Where C comes from. In this order; if none of them exists, ASK Owen. Never guess $1,125.**
 1. Owen says it in the chat.
-2. The authorization on the job: a note or Dispatch item "AHS approved #<n>: $<net>" / "AUTHO #" / "NCC $… Net
+2. **Frontdoor, AHS's own portal** (2026-11-12): `frontdoor_dispatch` with the job's `AHS Job ID` field →
+   `authorization.authorized_to_contractor` is C, and `customer_owes` / `total` are AHS's own estimate (say so if
+   you quote them). `requested: false` = AHS has not authorized anything yet → ask Owen. If the tool answers
+   "Frontdoor reading is off", go on to 3.
+3. The authorization on the job: a note or Dispatch item "AHS approved #<n>: $<net>" / "AUTHO #" / "NCC $… Net
    Total $…", or the job field `AHS authorized ($)`. If you only find an NCC/Net Total note, show both figures to
    Owen and ask which one is the credit.
-3. The job's `AHS-LEAK-REPAIR` line price (57 of 65 matched the text). `AHS-TRIP` / `AHS-TILE-01` ($100 trip or
+4. The job's `AHS-LEAK-REPAIR` line price (57 of 65 matched the text). `AHS-TRIP` / `AHS-TILE-01` ($100 trip or
    inspection) are NOT part of the credit. How `AHS-ADDL-LEAK` adds to the credit is not known, so ask.
 
 Historical values: −$1,125 (90 rows), −$1,100 (51), −$1,000 (6, e.g. DTR-119, 129, 138), and odd −$600 / −$100 /
