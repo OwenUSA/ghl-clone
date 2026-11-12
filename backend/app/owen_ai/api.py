@@ -20,7 +20,16 @@ from .. import auth
 from ..db import get_db
 from ..models import OwenAiAlert, OwenAiMessage, OwenAiProposalDraft, OwenAiThread, Role
 from ..zuper import config as zuper_config
-from . import alerts, config, infographics, pictures, proposals, report, saved_reports
+from . import (
+    alerts,
+    config,
+    infographics,
+    pictures,
+    proposals,
+    report,
+    report_attach,
+    saved_reports,
+)
 
 router = APIRouter(prefix="/api/owen-ai", tags=["owen-ai"])
 NY = ZoneInfo("America/New_York")
@@ -280,6 +289,7 @@ def list_saved_reports(job_uid: str | None = None, p: auth.Principal = OWNER,
                        db: Session = Depends(get_db)) -> dict:
     return {"reports": saved_reports.list_out(db, (job_uid or "").strip() or None),
             "pictures_enabled": config.report_pictures_enabled(),
+            "attach_enabled": report_attach.refusal(db) is None,
             "picture_cost_usd": infographics.EST_COST}
 
 
@@ -288,6 +298,7 @@ def get_saved_report(report_id: int, p: auth.Principal = OWNER,
                      db: Session = Depends(get_db)) -> dict:
     return {**saved_reports.out(db, _saved(db, report_id), with_spec=True),
             "pictures_enabled": config.report_pictures_enabled(),
+            "attach_enabled": report_attach.refusal(db) is None,
             "picture_cost_usd": infographics.EST_COST}
 
 
@@ -378,6 +389,28 @@ async def upload_report_picture(report_id: int, file: UploadFile, p: auth.Princi
         return {"name": saved_reports.save_upload(report_id, data)}
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+class AttachReport(BaseModel):
+    proposal: str | None = Field(None, max_length=20)
+    version: int | None = Field(None, ge=1)
+
+
+@router.post("/inspection-reports/{report_id}/attach")
+def attach_report(report_id: int, body: AttachReport, p: auth.Principal = OWNER,
+                  db: Session = Depends(get_db)) -> dict:
+    """Put this report's PDF (the latest version unless `version`) on its DRAFT proposal in
+    Zuper (the linked DTR number unless `proposal`): one upload + one attach, read back, never
+    sent (report_attach.py). 409 with a sentence when refused - nothing was written then."""
+    _saved(db, report_id)
+    try:
+        res = report_attach.attach(db, report_id, p.email or "the owner", body.proposal,
+                                   body.version)
+    except report_attach.Refused as exc:
+        raise HTTPException(409, str(exc)) from None
+    except saved_reports.NotFound:
+        raise HTTPException(404, "Not Found") from None
+    return {**res, "message": report_attach.sentence(res)}
 
 
 @router.get("/inspection-reports/{report_id}/files/{folder}/{name}")

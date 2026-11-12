@@ -237,6 +237,92 @@ def _pictures_ok(method: str, path: str, body: Any, params: Any, files: Any, for
     return False
 
 
+_OWEN_AI_REPORT_ATTACH: ContextVar[dict | None] = ContextVar("zuper_owen_ai_report_attach",
+                                                             default=None)
+REPORT_ATTACH_MAX_BYTES = 15 * 1024 * 1024
+REPORT_PREFIX = "After-Inspection-Report-"          # every report PDF Owen AI puts on a proposal
+REPORT_ATTACH_NAME = re.compile(r"^After-Inspection-Report-[A-Za-z0-9-]{1,40}-v\d{1,4}\.pdf$")
+
+
+@contextlib.contextmanager
+def owen_ai_report_attach(estimate_uid: str):
+    """Owen AI's after-inspection report PDF attached to ONE DRAFT proposal (2026-11-12, the
+    user: "allow it to attach the after inspection into the proposal"; app/owen_ai/
+    report_attach.py and nothing else opens it).
+
+    Inside this scope the ONLY non-GETs are, in this order, once each:
+      POST /misc/upload        multipart: exactly one `attachment` named
+                               After-Inspection-Report-<job>-v<n>.pdf, a PDF (%PDF-), at most
+                               15 MB, and the form {"attachment_type": "ATTACHMENT"}; only after
+                               this scope READ GET /estimate/{uid} and saw a DRAFT proposal
+      POST /note_attachment    exactly {"module_name": "ESTIMATE", "module_uid": <THIS uid>,
+                               "data": {"type": "ATTACHMENT", "attachments": [ONE: the file this
+                               scope just uploaded - its attachment_uid, name, size and URL as
+                               Zuper answered them - visible_to_customer true]}}
+    and then, only after that attach, at most once:
+      DELETE /note_attachment  query exactly {item_uid: older report PDFs, module_name: ESTIMATE,
+                               module_uid: <THIS uid>, type: ATTACHMENT} - item_uid only uids
+                               this scope READ on this proposal as 'After-Inspection-Report-*'
+                               files (never the new one, never any other attachment). The call
+                               the zuper_proposals container uses to replace its own PDF.
+    No PUT, nothing that sends, no other query string. GETs as in `owen_ai_read` (the denylist
+    applies). Nothing at all unless both
+    OWEN_AI_PROPOSALS_ENABLED and OWEN_AI_REPORT_ATTACH_ENABLED are on."""
+    state = {"uid": str(estimate_uid or ""), "draft": False, "upload": None, "uploads": 0,
+             "attached": 0, "name": None, "old": set(), "deletes": 0}
+    token = _OWEN_AI_REPORT_ATTACH.set(state)
+    try:
+        yield state
+    finally:
+        _OWEN_AI_REPORT_ATTACH.reset(token)
+
+
+def _report_attach_ok(method: str, path: str, body: Any, params: Any, files: Any,
+                      form: Any) -> bool:
+    st = _OWEN_AI_REPORT_ATTACH.get()
+    if st is None or not st["uid"] or not (config.owen_ai_proposals_enabled()
+                                           and config.owen_ai_report_attach_enabled()):
+        return False
+    if method == "DELETE" and path == "/note_attachment":
+        # Replacing (2026-11-12, the user: "replace it"): only the report PDFs this scope saw
+        # on THIS proposal, only after the new one is attached, once.
+        if (body is not None or files is not None or form is not None or st["deletes"]
+                or st["attached"] != 1 or not isinstance(params, dict)):
+            return False
+        if (set(params) != {"item_uid", "module_name", "module_uid", "type"}
+                or params.get("module_name") != "ESTIMATE" or params.get("type") != "ATTACHMENT"
+                or params.get("module_uid") != st["uid"]):
+            return False
+        uids = [u for u in str(params.get("item_uid") or "").split(",") if u]
+        new = (st["upload"] or {}).get("attachment_uid")
+        return bool(uids) and new not in uids and set(uids) <= st["old"]
+    if params:
+        return False
+    if method == "POST" and path == "/misc/upload":
+        if body is not None or form != {"attachment_type": "ATTACHMENT"} or not st["draft"]:
+            return False
+        if st["uploads"] or st["attached"] or not isinstance(files, dict) \
+                or set(files) != {"attachment"}:
+            return False
+        f = files["attachment"]
+        return (isinstance(f, tuple) and len(f) == 3 and isinstance(f[0], str)
+                and REPORT_ATTACH_NAME.match(f[0]) is not None and isinstance(f[1], bytes)
+                and f[2] == "application/pdf" and f[1][:5] == b"%PDF-"
+                and 0 < len(f[1]) <= REPORT_ATTACH_MAX_BYTES)
+    if method == "POST" and path == "/note_attachment":
+        up = st["upload"]
+        if files is not None or form is not None or st["attached"] or st["uploads"] != 1 \
+                or not st["draft"] or not isinstance(up, dict):
+            return False
+        want = {"module_name": "ESTIMATE", "module_uid": st["uid"], "data": {
+            "type": "ATTACHMENT", "attachments": [{
+                "attachment_uid": up["attachment_uid"], "file_name": st["name"],
+                "file_size": up["attachment_size"], "url": up["attachment_path"],
+                "visible_to_customer": True}]}}
+        return body == want
+    return False
+
+
 _DISPATCH_WRITE: ContextVar[bool] = ContextVar("zuper_dispatch_write", default=False)
 _PROPOSAL_LINES: ContextVar[bool] = ContextVar("zuper_proposal_lines", default=False)
 
@@ -771,13 +857,31 @@ def _owen_ai_proposal_body_ok(method: str, path: str, body: Any, params: Any) ->
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None, files: dict | None = None,
             form: dict | None = None) -> Any:
-    """`files` / `form` (a multipart upload) exist for ONE caller: the step-pictures scope's
-    POST /misc/upload. Anywhere else a request carrying them is refused."""
+    """`files` / `form` (a multipart upload) exist for TWO callers: the step-pictures scope's
+    and the report-attach scope's POST /misc/upload. Anywhere else a request carrying them is
+    refused."""
     method = method.upper()
     path = "/" + path.lstrip("/")
     pictures = _OWEN_AI_PICTURES.get()
-    if (files is not None or form is not None) and pictures is None:
-        raise ZuperError("refused", "a multipart upload is only made by the step-pictures scope")
+    attach = _OWEN_AI_REPORT_ATTACH.get()
+    if (files is not None or form is not None) and pictures is None and attach is None:
+        raise ZuperError("refused", "a multipart upload is only made by the step-pictures or "
+                                    "report-attach scope")
+    if attach is not None and pictures is not None:
+        raise ZuperError("refused", "the report-attach and step-pictures scopes never nest")
+    if attach is not None and method != "GET":
+        if not _report_attach_ok(method, path, body, params, files, form):
+            off = (config.OWEN_AI_PROPOSALS_OFF_SENTENCE if not config.owen_ai_proposals_enabled()
+                   else config.OWEN_AI_REPORT_ATTACH_OFF_SENTENCE
+                   if not config.owen_ai_report_attach_enabled() else None)
+            raise ZuperError("refused", "%s %s is not a report-attach write%s" % (
+                method, path, " (%s)" % off if off else ""))
+        if (_READ_ONLY.get() or _DISPATCH_WRITE.get() or _PROPOSAL_LINES.get()
+                or _OWEN_AI_PROPOSAL.get() is not None or _send_scope()[0]):
+            raise ZuperError("refused", "a report-attach write cannot run inside another scope")
+    if attach is not None and method == "GET" and (files is not None or form is not None):
+        raise ZuperError("refused", "a GET carries no upload")
+    attach_write = attach is not None and method != "GET"          # passed the check above
     if pictures is not None and method != "GET":
         if not _pictures_ok(method, path, body, params, files, form):
             off = (config.OWEN_AI_PROPOSALS_OFF_SENTENCE if not config.owen_ai_proposals_enabled()
@@ -800,6 +904,8 @@ def request(method: str, path: str, *, params: dict | None = None,
             method, path, "" if config.owen_ai_proposals_enabled()
             else " (" + config.OWEN_AI_PROPOSALS_OFF_SENTENCE + ")"))
     proposal_write = method != "GET" and in_proposal   # passed the check above
+    if in_proposal and attach is not None:
+        raise ZuperError("refused", "the report-attach and proposal scopes never nest")
     if proposal_write and (_READ_ONLY.get() or _DISPATCH_WRITE.get()
                            or _PROPOSAL_LINES.get() or _send_scope()[0]):
         raise ZuperError("refused", "an Owen AI proposal write cannot run inside another scope")
@@ -811,12 +917,13 @@ def request(method: str, path: str, *, params: dict | None = None,
             method, path, scope_name, "" if gate_on else " (" + off_sentence + ")"))
     autoreply_send = (inside and method == AUTOREPLY_SEND[0]
                       and re.match(AUTOREPLY_SEND[1], path) is not None)
-    why = None if (autoreply_send or proposal_write or pictures_write) else denied(method, path)
+    why = None if (autoreply_send or proposal_write or pictures_write or attach_write) \
+        else denied(method, path)
     if why:
         raise ZuperError("refused", "%s %s is never called: %s" % (method, path, why))
     owen_ai_get = method == "GET" and (_OWEN_AI_READ.get() or in_proposal
-                                       or pictures is not None)
-    if not (autoreply_send or proposal_write or pictures_write or owen_ai_get
+                                       or pictures is not None or attach is not None)
+    if not (autoreply_send or proposal_write or pictures_write or attach_write or owen_ai_get
             or allowed(method, path)):
         raise ZuperError("refused", "%s %s is not on the sync's allowlist" % (method, path))
     if not (config.env_enabled() or _OPERATOR.get()):
@@ -838,6 +945,7 @@ def request(method: str, path: str, *, params: dict | None = None,
                                         method, path, "" if config.proposal_lines_enabled()
                                         else "; ZUPER_PROPOSAL_LINES is off"))
     if method != "GET" and config.pull_only() and not proposal_write and not pictures_write \
+            and not attach_write \
             and not _mirror_write_allowed(path) \
             and not _ahs_create_allowed(method, path) \
             and not _dispatch_write_allowed(method, path) \
@@ -904,6 +1012,31 @@ def request(method: str, path: str, *, params: dict | None = None,
             pictures["uploads"] += 1
         elif method == "PUT":
             pictures["puts"] += 1
+    if attach is not None:
+        # The attach must name exactly the file this scope uploaded, on a proposal it saw as a
+        # DRAFT.
+        if method == "GET" and path == "/estimate/" + attach["uid"]:
+            rec = data_of(payload)
+            attach["draft"] = (isinstance(rec, dict) and rec.get("estimate_uid") == attach["uid"]
+                               and rec.get("is_proposal") is not False
+                               and not rec.get("is_deleted")
+                               and str(rec.get("estimate_status") or "").upper() == "DRAFT")
+            if isinstance(rec, dict) and not attach["attached"]:
+                attach["old"] = {str(a["attachment_uid"]) for a in rec.get("attachments") or []
+                                 if isinstance(a, dict) and a.get("attachment_uid")
+                                 and str(a.get("file_name") or "").startswith(REPORT_PREFIX)}
+        elif method == "POST" and path == "/misc/upload":
+            attach["uploads"] += 1
+            attach["name"] = files["attachment"][0]
+            rec = data_of(payload)
+            ok = (isinstance(rec, dict) and isinstance(rec.get("attachment_uid"), str)
+                  and str(rec.get("attachment_path") or "").startswith("https://"))
+            attach["upload"] = {k: rec.get(k) for k in ("attachment_uid", "attachment_path",
+                                                        "attachment_size")} if ok else None
+        elif method == "DELETE":
+            attach["deletes"] += 1
+        elif method == "POST":
+            attach["attached"] += 1
     return payload
 
 

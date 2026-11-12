@@ -59,3 +59,10 @@ Read `knowledge/inspection-report-guide.md` first (the 10 rules) and `knowledge/
    - Regenerate a picture only when he asked for it, or when its words changed and he wants it
      updated. Each one is about $0.18.
 4. Reply with the new links and what changed.
+
+## Put it on the proposal (only when Owen asks)
+
+`mcp__owen__attach_inspection_report` with the report and the DTR number. It uploads the latest
+version's PDF to that DRAFT proposal in Zuper, replaces an older report PDF there, and never
+sends. Zuper's Send ticks every attachment, so the customer gets it with the proposal. Attach the
+FINAL version: attaching again after a change replaces the old one.

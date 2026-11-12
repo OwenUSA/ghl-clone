@@ -8190,3 +8190,27 @@ to make reports like it. Decided with the user on 2026-11-12:
 **Before switching it on in production:** `./deploy.sh --with-migrations` (revision
 `e5b9d3a1c7f4`, two new tables, nothing changed). Then try one report with pictures OFF; set
 `OWEN_AI_REPORT_PICTURES_ENABLED=true` only when the owner wants them.
+
+## AMENDMENT (2026-11-12): the after-inspection report's PDF on its DRAFT proposal
+
+The user (for the owner): Owen AI may ATTACH a saved report's PDF to its proposal in Zuper. A
+scoped lift of "Zuper is read-only", like the proposal drafts and step pictures. Zuper's Send
+ticks every attachment, so the file reaches the customer with the proposal email.
+
+- Built in `owen_ai/report_attach.py`, through `client.owen_ai_report_attach(<estimate uid>)`.
+  The only writes are, once each:
+  - `POST /misc/upload`: one PDF named `After-Inspection-Report-<job>-v<n>.pdf`, at most 15 MB,
+    only after the scope read the proposal as a DRAFT;
+  - `POST /note_attachment`: exactly that file on THIS proposal, visible to the customer;
+  - **Replace** (the user's choice): after the new file is confirmed on it, one
+    `DELETE /note_attachment` of only the `After-Inspection-Report-*` files the scope read on
+    THIS proposal. It is the same call the `zuper_proposals` container uses to replace its own PDF.
+    Zuper's own proposal PDF, the AHS work order and every other attachment are never touched.
+- Nothing sends. It works only on a DRAFT on the report's own job, and only when someone presses
+  "Attach to proposal" or asks Owen AI (`attach_inspection_report`). Missing header settings
+  (phone / license / city) are a note, not a refusal (the page leaves them out).
+- It is off unless BOTH `OWEN_AI_REPORT_ATTACH_ENABLED` and `OWEN_AI_PROPOSALS_ENABLED` are on and
+  the registry's owen_ai "zuper_proposals" level allows it. Switched on in production 2026-11-12.
+- Tests: `tests/test_owen_ai_report_attach.py`. Started by the "shorten the proposal pages"
+  session, which attached #777's report to DTR-168 by hand first.
+
