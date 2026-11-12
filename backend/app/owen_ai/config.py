@@ -10,6 +10,7 @@ MAX_TURNS = 40                      # tool calls + answers in one reply, then it
 TURN_TIMEOUT_SECONDS = 15 * 60
 TOOL_RESULT_MAX_CHARS = 60_000      # a bigger Zuper/Quo answer is cut, with a sentence saying so
 TITLE_MAX = 80
+SDK_MAX_BUFFER_BYTES = 32 * 1024 * 1024   # the CLI -> SDK message limit (the SDK's default: 1 MB)
 
 OFF_SENTENCE = "Owen AI is off on this server (OWEN_AI_ENABLED)."
 NO_TOKEN_SENTENCE = ("Owen AI has no Claude login on this server: log in once inside the owen_ai "

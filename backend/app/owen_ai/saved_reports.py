@@ -460,9 +460,11 @@ def _picture_lines(row: OwenAiReport, v: OwenAiReportVersion) -> list[str]:
     folder = report_dir(row.id) / "pictures"
     out = []
     for name, p in (v.pictures or {}).items():
-        if p.get("file") and p.get("state") in ("current", "stale"):
-            out.append("- %s picture (%s): %s" % (name, p["state"],
-                                                  (folder / p["file"]).resolve()))
+        if p.get("file") and p.get("state") in ("current", "stale", "uploaded") \
+                and (folder / p["file"]).is_file():
+            # The small JPEG copy, never the 2.5 MB PNG: a Read that big ended the turn.
+            small = infographics.preview(folder / p["file"])
+            out.append("- %s picture (%s): %s" % (name, p["state"], small.resolve()))
     if out:
         out.insert(0, "READ each new picture with the Read tool and check every word against "
                       "the spec (titles, steps, callouts, layers, labels, warranty). If a word "
