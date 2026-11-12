@@ -21,6 +21,7 @@ import copy
 import io
 import json
 import shutil
+from pathlib import Path
 
 import httpx
 import httpx2
@@ -247,6 +248,26 @@ def test_pictures_are_made_once_marked_stale_on_edit_and_remade_only_when_asked(
     v4 = saved_reports.update(db, row.id, latest_spec(world, row), 3, source="page",
                               regenerate=["BETTER"])
     assert len(ai.requests) == 4 and v4.pictures["BETTER"]["state"] == "current"
+
+
+def test_owen_ai_reads_a_small_copy_of_each_picture_never_the_big_png(world, monkeypatch):
+    """A 2.5 MB PNG in a Read result ended Owen AI's turn (2026-11-12, the SDK's 1 MB limit)."""
+    monkeypatch.setenv("OWEN_AI_REPORT_PICTURES_ENABLED", "true")
+    out = tools_call("make_inspection_report", full(world["env"]))
+    lines = [ln for ln in out.splitlines() if " picture (current): " in ln]
+    assert len(lines) == 3, out
+    for ln in lines:
+        path = Path(ln.split(": ", 1)[1])
+        assert path.name.endswith(".preview.jpg") and path.is_file()
+        assert path.stat().st_size < 400_000
+        with Image.open(path) as im:
+            assert max(im.size) <= 1280
+
+
+def test_the_sdk_message_limit_is_raised():
+    from app.owen_ai import agent, config
+    assert config.SDK_MAX_BUFFER_BYTES >= 16 * 1024 * 1024
+    assert "max_buffer_size=config.SDK_MAX_BUFFER_BYTES" in Path(agent.__file__).read_text("utf-8")
 
 
 def test_an_uploaded_picture_replaces_the_ai_one(world):

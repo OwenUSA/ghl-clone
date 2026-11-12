@@ -131,4 +131,24 @@ def save(folder: Path, h: str, png: bytes) -> str:
     folder.mkdir(parents=True, exist_ok=True)
     name = "%s.png" % h
     (folder / name).write_bytes(png)
+    preview(folder / name)
     return name
+
+
+PREVIEW_SIDE = 1280
+PREVIEW_QUALITY = 82
+
+
+def preview(path: Path) -> Path:
+    """A small JPEG copy (~150-250 KB) of a picture, for Owen AI's Read tool: the full 1536 px
+    PNG is ~2.5 MB, and a Read result that big ended Owen AI's turn (2026-11-12, the SDK's 1 MB
+    message limit). Made once, beside the picture: '<name>.preview.jpg'. The words stay
+    readable at this size."""
+    out = path.with_name(path.stem + ".preview.jpg")
+    if not out.is_file():
+        from PIL import Image
+        with Image.open(path) as src:
+            im = src.convert("RGB")
+        im.thumbnail((PREVIEW_SIDE, PREVIEW_SIDE))
+        im.save(out, "JPEG", quality=PREVIEW_QUALITY, optimize=True)
+    return out

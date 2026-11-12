@@ -83,6 +83,11 @@ async def _run(prompt: str, session_id: str | None, note: str) -> TurnResult:
         cli_path=config.cli_path(),
         max_turns=config.MAX_TURNS,
         resume=session_id,
+        # One message from the CLI carries a whole tool result, a Read picture included
+        # (base64). The SDK's default 1 MB ended a turn when Owen AI read a 2.5 MB option
+        # picture (2026-11-12); infographics.preview() keeps what it reads small, this keeps
+        # one big file from ever ending a turn again.
+        max_buffer_size=config.SDK_MAX_BUFFER_BYTES,
     )
     steps: list[dict] = []
     by_id: dict[str, dict] = {}
