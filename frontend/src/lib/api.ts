@@ -2886,6 +2886,8 @@ export type OwenAiSavedReportDetail = OwenAiSavedReport & {
   spec: Record<string, unknown>; library: string[]; versions: OwenAiReportVersion[]
   files_url: string; options: { name: string; warranty: string | null }[]
   pictures_enabled: boolean; picture_cost_usd: number
+  /** Attaching the PDF to the proposal in Zuper is allowed on this server (2026-11-12). */
+  attach_enabled?: boolean
 }
 export const owenAiSavedReports = () =>
   get<{ reports: OwenAiSavedReport[]; pictures_enabled: boolean; picture_cost_usd: number }>(
@@ -2902,6 +2904,10 @@ export const owenAiPreviewReport = (id: number, spec: Record<string, unknown>) =
   send<{ html: string }>(`/api/owen-ai/inspection-reports/${id}/preview`, 'POST', { spec })
 export const owenAiUploadReportPicture = (id: number, file: File) =>
   upload<{ name: string }>(`/api/owen-ai/inspection-reports/${id}/uploads`, file)
+/** Put the report's PDF on its DRAFT proposal in Zuper (never sent; 409 + sentence if refused). */
+export const owenAiAttachReport = (id: number, body: { proposal?: string; version?: number } = {}) =>
+  send<{ status: 'attached' | 'already'; proposal: string; file_name: string; version: number
+    older: string[]; removed: string[]; message: string }>(`/api/owen-ai/inspection-reports/${id}/attach`, 'POST', body)
 export const owenAiReportFileUrl = (id: number, rel: string) =>
   `${BASE}/api/owen-ai/inspection-reports/${id}/files/${rel}`
 /** A saved version's page, as text, for the preview frame (same-origin, the owner's cookie). */

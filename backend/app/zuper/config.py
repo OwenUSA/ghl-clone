@@ -126,6 +126,18 @@ def owen_ai_proposal_pictures_enabled() -> bool:
     return _flag("OWEN_AI_PROPOSAL_PICTURES_ENABLED", False)
 
 
+OWEN_AI_REPORT_ATTACH_OFF_SENTENCE = (
+    "Attaching reports to proposals is switched off on this server (OWEN_AI_REPORT_ATTACH_ENABLED "
+    "is not true), so nothing was put on the proposal.")
+
+
+def owen_ai_report_attach_enabled() -> bool:
+    """The server's gate on putting an after-inspection report's PDF on a DRAFT proposal
+    (2026-11-12, app/owen_ai/report_attach.py). Off unless the deployment says so; with it off
+    `client.owen_ai_report_attach` allows nothing. OWEN_AI_PROPOSALS_ENABLED must be on too."""
+    return _flag("OWEN_AI_REPORT_ATTACH_ENABLED", False)
+
+
 def dispatch_writes_enabled() -> bool:
     """The server's gate on the Dispatch page's "let the agent do it" (phase 3, 2026-10-01).
 

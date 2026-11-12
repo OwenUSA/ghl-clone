@@ -1306,7 +1306,7 @@ AUDITED = {
         "approve_proposal", "reject_proposal", "generate_pictures", "attach_pictures",
         "discard_pictures", "picture_file", "list_saved_reports", "get_saved_report",
         "get_saved_version", "save_report", "restore_report", "preview_report",
-        "upload_report_picture", "saved_report_file"), "ADMIN (never restricted)"),
+        "upload_report_picture", "saved_report_file", "attach_report"), "ADMIN (never restricted)"),
 }
 
 

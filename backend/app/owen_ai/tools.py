@@ -35,6 +35,7 @@ from . import (
     proposals,
     quo,
     report,
+    report_attach,
     saved_reports,
 )
 
@@ -251,6 +252,9 @@ SPECS = SPECS + proposals.SPECS
 # Step pictures on a CREATED proposal (2026-11-09): only when Owen asks; generate talks to OpenAI
 # only, attach goes through client.owen_ai_proposal_pictures (option_image only, read back).
 SPECS = SPECS + pictures.SPECS
+# The saved report's PDF on its DRAFT proposal (2026-11-12): only when Owen asks; two writes
+# through client.owen_ai_report_attach (upload, attach), read back, never sent.
+SPECS = SPECS + report_attach.SPECS
 
 TOOL_NAMES = tuple("mcp__%s__%s" % (SERVER_NAME, name) for name, *_ in SPECS)
 

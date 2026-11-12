@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ApiError, owenAiPreviewReport, owenAiReportFileUrl, owenAiReportHtml, owenAiRestoreReport, owenAiSaveReport,
+  ApiError, owenAiAttachReport, owenAiPreviewReport, owenAiReportFileUrl, owenAiReportHtml, owenAiRestoreReport, owenAiSaveReport,
   owenAiSavedReport, owenAiSavedReports, owenAiUploadReportPicture, type OwenAiSavedReportDetail,
 } from '../../lib/api'
 import {
@@ -114,6 +114,12 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
     },
     onError: (e) => setMessage({ text: (e as Error).message, bad: true }),
   })
+  // Puts the saved PDF on the report's DRAFT proposal in Zuper (2026-11-12). Never sends it.
+  const attachToProposal = useMutation({
+    mutationFn: () => owenAiAttachReport(id),
+    onSuccess: (r) => setMessage({ text: r.message, bad: r.older.length > 0 }),
+    onError: (e) => setMessage({ text: (e as Error).message, bad: true }),
+  })
   const preview = useMutation({
     mutationFn: () => owenAiPreviewReport(id, draft!),
     onSuccess: (r) => { setHtml(r.html); setMessage({ text: 'Preview of your unsaved changes.', bad: false }) },
@@ -143,6 +149,12 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
         <span style={{ flex: 1 }} />
         <a href={d.latest.html_url} target="_blank" rel="noreferrer" style={chipBtn}>Open page</a>
         {d.latest.pdf_url && <a href={d.latest.pdf_url} style={chipBtn}>Download PDF</a>}
+        {d.attach_enabled && d.latest.pdf_url && (
+          <button type="button" style={chipBtn} disabled={attachToProposal.isPending || dirty}
+            title={dirty ? 'Save your changes first: the saved version is what gets attached.'
+              : "Put this version's PDF on the proposal in Zuper (still a draft; nothing is sent)."}
+            onClick={() => attachToProposal.mutate()}>
+            {attachToProposal.isPending ? 'Attaching…' : 'Attach to proposal'}</button>)}
         <button type="button" onClick={() => setShowHistory(!showHistory)} aria-expanded={showHistory}
           style={chipBtn}>History ({d.versions.length})</button>
       </div>
