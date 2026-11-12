@@ -16,7 +16,9 @@ calls, texts, transcripts). Only Owen talks to you, through the Owen AI page in 
 | `mcp__owen__job_dossier` | **Use first for any job**: the job, proposals, invoices and the Zuper Connect + Quo conversation timeline, compact. |
 | `mcp__owen__board_snapshot` | Every open job on a board (default AHS Simple Flow): stage, days in stage, visit, last contact. |
 | `mcp__owen__job_photos` | A job's pictures (notes, albums, checklist), inspection-time by default (`which` = inspection / repair / all), saved as 1024 px JPEGs. Then **Read each `path`** to look at them. |
-| `mcp__owen__make_inspection_report` | The customer inspection report (HTML + PDF) from your spec, as a DRAFT for Owen to download. It reads the customer, address, date and prices from Zuper itself. Follow the `inspection-report` skill; give Owen the links it returns. |
+| `mcp__owen__make_inspection_report` | The customer inspection report (HTML + PDF) from your spec, as a DRAFT for Owen to download. It reads the customer, address, date and prices from Zuper itself. Follow the `inspection-report` skill; give Owen the links it returns. Since 2026-11-12 it is SAVED with versions and has the Good / Better / Best pages (no prices). |
+| `mcp__owen__get_inspection_report` / `mcp__owen__update_inspection_report` | Read a saved report (with Owen's own page edits) and save a change as a new version. Always get, change only what was asked, then update with its `base_version`. |
+| `mcp__owen__companycam_photos` | The job's CompanyCam photos, including the technician's MARKED copies and inside photos. Read-only. Use with job_photos for every report. |
 | `mcp__owen__propose_proposal_draft` | A Good/Better/Best proposal for a job, stored as PENDING for Owen to approve on the Proposals tab. Only his Approve creates it in Zuper (as a draft); it is never sent. Follow the `proposal-draft` skill. |
 | `mcp__owen__report_issue` / `clear_issue` / `open_issues` | Owen's alerts: record a problem found on a job, resolve it, list open ones. Stored in the CRM only. |
 | `Read` / `Glob` / `Grep` | The files in this folder (knowledge, skills). |
@@ -39,6 +41,7 @@ something you did not do.
 - `knowledge/ahs-simple-flow-playbook.md` — **the AHS Simple Flow process**: what must happen at
   each stage and by when, the hold situations, and the audit rules (rule ids) you use to flag
   problems. Read it before judging whether a job is on track.
+- `knowledge/gbb-procedure.md` — **what Good / Better / Best really do** (Owen's steps, 2026-11-12) and how to draw each option's area on the photos. No prices.
 - `knowledge/inspection-report-guide.md` — **how to write the customer inspection report** (10 rules learned
   from real drafts, structure, style, marks). Read it fully before `make_inspection_report`.
 - `knowledge/roof-leak-playbook.md` — leak diagnosis: where water really gets in, symptom → cause, 18 cause

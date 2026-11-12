@@ -8126,3 +8126,59 @@ the office typing them. Read only. Submitting anything to AHS stays Never (regis
   the Frontdoor-vs-Zuper comparison on dispatch (`/opt/ops/zuper/fdcmp`) moving onto this reader;
   the server login (needs the owner's OK to put the credential on owen-main); AHS's terms for
   automated access to the portal, and whether AHS offers an API key (prefer it if it does).
+
+## AMENDMENT (2026-11-12): the after-inspection report — Good / Better / Best, no prices, editable
+
+The owner approved a draft report for Zuper job #292 and wants Owen AI's `make_inspection_report`
+to make reports like it. Decided with the user on 2026-11-12:
+
+- **No prices.** The report shows none until AHS says how much it covers. A "$" figure anywhere in
+  the Good / Better / Best part is refused by the spec (`report.MONEY`); there is no price table
+  (unchanged from the owner's 2026-11-09 rule). A priced copy after an AHS authorization is
+  possible later; it is not built.
+- **New parts of the report** (`report.py`):
+  - `galleries` (e.g. "Inside the house", the technician's marked cracked tiles);
+  - `gbb`: per option an AI picture (work sequence, finished overview, section detail, top view,
+    warranty), the area it covers drawn on REAL photos (`Area`: a polygon of 0-1 fractions,
+    `covered` in the option's colour or `excluded` dashed grey), and the full written scope, days
+    and warranty (the warranty comes from the proposal);
+  - a comparison.
+- **Everything can be changed after it is made**, by hand or by asking Owen AI.
+  `saved_reports.py` stores one `owen_ai_reports` row per report and an
+  `owen_ai_report_versions` row per save.
+  - A save names the version it started from and is REFUSED (Conflict / 409) when that is no
+    longer the latest, so Owen AI and Owen never overwrite each other.
+  - Restore is a new version. Owen AI edits through `get_inspection_report` →
+    `update_inspection_report`.
+  - The Owen AI page has a **Reports** tab: an editor for every field, corner dragging for the
+    areas, an "All fields" JSON editor, preview, history and restore, and uploading your own
+    picture.
+- **Files live on the owen_ai_pictures volume** (`config.report_store_dir()`), because the api
+  container mounts the old reports folder READ-ONLY and page edits run in the api.
+  - Each report keeps its OWN copies of its photos (and of the rest of their folders), so it
+    survives job_photos' 14-day cleanup.
+  - The old 90-day folder reports are still served; new ones are not cleaned up.
+- **Option pictures** (`infographics.py`):
+  - One gpt-image-2 edit per option, using `assets/infographic-layout.jpg` (the approved layout,
+    from another job, no customer data) as the reference. The prompt holds only the work, never
+    a customer name, address, job number or price.
+  - About $0.18 each, cost kept on the version.
+  - OFF unless `OWEN_AI_REPORT_PICTURES_ENABLED`.
+  - A picture is named by the hash of its text: made on the first save, then only when a save
+    names it. An edit only marks it **stale**.
+  - The words are drawn by the model, so Owen AI reads every new picture back (the skill), and
+    Owen can upload his own.
+- **CompanyCam photos for Owen AI** (`companycam_photos.py`): on #292 the evidence that mattered
+  (the inside photos, the technician's marked copies: "2 old repairs the leaks is back") was only
+  in CompanyCam.
+  - Read through `app/companycam.py` (GET only), via the job's CRM card's linked projects.
+  - Numbered from 101; `NNNa.jpg` is the marked copy.
+- **Owen's procedure** (recorded 2026-11-12) is in `owen-ai/knowledge/gbb-procedure.md`. GOOD
+  always stops the leak; BETTER/BEST add more. His "bull" and "grinders" steps are not explained
+  yet and stay out of reports.
+- **Who edits:** the Reports tab is Owen AI's, so the owner only (404 for anyone else), like
+  the rest of the module. Opening it to ADMINs is an open question.
+
+**Before switching it on in production:** `./deploy.sh --with-migrations` (revision
+`e5b9d3a1c7f4`, two new tables, nothing changed). Then try one report with pictures OFF; set
+`OWEN_AI_REPORT_PICTURES_ENABLED=true` only when the owner wants them.

@@ -207,7 +207,7 @@ export function linkSpans(text: string): LinkSpan[] {
 // ---- the audit sweep's alerts (2026-11-03) -----------------------------------------------
 
 /** The page's left-column switch. */
-export type OwenAiTab = 'chats' | 'alerts' | 'proposals'
+export type OwenAiTab = 'chats' | 'alerts' | 'proposals' | 'reports'
 
 export type Severity = 'urgent' | 'today' | 'watch'
 export const SEVERITIES: readonly Severity[] = ['urgent', 'today', 'watch']

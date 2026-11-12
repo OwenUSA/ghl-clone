@@ -25,7 +25,18 @@ from typing import Any
 
 from ..frontdoor import service as frontdoor
 from ..zuper import client as zc
-from . import alerts, config, dossier, photos, pictures, proposals, quo, report
+from . import (
+    alerts,
+    companycam_photos,
+    config,
+    dossier,
+    photos,
+    pictures,
+    proposals,
+    quo,
+    report,
+    saved_reports,
+)
 
 SERVER_NAME = "owen"
 
@@ -228,7 +239,12 @@ SPECS = (
 SPECS = SPECS + alerts.SPECS
 # The customer inspection report (2026-11-07): an HTML/PDF draft saved for Owen to download;
 # its facts (customer, address, date, prices) are read from Zuper by the tool, not typed.
-SPECS = SPECS + report.SPECS
+# Since 2026-11-12 it is SAVED with versions (saved_reports.py): Owen can change anything on the
+# page, and Owen AI reads it back (get_) and saves a new version (update_) — never sent.
+SPECS = SPECS + saved_reports.SPECS
+# CompanyCam's photos of the job (2026-11-12), the technician's marked copies included — read
+# through app/companycam.py, GET only.
+SPECS = SPECS + companycam_photos.SPECS
 # Proposal drafts (2026-11-09): stored PENDING in the CRM; Zuper is written only when the owner
 # approves one on the Proposals tab (proposals.approve), never by this tool.
 SPECS = SPECS + proposals.SPECS

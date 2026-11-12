@@ -53,6 +53,8 @@ tool's warnings to Owen in the chat**. Owen downloads it from the chat and decid
 | Findings | 1–8 cards, worst first | Each: title, severity, 1–2 photos with marks, refs (all photo numbers), saw / means / why / like / fix / prevent. |
 | Inside | photo + Yes/No/Not checked list | Honest list incl. "Not checked — attic". |
 | Options | — | **Not in the report** (owner, 2026-11-09): no price table and no signature line. The proposal goes to the customer separately; "How we fix it" may still name which option includes the fix, never a price. |
+| Photo pages | `galleries` | e.g. "Inside the house", "Cracked tiles marked by our technician" (the technician's marked copies). |
+| Good / Better / Best | `gbb` | Per option: an AI picture of the work, the area it covers drawn on real photos, the written scope, days, warranty (from the proposal). Then a comparison. **Still no prices** (2026-11-12): they come after AHS says how much it covers. See `gbb-procedure.md`. |
 | Until it's fixed / legal | optional overrides | Defaults come from the playbook §4 and §8. |
 
 ## 3. Writing style

@@ -1297,13 +1297,16 @@ AUDITED = {
         "DISPATCH_VIEW: restricted refused 403"),
     # Speak instead of type in the AI chats (app/speech.py, 2026-10-22): Dispatch's rule.
     "speech_transcribe": "DISPATCH_VIEW: restricted refused 403",
-    # Owen AI (app/owen_ai/api.py, 2026-11-02; proposal drafts 2026-11-09): ONE user, the owner,
-    # an ADMIN (never restricted); everyone else 404 (`owner`). Pinned by tests/test_owen_ai*.py.
+    # Owen AI (app/owen_ai/api.py, 2026-11-02; proposal drafts 2026-11-09; saved, editable
+    # inspection reports 2026-11-12): ONE user, the owner, an ADMIN (never restricted); everyone
+    # else 404 (`owner`). Pinned by tests/test_owen_ai*.py.
     **dict.fromkeys((
         "status", "threads", "create_thread", "thread", "edit_thread", "send", "list_alerts",
         "dismiss_alert", "list_reports", "report_file", "list_proposals", "get_proposal",
         "approve_proposal", "reject_proposal", "generate_pictures", "attach_pictures",
-        "discard_pictures", "picture_file"), "ADMIN (never restricted)"),
+        "discard_pictures", "picture_file", "list_saved_reports", "get_saved_report",
+        "get_saved_version", "save_report", "restore_report", "preview_report",
+        "upload_report_picture", "saved_report_file"), "ADMIN (never restricted)"),
 }
 
 
