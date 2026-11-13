@@ -290,3 +290,19 @@ def test_the_batch_refuses_when_off(monkeypatch):
     with pytest.raises(fd_service.FrontdoorOff):
         fd_service.dispatch_many(["99000001"])
     assert opened == []
+
+
+def test_only_contact_since_the_job_was_created_counts(reviews):
+    old_text = {"ts": ts(50), "ch": "quo_text", "dir": "in", "text": "Old job question"}
+    new_job = {"row": {"number": "846", "stage": "Got a job from AHS", "days_in_stage": 0},
+               "dossier": {"job": {"board": "AHS Simple Flow", "created": ts(0.1),
+                                   "custom_fields": {"AHS Job ID": "102432459"}},
+                           "conversations": [old_text]}}
+    assert review.attention(new_job, NOW) == []          # brand new: nothing to flag yet
+    week_old = {**new_job, "dossier": {**new_job["dossier"], "job": {
+        **new_job["dossier"]["job"], "created": ts(4)}}}
+    assert review.attention(week_old, NOW) == [
+        "No text or call with the customer since the job was created (4 days ago)"]
+    replied = {**week_old, "dossier": {**week_old["dossier"], "conversations": [
+        {"ts": ts(3.5), "ch": "quo_text", "dir": "in", "text": "Is Friday ok?"}, old_text]}}
+    assert "last word" in review.attention(replied, NOW)[0]
