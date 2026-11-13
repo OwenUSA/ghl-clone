@@ -362,7 +362,8 @@ class Gbb(_Strict):
 class Spec(_Strict):
     job_uid: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F-]{20,64}$")]
     proposal: Annotated[str, StringConstraints(pattern=r"^[A-Za-z-]{0,10}\d{1,8}$")] | None = \
-        Field(None, description="e.g. DTR-129; default = the job's newest proposal")
+        Field(None, description="e.g. DTR-129; default = the job's newest proposal. "
+              "DRAFT-<id> = your pending proposal draft (prices before Owen approves it)")
     final: bool = Field(False, description="kept for compatibility; the page never shows a "
                         "draft banner")
     badge: Badge
@@ -728,6 +729,36 @@ def ahs_authorization(rec: dict, warnings: list[str]) -> dict | None:
     return a
 
 
+def draft_ref(proposal: str | None) -> int | None:
+    """'DRAFT-12' -> 12: the report's prices come from Owen AI's proposal draft #12, still
+    waiting for Owen's approval (2026-11-13), instead of a proposal in Zuper."""
+    m = re.fullmatch(r"\s*DRAFT-?(\d{1,8})\s*", str(proposal or ""), re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def options_from_draft(draft_id: int, job_uid: str, warnings: list[str],
+                       ahs: dict | None = None) -> tuple[list[Option], str | None]:
+    """The options of a PENDING proposal draft (proposals.py), read exactly as a Zuper proposal
+    would be (`proposals._options` builds Zuper's own shape, `options_of` parses it): names,
+    totals, deposits, warranties, steps and the price block. Only a draft for THIS job."""
+    from ..db import SessionLocal
+    from ..models import OwenAiProposalDraft
+    from . import proposals
+    with SessionLocal() as db:
+        row = db.get(OwenAiProposalDraft, draft_id)
+        if row is None or str(row.job_uid).lower() != str(job_uid).lower():
+            warnings.append("There is no proposal draft %d for this job: no options table."
+                            % draft_id)
+            return [], None
+        zopts = proposals._options(row)
+        for zo, o in zip(zopts, row.options, strict=True):
+            zo["total"] = o.get("price")
+        label = "draft %d" % row.id
+        if row.status != "pending":
+            warnings.append("Proposal draft %d is %s, not pending." % (row.id, row.status))
+    return options_of({"proposal_options": zopts}, label, warnings, ahs), label
+
+
 def _inspection_move(rec: dict) -> dict | None:
     for rx in (r"inspection in progress", r"inspect"):
         for s in sorted((x for x in rec.get("job_status") or [] if isinstance(x, dict)),
@@ -783,6 +814,11 @@ def fetch_facts(job_uid: str, proposal: str | None = None) -> Facts:
             warnings.append("No %s (%s is not set): the report shows %s."
                             % (label, env, config.PLACEHOLDER))
 
+    draft_id = draft_ref(proposal)
+    if draft_id is not None:
+        f.options, f.proposal = options_from_draft(draft_id, f.job_uid, warnings,
+                                                   ahs_authorization(rec, warnings))
+        return f
     try:
         rows = [x for x in zc.rows_of(r.get("/estimate", {"filter.job": f.job_uid, "count": 50,
                                                           "page": 1}))
