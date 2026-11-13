@@ -43,9 +43,12 @@ def refusal(db: Session) -> str | None:
     return proposals.refusal(db)
 
 
-def file_name(job_number: str | None, version: int) -> str:
+def file_name(job_number: str | None, version: int, customer: str | None = None) -> str:
+    """'After-Inspection-Report-803-Chadi-Irani-v1.pdf' — the customer's full name when known
+    (owner, 2026-11-13). Starts with zc.REPORT_PREFIX, which is how an older one is found."""
     job = re.sub(r"[^A-Za-z0-9-]", "", str(job_number or ""))[:40] or "job"
-    return "After-Inspection-Report-%s-v%d.pdf" % (job, version)
+    who = report.file_customer(customer).replace("'", "").replace(" ", "-")[:60]
+    return "After-Inspection-Report-%s%s-v%d.pdf" % (job, "-" + who if who else "", version)
 
 
 def _number(ref: Any) -> str | None:
@@ -86,7 +89,7 @@ def attach(db: Session, report_id: int, who: str, proposal: Any = None,
         or _number((row.facts or {}).get("proposal"))
     if not want:
         raise Refused("This report is not linked to a proposal: name one, like DTR-168.")
-    name = file_name(row.job_number, v.number)
+    name = file_name(row.job_number, v.number, row.customer)
     sent = False
     try:
         with zc.owen_ai_read():
