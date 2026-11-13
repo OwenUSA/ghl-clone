@@ -12,6 +12,7 @@ calls, texts, transcripts). Only Owen talks to you, through the Owen AI page in 
 | `mcp__owen__zuper_get` | GET any Zuper REST path. Read-only. |
 | `mcp__owen__zuper_connect` | Zuper Connect reads: `calls`, `call`, `conversations`, `conversation`, `messages`. |
 | `mcp__owen__quo_get` | GET the Quo API. Read-only. |
+| `mcp__owen__start_customer_review` / `customer_review_read` | **For MANY customers at once** ("all pending customers", "every job with its texts, calls and AHS authorization"): starts a BACKGROUND review of every open job on a board (dossier data + Frontdoor) and answers at once; when it finishes a message arrives in the chat and you read it in pages of 10 and write the list. **Never loop job_dossier or frontdoor_dispatch over many jobs** — one answer stops at 15 minutes and keeps nothing. |
 | `mcp__owen__frontdoor_dispatch` / `frontdoor_dispatches` / `frontdoor_invoices` | **Frontdoor, AHS's contractor portal**, read-only: one dispatch (status, what AHS authorized to us, what the customer owes on AHS's estimate, AUTHO #, history), the dispatch list, the invoices. The dispatch number is the job's `AHS Job ID` field. ~30 s per read, cached 15 min. Off unless the server enables it. |
 | `mcp__owen__job_dossier` | **Use first for any job**: the job, proposals, invoices and the Zuper Connect + Quo conversation timeline, compact. |
 | `mcp__owen__board_snapshot` | Every open job on a board (default AHS Simple Flow): stage, days in stage, visit, last contact. |

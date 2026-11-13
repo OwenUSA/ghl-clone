@@ -36,6 +36,7 @@ from . import (
     quo,
     report,
     report_attach,
+    review,
     saved_reports,
 )
 
@@ -135,6 +136,31 @@ def frontdoor_read(what: str, dispatch: str | None = None, since: str | None = N
         return "ERROR from Frontdoor: %s" % frontdoor.sentence(exc)
 
 
+def start_customer_review(board: str | None = None, with_frontdoor: bool = True,
+                          resume: str | None = None) -> str:
+    """Starts the background customer review (review.py) and answers at once."""
+    try:
+        s = review.start(board or dossier.SIMPLE_FLOW, with_frontdoor,
+                         proposals.CURRENT_THREAD, resume)
+    except Exception as exc:  # noqa: BLE001
+        return "ERROR: could not start the customer review: %s" % exc
+    return review.started_text(s)
+
+
+def customer_review_read(review_id: str | None = None, start: int = 0, count: int = 10,
+                         only_attention: bool = False) -> str:
+    try:
+        out = review.read(review_id or None, start, count, only_attention)
+    except LookupError as exc:
+        return "ERROR: %s" % exc
+    s = out["review"]
+    if s.get("state") == "running":
+        left = review.eta(s)
+        out["note"] = "Still gathering (%s); what is shown is what is saved so far.%s" % (
+            s.get("phase"), " Done in %s." % left if left else "")
+    return _text(out)
+
+
 # ------------------------------------------------------------------------- the MCP server
 
 SPECS = (
@@ -205,6 +231,34 @@ SPECS = (
                                        "params": {"type": "object"}},
       "required": ["path"]},
      lambda a: quo_get(a["path"], a.get("params"))),
+    ("start_customer_review",
+     ("USE THIS for any question about MANY customers at once (\"all pending customers\", "
+      "\"every job on the board with its texts, calls and AHS authorization\"). Never call "
+      "job_dossier or frontdoor_dispatch in a loop for that — it cannot finish in one answer. "
+      "Starts a BACKGROUND review of every open job on `board` (default \"AHS Simple Flow\"): "
+      "per job the job_dossier data (stage history, notes, proposals, invoices, 60 days of Zuper "
+      "Connect + Quo texts and calls with call summaries) and, with `with_frontdoor` (default "
+      "true), the Frontdoor dispatch and authorization; then an Excel. Answers at once. When it "
+      "finishes a message arrives in THIS chat and you write the list then. `resume` = the id "
+      "of a stopped review to continue it."),
+     {"type": "object", "properties": {"board": {"type": "string"},
+                                       "with_frontdoor": {"type": "boolean"},
+                                       "resume": {"type": "string"}}},
+     lambda a: start_customer_review(a.get("board"), a.get("with_frontdoor", True),
+                                     a.get("resume"))),
+    ("customer_review_read",
+     ("Read a customer review (start_customer_review) in pages: `start` (0, then next_start), "
+      "`count` (default 10, at most 20), `only_attention` = only customers with something to "
+      "address. Each customer: job, name, stage + days, last stage moves, last note, proposal, "
+      "the newest texts/calls (with call summaries), Frontdoor (authorized to us, customer "
+      "owes), and `attention` (rule-based reasons). Also the review's state and the Excel link "
+      "(give Owen the link). No `review_id` = the newest review."),
+     {"type": "object", "properties": {"review_id": {"type": "string"},
+                                       "start": {"type": "integer"},
+                                       "count": {"type": "integer"},
+                                       "only_attention": {"type": "boolean"}}},
+     lambda a: customer_review_read(a.get("review_id"), a.get("start") or 0,
+                                    a.get("count") or 10, bool(a.get("only_attention")))),
     ("frontdoor_dispatch",
      ("READ one AHS dispatch in Frontdoor, AHS's contractor portal (read-only; ~30 s, cached 15 "
       "min, `fresh`: true re-reads). `dispatch` = the AHS dispatch number = the Zuper job's "

@@ -29,6 +29,7 @@ from . import (
     proposals,
     report,
     report_attach,
+    review,
     saved_reports,
 )
 
@@ -262,6 +263,20 @@ def report_file(report_id: str, file: str, p: auth.Principal = OWNER) -> FileRes
     meta = report.read_meta(report_id) or {"job_number": report_id.split("-", 1)[0]}
     name = report.friendly_name(meta, file)          # ASCII letters, digits, spaces, - and '
     return FileResponse(path, media_type=report.FILES[file], headers={
+        "Content-Disposition": "attachment; filename=\"%s\"; filename*=utf-8''%s"
+                               % (name, quote(name)),
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/reviews/{review_id}/{file}")
+def review_file(review_id: str, file: str, p: auth.Principal = OWNER) -> FileResponse:
+    """A customer review's Excel (review.py). Any other name or id is 404."""
+    path = review.file_path(review_id, file)
+    if path is None:
+        raise HTTPException(404, "Not Found")
+    name = "Customer review %s.xlsx" % review_id
+    return FileResponse(path, media_type="application/vnd.openxmlformats-officedocument."
+                                         "spreadsheetml.sheet", headers={
         "Content-Disposition": "attachment; filename=\"%s\"; filename*=utf-8''%s"
                                % (name, quote(name)),
         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
