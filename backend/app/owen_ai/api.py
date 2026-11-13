@@ -445,7 +445,7 @@ def saved_report_file(report_id: int, folder: str, name: str, download: bool = F
     headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
     if name in report.FILES:
         meta = {"job_number": row.job_number,
-                "last_name": (row.customer or "").split(" ")[-1] if row.customer else None}
+                "customer": row.customer}
         fname = report.friendly_name(meta, name)
         inline = name.endswith(".html") and not download
         headers["Content-Disposition"] = ("inline" if inline else "attachment") \

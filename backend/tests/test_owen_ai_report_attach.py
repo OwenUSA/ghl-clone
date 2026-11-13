@@ -92,7 +92,7 @@ def test_it_attaches_to_the_draft_and_writes_only_upload_and_attach(attach_world
     assert z.writes() == [("POST", "/misc/upload"), ("POST", "/note_attachment")]
     names = [a["file_name"] for a in z.est["attachments"]]
     assert names == ["Proposal-DTR-168.pdf", "123456 BARSOUM.pdf",
-                     "After-Inspection-Report-728-v1.pdf"]
+                     "After-Inspection-Report-728-Brett-Edelson-v1.pdf"]
     assert not any("/send" in r.url.path for r in z.requests)
     assert z.est["estimate_status"] == "DRAFT"
     # The same version again: nothing is written.
@@ -117,7 +117,8 @@ def test_a_newer_version_replaces_only_our_older_report(attach_world, monkeypatc
     assert q == {"item_uid": ["old-rep"], "module_name": ["ESTIMATE"], "module_uid": [EST],
                  "type": ["ATTACHMENT"]}
     assert [a["file_name"] for a in z.est["attachments"]] == [
-        "Proposal-DTR-168.pdf", "123456 BARSOUM.pdf", "After-Inspection-Report-728-v1.pdf"]
+        "Proposal-DTR-168.pdf", "123456 BARSOUM.pdf",
+        "After-Inspection-Report-728-Brett-Edelson-v1.pdf"]
     assert "Replaced the older report" in report_attach.sentence(res)
 
 

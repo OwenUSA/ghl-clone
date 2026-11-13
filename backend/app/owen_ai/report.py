@@ -1500,10 +1500,20 @@ def cleanup(root: Path, now: float | None = None) -> int:
     return removed
 
 
+def file_customer(name: str | None) -> str:
+    """A customer's name made safe for a file name: accents simplified (José Peña -> Jose
+    Pena), only ASCII letters, digits, spaces, - and ', spaces collapsed. "" when none."""
+    import unicodedata
+    plain = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 '\-]", "", plain)).strip()
+
+
 def friendly_name(meta: dict, file: str) -> str:
-    last = re.sub(r"[^A-Za-z0-9 '\-]", "", str(meta.get("last_name") or "")).strip()
+    """'Inspection Report - Job 803 - Chadi Irani.pdf': the customer's FULL name (owner,
+    2026-11-13), the last name alone for an old report that kept only that."""
+    who = file_customer(meta.get("customer")) or file_customer(meta.get("last_name"))
     base = "Inspection Report - Job %s" % re.sub(r"[^A-Za-z0-9]", "", str(meta.get("job_number")))
-    return "%s%s.%s" % (base, " - " + last if last else "", file.rsplit(".", 1)[1])
+    return "%s%s.%s" % (base, " - " + who if who else "", file.rsplit(".", 1)[1])
 
 
 def read_meta(report_id: str) -> dict | None:

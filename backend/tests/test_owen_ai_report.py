@@ -430,11 +430,11 @@ def test_the_owner_downloads_the_files_as_attachments(db, people, env):  # noqa:
     assert r.status_code == 200 and r.content.startswith(b"%PDF")
     cd = r.headers["content-disposition"]
     assert cd.startswith("attachment;")
-    assert 'filename="Inspection Report - Job 728 - Edelson.pdf"' in cd
+    assert 'filename="Inspection Report - Job 728 - Brett Edelson.pdf"' in cd
     h = call("GET", "/reports/%s/report.html" % rid, "owner", people)
     assert h.status_code == 200 and "Brett Edelson" in h.text
     hd = h.headers["content-disposition"]
-    assert 'filename="Inspection Report - Job 728 - Edelson.html"' in hd
+    assert 'filename="Inspection Report - Job 728 - Brett Edelson.html"' in hd
     lst = call("GET", "/reports?job_uid=" + JOB_UID, "owner", people).json()["reports"]
     assert [x["id"] for x in lst] == [rid]
     assert lst[0]["pdf_url"] == "/api/owen-ai/reports/%s/report.pdf" % rid
