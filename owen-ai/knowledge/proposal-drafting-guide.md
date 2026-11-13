@@ -11,6 +11,21 @@ names, numbers only from data.
 in Zuper, and only as a Zuper DRAFT. Nothing is ever sent to a customer. Never say a proposal was "created",
 "sent" or "in Zuper". Say it is "waiting for your approval on the Proposals tab".
 
+**OWNER'S PRICE AND WARRANTY RULE (2026-11-13) — overrides §2.3's default and §4's numbers:**
+
+| | GOOD | BETTER | BEST |
+|---|---|---|---|
+| Warranty | **1 month** | **3 months** | **6 months** |
+| Option total, BEFORE the AHS credit (= M, the member price; R−D… on a retail job = P) | lowest | a clear step up | **$3,500 – $4,000 or more** |
+
+- The three totals climb like an **exponential curve**: each step is bigger than the one before
+  (BEST − BETTER > BETTER − GOOD), never a flat ladder. A shape that fits: BETTER ≈ 1.6–2× GOOD and BEST ≈ 1.6–2×
+  BETTER, with BEST never under $3,500. Pick the actual figures per job from the scope (§4's table tells you which
+  jobs are bigger), round to $25 / $50, and show Owen the three totals and why.
+- On an AHS job the customer pays P = M − C for each option (C from §3, the same in all three); GOOD can still be
+  $0 to the customer when C covers it. On a retail job P is the total itself.
+- Prices Owen gives in the chat still win over this rule.
+
 **Price rule (owner, 2026-11-09):** prices Owen gives in the chat **always win**. Without them, estimate each
 option from past prices (§4) and show Owen the basis (the comparable DTR numbers and their prices). This is the
 one exception to the operating manual's "never estimate a price": it covers proposal drafts only, and every estimate
@@ -73,7 +88,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | double sealing of seams, flashing, transition | all penetrations, vents and boots resealed; multi-layer elastomeric; **roof maintenance / tune-up** |
 | Materials | reinstall the original tiles; matching replacements for cracked pieces | matching replacement tiles as needed | tile bonding / structural reinstall |
 | Close-out | cleanup + magnetic sweep + final inspection | same | **photo documentation** of the completed work |
-| Warranty | **1 month** (default) | **1 month** (default) | **1 month** (default) |
+| Warranty | **1 month** | **3 months** | **6 months** (owner, 2026-11-13) |
 | Usual extra findings | — | fascia board, hip re-mortar of the adjacent run, pipe boots, flat-junction recoat | full valley system, skylight or chimney re-flash, full flat recoat |
 
 Within the 35 three-tier proposals, BETTER most often added: plywood (25), expanded area (24), premium
@@ -129,11 +144,12 @@ Option names are exactly `GOOD`, `BETTER`, `BEST`. Exactly one option is `is_rec
 (42 of 42 three-tier proposals). Make BETTER the recommended one instead when the photos make BETTER the minimum
 correct fix (visible rot, two leak zones, curb lap needed), and say so to Owen.
 
-### 2.3 Warranty — DEFAULT 1 MONTH ON EVERY OPTION (owner, 2026-11-09)
+### 2.3 Warranty — GOOD 1 MONTH, BETTER 3 MONTHS, BEST 6 MONTHS (owner, 2026-11-13)
 
-Every option (Good, Better and Best) gets **1 month** of workmanship warranty unless Owen gives another period for
-this proposal. Text: `Workmanship Warranty: 1 Month This warranty covers workmanship on <the work in THIS option>
-for 1 month from completion.` Leaving `warranty` out gives that default. The history below is for reference only.
+GOOD gets **1 month**, BETTER **3 months**, BEST **6 months** of workmanship warranty unless Owen gives another
+period for this proposal (this replaces the 2026-11-09 "1 month on every option"). Text: `Workmanship Warranty:
+<N> Month(s) This warranty covers workmanship on <the work in THIS option> for <N> month(s) from completion.` Set
+`warranty` on BETTER and BEST explicitly: leaving it out gives 1 month. The history below is for reference only.
 
 #### History (do not use as the default)
 
@@ -207,6 +223,10 @@ second area, rot), GOOD is paid (§4). A $0 GOOD is never a placeholder for a sc
 ---
 
 ## 4. Price estimator (use only when Owen gave no price)
+
+**Since 2026-11-13 the owner's rule at the top of this guide sets the SHAPE (BEST total $3,500–4,000+, a steep
+curve). Use this section only to judge how big a job is** (one leak vs two areas, 2-story, flat), never to
+bring BEST back down to the old $3,000 customer-pays.
 
 **This is an ESTIMATE from history, and Owen may override it.** It is the customer-pays figure after the AHS
 credit. It was computed from the late era (created Oct 14 on, mainly DTR-115 to 138, where Tile BEST is $3,000 in 9
@@ -342,7 +362,7 @@ fascia (294, 627, 711, 730). Rot found on repair day with only GOOD sold means a
   write them only when a photo shows them.
 - **Tier label vs content:** no "Everything in the Better Option" in GOOD (DTR-104). No "Everything in the Good
   Option" when there is no GOOD (job 681). No BETTER text in the GOOD slot (DTR-107).
-- **Warranty covers only this option's work:** the period is 1 month by default (owner) and the text names only work in that option (DTR-16
+- **Warranty covers only this option's work:** the period is 1 / 3 / 6 months for GOOD / BETTER / BEST (owner, 2026-11-13) and the text names only work in that option (DTR-16
   BEST covered "ponding area restoration" that was not in its scope).
 - **Weak ladder:** BEST $10 above BETTER (DTR-71, 74). Different prices for identical scope on the same job.
   Different AHS credits across tiers or versions (DTR-38 vs 40).
@@ -395,8 +415,8 @@ known.
 - [ ] Every damage item is in a tier or in `notes_for_owen` ("seen, not priced").
 - [ ] Price block: P = price; M = P + C; S = R − P; R > M; the same C in every option; C came from the job or Owen.
 - [ ] $0 GOOD only when AHS covers the whole GOOD scope.
-- [ ] Ladder: BETTER − GOOD ≥ $500, BEST − BETTER ≥ $1,000; rounded to $25 / $50.
-- [ ] Warranty 1 month on every option (unless Owen gave another), covering only this option's work.
+- [ ] Totals before AHS climb like a curve (BEST − BETTER > BETTER − GOOD); BEST total ≥ $3,500; rounded to $25 / $50.
+- [ ] Warranty GOOD 1 month, BETTER 3 months, BEST 6 months (unless Owen gave another), covering only this option's work.
 - [ ] `deposit` = 50%; payment halves = P/2 with two decimals; "billed directly to AHS"; $0 text on a $0 option.
 - [ ] Exactly one `is_recommended`.
 - [ ] Title follows §7.
