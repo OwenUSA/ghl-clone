@@ -8236,3 +8236,21 @@ much, so `app/owen_ai/review.py` does it in the background:
   30 days; `GET /api/owen-ai/reviews/<id>/review.xlsx` is the owner's only (404 for anyone else).
 - A container restart stops a running review; its status reads "stopped" after 10 minutes without
   a heartbeat, and `start_customer_review(resume=<id>)` continues it.
+
+## AMENDMENT (2026-11-13): Owen AI answers up to 3 chats at once
+
+The owner works in ~4 chats; one answer at a time made each wait behind the others (a report can
+take 15 minutes). The runner now answers up to `OWEN_AI_PARALLEL` (default 3, max 4) chats at
+once — each in its own worker thread, its own database session and its own event loop.
+
+- **Never two answers in one chat, and a chat's messages in order** (`runner.claim`): a chat's
+  Claude session is resumed from the thread and saved back after each answer, so order is memory.
+  Only the main loop claims, one at a time, so the check cannot race.
+- **The chat an answer belongs to is a context variable** (`proposals.answering` /
+  `current_thread`), not the old module global `CURRENT_THREAD`, which parallel answers would
+  have mixed up (a proposal draft or a customer review filed under another chat). Tool calls see
+  it because asyncio.to_thread copies the context. `tests/test_owen_ai_parallel.py` runs three
+  chats at the same moment and checks each tool saw its own chat.
+- Shared on purpose: the Quo cache (same data), Frontdoor (one read at a time, by its lock).
+- Limits: each answer is one Claude Code process (~300-400 MB; the container has 1.5 GB), and
+  parallel answers spend the Claude plan's usage faster.

@@ -31,6 +31,16 @@ def enabled() -> bool:
     return _flag("OWEN_AI_ENABLED")
 
 
+def parallel() -> int:
+    """How many chats the runner answers at once (OWEN_AI_PARALLEL, 1-4, default 3). Each
+    answer is one Claude Code process (~300-400 MB); the container is limited to 1.5 GB."""
+    try:
+        n = int((os.getenv("OWEN_AI_PARALLEL") or "3").strip())
+    except ValueError:
+        n = 3
+    return max(1, min(n, 4))
+
+
 def owner_email() -> str:
     return (os.getenv("OWEN_AI_OWNER_EMAIL") or "").strip().lower()
 
