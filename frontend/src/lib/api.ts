@@ -2792,7 +2792,7 @@ export type OwenAiMessage = {
   /** 'system': a note the CRM posted (a proposal draft approved / rejected, 2026-11-09). */
   id: number; role: 'user' | 'assistant' | 'system'; content: string
   /** 'audit' in the sweep's threads: the user side is a machine prompt, not the owner. */
-  kind?: 'chat' | 'audit'; job_uid?: string | null
+  kind?: 'chat' | 'audit' | 'review'; job_uid?: string | null
   status: 'queued' | 'running' | 'done' | 'error'; steps: OwenAiStep[]; error: string | null
   model: string | null; cost_usd: number | null; duration_ms: number | null; num_turns: number | null
   created_at: string | null; finished_at: string | null
