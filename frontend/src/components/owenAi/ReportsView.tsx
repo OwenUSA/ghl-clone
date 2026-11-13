@@ -148,6 +148,7 @@ function ReportEditor({ id, onBack }: { id: number; onBack: () => void }) {
           Saving now will be refused.</span>}
         <span style={{ flex: 1 }} />
         <a href={d.latest.html_url} target="_blank" rel="noreferrer" style={chipBtn}>Open page</a>
+        <a href={`${d.latest.html_url}?download=1`} style={chipBtn}>Download HTML</a>
         {d.latest.pdf_url && <a href={d.latest.pdf_url} style={chipBtn}>Download PDF</a>}
         {d.attach_enabled && d.latest.pdf_url && (
           <button type="button" style={chipBtn} disabled={attachToProposal.isPending || dirty}

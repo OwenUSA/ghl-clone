@@ -431,10 +431,13 @@ def attach_report(report_id: int, body: AttachReport, p: auth.Principal = OWNER,
 
 
 @router.get("/inspection-reports/{report_id}/files/{folder}/{name}")
-def saved_report_file(report_id: int, folder: str, name: str, p: auth.Principal = OWNER,
+def saved_report_file(report_id: int, folder: str, name: str, download: bool = False,
+                      p: auth.Principal = OWNER,
                       db: Session = Depends(get_db)) -> FileResponse:
     """lib/<photo>, pictures/<picture> or v<n>/report.html|pdf of this report. Anything else,
-    or a path outside the report's folder, is 404."""
+    or a path outside the report's folder, is 404. The HTML opens in the browser unless
+    `download` (the "Download HTML" button, 2026-11-13); its photos are embedded, so the file
+    works on its own."""
     row = _saved(db, report_id)
     path = saved_reports.file_path(report_id, "%s/%s" % (folder, name))
     if path is None:
@@ -444,7 +447,8 @@ def saved_report_file(report_id: int, folder: str, name: str, p: auth.Principal 
         meta = {"job_number": row.job_number,
                 "last_name": (row.customer or "").split(" ")[-1] if row.customer else None}
         fname = report.friendly_name(meta, name)
-        headers["Content-Disposition"] = ("inline" if name.endswith(".html") else "attachment") \
+        inline = name.endswith(".html") and not download
+        headers["Content-Disposition"] = ("inline" if inline else "attachment") \
             + "; filename=\"%s\"; filename*=utf-8''%s" % (fname, quote(fname))
         return FileResponse(path, media_type=report.FILES[name], headers=headers)
     media = "image/png" if name.lower().endswith(".png") else "image/jpeg"
