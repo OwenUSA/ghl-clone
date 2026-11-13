@@ -264,10 +264,19 @@ def attention(rec: dict, now: datetime) -> list[str]:
         return ["Could not read this job: %s" % rec["error"]]
     dz = rec.get("dossier") or {}
     row = rec.get("row") or {}
-    conv = [e for e in dz.get("conversations") or [] if isinstance(e, dict)]
+    # Only contact since this job was created counts: the same phone often has an older job,
+    # and its texts are not this job's (job 846, 2026-11-13: new today, flagged for a September
+    # text). A day of slack for a call that came just before the job was entered.
+    created = _at({"ts": (dz.get("job") or {}).get("created")})
+    floor = created - timedelta(days=1) if created else None
+    conv = [e for e in dz.get("conversations") or [] if isinstance(e, dict)
+            and (floor is None or (_at(e) or floor) >= floor)]
     newest = max(conv, key=lambda e: _at(e) or datetime.min.replace(tzinfo=UTC), default=None)
+    age = (now - created).days if created else None
     if newest is None:
-        out.append("No text or call with the customer in %d days" % dossier.DAYS)
+        if age is None or age >= 1:
+            out.append("No text or call with the customer since the job was created (%s)" % (
+                "%d days ago" % age if age is not None else "date unknown"))
     else:
         at = _at(newest)
         days = (now - at).days if at else None
