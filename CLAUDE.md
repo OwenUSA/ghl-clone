@@ -1065,6 +1065,11 @@ Tools: `frontdoor_dispatch` / `frontdoor_dispatches` / `frontdoor_invoices`; the
 fills a missing AHS credit from it and warns on a different one. Also gated by the registry's
 owen_ai "ahs_read". **No test reaches Frontdoor** (`tests/frontdoor_guard.py`). See DECISIONS.md.
 
+**Many customers at once is a background review** (2026-11-13, `app/owen_ai/review.py`): Owen AI's
+`start_customer_review` gathers every open job on a board (dossier + Frontdoor in one browser
+session) outside the 15-minute answer limit, writes `review.xlsx`, and queues a message in the
+chat so Owen AI writes the list from `customer_review_read`. See DECISIONS.md.
+
 ## The after-inspection report: Good / Better / Best, editable, no prices (2026-11-12)
 
 Owen AI's `make_inspection_report` now saves the report with versions

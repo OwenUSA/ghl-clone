@@ -80,6 +80,50 @@ def dispatch(value, fresh: bool = False) -> dict:
                  lambda p: parse.dispatch_detail(p.dispatch_detail(did)), fresh)
 
 
+def dispatch_many(values, on_each=None) -> dict[str, dict]:
+    """Many dispatches in ONE browser session (the customer review, 2026-11-13): about 10 s each
+    instead of 25-45 s with a browser per read. Cached ones are not read again. One dispatch
+    the portal will not show is recorded as {"dispatch_id", "error"} and the rest go on; a write
+    the guard refused stops everything (WriteRefused). `on_each(id, result)` after each one.
+    Holds the read lock for the whole batch, so a chat read waits for it."""
+    why = config.refusal()
+    if why:
+        raise FrontdoorOff(why)
+    ids = list(dict.fromkeys(d for d in (dispatch_id(v) for v in values) if d))
+    out: dict[str, dict] = {}
+
+    def done(did: str, value: dict) -> None:
+        out[did] = value
+        if on_each:
+            on_each(did, value)
+
+    with _LOCK:
+        todo = []
+        for did in ids:
+            hit = _CACHE.get("dispatch:" + did)
+            if hit and time.monotonic() - hit[0] < config.CACHE_SECONDS:
+                done(did, {**hit[1], "cached": True})
+            else:
+                todo.append(did)
+        if not todo:
+            return out
+        started = time.monotonic()
+        with client.session() as portal:
+            for did in todo:
+                try:
+                    value = parse.dispatch_detail(portal.dispatch_detail(did))
+                    value["read_at"] = datetime.now(parse.NY).isoformat(timespec="seconds")
+                    _CACHE["dispatch:" + did] = (time.monotonic(), value)
+                except (client.WriteRefused, client.ClickRefused):
+                    raise
+                except Exception as exc:  # noqa: BLE001 — one page, recorded; the rest go on
+                    value = {"dispatch_id": did, "error": sentence(exc)}
+                portal.guard.check()
+                done(did, value)
+        log.info("frontdoor: %d dispatches read in %.0fs", len(todo), time.monotonic() - started)
+    return out
+
+
 def dispatches(since: date | None = None, fresh: bool = False) -> dict:
     since = since or (date.today() - timedelta(days=30))
 

@@ -1302,7 +1302,8 @@ AUDITED = {
     # else 404 (`owner`). Pinned by tests/test_owen_ai*.py.
     **dict.fromkeys((
         "status", "threads", "create_thread", "thread", "edit_thread", "send", "list_alerts",
-        "dismiss_alert", "list_reports", "report_file", "list_proposals", "get_proposal",
+        "dismiss_alert", "list_reports", "report_file", "review_file", "list_proposals",
+        "get_proposal",
         "approve_proposal", "reject_proposal", "generate_pictures", "attach_pictures",
         "discard_pictures", "picture_file", "list_saved_reports", "get_saved_report",
         "get_saved_version", "save_report", "restore_report", "preview_report",

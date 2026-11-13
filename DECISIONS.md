@@ -8214,3 +8214,25 @@ ticks every attachment, so the file reaches the customer with the proposal email
 - Tests: `tests/test_owen_ai_report_attach.py`. Started by the "shorten the proposal pages"
   session, which attached #777's report to DTR-168 by hand first.
 
+
+## AMENDMENT (2026-11-13): Owen AI's customer review runs in the background
+
+Owen asked Owen AI to review every pending customer (~70) with Zuper Connect, Quo and Frontdoor;
+it stopped at the 15-minute answer limit twice and kept nothing. A chat answer cannot hold that
+much, so `app/owen_ai/review.py` does it in the background:
+
+- `start_customer_review` (tool) starts a thread in the owen_ai runner and answers at once. Per
+  open job on the board: `dossier.dossier()` with a 60 000-character cap, saved to
+  `reviews/<id>/customers/<job>.json` as it goes (a failed job is recorded; a resumed review skips
+  saved ones). Then every "AHS Job ID" is read from Frontdoor in ONE browser session
+  (`frontdoor.service.dispatch_many`, ~10 s each; a Frontdoor failure leaves the rest intact).
+  Then `review.xlsx` (Customers, History, Frontdoor). One review at a time.
+- When it ends, ONE message (kind "review") is queued in the chat that started it; the page shows
+  it as a quiet line, and Owen AI reads the review with `customer_review_read` (pages of 10,
+  `only_attention`) and writes the list. The rule-based "attention" reasons (customer has the last
+  word, no contact for 3+ days, 7+ days in a stage, AHS authorized but no proposal, no AHS Job ID,
+  failed text) are facts for Owen AI's judgment, not the judgment itself.
+- Reads only, like every Owen AI tool. Files in the owen_ai_home volume beside the reports, kept
+  30 days; `GET /api/owen-ai/reviews/<id>/review.xlsx` is the owner's only (404 for anyone else).
+- A container restart stops a running review; its status reads "stopped" after 10 minutes without
+  a heartbeat, and `start_customer_review(resume=<id>)` continues it.

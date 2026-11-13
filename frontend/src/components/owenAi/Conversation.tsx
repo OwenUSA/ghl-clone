@@ -54,7 +54,10 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
             </div>
           )}
           {messages.map((m) => m.role === 'user'
-            ? (audit || m.kind === 'audit' ? <AuditPrompt key={m.id} m={m} /> : <UserBubble key={m.id} m={m} />)
+            ? (audit || m.kind === 'audit' ? <AuditPrompt key={m.id} m={m} />
+              : m.kind === 'review' ? <AuditPrompt key={m.id} m={m}
+                label="The customer review finished — Owen AI is writing the list" />
+              : <UserBubble key={m.id} m={m} />)
             : m.role === 'system' ? <SystemNote key={m.id} m={m} />
             : <AssistantMessage key={m.id} m={m} />)}
           {busy && (
@@ -128,14 +131,16 @@ function SystemNote({ m }: { m: OwenAiMessage }) {
 }
 
 /** A scheduled audit's machine prompt: one small grey line, the whole prompt on click. */
-function AuditPrompt({ m }: { m: OwenAiMessage }) {
+/** A message the CRM queued itself (a sweep's audit, a finished customer review), shown as a
+ *  quiet line rather than as if Owen had typed it. */
+function AuditPrompt({ m, label }: { m: OwenAiMessage; label?: string }) {
   const [open, setOpen] = useState(false)
   return (
     <div style={{ margin: '16px 0 4px', fontSize: 12, color: MUTED, minWidth: 0 }}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? undefined : m.content}
         style={{ fontSize: 12, color: MUTED, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
         <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 3, background: 'rgb(208,213,221)' }} />
-        {auditPromptLabel(m.content)}
+        {label ?? auditPromptLabel(m.content)}
       </button>
       {open && <div style={{ marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</div>}
       {m.status === 'error' && m.error && <div role="alert" style={errorBox}>{m.error}</div>}
