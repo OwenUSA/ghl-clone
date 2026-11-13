@@ -74,10 +74,20 @@ PROPOSALS_READ_MAX = 10       # the job's newest proposals read in full
 PRICE_MAX = 500_000
 # Text a template's own placeholder description carries (live: DTR-CUSTOM-* products).
 PLACEHOLDER_MARKERS = ("(write the scope", "(state warranty")
-# Owner, 2026-11-09: every option's workmanship warranty is 1 month by default (Good, Better and
-# Best alike). Claude uses another period only when Owen gives one for that proposal.
-DEFAULT_WARRANTY = ("Workmanship Warranty: 1 Month This warranty covers workmanship on the repair "
-                    "work in this option for 1 month from completion.")
+# Owner, 2026-11-13 (replacing 2026-11-09's "1 month on every option"): GOOD 1 month, BETTER 3
+# months, BEST 6 months of workmanship warranty by default. Claude uses another period only when
+# Owen gives one for that proposal.
+WARRANTY_MONTHS = {"GOOD": 1, "BETTER": 3, "BEST": 6}
+
+
+def default_warranty(name: str) -> str:
+    n = WARRANTY_MONTHS.get(str(name or "").upper(), 1)
+    period = "%d Month%s" % (n, "" if n == 1 else "s")
+    return ("Workmanship Warranty: %s This warranty covers workmanship on the repair work in this "
+            "option for %s from completion." % (period, period.lower()))
+
+
+DEFAULT_WARRANTY = default_warranty("GOOD")
 DASH = chr(0x2013)  # the en dash Luis's payment terms use
 WAITING = ("Waiting for Owen to approve on the Proposals tab — nothing was created in Zuper "
            "yet.")
@@ -274,7 +284,8 @@ def validate(spec: Any) -> dict:
         if rec is not None and not isinstance(rec, bool):
             problems.append("%s.recommended must be true or false" % where)
         otitle = _text(o, "title", where, problems, 200)
-        warranty = _text(o, "warranty", where, problems, 400, required=False) or DEFAULT_WARRANTY
+        warranty = (_text(o, "warranty", where, problems, 400, required=False)
+                    or default_warranty(name))
         scope = _text(o, "scope_html", where, problems, 8000)
         terms = _text(o, "payment_terms", where, problems, 600, required=False)
         if price is None or not otitle or not warranty or not scope or name not in OPTION_NAMES:
@@ -534,8 +545,8 @@ def input_schema() -> dict:
         "price": {"type": "number", "minimum": 0},
         "deposit": {"type": "number", "minimum": 0, "description": "default 50% of price"},
         "recommended": {"type": "boolean", "description": "default: BEST"},
-        "warranty": {"type": "string", "description": "e.g. 'Workmanship Warranty: 6 months on "
-                                                       "...'"},
+        "warranty": {"type": "string", "description": "default GOOD 1 month, BETTER 3 months, "
+                                                       "BEST 6 months (owner, 2026-11-13)"},
         "scope_html": {"type": "string", "description": "<p><b>Scope of Work</b></p><ul><li>"
                                                          "price block</li><li>steps…</li></ul>"},
         "payment_terms": {"type": "string", "description": "default: 50% upfront / 50% on "

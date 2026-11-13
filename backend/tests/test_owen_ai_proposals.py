@@ -505,13 +505,13 @@ def test_every_draft_uses_the_short_proposal_template():
         assert proposals.validate(s)["template"] == proposals.SHORT
 
 
-def test_every_option_defaults_to_a_one_month_warranty():
-    """Owner, 2026-11-09: 1 month on Good, Better and Best unless Owen gives another period."""
+def test_the_default_warranty_is_1_3_6_months():
+    """Owner, 2026-11-13: GOOD 1 month, BETTER 3 months, BEST 6 months unless Owen gives another."""
     opts = [{"name": n, "title": n.title(), "price": p, "scope_html": "<ul><li>x</li></ul>"}
             for n, p in (("GOOD", 600), ("BETTER", 1400), ("BEST", 3000))]
     clean = proposals.validate({"job": "701", "title": "T", "options": opts})
-    for o in clean["options"]:
-        assert o["warranty"] == proposals.DEFAULT_WARRANTY and "1 Month" in o["scope_html"]
+    for o, want in zip(clean["options"], ("1 Month ", "3 Months ", "6 Months "), strict=True):
+        assert o["warranty"] == proposals.default_warranty(o["name"]) and want in o["scope_html"]
     opts[2]["warranty"] = "Workmanship Warranty: 1 Year"
     best = proposals.validate({"job": "701", "title": "T", "options": opts})["options"][2]
     assert best["warranty"].startswith("Workmanship Warranty: 1 Year")
