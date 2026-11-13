@@ -467,3 +467,16 @@ def test_the_report_makes_no_request_when_reading_is_off(db, portal):
     w = []
     assert report.ahs_authorization(job_rec("99000001"), w) is None
     assert portal.opened == [] and not w
+
+
+def test_the_owen_ai_pages_chip_is_green_only_when_reading_can_work(monkeypatch, tmp_path):
+    monkeypatch.setenv("FRONTDOOR_STATE_DIR", str(tmp_path))
+    assert config.ready() is False                          # off
+    monkeypatch.setenv("FRONTDOOR_READ_ENABLED", "true")
+    assert config.ready() is False                          # on, but no login anywhere
+    (tmp_path / "state.json").write_text("{}", encoding="utf-8")
+    assert config.ready() is True                           # the api container's case
+    (tmp_path / "state.json").unlink()
+    monkeypatch.setenv("FRONTDOOR_USER", "office@example.com")
+    monkeypatch.setenv("FRONTDOOR_PASSWORD", SECRET)
+    assert config.ready() is True                           # owen_ai's case

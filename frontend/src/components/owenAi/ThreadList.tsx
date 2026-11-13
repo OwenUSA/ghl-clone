@@ -53,21 +53,15 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
             style={tabBtn(tab === 'alerts')}>
             Alerts
             {badge.n > 0 && (
-              <span aria-hidden="true" style={{ marginLeft: 6, minWidth: 18, height: 18, padding: '0 5px',
-                borderRadius: 9, fontSize: 11, fontWeight: 600, lineHeight: '18px', display: 'inline-block',
-                color: badge.red ? '#fff' : 'rgb(181,71,8)',
-                background: badge.red ? 'rgb(240,68,56)' : 'rgb(254,240,199)' }}>{badge.n}</span>
+              <CountBadge n={badge.n} color={badge.red ? '#fff' : 'rgb(181,71,8)'}
+                background={badge.red ? 'rgb(240,68,56)' : 'rgb(254,240,199)'} />
             )}
           </button>
           <button type="button" role="tab" aria-selected={tab === 'proposals'} onClick={() => onTab('proposals')}
             aria-label={pendingProposals ? `Proposals: ${pendingProposals} waiting for you` : 'Proposals'}
             style={tabBtn(tab === 'proposals')}>
             Proposals
-            {pendingProposals > 0 && (
-              <span aria-hidden="true" style={{ marginLeft: 6, minWidth: 18, height: 18, padding: '0 5px',
-                borderRadius: 9, fontSize: 11, fontWeight: 600, lineHeight: '18px', display: 'inline-block',
-                color: '#fff', background: BLUE }}>{pendingProposals}</span>
-            )}
+            {pendingProposals > 0 && <CountBadge n={pendingProposals} color="#fff" background={BLUE} />}
           </button>
           <button type="button" role="tab" aria-selected={tab === 'reports'} onClick={() => onTab('reports')}
             style={tabBtn(tab === 'reports')}>Reports</button>
@@ -167,6 +161,18 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
 const startBtn: React.CSSProperties = { flex: 1, textAlign: 'center', fontSize: 13, fontWeight: 500, color: INK,
   border: `1px solid ${LINE}`, borderRadius: 10, padding: '7px 6px', background: '#fff', whiteSpace: 'nowrap' }
 
-const tabBtn = (on: boolean): React.CSSProperties => ({ flex: 1, display: 'flex', alignItems: 'center',
-  justifyContent: 'center', fontSize: 13, fontWeight: 500, color: on ? INK : MUTED, borderRadius: 8, padding: '5px 6px',
+// Four tabs share a 232 px bar, so a count must not take width: it sits on the tab's top-right
+// corner (a count beside the word pushed "Reports" out of the bar, 2026-11-13).
+function CountBadge({ n, color, background }: { n: number; color: string; background: string }) {
+  return (
+    <span aria-hidden="true" style={{ position: 'absolute', top: -5, right: -3, minWidth: 16, height: 16,
+      padding: '0 4px', borderRadius: 8, fontSize: 10, fontWeight: 600, lineHeight: '16px', textAlign: 'center',
+      boxSizing: 'border-box', color, background, boxShadow: '0 0 0 2px rgb(228,231,236)', pointerEvents: 'none' }}>
+      {n > 99 ? '99+' : n}</span>
+  )
+}
+
+const tabBtn = (on: boolean): React.CSSProperties => ({ flex: '1 1 0', minWidth: 0, position: 'relative',
+  display: 'flex', alignItems: 'center', whiteSpace: 'nowrap',
+  justifyContent: 'center', fontSize: 13, fontWeight: 500, color: on ? INK : MUTED, borderRadius: 8, padding: '5px 4px',
   background: on ? '#fff' : 'transparent', boxShadow: on ? '0 1px 2px rgba(16,24,40,0.08)' : undefined })

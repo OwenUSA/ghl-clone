@@ -2777,7 +2777,7 @@ export const transcribeSpeech = (audio: Blob) =>
 // Every route answers 404 unless the signed-in user is THE owner; the browser draws the module
 // only once GET /status succeeded (components/owenAi/useOwenAiStatus.ts).
 export type OwenAiStatus = {
-  enabled: boolean; claude_login: boolean; zuper: boolean; quo: boolean; model: string
+  enabled: boolean; claude_login: boolean; zuper: boolean; quo: boolean; frontdoor: boolean; model: string
   last_answer_at: string | null; sentence: string | null
 }
 export type OwenAiThreadKind = 'daily' | 'job' | 'task' | 'audit'

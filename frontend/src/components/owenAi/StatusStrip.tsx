@@ -16,6 +16,7 @@ export function StatusStrip({ status }: { status: OwenAiStatus | undefined }) {
         <Badge on={status.zuper} label="Zuper" />
         <Badge on={status.quo} label="Quo" />
         <Badge on={status.claude_login} label="Claude login" />
+        <Badge on={status.frontdoor} label="Frontdoor" />
         {status.model && <span style={{ marginLeft: 4 }}>Model: {status.model}</span>}
       </div>
     </div>

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import auth
 from ..db import get_db
+from ..frontdoor import config as frontdoor_config
 from ..models import OwenAiAlert, OwenAiMessage, OwenAiProposalDraft, OwenAiThread, Role
 from ..zuper import config as zuper_config
 from . import (
@@ -88,7 +89,8 @@ def status(p: auth.Principal = OWNER, db: Session = Depends(get_db)) -> dict:
                       .order_by(OwenAiMessage.id.desc()).limit(1)).first()
     return {"enabled": config.enabled(), "claude_login": config.token_set(),
             "zuper": zuper_config.env_enabled() and zuper_config.key_set(),
-            "quo": bool(config.quo_key()), "model": config.model() or "plan default",
+            "quo": bool(config.quo_key()), "frontdoor": frontdoor_config.ready(),
+            "model": config.model() or "plan default",
             "last_answer_at": _iso(last.finished_at) if last else None,
             "sentence": None if config.enabled() and config.token_set() else (
                 config.OFF_SENTENCE if not config.enabled() else config.NO_TOKEN_SENTENCE)}

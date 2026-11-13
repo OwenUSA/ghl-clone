@@ -62,6 +62,15 @@ def chromium() -> str | None:
     return shutil.which("chromium") or shutil.which("chromium-browser")
 
 
+def ready() -> bool:
+    """For the Owen AI page's green chip: reading is on and a login is at hand — the credentials,
+    or a login Owen AI's container saved. The api container has no credentials (only owen_ai
+    mounts them) but sees the owen_ai_home volume read-only, where the saved login lives."""
+    if not enabled():
+        return False
+    return credentials() is not None or (state_dir() / "state.json").is_file()
+
+
 def refusal() -> str | None:
     """Why no read may start now; None = it may."""
     if not enabled():
