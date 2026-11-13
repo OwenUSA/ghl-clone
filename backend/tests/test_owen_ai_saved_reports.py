@@ -321,6 +321,13 @@ def test_the_page_can_read_edit_preview_restore_and_download(world):
     html = call("GET", "/inspection-reports/%d/files/v3/report.html" % row.id, "owner",
                 people_)
     assert html.status_code == 200 and "Sunny, dry" in html.text
+    assert html.headers["content-disposition"].startswith("inline")
+    # "Download HTML" (2026-11-13): the same file, as a download.
+    dl = call("GET", "/inspection-reports/%d/files/v3/report.html?download=1" % row.id, "owner",
+              people_)
+    assert dl.status_code == 200 and dl.content == html.content
+    assert dl.headers["content-disposition"].startswith("attachment")
+    assert ".html" in dl.headers["content-disposition"]
     photo = call("GET", "/inspection-reports/%d/files/%s" % (row.id, d["library"][0]), "owner",
                  people_)
     assert photo.status_code == 200 and photo.headers["content-type"] == "image/jpeg"
