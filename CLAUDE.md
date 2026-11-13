@@ -1070,6 +1070,11 @@ owen_ai "ahs_read". **No test reaches Frontdoor** (`tests/frontdoor_guard.py`). 
 session) outside the 15-minute answer limit, writes `review.xlsx`, and queues a message in the
 chat so Owen AI writes the list from `customer_review_read`. See DECISIONS.md.
 
+**Owen AI answers up to 3 chats at once** (2026-11-13, `OWEN_AI_PARALLEL`), never two in one chat
+and a chat's messages in order. The chat an answer belongs to is `proposals.current_thread()`, a
+context variable: never add a module global that a tool reads to know "which chat". See
+DECISIONS.md.
+
 ## The after-inspection report: Good / Better / Best, editable, no prices (2026-11-12)
 
 Owen AI's `make_inspection_report` now saves the report with versions

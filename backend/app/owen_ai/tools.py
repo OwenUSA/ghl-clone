@@ -141,7 +141,7 @@ def start_customer_review(board: str | None = None, with_frontdoor: bool = True,
     """Starts the background customer review (review.py) and answers at once."""
     try:
         s = review.start(board or dossier.SIMPLE_FLOW, with_frontdoor,
-                         proposals.CURRENT_THREAD, resume)
+                         proposals.current_thread(), resume)
     except Exception as exc:  # noqa: BLE001
         return "ERROR: could not start the customer review: %s" % exc
     return review.started_text(s)

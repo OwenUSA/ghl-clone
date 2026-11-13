@@ -188,11 +188,8 @@ def thread(db, people) -> OwenAiThread:
 
 def propose(db, people, z, **over) -> OwenAiProposalDraft:
     th = thread(db, people)
-    proposals.CURRENT_THREAD = th.id
-    try:
+    with proposals.answering(th.id):
         out = proposals.tool_propose(spec(**over))
-    finally:
-        proposals.CURRENT_THREAD = None
     assert proposals.WAITING in out, out
     db.expire_all()
     return db.query(OwenAiProposalDraft).order_by(OwenAiProposalDraft.id.desc()).first()
@@ -258,11 +255,8 @@ def test_a_sent_proposal_on_the_same_template_refuses_unless_allow_second(db, pe
     out = proposals.tool_propose(spec())
     assert out.startswith("ERROR") and "DTR-149" in out and "allow_second" in out
     assert db.query(OwenAiProposalDraft).count() == 0
-    proposals.CURRENT_THREAD = th.id
-    try:
+    with proposals.answering(th.id):
         assert proposals.WAITING in proposals.tool_propose(spec(allow_second=True))
-    finally:
-        proposals.CURRENT_THREAD = None
     assert all(r.method == "GET" for r in z.requests)
 
 

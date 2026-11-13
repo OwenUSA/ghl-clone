@@ -29,6 +29,8 @@ option on the template's DTR package product, quantity 1, price = the option's p
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import html
 import math
 import os
@@ -85,9 +87,26 @@ SIGNER_UID = "74cd936c-9386-469b-addc-d05d3d1a06a0"
 SIGNER_NAME = "Owen Buzaglo"
 SIGNER_EMAIL = "owen@dreamteamroofingfl.com"
 
-# The thread the runner is answering right now (one message at a time, by design): the tool
-# records it so approve / reject can tell that conversation what happened.
-CURRENT_THREAD: int | None = None
+# The thread THIS answer belongs to: the tool records it so approve / reject can tell that
+# conversation what happened. A context variable, not a module global (2026-11-13): the runner
+# answers up to OWEN_AI_PARALLEL chats at once, each in its own thread and event loop, and a
+# tool call (asyncio.to_thread copies the context) must see its own chat, never another's.
+_CURRENT_THREAD: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "owen_ai_current_thread", default=None)
+
+
+def current_thread() -> int | None:
+    return _CURRENT_THREAD.get()
+
+
+@contextlib.contextmanager
+def answering(thread_id: int | None):
+    """Everything inside belongs to this chat (the runner wraps one answer in it)."""
+    token = _CURRENT_THREAD.set(thread_id)
+    try:
+        yield
+    finally:
+        _CURRENT_THREAD.reset(token)
 
 
 class SpecError(ValueError):
@@ -482,7 +501,7 @@ def tool_propose(args: dict) -> str:
     spec = args.get("spec") if isinstance(args, dict) and "spec" in args else args
     db = _session()
     try:
-        row = prepare(db, spec, CURRENT_THREAD)
+        row = prepare(db, spec, current_thread())
     except SpecError as exc:
         return ("ERROR: the spec is not valid — fix these and call again:\n"
                 + "\n".join("- " + p for p in exc.problems))

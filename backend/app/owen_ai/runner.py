@@ -1,7 +1,13 @@
-"""Owen AI's runner: claims queued messages and answers them, one at a time (2026-11-02).
+"""Owen AI's runner: claims queued messages and answers them (2026-11-02).
 
-Run with `python -m app.owen_ai.runner` (the `owen_ai` container). One message at a time on
-purpose: it is one person's plan, and two turns in the same thread must never run together.
+Run with `python -m app.owen_ai.runner` (the `owen_ai` container). Since 2026-11-13 it answers
+up to `config.parallel()` chats AT ONCE (OWEN_AI_PARALLEL, default 3) — the owner works in
+several chats — but never two messages of the SAME chat together, and always a chat's oldest
+waiting message first (`claim`): a chat's Claude session is resumed from the thread and saved
+back after each answer, so its order is its memory. Each answer runs in its own worker thread
+with its own database session and event loop; the chat it belongs to is a context variable
+(`proposals.answering`), never a shared global. Claims are made only by the main loop, one at a
+time, so the "no answer running in this chat" check cannot race.
 """
 from __future__ import annotations
 
@@ -9,11 +15,12 @@ import logging
 import os
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import case, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import case, exists, func, select, update
+from sqlalchemy.orm import Session, aliased
 
 from ..models import OwenAiMessage, OwenAiThread
 from ..registry import service as registry
@@ -40,9 +47,18 @@ def recover(db: Session) -> int:
 
 
 def claim(db: Session) -> OwenAiMessage | None:
-    # The owner's own messages always go before a sweep's audits.
+    """The next message to answer: the owner's own before a sweep's audits; never one whose
+    chat already has an answer running; never one with an older message still waiting in the
+    same chat (so answers in one chat keep their order even with several running at once)."""
+    other = aliased(OwenAiMessage)
+    busy_chat = exists().where(other.thread_id == OwenAiMessage.thread_id,
+                               other.role == "user", other.status == "running")
+    older_waiting = exists().where(other.thread_id == OwenAiMessage.thread_id,
+                                   other.role == "user", other.status == "queued",
+                                   other.id < OwenAiMessage.id)
     m = db.scalars(select(OwenAiMessage).where(
-        OwenAiMessage.status == "queued", OwenAiMessage.role == "user")
+        OwenAiMessage.status == "queued", OwenAiMessage.role == "user",
+        ~busy_chat, ~older_waiting)
         .order_by(case((OwenAiMessage.kind == "chat", 0), else_=1), OwenAiMessage.id)
         .limit(1)).first()
     if m is None:
@@ -85,11 +101,8 @@ def answer(db: Session, m: OwenAiMessage, turn: TurnFn) -> OwenAiMessage:
         prompt = m.content if not crm else (
             "[From the CRM since your last answer]\n%s\n\n%s" % (
                 "\n".join("- " + n for n in crm), m.content))
-        proposals.CURRENT_THREAD = th.id
-        try:
+        with proposals.answering(th.id):
             result = turn(prompt, th.session_id, note)
-        finally:
-            proposals.CURRENT_THREAD = None
     now = _now()
     reply = OwenAiMessage(
         thread_id=m.thread_id, role="assistant",
@@ -231,6 +244,42 @@ def run_once(db: Session, turn: TurnFn) -> bool:
     return True
 
 
+def answer_in_own_session(message_id: int, turn: TurnFn, session_factory) -> None:
+    """A worker: one claimed message answered with its OWN database session (a Session is
+    never shared between threads). Errors are recorded on the message like run_once does."""
+    db = session_factory()
+    try:
+        m = db.get(OwenAiMessage, message_id)
+        if m is None:
+            return
+        try:
+            answer(db, m, turn)
+        except Exception:                         # a bug here must not kill the worker
+            log.exception("owen_ai: message %s failed", message_id)
+            db.rollback()
+            db.execute(update(OwenAiMessage).where(OwenAiMessage.id == message_id).values(
+                status="error", error="Internal error in the runner (see owen_ai logs).",
+                finished_at=_now()))
+            db.commit()
+    finally:
+        db.close()
+
+
+def dispatch(db: Session, pool: ThreadPoolExecutor, active: set[Future], turn: TurnFn,
+             session_factory, slots: int) -> int:
+    """Claim and hand out messages while a slot is free. Returns how many were started."""
+    for f in [f for f in active if f.done()]:
+        active.discard(f)
+    started = 0
+    while len(active) < slots:
+        m = claim(db)
+        if m is None:
+            break
+        active.add(pool.submit(answer_in_own_session, m.id, turn, session_factory))
+        started += 1
+    return started
+
+
 def main() -> None:                               # pragma: no cover - the container's loop
     from ..db import SessionLocal
     from . import dossier
@@ -246,13 +295,16 @@ def main() -> None:                               # pragma: no cover - the conta
             log.warning("owen_ai: %d message(s) were mid-answer at start; marked error", n)
     finally:
         db.close()
-    log.info("owen_ai runner up (enabled=%s, token=%s, workspace=%s)",
-             config.enabled(), config.token_set(), config.workspace())
+    slots = config.parallel()
+    log.info("owen_ai runner up (enabled=%s, token=%s, workspace=%s, parallel=%d)",
+             config.enabled(), config.token_set(), config.workspace(), slots)
+    pool = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="owen-ai-answer")
+    active: set[Future] = set()
     while True:
         db = SessionLocal()
         try:
             maybe_sweep(db, datetime.now(NY), dossier.open_jobs)
-            busy = run_once(db, agent.run_turn)
+            busy = dispatch(db, pool, active, agent.run_turn, SessionLocal, slots) > 0
         except Exception:
             log.exception("owen_ai: runner loop error")
             db.rollback()

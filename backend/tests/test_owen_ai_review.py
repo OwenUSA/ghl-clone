@@ -198,8 +198,8 @@ def test_start_runs_in_the_background_and_queues_one_message_in_its_chat(reviews
         real(d, s, dossier_fn=dossier_of, open_jobs_fn=lambda board: JOBS,
              frontdoor_fn=lambda ids, each: None)
     monkeypatch.setattr(review, "gather", fake_gather)
-    monkeypatch.setattr(tools.proposals, "CURRENT_THREAD", th.id)
-    out = tools.start_customer_review()
+    with tools.proposals.answering(th.id):
+        out = tools.start_customer_review()
     assert '"started"' in out
     for t in list(review._THREADS.values()):
         t.join(10)
