@@ -27,9 +27,9 @@ Read `knowledge/inspection-report-guide.md` first (the 10 rules) and `knowledge/
 5. **Write the spec** (guide §2–§5):
    - badge, what_happened, hero, location, findings, inside, not_done, weather, inspected_how;
    - `galleries`: e.g. "Inside the house", "Cracked tiles marked by our technician";
-   - `cost_factors`: 2-6 facts about THIS job that drive its price (guide §2b) - stories, roof material,
-     HVHZ only in Miami-Dade / Broward, area size, access, hidden damage. The tool adds the distance
-     from downtown Miami and, on AHS jobs, the AHS section by itself;
+   - `cost_factors`: 2-4 facts about THIS house and roof, strongest first, short (guide §2b); `photo`
+     only when a photo clearly shows it. HVHZ only in Miami-Dade / Broward, otherwise leave the code out.
+     The tool adds warranty, licence, cleanup, the distance and (AHS jobs) the AHS section;
    - `gbb`:
      - per option: headline, picture (6 steps, callouts, layers, top label, roof, notes), the full
        written `scope`, days, and `coverage` (areas drawn on PLAIN photos: `covered`, or

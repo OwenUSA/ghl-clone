@@ -331,8 +331,10 @@ class GalleryPhoto(_Strict):
 
 
 class CostFactor(_Strict):
-    title: Plain(70)
-    why: Plain(280)
+    title: Plain(60)
+    why: Plain(170)
+    photo: Plain(20) = Field("", description="OPTIONAL, e.g. 'photo 20' - only when a photo in "
+                             "this report clearly shows it")
 
 
 class Gallery(_Strict):
@@ -393,11 +395,12 @@ class Spec(_Strict):
     galleries: list[Gallery] | None = Field(None, max_length=4, description=(
         "photo pages after the findings, e.g. 'Inside the house', 'Cracked tiles marked by our "
         "technician'"))
-    cost_factors: list[CostFactor] | None = Field(None, max_length=6, description=(
-        "\"What goes into your price\" (owner, 2026-11-16): 2-6 facts about THIS job that drive "
-        "its cost - stories, roof material, the county's building code, size of the area, access, "
-        "hidden-damage allowance - each with one plain sentence why. Only what the job's data or "
-        "photos show; no dollar amounts. The distance from downtown Miami is added by the tool."))
+    cost_factors: list[CostFactor] | None = Field(None, max_length=4, description=(
+        "\"What goes into your price\" (owner, 2026-11-16): 2-4 facts about THIS house and roof "
+        "that drive its cost, strongest first - roof material, stories / height, joins to walls, "
+        "access, hidden damage, the HVHZ code ONLY in Miami-Dade or Broward. One short sentence "
+        "why each; nothing the option pages already say. Only what the data or photos show; no "
+        "dollar amounts. The tool adds warranty, licence, cleanup and the distance itself."))
     inspector: Plain(80) = Field("", description=(
         "the technician's name to show as Inspector, ONLY when Owen asks for another name than "
         "the one read from Zuper"))
@@ -1466,20 +1469,54 @@ def miles_from_downtown_miami(geo: list[float] | None) -> int | None:
     return int(3958.8 * 2 * math.asin(math.sqrt(h)))
 
 
-def price_factors_html(s: Spec, f: Facts) -> str:
-    items = []
+PRICE_CSS = (
+    ".pricepage{font-size:8.4pt;line-height:1.28}"
+    ".pricepage h2{font-size:12.5pt!important;margin:0 0 1.5mm!important;padding-bottom:1mm}"
+    ".pricepage h2.second{margin-top:3mm!important}.pricepage p{margin:0.8mm 0}"
+    ".ptab{width:100%;border-collapse:collapse;margin:0.5mm 0 1mm}"
+    ".ptab td{border-top:1px solid #e4e7ec;padding:0.9mm 1.5mm;vertical-align:top}"
+    ".ptab td:first-child{width:30%;font-weight:700}.ptab .ph{color:#667085;font-size:7.6pt}"
+    ".ahsimg{width:88%;border:1px solid #d0d5dd;display:block;margin:0.8mm auto 0}"
+    ".ahscap{font-size:6.8pt;color:#667085;margin:0.3mm 0 1.2mm;text-align:center}"
+    ".ahsfine{font-size:7.2pt;color:#667085}")
+
+
+def _warranty_line(f: Facts) -> str:
+    """'1 month (Good), 3 months (Better), 6 months (Best)' from the proposal's options."""
+    parts = ["%s (%s)" % (o.warranty, o.name.title()) for o in f.options if o.warranty]
+    if len(parts) == 1:
+        return parts[0].split(" (")[0]
+    return ", ".join(parts)
+
+
+def price_rows(s: Spec, f: Facts) -> list[tuple[str, str, str]]:
+    """(factor, why, photo) - this job's own factors first (Claude's, strongest first), then the
+    ones true of every job, then the distance (the weakest argument, so last)."""
+    rows = [(c.title, c.why, c.photo) for c in s.cost_factors or []]
+    war = _warranty_line(f)
+    rows.append(("Written workmanship warranty",
+                 "We stand behind the work for %s." % war if war else
+                 "We stand behind the work with a written workmanship warranty.", ""))
+    rows.append(("Licensed and insured",
+                 "Done by a licensed, insured roofing contractor%s, with a trained crew." % (
+                     " (license %s)" % f.license if f.license else ""), ""))
+    rows.append(("Cleanup and disposal",
+                 "Old materials are hauled away and the yard is swept for nails.", ""))
     miles = miles_from_downtown_miami(f.geo)
     if miles is not None and miles >= 5:
-        items.append(("About %d miles from downtown Miami" % miles,
-                      "Our crew, equipment and materials travel about %d miles each way to your "
-                      "home, which adds drive time and fuel to every visit." % miles))
-    items += [(c.title, c.why) for c in s.cost_factors or []]
-    if not items:
-        return ""
-    lis = "".join("<li><b>%s.</b> %s</li>" % (esc(t.rstrip(".")), esc(w)) for t, w in items)
-    return ('<div class="keep"><h2 style="margin-top:6mm">What goes into your price</h2>\n'
-            "<p>These are the main things about your home and this repair that make it cost "
-            "what it does.</p>\n<ul>%s</ul></div>\n" % lis)
+        rows.append(("About %d miles from downtown Miami" % miles,
+                     "The crew, tools and materials travel about %d miles each way to your "
+                     "home." % miles, ""))
+    return rows
+
+
+def price_factors_html(s: Spec, f: Facts) -> str:
+    trs = "".join("<tr><td>%s</td><td>%s%s</td></tr>" % (
+        esc(t.rstrip(".")), esc(w), (' <span class="ph">(see %s)</span>' % esc(ph)) if ph else "")
+        for t, w, ph in price_rows(s, f))
+    return ('<h2>What goes into your price</h2>\n<p>The main things about your home and this '
+            "repair that make it cost what it does:</p>\n<table class=\"ptab\">%s</table>\n"
+            % trs)
 
 
 @cache
@@ -1488,10 +1525,10 @@ def _ahs_img(name: str) -> str:
         (ASSETS / "ahs" / name).read_bytes()).decode()
 
 
-def _ahs_fig(name: str, page: str) -> str:
-    return ('<figure style="margin:2mm 0 4mm"><img src="%s" alt="American Home Shield website" '
-            'style="width:100%%;border:1px solid #d0d5dd"><figcaption>Source: ahs.com (%s), '
-            'captured %s.</figcaption></figure>' % (_ahs_img(name), page, AHS_CAPTURED))
+def _ahs_fig(name: str) -> str:
+    return ('<img class="ahsimg" src="%s" alt="American Home Shield website"><div class="ahscap">'
+            "Source: ahs.com, roof leak repairs page, captured %s.</div>"
+            % (_ahs_img(name), AHS_CAPTURED))
 
 
 def ahs_html(f: Facts) -> str:
@@ -1501,30 +1538,30 @@ def ahs_html(f: Facts) -> str:
         return ""
     claim = ""
     if f.ahs_authorized is not None:
-        claim = ("<p>For <b>your</b> claim, AHS authorized <b>%s</b> (AHS's contractor portal%s). "
-                 "AHS decides that amount for each claim.</p>\n" % (
+        claim = (" For <b>your</b> claim, AHS authorized <b>%s</b> (AHS's contractor portal%s); "
+                 "AHS decides that amount for each claim." % (
                      fmt_money(f.ahs_authorized),
                      ", dispatch " + esc(f.ahs_dispatch) if f.ahs_dispatch else ""))
-    links = '<a href="%s">%s</a><br><a href="%s">%s</a>' % (
-        AHS_ROOF_URL, AHS_ROOF_URL, AHS_PLANS_URL, AHS_PLANS_URL)
     return (
-        '<div class="pgbreak"></div><h2 style="margin-top:0">Why AHS doesn&#39;t pay for all of '
-        "it</h2>\n"
-        "<p>Your American Home Shield (AHS) plan's roof leak coverage pays to <b>repair a covered "
-        "leak, up to a limit</b>. This is how AHS describes that limit on its own website:</p>\n"
-        + _ahs_fig("how-much.png", "roof leak repairs page")
-        + _ahs_fig("plans-limit.png", "plans page") + claim
-        + "<p>AHS repairs a leak; it does not replace roofs or pay for upgrades:</p>\n"
-        + _ahs_fig("replace-roof.png", "roof leak repairs page")
-        + "<p>The options in your proposal go <b>beyond the minimum repair AHS covers</b>: a "
-        "wider area, stronger materials, a longer warranty. That difference is the part you "
-        "pay.</p>\n"
-        + '<div class="keep"><p>AHS also lists what its roof leak coverage does not include:</p>'
-        + _ahs_fig("covered-not-covered.png", "roof leak repairs page") + "</div>\n"
-        + "<p>See the details on AHS's website:<br>" + links + "</p>\n"
-        + '<p style="font-size:8.5pt;color:#667085">AHS can change its terms, and your own AHS '
-        "plan agreement is what applies to you. Dream Team Roofing is not affiliated with "
-        "American Home Shield.</p>\n")
+        "<h2 style=\"margin-top:3mm\">Why AHS doesn&#39;t pay for all of it</h2>\n"
+        "<p>Your American Home Shield (AHS) plan pays to <b>repair a covered roof leak, up to "
+        "$1,000 per plan term</b>, as AHS states below.%s AHS does not replace roofs or pay for "
+        "upgrades:</p>\n" % claim
+        + _ahs_fig("replace-roof.png")
+        + "<p>Your proposal's options go <b>beyond the minimum repair AHS covers</b>: a wider "
+        "area, stronger materials and a longer warranty. That difference is the part you pay. "
+        "This is what AHS lists as covered and not covered:</p>\n"
+        + _ahs_fig("covered-not-covered.png")
+        + '<p class="ahsfine">More details on AHS\'s website: <a href="%s">%s</a> and '
+        '<a href="%s">%s</a>. AHS can change its terms, and your own AHS plan agreement is what '
+        "applies to you. Dream Team Roofing is not affiliated with American Home Shield.</p>\n"
+        % (AHS_ROOF_URL, AHS_ROOF_URL, AHS_PLANS_URL, AHS_PLANS_URL))
+
+
+def price_page_html(s: Spec, f: Facts) -> str:
+    """Both sections on ONE page of their own (owner, 2026-11-16: never more than one page)."""
+    return ('<div class="pgbreak"></div><div class="pricepage">%s%s</div>\n'
+            % (price_factors_html(s, f), ahs_html(f)))
 
 
 def gbb_html(s: Spec, f: Facts, pictures: dict[str, Path | None]) -> str:
@@ -1583,13 +1620,14 @@ def render(spec: Spec | dict, photos_dir: Path | str | None, facts: Facts,
     s = validate(spec, photos_dir, roots)
     imgs: dict[str, str] = {}
     body = page1(s, facts, imgs, bool(s.gbb)) + page2(s, imgs) + findings_html(s, imgs) \
-        + galleries_html(s, imgs) + price_factors_html(s, facts) + ahs_html(facts) \
+        + galleries_html(s, imgs) + price_page_html(s, facts) \
         + gbb_html(s, facts, pictures or {}) + page4(s, facts)
     title = "Roof Inspection Report — Job %s" % esc(facts.job_number)
     return ("<!doctype html><html lang='en'><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>%s</title><style>%s%s%s</style><body>%s%s</body></html>") % (
-        title, _asset("report.css"), EXTRA_CSS, GBB_CSS, body, _asset("lightbox.html"))
+        title, _asset("report.css"), EXTRA_CSS, GBB_CSS + PRICE_CSS, body,
+        _asset("lightbox.html"))
 
 
 def facts_to_dict(f: Facts) -> dict:
