@@ -58,6 +58,9 @@ tool's warnings to Owen in the chat**. Owen downloads it from the chat and decid
 | Inspector | `inspector` (optional) | Only when Owen names a different technician than Zuper's. |
 | Until it's fixed / legal | optional overrides | Defaults come from the playbook §4 and §8. |
 
+**No options in the report (owner, 2026-11-16):** the Good / Better / Best pages stay in the proposal only;
+leave `gbb` out unless Owen asks for them by name.
+
 ## 2b. "What goes into your price" and "Why AHS doesn't pay for all of it" (owner, 2026-11-16)
 
 Every report now carries two sections the owner asked for, so the customer understands the price.
