@@ -330,6 +330,11 @@ class GalleryPhoto(_Strict):
     caption: Words(120) = ""
 
 
+class CostFactor(_Strict):
+    title: Plain(70)
+    why: Plain(280)
+
+
 class Gallery(_Strict):
     title: Words(80)
     photos: list[GalleryPhoto] = Field(min_length=1, max_length=12)
@@ -388,6 +393,11 @@ class Spec(_Strict):
     galleries: list[Gallery] | None = Field(None, max_length=4, description=(
         "photo pages after the findings, e.g. 'Inside the house', 'Cracked tiles marked by our "
         "technician'"))
+    cost_factors: list[CostFactor] | None = Field(None, max_length=6, description=(
+        "\"What goes into your price\" (owner, 2026-11-16): 2-6 facts about THIS job that drive "
+        "its cost - stories, roof material, the county's building code, size of the area, access, "
+        "hidden-damage allowance - each with one plain sentence why. Only what the job's data or "
+        "photos show; no dollar amounts. The distance from downtown Miami is added by the tool."))
     inspector: Plain(80) = Field("", description=(
         "the technician's name to show as Inspector, ONLY when Owen asks for another name than "
         "the one read from Zuper"))
@@ -471,6 +481,13 @@ class Facts:
     proposal: str | None = None
     options: list[Option] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # 2026-11-16: the price-factors and AHS sections. geo = [lat, lon] of the service address;
+    # ahs_job = an AHS job (its board, or an AHS Job ID); ahs_authorized / ahs_dispatch = what
+    # Frontdoor says AHS authorized for THIS claim (None when not read).
+    geo: list[float] | None = None
+    ahs_job: bool = False
+    ahs_authorized: float | None = None
+    ahs_dispatch: str | None = None
 
 
 STATES = {
@@ -791,6 +808,17 @@ def fetch_facts(job_uid: str, proposal: str | None = None) -> Facts:
               customer=" ".join(x for x in (first, last) if x) or None,
               last_name=last or None, address=clean_address(addr) if addr else None,
               warnings=warnings)
+    f.geo = _geo(addr)
+    category = rec.get("job_category")
+    board = str(category.get("category_name") or "") if isinstance(category, dict) else ""
+    has_ahs_id = any(isinstance(x, dict) and str(x.get("label") or "").strip().lower()
+                     == AHS_JOB_ID_LABEL.lower() and str(x.get("value") or "").strip()
+                     for x in rec.get("custom_fields") or [])
+    f.ahs_job = "ahs" in board.lower() or has_ahs_id
+    ahs = ahs_authorization(rec, warnings) if f.ahs_job else None
+    if ahs:
+        f.ahs_authorized = ahs.get("authorized_to_contractor")
+        f.ahs_dispatch = ahs.get("dispatch_id")
     move = _inspection_move(rec)
     when = parse_time(move.get("created_at")) if move else None
     when = when or parse_time(rec.get("scheduled_start_time"))
@@ -816,8 +844,7 @@ def fetch_facts(job_uid: str, proposal: str | None = None) -> Facts:
 
     draft_id = draft_ref(proposal)
     if draft_id is not None:
-        f.options, f.proposal = options_from_draft(draft_id, f.job_uid, warnings,
-                                                   ahs_authorization(rec, warnings))
+        f.options, f.proposal = options_from_draft(draft_id, f.job_uid, warnings, ahs)
         return f
     try:
         rows = [x for x in zc.rows_of(r.get("/estimate", {"filter.job": f.job_uid, "count": 50,
@@ -846,7 +873,7 @@ def fetch_facts(job_uid: str, proposal: str | None = None) -> Facts:
         try:
             full = zc.data_of(r.get("/estimate/" + str(pick["estimate_uid"])))
             f.options = options_of(full if isinstance(full, dict) else {}, f.proposal, warnings,
-                                   ahs_authorization(rec, warnings))
+                                   ahs)
         except zc.ZuperError as exc:
             warnings.append("Could not read %s (%s): no options table."
                             % (f.proposal, zc.sentence(exc)))
@@ -1410,6 +1437,96 @@ def price_box(o: OptionBlock, f: Facts) -> str:
     return '<div class="gprice">%s</div>' % "".join("<div>%s</div>" % r for r in rows)
 
 
+# ------------------------------------------------------- price factors + AHS (2026-11-16)
+
+DOWNTOWN_MIAMI = (25.7743, -80.1937)
+AHS_ROOF_URL = "https://www.ahs.com/our-coverage/additional-coverage/roof-leak-repairs/"
+AHS_PLANS_URL = "https://www.ahs.com/plans/"
+AHS_CAPTURED = "November 16, 2026"          # when assets/ahs/*.png were taken from ahs.com
+
+
+def _geo(addr: dict) -> list[float] | None:
+    g = (addr.get("geo_cordinates") or addr.get("geo_coordinates")) if isinstance(addr, dict) \
+        else None
+    try:
+        lat, lon = float(g[0]), float(g[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return [lat, lon] if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat or lon) else None
+
+
+def miles_from_downtown_miami(geo: list[float] | None) -> int | None:
+    """Straight-line miles, rounded DOWN (the road is always longer: never overstated)."""
+    if not geo:
+        return None
+    import math
+    la1, lo1, la2, lo2 = map(math.radians, (*DOWNTOWN_MIAMI, geo[0], geo[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * \
+        math.sin((lo2 - lo1) / 2) ** 2
+    return int(3958.8 * 2 * math.asin(math.sqrt(h)))
+
+
+def price_factors_html(s: Spec, f: Facts) -> str:
+    items = []
+    miles = miles_from_downtown_miami(f.geo)
+    if miles is not None and miles >= 5:
+        items.append(("About %d miles from downtown Miami" % miles,
+                      "Our crew, equipment and materials travel about %d miles each way to your "
+                      "home, which adds drive time and fuel to every visit." % miles))
+    items += [(c.title, c.why) for c in s.cost_factors or []]
+    if not items:
+        return ""
+    lis = "".join("<li><b>%s.</b> %s</li>" % (esc(t.rstrip(".")), esc(w)) for t, w in items)
+    return ('<div class="keep"><h2 style="margin-top:6mm">What goes into your price</h2>\n'
+            "<p>These are the main things about your home and this repair that make it cost "
+            "what it does.</p>\n<ul>%s</ul></div>\n" % lis)
+
+
+@cache
+def _ahs_img(name: str) -> str:
+    return "data:image/png;base64," + base64.b64encode(
+        (ASSETS / "ahs" / name).read_bytes()).decode()
+
+
+def _ahs_fig(name: str, page: str) -> str:
+    return ('<figure style="margin:2mm 0 4mm"><img src="%s" alt="American Home Shield website" '
+            'style="width:100%%;border:1px solid #d0d5dd"><figcaption>Source: ahs.com (%s), '
+            'captured %s.</figcaption></figure>' % (_ahs_img(name), page, AHS_CAPTURED))
+
+
+def ahs_html(f: Facts) -> str:
+    """Why AHS does not pay for everything - only on an AHS job. Fixed wording and AHS's own
+    words in pictures: Claude cannot change what this section says about AHS."""
+    if not f.ahs_job:
+        return ""
+    claim = ""
+    if f.ahs_authorized is not None:
+        claim = ("<p>For <b>your</b> claim, AHS authorized <b>%s</b> (AHS's contractor portal%s). "
+                 "AHS decides that amount for each claim.</p>\n" % (
+                     fmt_money(f.ahs_authorized),
+                     ", dispatch " + esc(f.ahs_dispatch) if f.ahs_dispatch else ""))
+    links = '<a href="%s">%s</a><br><a href="%s">%s</a>' % (
+        AHS_ROOF_URL, AHS_ROOF_URL, AHS_PLANS_URL, AHS_PLANS_URL)
+    return (
+        '<div class="pgbreak"></div><h2 style="margin-top:0">Why AHS doesn&#39;t pay for all of '
+        "it</h2>\n"
+        "<p>Your American Home Shield (AHS) plan's roof leak coverage pays to <b>repair a covered "
+        "leak, up to a limit</b>. This is how AHS describes that limit on its own website:</p>\n"
+        + _ahs_fig("how-much.png", "roof leak repairs page")
+        + _ahs_fig("plans-limit.png", "plans page") + claim
+        + "<p>AHS repairs a leak; it does not replace roofs or pay for upgrades:</p>\n"
+        + _ahs_fig("replace-roof.png", "roof leak repairs page")
+        + "<p>The options in your proposal go <b>beyond the minimum repair AHS covers</b>: a "
+        "wider area, stronger materials, a longer warranty. That difference is the part you "
+        "pay.</p>\n"
+        + '<div class="keep"><p>AHS also lists what its roof leak coverage does not include:</p>'
+        + _ahs_fig("covered-not-covered.png", "roof leak repairs page") + "</div>\n"
+        + "<p>See the details on AHS's website:<br>" + links + "</p>\n"
+        + '<p style="font-size:8.5pt;color:#667085">AHS can change its terms, and your own AHS '
+        "plan agreement is what applies to you. Dream Team Roofing is not affiliated with "
+        "American Home Shield.</p>\n")
+
+
 def gbb_html(s: Spec, f: Facts, pictures: dict[str, Path | None]) -> str:
     if not s.gbb:
         return ""
@@ -1466,7 +1583,8 @@ def render(spec: Spec | dict, photos_dir: Path | str | None, facts: Facts,
     s = validate(spec, photos_dir, roots)
     imgs: dict[str, str] = {}
     body = page1(s, facts, imgs, bool(s.gbb)) + page2(s, imgs) + findings_html(s, imgs) \
-        + galleries_html(s, imgs) + gbb_html(s, facts, pictures or {}) + page4(s, facts)
+        + galleries_html(s, imgs) + price_factors_html(s, facts) + ahs_html(facts) \
+        + gbb_html(s, facts, pictures or {}) + page4(s, facts)
     title = "Roof Inspection Report — Job %s" % esc(facts.job_number)
     return ("<!doctype html><html lang='en'><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
