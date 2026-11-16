@@ -52,7 +52,7 @@ def test_the_ahs_section_only_on_ahs_jobs_with_their_own_words():
     assert report.ahs_html(facts(ahs_job=False)) == ""
     html = report.ahs_html(facts(ahs_job=True, ahs_authorized=1125.0, ahs_dispatch="99913749"))
     assert "Why AHS doesn&#39;t pay for all of it" in html
-    assert html.count("data:image/png;base64,") == 2
+    assert html.count("data:image/png;base64,") == 3
     assert report.AHS_ROOF_URL in html and report.AHS_PLANS_URL in html
     assert "not affiliated with American Home Shield" in html
     # Never this claim's amount, even when Frontdoor knows it: often it is not known yet.

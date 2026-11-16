@@ -1476,7 +1476,7 @@ PRICE_CSS = (
     ".ptab{width:100%;border-collapse:collapse;margin:0.5mm 0 1mm}"
     ".ptab td{border-top:1px solid #e4e7ec;padding:0.9mm 1.5mm;vertical-align:top}"
     ".ptab td:first-child{width:30%;font-weight:700}.ptab .ph{color:#667085;font-size:7.6pt}"
-    ".ahsimg{width:88%;border:1px solid #d0d5dd;display:block;margin:0.8mm auto 0}"
+    ".ahsimg{width:80%;border:1px solid #d0d5dd;display:block;margin:0.6mm auto 0}"
     ".ahscap{font-size:6.8pt;color:#667085;margin:0.3mm 0 1.2mm;text-align:center}"
     ".ahsfine{font-size:7.2pt;color:#667085}")
 
@@ -1540,8 +1540,9 @@ def ahs_html(f: Facts) -> str:
     return (
         "<h2 class=\"second\">Why AHS doesn&#39;t pay for all of it</h2>\n"
         "<p>Your American Home Shield (AHS) plan pays to <b>repair a covered roof leak, up to "
-        "$1,000 per plan term</b>, as AHS states below. AHS does not replace roofs or pay for "
-        "upgrades:</p>\n"
+        "$1,000 per plan term</b>, as AHS states:</p>\n"
+        + _ahs_fig("how-much.png")
+        + "<p>AHS does not replace roofs or pay for upgrades:</p>\n"
         + _ahs_fig("replace-roof.png")
         + "<p>Your proposal's options go <b>beyond the minimum repair AHS covers</b>: a wider "
         "area, stronger materials and a longer warranty. That difference is the part you pay. "
