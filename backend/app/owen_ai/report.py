@@ -1533,20 +1533,15 @@ def _ahs_fig(name: str) -> str:
 
 def ahs_html(f: Facts) -> str:
     """Why AHS does not pay for everything - only on an AHS job. Fixed wording and AHS's own
-    words in pictures: Claude cannot change what this section says about AHS."""
+    words in pictures: Claude cannot change what this section says about AHS. It never states an
+    amount for the customer's own claim: often it is not known yet (owner, 2026-11-16)."""
     if not f.ahs_job:
         return ""
-    claim = ""
-    if f.ahs_authorized is not None:
-        claim = (" For <b>your</b> claim, AHS authorized <b>%s</b> (AHS's contractor portal%s); "
-                 "AHS decides that amount for each claim." % (
-                     fmt_money(f.ahs_authorized),
-                     ", dispatch " + esc(f.ahs_dispatch) if f.ahs_dispatch else ""))
     return (
-        "<h2 style=\"margin-top:3mm\">Why AHS doesn&#39;t pay for all of it</h2>\n"
+        "<h2 class=\"second\">Why AHS doesn&#39;t pay for all of it</h2>\n"
         "<p>Your American Home Shield (AHS) plan pays to <b>repair a covered roof leak, up to "
-        "$1,000 per plan term</b>, as AHS states below.%s AHS does not replace roofs or pay for "
-        "upgrades:</p>\n" % claim
+        "$1,000 per plan term</b>, as AHS states below. AHS does not replace roofs or pay for "
+        "upgrades:</p>\n"
         + _ahs_fig("replace-roof.png")
         + "<p>Your proposal's options go <b>beyond the minimum repair AHS covers</b>: a wider "
         "area, stronger materials and a longer warranty. That difference is the part you pay. "
