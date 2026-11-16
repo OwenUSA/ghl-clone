@@ -34,7 +34,7 @@ Read `knowledge/inspection-report-guide.md` first (the 10 rules) and `knowledge/
      - per option: headline, picture (6 steps, callouts, layers, top label, roof, notes), the full
        written `scope`, days, and `coverage` (areas drawn on PLAIN photos: `covered`, or
        `excluded` for what GOOD leaves);
-     - then `compare` rows: leaks fixed, membrane, sealing, repair time, photo record, warranty.
+     - then `compare` rows: leaks fixed, membrane, sealing, repair time, warranty.
 
    Run the guide's §6 checklist.
 6. **Call** `mcp__owen__make_inspection_report`. If it returns validation errors, fix them and retry.
