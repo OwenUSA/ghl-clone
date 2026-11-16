@@ -5,6 +5,11 @@ description: Make or change the customer after-inspection report (HTML + PDF, Dr
 
 # After-inspection report
 
+**OWNER'S RULE (2026-11-16): the report has NO Good / Better / Best pages.** Leave `gbb` out. The options,
+their scope and their prices live only in the proposal. The report is the analysis of the roof plus
+"What goes into your price" (`cost_factors`, guide §2b) and, on AHS jobs, the tool's AHS section. Use the
+`gbb` steps below only if Owen asks for the options in a report by name.
+
 Read `knowledge/inspection-report-guide.md` first (the 10 rules) and `knowledge/gbb-procedure.md`
 (what each option really does, and how to draw the areas). Diagnosis help:
 `knowledge/roof-leak-playbook.md` (§0 core rules, §2 symptom → cause, §3 cause cards, §5 severity).
