@@ -38,7 +38,7 @@ in Zuper, and only as a Zuper DRAFT. Nothing is ever sent to a customer. Never s
    (50%):</b> $x</p>`
 5. `<p><i>One sentence on what this option does NOT include.</i></p>` (e.g. "does not include plywood
    decking replacement").
-No general terms, no footer, no separate price lines, no bullets. 250-450 words per option so each option
+No general terms, no footer, no separate price lines, no bullets. **Never promise photos** (before-and-after pictures, completion photographs, photo documentation or a photo sign-off): we do not provide them (owner, 2026-11-16). 250-450 words per option so each option
 fits one page. The option title is a short professional subtitle.
 
 **GOOD's price on an AHS job comes from Frontdoor (owner, 2026-11-16):** GOOD total = Frontdoor's "Total",
@@ -108,7 +108,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | Deck | inspect the deck ("Underlayment & deck inspection") | **plywood decking replacement** (allowance: "up to 1 sheet 4x8 CDX" or "as found") | plywood across the whole 2x footprint |
 | Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | double sealing of seams, flashing, transition | all penetrations, vents and boots resealed; multi-layer elastomeric; **roof maintenance / tune-up** |
 | Materials | reinstall the original tiles; matching replacements for cracked pieces | matching replacement tiles as needed | tile bonding / structural reinstall |
-| Close-out | cleanup + magnetic sweep + final inspection | same | **photo documentation** of the completed work |
+| Close-out | cleanup + magnetic sweep + final inspection | same | same, plus a final quality sign-off (NO photo promises - owner, 2026-11-16) |
 | Warranty | **1 month** | **3 months** | **6 months** (owner, 2026-11-13) |
 | Usual extra findings | — | fascia board, hip re-mortar of the adjacent run, pipe boots, flat-junction recoat | full valley system, skylight or chimney re-flash, full flat recoat |
 
@@ -140,7 +140,7 @@ underlayment (14), penetration reseal (13), 2x area (11).
 3. **Double Underlayment Protection System**: "Install two full layers of high-performance, high-temperature self-adhered waterproof underlayment across the entire expanded footprint for maximum multi-layer defense."
 4. **Premium Sealing & Overall Roof Maintenance**: "Apply multi-layer elastomeric waterproofing compound over all transition seams, flashing joints, and overlaps while resealing adjacent roof penetrations, vents, and boots in the work zone."
 5. **Tile Structural Repair & Reinstallation**: "Mechanically reinstall surface materials across the expanded perimeter, supplying matching replacements as needed."
-6. **Site Cleanup & Photo Documentation**: "Execute meticulous job site cleanup, grounds magnetic sweep, and deliver a photo-documented quality sign-off."
+6. **Site Cleanup & Final Inspection**: "Execute meticulous job site cleanup, grounds magnetic sweep, and a final quality inspection." (Luis's old wording promised a photo-documented sign-off - removed, owner 2026-11-16.)
 
 **Material variants:**
 - **Shingle** (DTR-135): "Shingle Removal & … Teardown: carefully remove approximately N architectural/dimensional shingles …".

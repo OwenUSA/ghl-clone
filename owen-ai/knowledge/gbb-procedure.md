@@ -51,7 +51,7 @@ cleanup + walk-through in the last one ("Tiles Back & Walk-Through").
 - An **expanded area** around every leak: a wider area opened, to cut off water that travels
   sideways under the tiles. The coverage photo must SHOW the bigger area; that is the point of BEST.
 - Two layers of Peel & Stick, and a full flashing overhaul.
-- Two days; a photo record of the finished work; the longest warranty.
+- Two days; the longest warranty.
 
 ## Coverage areas on the real photos
 
