@@ -26,6 +26,27 @@ in Zuper, and only as a Zuper DRAFT. Nothing is ever sent to a customer. Never s
   $0 to the customer when C covers it. On a retail job P is the total itself.
 - Prices Owen gives in the chat still win over this rule.
 
+**THE SCOPE FORMAT - owner's standard (2026-11-16, first written for DTR-181, job #779).** Each option's
+`scope_html` is, in this order and nothing else:
+1. `<p><b>(Retail Value: $R | Special AHS Member Price: $M | AHS Authorized Credit: -$C | Customer Pays Out of
+   Pocket: $P | Total Savings: $S)</b></p>` - ONE line (with no AHS credit, leave the credit out).
+2. `<p><b>Scope of Work</b></p>`
+3. 5 to 8 numbered steps in work order, each `<p><b>N. Step title:</b> 2-4 detailed, professional sentences
+   for THIS job.</p>` (preparation/removal, inspection, waterproofing, the main repair, restoration, final
+   inspection and cleanup). Write like a roofer; never copy garbled dictation.
+4. `<p><b>Workmanship Warranty:</b> N Month(s) · <b>Deposit (50%):</b> $x · <b>Balance Upon Completion
+   (50%):</b> $x</p>`
+5. `<p><i>One sentence on what this option does NOT include.</i></p>` (e.g. "does not include plywood
+   decking replacement").
+No general terms, no footer, no separate price lines, no bullets. 250-450 words per option so each option
+fits one page. The option title is a short professional subtitle.
+
+**GOOD's price on an AHS job comes from Frontdoor (owner, 2026-11-16):** GOOD total = Frontdoor's "Total",
+AHS credit = "Authorized To Contractor", customer pays = "Customer Owes" (`frontdoor_dispatch`). BETTER and
+BEST then rise above it on the steep curve. If Frontdoor's credit is only a trip / inspection amount (e.g.
+$100), count NO credit: the customer pays the full price of every option. Owen's notes on the job (scope and
+prices) win over everything here.
+
 **Price rule (owner, 2026-11-09):** prices Owen gives in the chat **always win**. Without them, estimate each
 option from past prices (§4) and show Owen the basis (the comparable DTR numbers and their prices). This is the
 one exception to the operating manual's "never estimate a price": it covers proposal drafts only, and every estimate
