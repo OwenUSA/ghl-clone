@@ -58,6 +58,32 @@ tool's warnings to Owen in the chat**. Owen downloads it from the chat and decid
 | Inspector | `inspector` (optional) | Only when Owen names a different technician than Zuper's. |
 | Until it's fixed / legal | optional overrides | Defaults come from the playbook §4 and §8. |
 
+## 2b. "What goes into your price" and "Why AHS doesn't pay for all of it" (owner, 2026-11-16)
+
+Every report now carries two sections the owner asked for, so the customer understands the price.
+
+**`cost_factors`** (2-6 items, each `{title, why}`): the facts about THIS job that make it cost what it
+does. The tool adds the distance from downtown Miami itself (from the job's address) - never write
+distance yourself. Use only what the job's data, intake answers or photos show:
+- **Stories / height:** "Two-story home" - ladders, safety lines and slower work on a second-story roof.
+- **Roof material:** concrete tile is lifted and re-set by hand and breaks; matching replacement tiles;
+  shingle or flat roofs have their own steps. Say what THIS roof is.
+- **Building code by county:** Miami-Dade and Broward are in the Florida Building Code's
+  **High-Velocity Hurricane Zone (HVHZ)**: approved (NOA) materials and stricter installation. Palm
+  Beach and other counties are NOT HVHZ - never claim it there. Know the county from the city.
+- **Size of the area:** the option covers a wider area than the leak itself (from the scope).
+- **Access:** trees over the roof, a pool cage, a tight side yard - only when a photo shows it.
+- **Hidden damage:** what is under the tiles / underlayment can only be seen once opened; the price
+  allows for it (only when the scope includes it).
+- **Materials:** peel-and-stick / double underlayment, flashing - when the options use them.
+Plain words, one sentence of "why" each, no dollar amounts, no invented facts. A retail job gets the
+same section.
+
+**The AHS section is written by the tool, not by you:** on an AHS job it shows AHS's own website
+(pictures of the $1,000 limit, "Will AHS replace my roof? No", what is not covered), what AHS
+authorized for THIS claim (from Frontdoor), and the links. You do not write it and cannot change it;
+just make sure your text does not contradict it (e.g. never say AHS will pay for the options).
+
 ## 3. Writing style
 
 - 6th–8th grade. Short sentences. Define a roofing word the first time ("the hip (the ridge that runs down a corner)").
