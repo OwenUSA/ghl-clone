@@ -29,27 +29,34 @@ def test_distance_is_measured_from_downtown_miami_and_rounded_down():
     assert report._geo({"geo_cordinates": [0, 0]}) is None and report._geo({}) is None
 
 
-def test_price_factors_start_with_the_distance_then_claudes_factors():
-    html = report.price_factors_html(spec(("Two-story home", "Ladders and safety lines.")),
-                                     facts(geo=[26.2036594, -80.2189528]))
-    assert "What goes into your price" in html
-    assert html.index("About 29 miles from downtown Miami") < html.index("Two-story home")
-    near = report.price_factors_html(spec(("Concrete tile", "Lifted by hand.")),
-                                     facts(geo=[25.78, -80.20]))
-    assert "miles from downtown" not in near and "Concrete tile" in near
-    assert report.price_factors_html(spec(), facts()) == ""
+def test_the_jobs_own_factors_first_then_every_jobs_then_the_distance_last():
+    f = facts(geo=[26.2036594, -80.2189528], license="CCC123",
+              options=[report.Option(name="GOOD", warranty="1 month"),
+                       report.Option(name="BEST", warranty="6 months")])
+    rows = report.price_rows(spec(("Two-story home", "Ladders and safety lines.")), f)
+    titles = [t for t, *_ in rows]
+    assert titles[0] == "Two-story home"
+    assert titles[1:4] == ["Written workmanship warranty", "Licensed and insured",
+                           "Cleanup and disposal"]
+    assert titles[-1] == "About 29 miles from downtown Miami"
+    assert "1 month (Good), 6 months (Best)" in rows[1][1] and "CCC123" in rows[2][1]
+    near = [t for t, *_ in report.price_rows(spec(), facts(geo=[25.78, -80.20]))]
+    assert not [t for t in near if "miles" in t]
+    photo = report.CostFactor(title="Cedar shakes", why="Cut to fit.", photo="photo 21")
+    html = report.price_factors_html(SimpleNamespace(cost_factors=[photo]), facts())
+    assert "(see photo 21)" in html
+    assert "(see" not in report.price_factors_html(spec(("Tile", "By hand.")), facts())
 
 
 def test_the_ahs_section_only_on_ahs_jobs_with_their_own_words():
     assert report.ahs_html(facts(ahs_job=False)) == ""
     html = report.ahs_html(facts(ahs_job=True, ahs_authorized=1125.0, ahs_dispatch="99913749"))
     assert "Why AHS doesn&#39;t pay for all of it" in html
-    assert html.count("data:image/png;base64,") == 4
+    assert html.count("data:image/png;base64,") == 2
     assert report.AHS_ROOF_URL in html and report.AHS_PLANS_URL in html
     assert "AHS authorized <b>$1,125</b>" in html and "dispatch 99913749" in html
     assert "not affiliated with American Home Shield" in html
-    assert "authorized" not in report.ahs_html(facts(ahs_job=True)).split("<h2")[1].split(
-        "replace roofs")[0].replace("authorized_to", "")
+    assert "For <b>your</b> claim" not in report.ahs_html(facts(ahs_job=True))
 
 
 def test_the_new_facts_survive_a_save():

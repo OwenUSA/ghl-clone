@@ -62,22 +62,23 @@ tool's warnings to Owen in the chat**. Owen downloads it from the chat and decid
 
 Every report now carries two sections the owner asked for, so the customer understands the price.
 
-**`cost_factors`** (2-6 items, each `{title, why}`): the facts about THIS job that make it cost what it
-does. The tool adds the distance from downtown Miami itself (from the job's address) - never write
-distance yourself. Use only what the job's data, intake answers or photos show:
-- **Stories / height:** "Two-story home" - ladders, safety lines and slower work on a second-story roof.
-- **Roof material:** concrete tile is lifted and re-set by hand and breaks; matching replacement tiles;
+**`cost_factors`** (2-4 items, each `{title, why, photo}`), STRONGEST FIRST: facts about THIS house and
+roof that make it cost what it does. The page must stay ONE page, so short: title up to 60 characters,
+one sentence of "why" (up to 170). `photo` is OPTIONAL ("photo 20") - only when a photo in the report
+clearly shows it; leave it empty otherwise. Use only what the job's data, intake answers or photos show:
+- **Roof material:** concrete tile is lifted and re-set by hand and breaks; cedar shakes are cut to fit;
   shingle or flat roofs have their own steps. Say what THIS roof is.
-- **Building code by county:** Miami-Dade and Broward are in the Florida Building Code's
-  **High-Velocity Hurricane Zone (HVHZ)**: approved (NOA) materials and stricter installation. Palm
-  Beach and other counties are NOT HVHZ - never claim it there. Know the county from the city.
-- **Size of the area:** the option covers a wider area than the leak itself (from the scope).
+- **Stories / height / joins:** a second-story roof, or a roof that ends against a two-story wall.
 - **Access:** trees over the roof, a pool cage, a tight side yard - only when a photo shows it.
-- **Hidden damage:** what is under the tiles / underlayment can only be seen once opened; the price
-  allows for it (only when the scope includes it).
-- **Materials:** peel-and-stick / double underlayment, flashing - when the options use them.
-Plain words, one sentence of "why" each, no dollar amounts, no invented facts. A retail job gets the
-same section.
+- **Hidden damage:** what is under the tiles can only be seen once opened; the price allows for it.
+- **Building code:** ONLY in Miami-Dade or Broward - the Florida Building Code's High-Velocity Hurricane
+  Zone (HVHZ) requires approved (NOA) materials and stricter installation. Anywhere else, leave the
+  code OUT (a factor that says "this does not apply" explains nothing).
+- At most ONE line for what the options add ("Each step up opens a wider area and uses stronger
+  waterproofing") - the option pages already show the rest.
+The tool adds by itself, after yours: the workmanship warranty (from the proposal), licensed and
+insured, cleanup and disposal, and the distance from downtown Miami. Never write those. No dollar
+amounts, nothing invented. A retail job gets the same section.
 
 **The AHS section is written by the tool, not by you:** on an AHS job it shows AHS's own website
 (pictures of the $1,000 limit, "Will AHS replace my roof? No", what is not covered), what AHS
