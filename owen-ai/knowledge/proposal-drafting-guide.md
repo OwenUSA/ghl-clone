@@ -38,7 +38,7 @@ in Zuper, and only as a Zuper DRAFT. Nothing is ever sent to a customer. Never s
    (50%):</b> $x</p>`
 5. `<p><i>One sentence on what this option does NOT include.</i></p>` (e.g. "does not include plywood
    decking replacement").
-No general terms, no footer, no separate price lines, no bullets. **Never promise photos** (before-and-after pictures, completion photographs, photo documentation or a photo sign-off): we do not provide them (owner, 2026-11-16). 250-450 words per option so each option
+No general terms, no footer, no separate price lines, no bullets. **Never promise photos** (before-and-after pictures, completion photographs, photo documentation or a photo sign-off): we do not provide them (owner, 2026-11-16). **Never mention a magnetic sweep for nails** either: we do not do it (owner, 2026-11-17). 250-450 words per option so each option
 fits one page. The option title is a short professional subtitle.
 
 **GOOD's price on an AHS job comes from Frontdoor (owner, 2026-11-16):** GOOD total = Frontdoor's "Total",
@@ -108,7 +108,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | Deck | inspect the deck ("Underlayment & deck inspection") | **plywood decking replacement** (allowance: "up to 1 sheet 4x8 CDX" or "as found") | plywood across the whole 2x footprint |
 | Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | double sealing of seams, flashing, transition | all penetrations, vents and boots resealed; multi-layer elastomeric; **roof maintenance / tune-up** |
 | Materials | reinstall the original tiles; matching replacements for cracked pieces | matching replacement tiles as needed | tile bonding / structural reinstall |
-| Close-out | cleanup + magnetic sweep + final inspection | same | same, plus a final quality sign-off (NO photo promises - owner, 2026-11-16) |
+| Close-out | cleanup + final inspection (NO magnetic sweep - owner, 2026-11-17) | same | same, plus a final quality sign-off (NO photo promises - owner, 2026-11-16) |
 | Warranty | **1 month** | **3 months** | **6 months** (owner, 2026-11-13) |
 | Usual extra findings | — | fascia board, hip re-mortar of the adjacent run, pipe boots, flat-junction recoat | full valley system, skylight or chimney re-flash, full flat recoat |
 
@@ -124,7 +124,7 @@ underlayment (14), penetration reseal (13), 2x area (11).
 3. **Underlayment & Waterproof Sealing**: "Remove degraded underlayment, install fresh commercial-grade waterproof underlayment, and seal all perimeter seams and transition joints with heavy-duty elastomeric/bull membrane sealant."
 4. **Flashing & Penetration Reseal** (only the joints that exist in the photos): "Inspect and reseal adjacent wall flashings, transition metal seams, and roof penetrations within the repair zone."
 5. **Tile Re-Integration**: "Reinstall original concrete tiles securely over the repaired section, supplying matching replacement tiles for any cracked or broken pieces."
-6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup, grounds magnetic sweep for metal fasteners, and execute a final quality inspection."
+6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and execute a final quality inspection."
 
 **BETTER** (DTR-129 / 131):
 1. **Expanded Sector Inspection & Teardown**: "Everything in the Good Option, extended across a wider tile removal perimeter around <the spot> to capture hidden water migration."
@@ -132,7 +132,7 @@ underlayment (14), penetration reseal (13), 2x area (11).
 3. **Better Underlayment Upgrade**: "Install premium high-performance, high-temperature self-adhered waterproof underlayment across the expanded sector, securely lapped into surrounding roof sections."
 4. **<Transition / Valley / Wall> Flashing & Double Sealing**: "Apply a double layer of heavy-duty elastomeric waterproofing sealant over all metal seams, wall flashings and perimeter tile overlaps."
 5. **Tile Realignment & Reinstallation**: "Re-align, interlock, and mechanically reinstall concrete roof tiles across the expanded area, supplying matching replacement tiles as needed."
-6. **Site Cleanup & Magnetic Sweep**: "Perform full job site cleanup, grounds magnetic sweep for loose fasteners, and conduct a final quality inspection."
+6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and conduct a final quality inspection."
 
 **BEST** (DTR-129 / 131 / 135):
 1. **2x Extended Teardown & Substrate Access**: "Everything in the Better Option, covering a double-wide work area across <the zone> and surrounding high-risk roof sectors to eliminate hidden water migration."
@@ -140,7 +140,7 @@ underlayment (14), penetration reseal (13), 2x area (11).
 3. **Double Underlayment Protection System**: "Install two full layers of high-performance, high-temperature self-adhered waterproof underlayment across the entire expanded footprint for maximum multi-layer defense."
 4. **Premium Sealing & Overall Roof Maintenance**: "Apply multi-layer elastomeric waterproofing compound over all transition seams, flashing joints, and overlaps while resealing adjacent roof penetrations, vents, and boots in the work zone."
 5. **Tile Structural Repair & Reinstallation**: "Mechanically reinstall surface materials across the expanded perimeter, supplying matching replacements as needed."
-6. **Site Cleanup & Final Inspection**: "Execute meticulous job site cleanup, grounds magnetic sweep, and a final quality inspection." (Luis's old wording promised a photo-documented sign-off - removed, owner 2026-11-16.)
+6. **Site Cleanup & Final Inspection**: "Execute meticulous job site cleanup and a final quality inspection." (Luis's old wording also had a grounds magnetic sweep - removed, owner 2026-11-17. Luis's old wording promised a photo-documented sign-off - removed, owner 2026-11-16.)
 
 **Material variants:**
 - **Shingle** (DTR-135): "Shingle Removal & … Teardown: carefully remove approximately N architectural/dimensional shingles …".
