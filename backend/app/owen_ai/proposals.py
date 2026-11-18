@@ -647,10 +647,20 @@ SPECS = (("propose_proposal_draft", DESCRIPTION, input_schema(), tool_propose),)
 
 # ------------------------------------------------------------------------------ the body
 
+def line_name(o: dict) -> str:
+    """What the customer reads on the line (2026-11-18): the option and its own title, e.g.
+    "BEST - Full-Coverage Repair with Double Underlayment". The template's product names are
+    placeholders ("GOOD - Custom Package (write scope and price on site)") or name a roof the
+    job may not have ("BEST - Maximum Protection Tile Leak Repair" on a cedar shake roof, DTR-195);
+    the product code and uid still say which product it is."""
+    title = (o.get("option_description") or "").strip()
+    return ("%s - %s" % (o["name"], title) if title else o["product"]["name"])[:200]
+
+
 def _line(o: dict) -> dict:
     p = o["product"]
     return {"line_item_type": "ITEM", "product_uid": p["uid"], "product_id": p["code"],
-            "name": p["name"], "description": o["scope_html"],
+            "name": line_name(o), "description": o["scope_html"],
             "product_type": p.get("type") or "SERVICE", "uom": p.get("uom") or "Job",
             "quantity": 1, "unit_price": o["price"], "total": o["price"],
             "tax": {"tax_exempt": False}, "section_type": "EXPANDED", "show_child_prices": True}

@@ -585,3 +585,17 @@ def test_read_proposal_returns_every_options_full_text(db, people):
     assert [o["name"] for o in out["options"]] == ["GOOD", "BETTER", "BEST"]
     assert out["options"][2]["lines"][0]["text"].count("cedar shakes") == 40
     assert "read_proposal" in {name for name, *_ in tools.SPECS}
+
+
+def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(db, people):
+    """DTR-195: the BEST line read "Maximum Protection Tile Leak Repair" on a cedar shake roof,
+    and GOOD / BETTER "Custom Package (write scope and price on site)"."""
+    z = install()
+    row = propose(db, people, z)
+    call("POST", "/proposals/%d/approve" % row.id, "owner", people)
+    est = json.loads(z.writes()[0].content)["estimate"]
+    names = [o["line_items"][0]["name"] for o in est["proposal_options"]]
+    assert names == ["GOOD - Targeted vent repair", "BETTER - Vent + roof edge",
+                     "BEST - Complete repair"]
+    assert [o["line_items"][0]["product_id"] for o in est["proposal_options"]] == [
+        "DTR-CUSTOM-GOOD", "DTR-CUSTOM-BETTER", "DTR-TILE-BEST"]       # same products
