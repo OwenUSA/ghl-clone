@@ -131,6 +131,18 @@ Within the 35 three-tier proposals, BETTER most often added: plywood (25), expan
 underlayment (17). **Plywood is no longer allowed in BETTER (owner, 2026-11-16)**: it moved to BEST or an optional add-on. BEST most often added: tune-up (21), full section (16), photo documentation (15), double
 underlayment (14), penetration reseal (13), 2x area (11).
 
+**Count the leaks before writing a word (owner, 2026-11-18 — #698 went out as 2 leaks when 3 were submitted to
+AHS):** take the HIGHEST count from every source and say each source in `notes_for_owen`:
+- the job's intake answer "How many leaks?";
+- the inspection notes and Antonio's marked photos (each marked area is a leak);
+- Owen's / Luis's notes and calls;
+- **what we submitted to AHS** — the Frontdoor estimate's leak lines. Owen AI cannot read the estimate itself (it
+  is behind "Edit Estimate", which locks it), so compare the Frontdoor TOTAL with the leak count: one leak is
+  usually $1,500-1,900 total, so a $4,100 total is very likely 2-3 leaks. If the total looks bigger than the leaks
+  you found, STOP and ask Owen how many leaks were submitted and where they are.
+Every leak in the count gets its own place in GOOD's scope ("Leak 1 - ...", "Leak 2 - ..."); never fold two into
+one or drop one. Two stain spots inside one marked area are ONE leak area (#836: 11 x 9 ft over the dining table).
+
 **Owen's rules from the team call (2026-11-17):**
 - **Every option's not-included note says we do NOT repair or paint ceilings or drywall inside the home.**
 - **Antonio's video and notes:** anything he mentions that is not in an option (cement, broken tiles, vents, fascia,
