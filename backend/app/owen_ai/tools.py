@@ -323,7 +323,9 @@ SPECS = (
       "\"AHS Job ID\" custom field (job_dossier shows it). Returns the dispatch status, invoice "
       "status, items, plan dates, `authorization` (authorized_to_contractor = what AHS pays us, "
       "customer_owes = the customer's share on AHS's own estimate, total, authorized_at, "
-      "authorized_by; requested=false = no authorization asked yet), AUTHO numbers and NCC / "
+      "authorized_by; requested=false = no authorization asked yet), `estimate_lines` = the "
+      "estimate WE submitted, one line per leak / repair (description, repair, price) - count "
+      "the leaks from it - AUTHO numbers and NCC / "
       "Net Total amounts found in AHS's notes, and the history (update, who, when; no note "
       "text). No customer name, phone or address — use job_dossier for those."),
      {"type": "object", "properties": {"dispatch": {"type": "string"},

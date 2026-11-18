@@ -8,6 +8,7 @@ Money is a float; a figure that is not on the page is None, never 0.
 from __future__ import annotations
 
 import re
+import struct
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
@@ -191,6 +192,8 @@ def dispatch_detail(raw: dict) -> dict:
         "plan_expires": day(cells.get("ContractExpiryDateText")),
         "items": [x for x in (clean(i) for i in raw.get("items") or []) if x],
         "authorization": authorization(raw.get("autho_text")),
+        # What we submitted to AHS, one line per leak / repair (2026-11-18).
+        "estimate_lines": estimate_lines(raw.get("estimate_raw")),
         "authorization_update": latest_autho,
         **figures,
         "history": history,
@@ -224,3 +227,87 @@ def invoice_row(tab: str, cells: dict) -> dict | None:
         "total": money(cells.get("TotalAmount") or cells.get("Total")),
         "paid": money(cells.get("TotalAmountPaid")),
     }
+
+
+# ------------------------------------------------------------------------------- the estimate
+
+def _varint(b: bytes, i: int) -> tuple[int, int]:
+    out = shift = 0
+    while True:
+        c = b[i]
+        i += 1
+        out |= (c & 0x7F) << shift
+        shift += 7
+        if c < 0x80:
+            return out, i
+
+
+def _fields(b: bytes) -> list[tuple[int, int, object]] | None:
+    """One protobuf message -> [(field, wire type, value)], bytes kept raw; None = not a message."""
+
+    out, i = [], 0
+    try:
+        while i < len(b):
+            key, i = _varint(b, i)
+            field, wt = key >> 3, key & 7
+            if field == 0:
+                return None
+            if wt == 0:
+                v, i = _varint(b, i)
+            elif wt == 1:
+                v = struct.unpack("<d", b[i:i + 8])[0]
+                i += 8
+            elif wt == 5:
+                v = struct.unpack("<f", b[i:i + 4])[0]
+                i += 4
+            elif wt == 2:
+                n, i = _varint(b, i)
+                v = b[i:i + n]
+                i += n
+            else:
+                return None
+            if i > len(b):
+                return None
+            out.append((field, wt, v))
+        return out
+    except (IndexError, ValueError, struct.error):
+        return None
+
+
+def _text(v) -> str | None:
+    try:
+        s = v.decode("utf-8") if isinstance(v, bytes) else None
+    except UnicodeDecodeError:
+        return None
+    return s if s and s.isprintable() else None
+
+
+def estimate_lines(data: bytes | None) -> list[dict]:
+    """The estimate WE submitted to AHS, from the portal's `estimate/v1/estimate-summary` answer
+    (protobuf, read while the dispatch page loads - no "Edit Estimate", which locks it).
+    2026-11-18: job #698 was proposed as 2 leaks when 3 were submitted. Schema-less: a
+    diagnosis is a message with a description (field 6) and a repair (field 7: name 2, price 3),
+    seen live as "Leak source on the bedroom window, Leaking hazard" / "Replace Underlayment" /
+    1300.0. -> [{"description", "repair", "price"}] in the portal's order; [] when unreadable."""
+    out: list[dict] = []
+
+    def walk(b: bytes, depth: int) -> None:
+        fs = _fields(b)
+        if fs is None or depth > 12:
+            return
+        desc = next((_text(v) for f, wt, v in fs if f == 6 and wt == 2 and _text(v)), None)
+        rep = next((v for f, wt, v in fs if f == 7 and wt == 2 and _fields(v)), None)
+        if desc and rep is not None:
+            rf = _fields(rep) or []
+            name = next((_text(v) for f, wt, v in rf if f == 2 and wt == 2 and _text(v)), None)
+            price = next((v for f, wt, v in rf if f == 3 and wt == 1), None)
+            if name and isinstance(price, float):
+                out.append({"description": desc, "repair": name, "price": round(price, 2)})
+                return
+        for _f, wt, v in fs:
+            if wt == 2 and isinstance(v, bytes) and len(v) > 2 and not _text(v):
+                walk(v, depth + 1)
+
+    if data:
+        walk(bytes(data), 0)
+    return out
