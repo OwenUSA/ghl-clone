@@ -83,6 +83,7 @@ The tool adds by itself, after yours: the workmanship warranty (from the proposa
 insured, cleanup and disposal, and the distance from downtown Miami. Never write those. No dollar
 amounts, nothing invented. A retail job gets the same section.
 
+**Retail customer on the AHS board** (Owen says no AHS coverage, e.g. #829): set `retail: true` in the spec and the AHS section is left out.
 **The AHS section is written by the tool, not by you:** on an AHS job it shows AHS's own website
 (pictures of the $1,000 limit, "Will AHS replace my roof? No", what is not covered), what AHS
 authorized for THIS claim (from Frontdoor), and the links. You do not write it and cannot change it;
