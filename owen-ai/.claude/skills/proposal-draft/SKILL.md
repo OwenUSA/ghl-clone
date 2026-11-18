@@ -11,6 +11,10 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
 
 **Prices Owen gives in the chat always win.** If he gave none, estimate them (guide §4) and show the basis.
 
+0. **Changing an existing proposal** ("fix DTR-195", "remove the plywood from BETTER"): read it in full with
+   `mcp__owen__read_proposal`. Still a DRAFT → write the corrected spec (ALL its options, not only the changed one)
+   with `replace: "DTR-195"`; Approve changes that same draft in place. Sent / signed / approved → it cannot be
+   changed; tell Owen and offer a new one (`allow_second`). Keep everything Owen did not ask to change.
 1. **Job facts:** `mcp__owen__job_dossier`. Note:
    - board and stage, AHS or retail, and the **AHS authorized credit** (note "AHS approved #… $…" / AUTHO, field
      `AHS authorized ($)`, `AHS-LEAK-REPAIR` line). If the credit is unknown on an AHS job, ask Owen; never assume

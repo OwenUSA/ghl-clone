@@ -521,3 +521,67 @@ def test_an_ampersand_is_escaped_once_whatever_claude_sends():
     for raw in ("Prep & Access", "Prep &amp; Access"):
         assert proposals.sanitize("<b>%s</b>" % raw) == "<b>Prep &amp; Access</b>"
     assert proposals.sanitize("<script>x</script>") == "&lt;script&gt;x&lt;/script&gt;"
+
+
+# ------------------------------------------------------------------------------- changing a draft
+
+def written_draft(uid="w-195", no=195, status="DRAFT", updated="2026-11-13T22:23:00Z"):
+    """A proposal a person (or an earlier approve) already wrote: not empty, so never 'filled'."""
+    d = auto_draft(uid=uid, no=no, status=status)
+    d["updated_at"] = updated
+    for o in d["proposal_options"]:
+        o["line_items"][0]["description"] = "<p>Maximum Protection Tile Leak Repair</p>"
+        o["line_items"][0]["total"] = o["total"] = 3375
+    return d
+
+
+def test_replace_changes_that_draft_in_place_with_one_put_and_no_second_proposal(db, people):
+    z = install([written_draft()])
+    row = propose(db, people, z, replace="DTR-195")
+    assert row.target == "replace:w-195" and row.spec["fill"]["estimate_number"] == "DTR-195"
+    assert row.spec["fill"]["before"][0]["total"] == 3375
+    assert all(r.method == "GET" for r in z.requests)            # proposing writes nothing
+    r = call("POST", "/proposals/%d/approve" % row.id, "owner", people)
+    assert r.json()["status"] == "created", r.json()
+    assert [(w.method, w.url.path) for w in z.writes()] == [("PUT", "/api/estimate/w-195")]
+    est = json.loads(z.writes()[0].content)["estimate"]
+    assert est["estimate_uid"] == "w-195" and est["proposal_options"][0]["option_uid"] == "ou-good"
+    assert len(z.estimates) == 1                                  # no second proposal
+    assert "Tile" not in json.dumps(z.estimates["w-195"])
+    note = db.query(OwenAiMessage).filter_by(thread_id=row.thread_id, role="system").one()
+    assert "changed in Zuper as DTR-195" in note.content
+
+
+def test_replace_refuses_a_sent_proposal_before_storing_anything(db, people):
+    z = install([written_draft(status="AWAIT_RESPONSE")])
+    out = proposals.tool_propose(spec(replace="DTR-195"))
+    assert out.startswith("ERROR") and "not a DRAFT" in out
+    assert db.query(OwenAiProposalDraft).count() == 0 and z.writes() == []
+
+
+def test_replace_refuses_when_someone_edited_it_in_zuper_after_owen_ai_read_it(db, people):
+    z = install([written_draft()])
+    row = propose(db, people, z, replace="DTR-195")
+    z.estimates["w-195"]["updated_at"] = "2026-11-18T15:00:00Z"   # Luis edits it in Zuper
+    r = call("POST", "/proposals/%d/approve" % row.id, "owner", people)
+    assert r.json()["status"] == "failed" and "edited in Zuper" in r.json()["error"]
+    assert z.writes() == []
+
+
+def test_replace_needs_a_proposal_number(db, people):
+    z = install([written_draft()])
+    out = proposals.tool_propose(spec(replace="the tile one"))
+    assert out.startswith("ERROR") and "DTR-195" in out and z.requests == []
+
+
+def test_read_proposal_returns_every_options_full_text(db, people):
+    from app.owen_ai import tools
+    long_text = "<p>" + "Remove the loose cedar shakes along the stone wall. " * 40 + "</p>"
+    d = written_draft()
+    d["proposal_options"][2]["line_items"][0]["description"] = long_text
+    install([d])
+    out = json.loads(tools.read_proposal("701", "DTR-195"))
+    assert out["proposal"] == "DTR-195" and out["can_change"] is True
+    assert [o["name"] for o in out["options"]] == ["GOOD", "BETTER", "BEST"]
+    assert out["options"][2]["lines"][0]["text"].count("cedar shakes") == 40
+    assert "read_proposal" in {name for name, *_ in tools.SPECS}

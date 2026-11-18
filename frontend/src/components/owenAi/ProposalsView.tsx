@@ -115,6 +115,11 @@ function PendingCard({ p, blocked, busy, onApprove, onReject, error }: {
     <article style={{ ...card, borderLeft: `3px solid ${BLUE}` }}>
       <Header p={p} />
       <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{proposalTarget(p)}</div>
+      {p.replaces && p.replaces.length > 0 && (
+        <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+          Now in Zuper: {p.replaces.map(o => `${o.name} ${o.total == null ? '—' : '$' + Number(o.total).toLocaleString('en-US')}`).join(' · ')}
+        </div>
+      )}
       {p.note && <div style={{ fontSize: 13, color: INK, marginTop: 6, whiteSpace: 'pre-wrap' }}>{p.note}</div>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 8, marginTop: 10 }}>
         {p.options.map((o) => <OptionPreview key={o.name} o={o} />)}
@@ -131,7 +136,9 @@ function PendingCard({ p, blocked, busy, onApprove, onReject, error }: {
       {confirming && (
         <div role="group" aria-label="Confirm approve" style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8,
           background: 'rgb(239,244,255)', border: '1px solid rgb(178,204,255)', fontSize: 13, color: INK }}>
-          {p.target.startsWith('fill:')
+          {p.target.startsWith('replace:')
+            ? <>Change <strong>{p.target_number ?? 'the draft'}</strong> in Zuper? Its options are replaced with these.</>
+            : p.target.startsWith('fill:')
             ? <>Fill <strong>{p.target_number ?? 'the empty draft'}</strong> in Zuper with these options?</>
             : <>Create this proposal in Zuper as a <strong>new draft</strong>?</>} It stays a draft — nothing is
           sent to the customer.
@@ -139,7 +146,7 @@ function PendingCard({ p, blocked, busy, onApprove, onReject, error }: {
             <button type="button" disabled={busy}
               onClick={() => { void onApprove().then(() => setConfirming(false)) }}
               style={{ fontSize: 13, color: '#fff', background: busy ? 'rgb(152,162,179)' : BLUE, borderRadius: 8,
-                padding: '5px 14px' }}>{busy ? 'Creating in Zuper…' : 'Yes, create the draft'}</button>
+                padding: '5px 14px' }}>{busy ? 'Saving in Zuper…' : p.target.startsWith('replace:') ? 'Yes, change it' : 'Yes, create the draft'}</button>
             <button type="button" disabled={busy} onClick={() => setConfirming(false)}
               style={{ fontSize: 12, color: MUTED, padding: '0 6px' }}>Cancel</button>
           </div>

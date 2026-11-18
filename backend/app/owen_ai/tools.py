@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import date
 from typing import Any
 
@@ -134,6 +135,44 @@ def frontdoor_read(what: str, dispatch: str | None = None, since: str | None = N
         return "ERROR: unknown Frontdoor read %r" % what
     except Exception as exc:  # noqa: BLE001 — a sentence, never a page's call log
         return "ERROR from Frontdoor: %s" % frontdoor.sentence(exc)
+
+
+def read_proposal(job: str, number: str) -> str:
+    """One proposal's FULL text, option by option (2026-11-18): zuper_get cuts a proposal off
+    before its options, so Owen AI could not see what it was asked to correct."""
+    try:
+        r = dossier.Reader()
+        rec = dossier.find_job(r, str(job))
+        if not isinstance(rec, dict) or not rec.get("job_uid"):
+            return "ERROR: no Zuper job %s" % job
+        want = re.sub(r"\D", "", str(number))
+        row = next((x for x in zc.rows_of(r.get("/estimate", {"filter.job": rec["job_uid"],
+                                                               "count": 50, "page": 1}))
+                    if isinstance(x, dict) and str(x.get("estimate_no")) == want), None)
+        if row is None:
+            return "ERROR: job #%s has no proposal DTR-%s" % (rec.get("work_order_number"), want)
+        e = zc.data_of(r.get("/estimate/" + str(row["estimate_uid"])))
+    except zc.ZuperError as exc:
+        return "ERROR from Zuper: %s" % zc.sentence(exc)
+    except LookupError as exc:
+        return "ERROR: %s" % exc
+    e = e if isinstance(e, dict) else {}
+    opts = []
+    for o in e.get("proposal_options") or []:
+        if not isinstance(o, dict):
+            continue
+        items = [li for li in o.get("line_items") or [] if isinstance(li, dict)]
+        opts.append({"name": o.get("option_name"), "title": o.get("option_description"),
+                     "customer_pays": o.get("total"), "deposit": o.get("deposit"),
+                     "recommended": o.get("is_recommended"),
+                     "lines": [{"product": li.get("product_id") or li.get("product_name"),
+                                "name": li.get("name"), "price": li.get("total"),
+                                "text": proposals.plain(li.get("description") or "")}
+                               for li in items]})
+    return _text({"proposal": "DTR-%s" % e.get("estimate_no"), "status": e.get("estimate_status"),
+                  "title": e.get("proposal_title"), "updated_at": e.get("updated_at"),
+                  "can_change": str(e.get("estimate_status") or "").upper() == "DRAFT",
+                  "options": opts})
 
 
 def find_ahs_dispatch(job: str) -> str:
@@ -292,6 +331,16 @@ SPECS = (
       "required": ["dispatch"]},
      lambda a: frontdoor_read("dispatch", dispatch=str(a["dispatch"]),
                               fresh=bool(a.get("fresh")))),
+    ("read_proposal",
+     ("READ one proposal's FULL text, option by option: title, customer pays, deposit and every "
+      "line's product, name and full scope text (zuper_get cuts proposals off). Use it before "
+      "correcting a proposal; `can_change` says whether it is still a DRAFT (only a DRAFT can be "
+      "changed, with propose_proposal_draft's `replace`)."),
+     {"type": "object", "properties": {"job": {"type": "string"},
+                                       "number": {"type": "string",
+                                                  "description": "e.g. DTR-195"}},
+      "required": ["job", "number"]},
+     lambda a: read_proposal(str(a["job"]), str(a["number"]))),
     ("find_ahs_dispatch",
      ("Which AHS dispatch number(s) belong to a Zuper job (CRM read, instant). Use it whenever "
       "the job's \"AHS Job ID\" field is empty, BEFORE pricing an AHS job: it also looks at "
