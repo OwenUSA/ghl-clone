@@ -42,7 +42,9 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    expanded area and self-adhered underlayment, plus the BETTER findings — **never plywood replacement in BETTER**
    (owner, 2026-11-16). BEST = everything in BETTER plus the 2x area, plywood, double underlayment and tune-up. Use
    5-8 steps in Luis's canonical wording. Warranty **1 / 3 / 6 months** for GOOD / BETTER / BEST (owner,
-   2026-11-13) and the payment terms in each option. **Never promise photos and never mention a magnetic sweep.**
+   2026-11-13) and the payment terms in each option. **Never promise photos and never mention a magnetic sweep.** Team-call rules (guide §2.1, 2026-11-17): the
+   not-included note says we do not repair ceilings / drywall; Antonio's extra findings become optional add-ons;
+   never claim we inspected the flashing; non-round prices ($2,975, not $3,000).
    Every finding goes either into a tier or into `notes_for_owen` as "seen, not priced".
 6. **Prices:** Owen's prices (chat or job notes) win; GOOD on an AHS job = the Frontdoor price (step 1). Otherwise
    the estimate from guide §4: base row + adders → round ($25 / $50) → check the ladder: each step up bigger than

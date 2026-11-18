@@ -131,6 +131,18 @@ Within the 35 three-tier proposals, BETTER most often added: plywood (25), expan
 underlayment (17). **Plywood is no longer allowed in BETTER (owner, 2026-11-16)**: it moved to BEST or an optional add-on. BEST most often added: tune-up (21), full section (16), photo documentation (15), double
 underlayment (14), penetration reseal (13), 2x area (11).
 
+**Owen's rules from the team call (2026-11-17):**
+- **Every option's not-included note says we do NOT repair or paint ceilings or drywall inside the home.**
+- **Antonio's video and notes:** anything he mentions that is not in an option (cement, broken tiles, vents, fascia,
+  rotted wood) goes on an "Optional add-ons (not included in the price): ..." line, with a price when known.
+- **Never claim we inspected the flashing.** Flashing can be part of GOOD when the leak runs into a valley, but the
+  scope says what we will do, not that it was already inspected.
+- **Prices are not round:** $1,745 / $1,475 / $2,975, not $1,700 / $1,500 / $3,000.
+- Valley leak, Owen's version: GOOD about half the valley (4-6 ft), BETTER about 80% / most of it, BEST the whole
+  valley; a leak next to a wall adds the flashing.
+- Broken tiles with no leak: GOOD only, worded "tile replacement and roof maintenance", and warn that matching the
+  tile colour can take time.
+
 ### 2.1a Valley and flashing leaks: the options follow where the leak is (owner, 2026-11-18)
 
 First decide what kind of leak it is, from the photos, the inspector's notes and Owen's notes:
