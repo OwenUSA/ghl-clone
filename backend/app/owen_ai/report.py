@@ -730,12 +730,17 @@ def frontdoor_refusal() -> str | None:
 
 
 def ahs_authorization(rec: dict, warnings: list[str]) -> dict | None:
-    """What AHS authorized on this job, read from Frontdoor by the job's "AHS Job ID" field.
-    None (and no request) when the job has no AHS Job ID or Frontdoor reading is off; a failed
-    read is a warning, never a failed report."""
-    ahs_id = next((str(f.get("value") or "").strip() for f in rec.get("custom_fields") or []
-                   if isinstance(f, dict) and str(f.get("label") or "").strip().lower()
-                   == AHS_JOB_ID_LABEL.lower() and str(f.get("value") or "").strip()), None)
+    """What AHS authorized on this job, read from Frontdoor by the job's "AHS Job ID" field, or,
+    when that is empty, by the one dispatch the CRM ties to this customer (`ahs_ids.single`,
+    2026-11-18). None (and no request) when there is none or several, or Frontdoor reading is
+    off; a failed read is a warning, never a failed report."""
+    from . import ahs_ids
+    ahs_id = ahs_ids.field_id(rec)
+    if not ahs_id:
+        try:
+            ahs_id = ahs_ids.single(rec)
+        except Exception:  # noqa: BLE001 — the CRM lookup must never break the report
+            ahs_id = None
     if not ahs_id or frontdoor_refusal():
         return None
     try:

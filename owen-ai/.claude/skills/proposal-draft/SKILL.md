@@ -15,6 +15,11 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    - board and stage, AHS or retail, and the **AHS authorized credit** (note "AHS approved #… $…" / AUTHO, field
      `AHS authorized ($)`, `AHS-LEAK-REPAIR` line). If the credit is unknown on an AHS job, ask Owen; never assume
      $1,125.
+   - **On an AHS job, GOOD's price is what we submitted in Frontdoor** (owner, 2026-11-16): `frontdoor_dispatch`
+     with the `AHS Job ID` field. **That field is sometimes empty: then call `mcp__owen__find_ahs_dispatch`
+     first** (2026-11-18 — job #768 went out $1,700 too low without it). No dispatch, or no price submitted:
+     GOOD is an estimate, and `notes_for_owen` says so.
+   - **Owen's notes on the job** (often dictated, with each option's scope and prices) win over the guide.
    - room names and leak areas from the notes and chats;
    - **existing proposals**: an auto-created template DRAFT (the tool fills it), or one already sent or approved
      (stop and ask before drafting another; `allow_second: true` only when Owen asks for a reissue).
@@ -28,12 +33,15 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
 4. **Findings:** list the distinct defects with photo refs, the number of leak areas, the stories, and rot seen or
    not seen. Use the inspector's own marks.
 5. **Scopes per tier** (guide §2, §5.2): GOOD = targeted fix of each leak area. BETTER = everything in GOOD plus the
-   expanded area, plywood and self-adhered underlayment, plus the BETTER findings. BEST = everything in BETTER plus
-   the 2x area, double underlayment and tune-up. Use 5-8 steps in Luis's canonical wording. Put
-   the warranty (1 month on every option by default, unless Owen says otherwise) and the payment terms in each option. Every finding goes either into a tier or
-   into `notes_for_owen` as "seen, not priced".
-6. **Prices:** use Owen's prices, or the estimate from guide §4: base row + adders → round ($25 / $50) → check the
-   ladder. Then build the price block: P = price, M = P + C, R = the tier anchor, S = R − P. Deposit = 50%.
+   expanded area and self-adhered underlayment, plus the BETTER findings — **never plywood replacement in BETTER**
+   (owner, 2026-11-16). BEST = everything in BETTER plus the 2x area, plywood, double underlayment and tune-up. Use
+   5-8 steps in Luis's canonical wording. Warranty **1 / 3 / 6 months** for GOOD / BETTER / BEST (owner,
+   2026-11-13) and the payment terms in each option. **Never promise photos and never mention a magnetic sweep.**
+   Every finding goes either into a tier or into `notes_for_owen` as "seen, not priced".
+6. **Prices:** Owen's prices (chat or job notes) win; GOOD on an AHS job = the Frontdoor price (step 1). Otherwise
+   the estimate from guide §4: base row + adders → round ($25 / $50) → check the ladder: each step up bigger than
+   the last, **BEST total at least $3,500**. Then build the price block: P = price, M = P + C, R = the tier anchor,
+   S = R − P. Deposit = 50%.
 7. **Spec:** `{job_uid, template, title, options: [{name, option_description, is_recommended, price, deposit,
    warranty, scope_html}], allow_second?, notes_for_owen}`. Title = `Active Leak Repair - <street address>`.
    `notes_for_owen` must contain the price basis (Owen's, or the estimate row + adders + comparable DTR-N G/B/B),
