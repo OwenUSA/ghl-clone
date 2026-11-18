@@ -136,6 +136,25 @@ def frontdoor_read(what: str, dispatch: str | None = None, since: str | None = N
         return "ERROR from Frontdoor: %s" % frontdoor.sentence(exc)
 
 
+def find_ahs_dispatch(job: str) -> str:
+    """Every AHS dispatch number tied to a Zuper job, with its source (`ahs_ids`, 2026-11-18)."""
+    from . import ahs_ids
+    try:
+        rec = dossier.find_job(dossier.Reader(), str(job))
+    except Exception as exc:  # noqa: BLE001
+        return "ERROR: %s" % exc
+    if not isinstance(rec, dict) or not rec.get("job_uid"):
+        return "ERROR: no Zuper job %s" % job
+    found = ahs_ids.candidates(rec)
+    return _text({"job": rec.get("work_order_number"), "candidates": found,
+                  "use": ahs_ids.single(rec),
+                  "note": ("none found: ask Owen for the dispatch number" if not found else
+                           "one dispatch: use it" if len(found) == 1 or ahs_ids.field_id(rec) else
+                           "several: read each with frontdoor_dispatch, use the one for THIS visit "
+                           "(the newest authorization after the job was created) and say which in "
+                           "notes_for_owen; if unsure, ask")})
+
+
 def start_customer_review(board: str | None = None, with_frontdoor: bool = True,
                           resume: str | None = None) -> str:
     """Starts the background customer review (review.py) and answers at once."""
@@ -273,6 +292,14 @@ SPECS = (
       "required": ["dispatch"]},
      lambda a: frontdoor_read("dispatch", dispatch=str(a["dispatch"]),
                               fresh=bool(a.get("fresh")))),
+    ("find_ahs_dispatch",
+     ("Which AHS dispatch number(s) belong to a Zuper job (CRM read, instant). Use it whenever "
+      "the job's \"AHS Job ID\" field is empty, BEFORE pricing an AHS job: it also looks at "
+      "the job title and the CRM's AHS work-order email cards for the same customer (phone or "
+      "exact name). Returns `candidates` [{dispatch, source}], `use` (the one to read "
+      "without asking, or null) and a `note` saying what to do with several or none."),
+     {"type": "object", "properties": {"job": {"type": "string"}}, "required": ["job"]},
+     lambda a: find_ahs_dispatch(str(a["job"]))),
     ("frontdoor_dispatches",
      ("READ the Frontdoor dispatch list (read-only): every AHS dispatch dated on or after "
       "`since` (YYYY-MM-DD, default 30 days ago), with date, brand, items, status group "

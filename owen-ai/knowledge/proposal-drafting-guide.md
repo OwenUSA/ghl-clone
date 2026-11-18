@@ -42,7 +42,11 @@ No general terms, no footer, no separate price lines, no bullets. **Never promis
 fits one page. The option title is a short professional subtitle.
 
 **GOOD's price on an AHS job comes from Frontdoor (owner, 2026-11-16):** GOOD total = Frontdoor's "Total",
-AHS credit = "Authorized To Contractor", customer pays = "Customer Owes" (`frontdoor_dispatch`). BETTER and
+AHS credit = "Authorized To Contractor", customer pays = "Customer Owes" (`frontdoor_dispatch`). **The job's
+`AHS Job ID` field is sometimes empty** (job #768, 2026-11-17: the proposal went out $1,700 too low): then call
+`find_ahs_dispatch` FIRST - it finds the number in the job title or on the customer's AHS email card in the CRM.
+Several numbers: read each and use the one for this visit, and say which in `notes_for_owen`. None: GOOD is an
+estimate - say so in `notes_for_owen`, never present it as the portal price. BETTER and
 BEST then rise above it on the steep curve. If Frontdoor's credit is only a trip / inspection amount (e.g.
 $100), count NO credit: the customer pays the full price of every option. Owen's notes on the job (scope and
 prices) win over everything here.
@@ -105,7 +109,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 |---|---|---|---|
 | Area | the targeted leak area (one per numbered area) | **expanded area** around the leak (the full valley run, the full wall line) | **2x / double-wide area** or the full roof section |
 | Underlayment | commercial-grade waterproof underlayment | **high-performance, high-temperature self-adhered** (peel & stick) | **double underlayment**: two full self-adhered layers |
-| Deck | inspect the deck ("Underlayment & deck inspection") | **plywood decking replacement** (allowance: "up to 1 sheet 4x8 CDX" or "as found") | plywood across the whole 2x footprint |
+| Deck | inspect the deck ("Underlayment & deck inspection") | inspect the deck again over the wider area; **NO plywood replacement in BETTER** (owner, 2026-11-16) - bad wood goes in the not-included note or an optional add-on | plywood decking replacement (allowance: "up to 1 sheet 4x8 CDX" or "as found"; whole 2x footprint when needed) |
 | Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | double sealing of seams, flashing, transition | all penetrations, vents and boots resealed; multi-layer elastomeric; **roof maintenance / tune-up** |
 | Materials | reinstall the original tiles; matching replacements for cracked pieces | matching replacement tiles as needed | tile bonding / structural reinstall |
 | Close-out | cleanup + final inspection (NO magnetic sweep - owner, 2026-11-17) | same | same, plus a final quality sign-off (NO photo promises - owner, 2026-11-16) |
@@ -113,7 +117,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | Usual extra findings | — | fascia board, hip re-mortar of the adjacent run, pipe boots, flat-junction recoat | full valley system, skylight or chimney re-flash, full flat recoat |
 
 Within the 35 three-tier proposals, BETTER most often added: plywood (25), expanded area (24), premium
-underlayment (17). BEST most often added: tune-up (21), full section (16), photo documentation (15), double
+underlayment (17). **Plywood is no longer allowed in BETTER (owner, 2026-11-16)**: it moved to BEST or an optional add-on. BEST most often added: tune-up (21), full section (16), photo documentation (15), double
 underlayment (14), penetration reseal (13), 2x area (11).
 
 ### 2.2 Canonical step titles and wording (reuse them; adapt the place and material)
@@ -158,7 +162,7 @@ underlayment (14), penetration reseal (13), 2x area (11).
 
 `option_description` patterns (most frequent):
 - GOOD "Targeted <Location> <Material> Leak Repair Package", for example "Targeted Entrance Leak & 4ft Valley Flashing Repair Package".
-- BETTER "Plywood Decking & Better Underlayment Repair Package" (+ ", Expanded Area" / "& Garage Valley Repair").
+- BETTER "Expanded Area & Better Underlayment Repair Package" (+ "& Garage Valley Repair"). Never "Plywood" in a BETTER title (owner, 2026-11-16).
 - BEST "Double Underlayment, Plywood Decking Replacement & 2x Expanded Area Waterproofing Package (Full Coverage)".
 
 Option names are exactly `GOOD`, `BETTER`, `BEST`. Exactly one option is `is_recommended`. It is BEST by convention
@@ -176,9 +180,9 @@ period for this proposal (this replaces the 2026-11-09 "1 month on every option"
 
 | Tier | Text (adapt the "covers" list so it names only work that is in THIS option's scope) |
 |---|---|
-| GOOD | `Workmanship Warranty: 3 Months This warranty covers workmanship on targeted primary leak repair, underlayment tie-in, and material reinstallation for 3 months from completion.` |
-| BETTER | `Workmanship Warranty: 6 Months This warranty covers workmanship on expanded transition leak remediation, plywood replacement, better underlayment installation, seam waterproofing, and tile reinstallation for 6 months from completion.` |
-| BEST | `Workmanship Warranty: 1 Year This warranty covers workmanship on 2x expanded repair, double underlayment installation, plywood replacement, transition sealing, and full material reinstallation for 1 full year from completion.` |
+| GOOD | `Workmanship Warranty: 1 Month This warranty covers workmanship on targeted primary leak repair, underlayment tie-in, and material reinstallation for 1 month from completion.` |
+| BETTER | `Workmanship Warranty: 3 Months This warranty covers workmanship on expanded transition leak remediation, better underlayment installation, seam waterproofing, and tile reinstallation for 3 months from completion.` |
+| BEST | `Workmanship Warranty: 6 Months This warranty covers workmanship on 2x expanded repair, double underlayment installation, plywood replacement, transition sealing, and full material reinstallation for 6 months from completion.` |
 
 Until Nov 9 the most common values were 3 months / 6 months / 1 year; the owner replaced them with 1 month on every option. Older variants exist, and you
 should NOT copy them: 30 days on GOOD and BETTER (DTR-34, 38, 40, 97, 135, 137), 90 days on all three tiers
@@ -218,7 +222,8 @@ anchor, not a cost. Never let M exceed R (DTR-116: M $2,625 > R $2,500).
 
 **Where C comes from. In this order; if none of them exists, ASK Owen. Never guess $1,125.**
 1. Owen says it in the chat.
-2. **Frontdoor, AHS's own portal** (2026-11-12): `frontdoor_dispatch` with the job's `AHS Job ID` field →
+2. **Frontdoor, AHS's own portal** (2026-11-12): `frontdoor_dispatch` with the job's `AHS Job ID` field (empty →
+   `find_ahs_dispatch`, 2026-11-18) →
    `authorization.authorized_to_contractor` is C, and `customer_owes` / `total` are AHS's own estimate (say so if
    you quote them). `requested: false` = AHS has not authorized anything yet → ask Owen. If the tool answers
    "Frontdoor reading is off", go on to 3.
