@@ -34,7 +34,9 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
 3. **Template:** always the **Short Proposal** template (`short`; the tool forces it). Still identify the roof
    material at the leak: write the scope for that material, and if it is not tile, warn Owen in `note` that the
    BEST product is named "Tile Leak Repair".
-4. **Findings:** list the distinct defects with photo refs, the number of leak areas, the stories, and rot seen or
+4. **Findings:** **count the leaks from every source and use the highest** (guide: intake "How many leaks?",
+   inspection notes, Antonio's marked photos, Owen's notes, and the Frontdoor total vs ~$1,500-1,900 per leak; if the
+   total suggests more leaks than you found, ask Owen before drafting). List the distinct defects with photo refs, the number of leak areas, the stories, and rot seen or
    not seen. Use the inspector's own marks.
 5. **Scopes per tier** (guide §2, §5.2). **First decide the leak type** - valley, flashing (into a valley or not),
    or regular - and follow guide §2.1a's ladder for it (owner, 2026-11-18: e.g. half the valley -> whole valley ->
