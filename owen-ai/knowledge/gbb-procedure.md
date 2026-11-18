@@ -45,7 +45,7 @@ whole valley + an extended area. Leak at a flashing that runs into a valley: GOO
 
 - All the leaks the inspection found, not only the main one.
 - A **membrane** (Peel & Stick, self-adhered) instead of plain underlayment.
-- Double sealing of the laps, transitions and flashing.
+- Sealing of the laps, transitions and flashing (one layer - double sealing is BEST's, owner 2026-11-18).
 - A **two-day** repair: the sealed area is left to dry overnight before the tiles go back.
 - A longer warranty (the proposal's).
 - Owen also named a "**bull**" step and "**grinders**". Their meaning is NOT confirmed yet, so do

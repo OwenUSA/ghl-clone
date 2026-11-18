@@ -121,7 +121,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | Area | the targeted leak area (one per numbered area) | **expanded area** around the leak (the full valley run, the full wall line) | **2x / double-wide area** or the full roof section |
 | Underlayment | commercial-grade waterproof underlayment | **high-performance, high-temperature self-adhered** (peel & stick) | **double underlayment**: two full self-adhered layers |
 | Deck | inspect the deck ("Underlayment & deck inspection") | inspect the deck again over the wider area; **NO plywood replacement in BETTER** (owner, 2026-11-16) - bad wood goes in the not-included note or an optional add-on | plywood decking replacement (allowance: "up to 1 sheet 4x8 CDX" or "as found"; whole 2x footprint when needed) |
-| Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | double sealing of seams, flashing, transition | all penetrations, vents and boots resealed; multi-layer elastomeric; **roof maintenance / tune-up** |
+| Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | **sealing** (one layer) of seams, flashing, transition - never "double" in BETTER (owner, 2026-11-18, DTR-210) | **double sealing** (multi-layer elastomeric) of seams, flashing, transition; all penetrations, vents and boots resealed; **roof maintenance / tune-up** |
 | Materials | reinstall the original tiles; matching replacements for cracked pieces | matching replacement tiles as needed | tile bonding / structural reinstall |
 | Close-out | cleanup + final inspection (NO magnetic sweep - owner, 2026-11-17) | same | same, plus a final quality sign-off (NO photo promises - owner, 2026-11-16) |
 | Warranty | **1 month** | **3 months** | **6 months** (owner, 2026-11-13) |
@@ -179,13 +179,13 @@ leak is - each option repairs more of the same system:
 1. **Expanded Sector Inspection & Teardown**: "Everything in the Good Option, extended across a wider tile removal perimeter around <the spot> to capture hidden water migration."
 2. **Plywood Decking Inspection & Replacement**: "Evaluate structural wood decking upon material removal. Remove rotted or water-damaged deck sections and install new code-compliant exterior-grade CDX plywood decking (up to 1 sheet 4x8) across the expanded repair footprint."
 3. **Better Underlayment Upgrade**: "Install premium high-performance, high-temperature self-adhered waterproof underlayment across the expanded sector, securely lapped into surrounding roof sections."
-4. **<Transition / Valley / Wall> Flashing & Double Sealing**: "Apply a double layer of heavy-duty elastomeric waterproofing sealant over all metal seams, wall flashings and perimeter tile overlaps."
+4. **<Transition / Valley / Wall> Flashing & Sealing**: "Apply heavy-duty elastomeric waterproofing sealant over all metal seams, wall flashings and perimeter tile overlaps." (Double sealing is BEST's, owner 2026-11-18.)
 5. **Tile Realignment & Reinstallation**: "Re-align, interlock, and mechanically reinstall concrete roof tiles across the expanded area, supplying matching replacement tiles as needed."
 6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and conduct a final quality inspection."
 
 **BEST** (DTR-129 / 131 / 135):
 1. **2x Extended Teardown & Substrate Access**: "Everything in the Better Option, covering a double-wide work area across <the zone> and surrounding high-risk roof sectors to eliminate hidden water migration."
-2. **Plywood Decking Replacement**: "Remove all damaged, warped, or rotted wood decking across the 2x expanded footprint and install fresh, code-compliant exterior-grade CDX plywood decking."
+2. **Plywood Decking Replacement (If Needed)**: "Remove any damaged, warped, or rotted wood decking found across the 2x expanded footprint and install fresh, code-compliant exterior-grade CDX plywood decking if needed." Always "if needed": not every roof has bad wood (owner, 2026-11-18, DTR-210).
 3. **Double Underlayment Protection System**: "Install two full layers of high-performance, high-temperature self-adhered waterproof underlayment across the entire expanded footprint for maximum multi-layer defense."
 4. **Premium Sealing & Overall Roof Maintenance**: "Apply multi-layer elastomeric waterproofing compound over all transition seams, flashing joints, and overlaps while resealing adjacent roof penetrations, vents, and boots in the work zone."
 5. **Tile Structural Repair & Reinstallation**: "Mechanically reinstall surface materials across the expanded perimeter, supplying matching replacements as needed."
@@ -208,7 +208,7 @@ leak is - each option repairs more of the same system:
 `option_description` patterns (most frequent):
 - GOOD "Targeted <Location> <Material> Leak Repair Package", for example "Targeted Entrance Leak & 4ft Valley Flashing Repair Package".
 - BETTER "Expanded Area & Better Underlayment Repair Package" (+ "& Garage Valley Repair"). Never "Plywood" in a BETTER title (owner, 2026-11-16).
-- BEST "Double Underlayment, Plywood Decking Replacement & 2x Expanded Area Waterproofing Package (Full Coverage)".
+- BEST "Double Underlayment & 2x Expanded Area Package (Full Coverage)" - plywood stays a step "(If Needed)", not a promise in the title.
 
 Option names are exactly `GOOD`, `BETTER`, `BEST`. Exactly one option is `is_recommended`. It is BEST by convention
 (42 of 42 three-tier proposals). Make BETTER the recommended one instead when the photos make BETTER the minimum
