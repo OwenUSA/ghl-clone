@@ -8254,3 +8254,22 @@ once — each in its own worker thread, its own database session and its own eve
 - Shared on purpose: the Quo cache (same data), Frontdoor (one read at a time, by its lock).
 - Limits: each answer is one Claude Code process (~300-400 MB; the container has 1.5 GB), and
   parallel answers spend the Claude plan's usage faster.
+
+## AMENDMENT (2026-11-18): Owen AI can change an existing DRAFT proposal, on Owen's Approve
+
+Asked by the user ("i want it to be able to edit proposals, please do") after Owen AI answered that it
+could not fix DTR-195 (a tile wording on a cedar shake roof) and told Owen to paste text into Zuper.
+Until now Approve could only create a new draft or fill the EMPTY draft Zuper made; every correction
+became a second proposal (#766 ended with two sent, #828 with two drafts).
+
+- `propose_proposal_draft` takes `replace: "DTR-N"`. It must be a DRAFT proposal on this job; a sent,
+  signed or approved one is refused before anything is stored. The row keeps the draft's `updated_at`
+  and its current option names and totals (the Proposals tab shows "Now in Zuper: …").
+- Approve re-reads it: still a DRAFT on this job, and NOT edited since Owen AI read it (else
+  "edited in Zuper after Owen AI read it", nothing written). Then ONE `PUT /estimate/{that uid}` with
+  the full options (its current option uids), read back as before. Never sent; status never named.
+- The write scope is unchanged: `client.owen_ai_proposal_write(fill_uids=[uid])` still allows only
+  that uid; the 2026-11-09 lift ("PUT /estimate/{own uid}") already covered the request shape.
+- `read_proposal` gives Owen AI a proposal's full text (zuper_get cut it off before the options).
+- Tests: `tests/test_owen_ai_proposals.py` (changing a draft: one PUT, no second proposal; refused when
+  sent; refused when edited since; the full-text read).

@@ -263,6 +263,7 @@ export function usd(v: number | null | undefined): string {
 
 /** Where Approve will put it: "New draft" or "Fill DTR-150". */
 export function proposalTarget(p: { target: string; target_number: string | null }): string {
+  if (p.target.startsWith('replace:')) return `Change ${p.target_number ?? 'the draft'} in Zuper (its options are replaced)`
   if (p.target.startsWith('fill:')) return `Fill ${p.target_number ?? 'the empty draft'} (Zuper made it for this job)`
   return 'New draft in Zuper'
 }

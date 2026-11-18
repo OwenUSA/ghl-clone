@@ -2842,6 +2842,7 @@ export type OwenAiProposal = {
   id: number; job_uid: string; job_number: string | null; customer_name: string | null
   template_key: string; template_name: string | null; title: string; status: OwenAiProposalStatus
   target: string; target_number: string | null; estimate_uid: string | null; estimate_number: string | null
+  replaces?: { name: string; option_description: string | null; total: number | null }[] | null
   estimate_url: string | null; job_url: string | null; error: string | null; note: string | null
   thread_id: number | null; created_at: string | null; decided_at: string | null; decided_by: string | null
   total: number; options: OwenAiProposalOption[]

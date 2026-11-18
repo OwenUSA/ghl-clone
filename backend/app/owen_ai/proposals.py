@@ -204,7 +204,8 @@ def description(scope_html: str, warranty: str, price: float, deposit: float,
 
 # ------------------------------------------------------------------------------ the spec
 
-TOP_KEYS = {"job", "template", "title", "options", "allow_second", "note"}
+TOP_KEYS = {"job", "template", "title", "options", "allow_second", "note", "replace"}
+_REPLACE = re.compile(r"\s*(?:DTR-?)?(\d{1,8})\s*", re.IGNORECASE)
 OPTION_KEYS = {"name", "title", "price", "deposit", "recommended", "warranty", "scope_html",
                "payment_terms"}
 
@@ -251,6 +252,13 @@ def validate(spec: Any) -> dict:
     if not isinstance(allow_second, bool):
         problems.append("allow_second must be true or false")
     note = _text(spec, "note", "spec", problems, 1000, required=False)
+    replace = spec.get("replace")
+    if replace is not None:
+        m = _REPLACE.fullmatch(str(replace)) if isinstance(replace, (str, int)) else None
+        if not m:
+            problems.append("replace must be the number of the DRAFT proposal to change, "
+                            "like DTR-195")
+        replace = "DTR-%s" % m.group(1) if m else None
     raw = spec.get("options")
     options: list[dict] = []
     if not isinstance(raw, list) or not 1 <= len(raw) <= 3:
@@ -308,7 +316,8 @@ def validate(spec: Any) -> dict:
     for o in options:
         o["is_recommended"] = bool(o["is_recommended"])
     return {"job": job, "template": template, "title": plain(sanitize(title))[:200],
-            "options": options, "allow_second": allow_second, "note": note}
+            "options": options, "allow_second": allow_second, "note": note,
+            "replace": replace}
 
 
 # ------------------------------------------------------------------------------ reading Zuper
@@ -449,6 +458,9 @@ def prepare(db: Session, spec_in: Any, thread_id: int | None = None,
                                                                    ", ".join(missing))])
     same = [e for e in facts["existing"] if _template_uid(e) == tpl_uid
             and str(e.get("estimate_status") or "").upper() != "DRAFT"]
+    if spec["replace"]:
+        target, fill = _replace_target(r, spec, facts)
+        return _store(db, spec, spec_in, facts, target, fill, thread_id)
     if same and not spec["allow_second"]:
         raise SpecError(["job #%s already has %s on this template (%s). Pass allow_second: true "
                          "only if Owen wants a second one." % (
@@ -464,6 +476,42 @@ def prepare(db: Session, spec_in: Any, thread_id: int | None = None,
                                     if isinstance(o, dict) and o.get("option_uid")}}
             target = "fill:%s" % e["estimate_uid"]
             break
+    return _store(db, spec, spec_in, facts, target, fill, thread_id)
+
+
+def _replace_target(r: dossier.Reader, spec: dict, facts: dict) -> tuple[str, dict]:
+    """The DRAFT proposal Owen asked to change (2026-11-18): on this job, still a DRAFT, a
+    proposal. Its `updated_at` is kept, so Approve can refuse when someone edited it since."""
+    want = spec["replace"]
+    e = next((x for x in facts["existing"] if dossier.proposal_number(x) == want), None)
+    if e is None:
+        rows = [x for x in zc.rows_of(r.get("/estimate", {"filter.job": facts["job_uid"],
+                                                           "count": 50, "page": 1}))
+                if isinstance(x, dict) and not x.get("is_deleted")]
+        row = next((x for x in rows if "DTR-%s" % x.get("estimate_no") == want), None)
+        e = _dict(zc.data_of(r.get("/estimate/" + str(row["estimate_uid"])))) if row else None
+    if not e:
+        raise SpecError(["job #%s has no proposal %s" % (facts["job_number"], want)])
+    if str(e.get("estimate_status") or "").upper() != "DRAFT" or e.get("is_deleted") \
+            or e.get("is_proposal") is False:
+        raise SpecError(["%s is %s, not a DRAFT proposal: it was sent or decided, so it cannot "
+                         "be changed. Draft a new proposal instead (allow_second: true)." % (
+                             want, e.get("estimate_status"))])
+    before = [{"name": str(o.get("option_name") or "").upper(),
+               "option_description": o.get("option_description"), "total": o.get("total")}
+              for o in e.get("proposal_options") or [] if isinstance(o, dict)]
+    return "replace:%s" % e["estimate_uid"], {
+        "estimate_uid": e["estimate_uid"], "estimate_number": want, "replace": True,
+        "updated_at": e.get("updated_at"), "before": before,
+        "option_uids": {str(o.get("option_name") or "").upper(): o.get("option_uid")
+                        for o in e.get("proposal_options") or []
+                        if isinstance(o, dict) and o.get("option_uid")}}
+
+
+def _store(db: Session, spec: dict, spec_in: Any, facts: dict, target: str, fill: dict | None,
+           thread_id: int | None) -> OwenAiProposalDraft:
+    tpl_uid = TEMPLATES[spec["template"]]
+    products = facts["products"]
     options = []
     for o in spec["options"]:
         p = products[o["name"]]
@@ -522,8 +570,7 @@ def tool_propose(args: dict) -> str:
         return "ERROR from Zuper: %s" % zc.sentence(exc)
     finally:
         db.close()
-    fill = (row.spec or {}).get("fill") or {}
-    lines = ["Draft #%d for job #%s%s — %s, \"%s\"." % (
+    lines =["Draft #%d for job #%s%s — %s, \"%s\"." % (
         row.id, row.job_number or row.job_uid,
         ", " + row.customer_name if row.customer_name else "",
         (row.spec or {}).get("template_name") or row.template_key, row.title)]
@@ -531,11 +578,20 @@ def tool_propose(args: dict) -> str:
         lines.append("- %s%s: %s — %s (deposit %s), %s" % (
             o["name"], " (recommended)" if o["is_recommended"] else "", o["option_description"],
             money(o["price"]), money(o["deposit"]), o["product"]["code"]))
-    lines.append("Target: %s." % ("fill the empty draft %s Zuper already made for this job"
-                                  % (fill.get("estimate_number") or row.target[5:])
-                                  if row.target.startswith("fill:") else "a new DRAFT"))
+    lines.append("Target: %s." % target_sentence(row))
     lines.append(WAITING)
     return "\n".join(lines)
+
+
+def target_sentence(row: OwenAiProposalDraft) -> str:
+    fill = (row.spec or {}).get("fill") or {}
+    if row.target.startswith("replace:"):
+        return ("change the DRAFT %s in place (its options are replaced; it stays a draft, "
+                "never sent)" % (fill.get("estimate_number") or row.target[8:]))
+    if row.target.startswith("fill:"):
+        return ("fill the empty draft %s Zuper already made for this job"
+                % (fill.get("estimate_number") or row.target[5:]))
+    return "a new DRAFT"
 
 
 def input_schema() -> dict:
@@ -560,6 +616,9 @@ def input_schema() -> dict:
                                                    "<street>'"},
         "options": {"type": "array", "items": option, "minItems": 1, "maxItems": 3},
         "allow_second": {"type": "boolean"},
+        "replace": {"type": "string", "description": "to CHANGE an existing DRAFT proposal "
+                                                     "instead of making a new one: its number, "
+                                                     "e.g. 'DTR-195'"},
         "note": {"type": "string", "description": "one line for Owen: why these options"}},
         "required": ["job", "title", "options"]}
 
@@ -571,12 +630,15 @@ DESCRIPTION = (
     "job); it is never sent to the customer. It ALWAYS uses the owner's template 'DTR - Tile Leak "
     "Repair - Short Proposal (Good / Better / Best)'. Spec: job; title (proposal_title); "
     "options[1-3] {name GOOD|BETTER|BEST, title (short option title), price (customer pays), "
-    "deposit? (default 50%), recommended? (default BEST), warranty? (default 1 month for every "
-    "option - change it only when Owen gives another), scope_html (Luis's "
+    "deposit? (default 50%), recommended? (default BEST), warranty? (default GOOD 1 month, "
+    "BETTER 3 months, BEST 6 months), scope_html (Luis's "
     "convention: a price-block bullet, then the scope bullets; allowed tags <p> <b> <i> <ul> "
     "<li> <br>, everything else is escaped; warranty and payment terms are added if missing), "
     "payment_terms?}; allow_second? (only if Owen wants a second proposal on the same "
-    "template); note? (one line for Owen). Do NOT type product codes, customer or address: the "
+    "template); replace? (to CHANGE an existing DRAFT proposal, e.g. 'DTR-195': on Approve its "
+    "options are replaced in place - never a second proposal; refused if it was sent or decided, "
+    "or edited in Zuper after you read it); note? (one line for Owen). Do NOT type product codes, "
+    "customer or address: the "
     "tool reads them from Zuper. No pictures. A newer draft for the same job and template "
     "replaces an older one still waiting.")
 
@@ -699,6 +761,21 @@ def check_readback(rec: dict, row: OwenAiProposalDraft) -> list[str]:
     return problems
 
 
+def _refresh_option_uids(row: OwenAiProposalDraft, cur: dict) -> None:
+    """Changing an existing draft (2026-11-18): refuse when someone edited it in Zuper after Owen
+    AI read it, then take its option uids as they are NOW, so the PUT replaces those options."""
+    seen = ((row.spec or {}).get("fill") or {}).get("updated_at")
+    if seen and cur.get("updated_at") and cur.get("updated_at") != seen:
+        raise LookupError("%s was edited in Zuper after Owen AI read it; nothing was changed. "
+                          "Ask Owen AI to read it again and redo the change." % (
+                              dossier.proposal_number(cur) or cur.get("estimate_uid")))
+    spec = dict(row.spec or {})
+    spec["fill"] = {**(spec.get("fill") or {}), "option_uids": {
+        str(o.get("option_name") or "").upper(): o.get("option_uid")
+        for o in cur.get("proposal_options") or [] if isinstance(o, dict) and o.get("option_uid")}}
+    row.spec = spec
+
+
 def approve(db: Session, row_id: int, who: str) -> OwenAiProposalDraft:
     row = db.get(OwenAiProposalDraft, row_id)
     if row is None:
@@ -716,7 +793,8 @@ def approve(db: Session, row_id: int, who: str) -> OwenAiProposalDraft:
         db.refresh(row)
         raise Refused("This draft is already %s." % row.status)
     db.refresh(row)
-    fill_uid = row.target[5:] if row.target.startswith("fill:") else None
+    replace_uid = row.target[8:] if row.target.startswith("replace:") else None
+    fill_uid = row.target[5:] if row.target.startswith("fill:") else replace_uid
     uid = None
     try:
         with zc.owen_ai_proposal_write(fill_uids=[fill_uid] if fill_uid else []):
@@ -726,10 +804,12 @@ def approve(db: Session, row_id: int, who: str) -> OwenAiProposalDraft:
                         or cur.get("is_deleted") or _dict(cur.get("job")).get(
                             "job_uid", row.job_uid) != row.job_uid:
                     raise LookupError(
-                        "%s is no longer an empty DRAFT on this job (status %s); nothing was "
+                        "%s is no longer a DRAFT on this job (status %s); nothing was "
                         "changed. Ask Owen AI for a new draft." % (
                             dossier.proposal_number(cur) or fill_uid,
                             cur.get("estimate_status")))
+                if replace_uid:
+                    _refresh_option_uids(row, cur)
                 zc.request("PUT", "/estimate/" + fill_uid, body=fill_body(row, fill_uid))
                 uid = fill_uid
             else:
@@ -758,8 +838,9 @@ def approve(db: Session, row_id: int, who: str) -> OwenAiProposalDraft:
         row.error = "Internal error (%s)%s." % (type(exc).__name__, (
             "; Zuper may already hold %s" % uid) if uid else "")
     if row.status == "created":
-        _note(db, row, "%s was APPROVED by %s and created in Zuper as %s — a DRAFT, not sent "
+        _note(db, row, "%s was APPROVED by %s and %s in Zuper as %s — a DRAFT, not sent "
                        "to the customer." % (_label(row), who,
+                                             "changed" if replace_uid else "created",
                                              row.estimate_number or row.estimate_uid))
     else:
         _note(db, row, "%s was approved by %s but FAILED in Zuper: %s" % (_label(row), who,
@@ -810,6 +891,7 @@ def out(row: OwenAiProposalDraft, full: bool = True) -> dict:
          "customer_name": row.customer_name, "template_key": row.template_key,
          "template_name": spec.get("template_name"), "title": row.title, "status": row.status,
          "target": row.target, "target_number": fill.get("estimate_number"),
+         "replaces": fill.get("before") if row.target.startswith("replace:") else None,
          "estimate_uid": row.estimate_uid, "estimate_number": row.estimate_number,
          "estimate_url": estimate_url(row.estimate_uid) if row.status in ("created", "failed")
          else None,
