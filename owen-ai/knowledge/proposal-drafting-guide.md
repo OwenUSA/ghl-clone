@@ -120,6 +120,28 @@ Within the 35 three-tier proposals, BETTER most often added: plywood (25), expan
 underlayment (17). **Plywood is no longer allowed in BETTER (owner, 2026-11-16)**: it moved to BEST or an optional add-on. BEST most often added: tune-up (21), full section (16), photo documentation (15), double
 underlayment (14), penetration reseal (13), 2x area (11).
 
+### 2.1a Valley and flashing leaks: the options follow where the leak is (owner, 2026-11-18)
+
+First decide what kind of leak it is, from the photos, the inspector's notes and Owen's notes:
+**a valley leak**, **a flashing leak** (wall, chimney, skylight, roof-to-wall or flat-to-slope joint) that may run
+into a valley, or **a regular leak** (field of the roof, nail, vent, pipe boot). Then build the ladder by WHERE the
+leak is - each option repairs more of the same system:
+
+| Where the leak is | GOOD | BETTER | BEST |
+|---|---|---|---|
+| In the valley, or very close to it | **half the valley** (e.g. 6 ft of a 12 ft valley) around the leak | **the whole valley** (e.g. 12 ft): new valley metal + underlayment the full run | **the whole valley + an extended area** on both sides of it |
+| At a flashing that runs into a valley | **the flashing**: open, new underlayment under it, reseal / replace it | the flashing **+ half the valley** | **the whole valley** + the flashing (new flashing system) |
+| At a flashing, no valley involved | the flashing over the leak area | the whole flashing line (the full wall run) | new flashing system + extended area (stucco cut and re-done when the flashing is in the wall) |
+| A regular leak | targeted repair of the leak area | **expanded area** around it | 2x / double-wide area or the full section |
+
+- Write real lengths: measure the valley on the photos or take them from the notes ("12 ft valley, we do 6 ft").
+  Never invent a length - if it is unknown, say "half the valley" / "the full valley" and put "valley length not
+  measured" in `notes_for_owen`.
+- An AHS patch may be smaller than half the valley (job #828: AHS covers 3 ft, so GOOD 3 ft, BETTER 6 ft, BEST the
+  whole 12 ft). Owen's notes on the job always win over this table.
+- Say in `notes_for_owen` which row you used and why ("leak 2 ft from the valley -> valley ladder").
+- Still: no plywood in BETTER; plywood only in BEST or as an add-on.
+
 ### 2.2 Canonical step titles and wording (reuse them; adapt the place and material)
 
 **GOOD** (Tile, 1-story; DTR-129 / 131 / 108 style):

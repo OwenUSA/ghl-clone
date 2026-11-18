@@ -32,7 +32,9 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    BEST product is named "Tile Leak Repair".
 4. **Findings:** list the distinct defects with photo refs, the number of leak areas, the stories, and rot seen or
    not seen. Use the inspector's own marks.
-5. **Scopes per tier** (guide §2, §5.2): GOOD = targeted fix of each leak area. BETTER = everything in GOOD plus the
+5. **Scopes per tier** (guide §2, §5.2). **First decide the leak type** - valley, flashing (into a valley or not),
+   or regular - and follow guide §2.1a's ladder for it (owner, 2026-11-18: e.g. half the valley -> whole valley ->
+   whole valley + extended area). For a regular leak: GOOD = targeted fix of each leak area. BETTER = everything in GOOD plus the
    expanded area and self-adhered underlayment, plus the BETTER findings — **never plywood replacement in BETTER**
    (owner, 2026-11-16). BEST = everything in BETTER plus the 2x area, plywood, double underlayment and tune-up. Use
    5-8 steps in Luis's canonical wording. Warranty **1 / 3 / 6 months** for GOOD / BETTER / BEST (owner,
