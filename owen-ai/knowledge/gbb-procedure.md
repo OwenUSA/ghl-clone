@@ -36,6 +36,11 @@ the proposal does not price; label it "ask us for a price" instead.
 The picture has room for 6 steps: merge 3 + 4 ("Inspect & Remove Old Underlayment") and put
 cleanup + walk-through in the last one ("Tiles Back & Walk-Through").
 
+**Valley and flashing leaks (owner, 2026-11-18):** the three options grow along the same system, by where the
+leak is. Leak at / near a valley: GOOD half the valley (e.g. 6 ft), BETTER the whole valley (e.g. 12 ft), BEST the
+whole valley + an extended area. Leak at a flashing that runs into a valley: GOOD the flashing, BETTER the flashing
++ half the valley, BEST the whole valley. Full table: `proposal-drafting-guide.md` §2.1a.
+
 ## BETTER: what it adds (Owen + the #292 proposal)
 
 - All the leaks the inspection found, not only the main one.
