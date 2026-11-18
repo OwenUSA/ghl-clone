@@ -136,10 +136,11 @@ AHS):** take the HIGHEST count from every source and say each source in `notes_f
 - the job's intake answer "How many leaks?";
 - the inspection notes and Antonio's marked photos (each marked area is a leak);
 - Owen's / Luis's notes and calls;
-- **what we submitted to AHS** — the Frontdoor estimate's leak lines. Owen AI cannot read the estimate itself (it
-  is behind "Edit Estimate", which locks it), so compare the Frontdoor TOTAL with the leak count: one leak is
-  usually $1,500-1,900 total, so a $4,100 total is very likely 2-3 leaks. If the total looks bigger than the leaks
-  you found, STOP and ask Owen how many leaks were submitted and where they are.
+- **what we submitted to AHS** — `frontdoor_dispatch` returns `estimate_lines`: the estimate we
+  submitted, one line per leak with its description and price (#698: AC unit $1,400, west side of the
+  flat roof $1,400, bedroom window $1,300 = $4,100). **That list is the leak count AHS approved** - every
+  line becomes a leak in the proposal. If it is empty, compare the Frontdoor TOTAL with ~$1,300-1,900 per
+  leak and ask Owen when it suggests more leaks than you found.
 Every leak in the count gets its own place in GOOD's scope ("Leak 1 - ...", "Leak 2 - ..."); never fold two into
 one or drop one. Two stain spots inside one marked area are ONE leak area (#836: 11 x 9 ft over the dining table).
 

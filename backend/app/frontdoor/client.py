@@ -181,6 +181,21 @@ class Portal:
         return out
 
     def dispatch_detail(self, dispatch_id: str) -> dict:
+        page = self.page
+        est: dict = {}
+
+        def keep(resp) -> None:     # the submitted estimate arrives as a GET while the page loads
+            if resp.request.method == "GET" and "/estimate/v1/estimate-summary" in resp.url:
+                with contextlib.suppress(Exception):
+                    est["raw"] = resp.body()
+        page.on("response", keep)
+        try:
+            return self._dispatch_detail(dispatch_id, est)
+        finally:
+            with contextlib.suppress(Exception):
+                page.remove_listener("response", keep)
+
+    def _dispatch_detail(self, dispatch_id: str, est: dict) -> dict:
         self.goto("/dispatches/" + dispatch_id)
         page = self.page
         try:
@@ -202,7 +217,7 @@ class Portal:
         top = page.locator("body").evaluate(EXTRACT)
         return {"dispatch_id": dispatch_id, "cells": top.get("cells") or {},
                 "items": top.get("items") or [], "autho_text": page.evaluate(AUTHO_PANEL),
-                "history": page.evaluate(HISTORY)}
+                "history": page.evaluate(HISTORY), "estimate_raw": est.get("raw")}
 
     def invoice_rows(self) -> dict[str, list[dict]]:
         self.goto("/invoice")

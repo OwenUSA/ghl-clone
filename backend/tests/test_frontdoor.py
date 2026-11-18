@@ -480,3 +480,41 @@ def test_the_owen_ai_pages_chip_is_green_only_when_reading_can_work(monkeypatch,
     monkeypatch.setenv("FRONTDOOR_USER", "office@example.com")
     monkeypatch.setenv("FRONTDOOR_PASSWORD", SECRET)
     assert config.ready() is True                           # owen_ai's case
+
+
+# ------------------------------------------------------------------------------ the estimate
+
+def _pb(field, value):
+    """A tiny protobuf encoder for the test: str/bytes -> length-delimited, float -> double."""
+    import struct
+
+    def varint(n):
+        out = b""
+        while True:
+            b = n & 0x7F
+            n >>= 7
+            out += bytes([b | (0x80 if n else 0)])
+            if not n:
+                return out
+    if isinstance(value, float):
+        return varint(field << 3 | 1) + struct.pack("<d", value)
+    data = value.encode() if isinstance(value, str) else value
+    return varint(field << 3 | 2) + varint(len(data)) + data
+
+
+def test_estimate_lines_read_every_leak_we_submitted():
+    """#698: the estimate listed 3 leaks; the proposal only knew of 2."""
+    def diag(desc, price):
+        return _pb(14, _pb(5, "Underlayment") + _pb(6, desc)
+                   + _pb(7, _pb(2, "Replace Underlayment") + _pb(3, price)))
+    blob = _pb(3, _pb(6, _pb(3, "562") + _pb(5, 4100.0)
+                      + diag("Leak source on the AC unit, leaking hazard", 1400.0)
+                      + diag("Leak source on the west side of the flat roof", 1400.0)
+                      + diag("Leak source on the bedroom window, Leaking hazard", 1300.0)))
+    lines = parse.estimate_lines(blob)
+    assert [line["price"] for line in lines] == [1400.0, 1400.0, 1300.0]
+    assert lines[2] == {"description": "Leak source on the bedroom window, Leaking hazard",
+                        "repair": "Replace Underlayment", "price": 1300.0}
+    assert parse.estimate_lines(None) == [] and parse.estimate_lines(b"\xff\xff") == []
+    detail = parse.dispatch_detail({"dispatch_id": "1", "estimate_raw": blob})
+    assert detail["estimate_lines"] == lines
