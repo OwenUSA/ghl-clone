@@ -373,6 +373,8 @@ class Spec(_Strict):
               "DRAFT-<id> = your pending proposal draft (prices before Owen approves it)")
     final: bool = Field(False, description="kept for compatibility; the page never shows a "
                         "draft banner")
+    retail: bool = Field(False, description="true when Owen says the customer has NO AHS coverage "
+                         "(a retail job on the AHS board, e.g. #829): the AHS section is left out")
     badge: Badge
     what_happened: Rich(1500)
     hero: Hero
@@ -1562,7 +1564,7 @@ def ahs_html(f: Facts) -> str:
 def price_page_html(s: Spec, f: Facts) -> str:
     """Both sections on ONE page of their own (owner, 2026-11-16: never more than one page)."""
     return ('<div class="pgbreak"></div><div class="pricepage">%s%s</div>\n'
-            % (price_factors_html(s, f), ahs_html(f)))
+            % (price_factors_html(s, f), "" if s.retail else ahs_html(f)))
 
 
 def gbb_html(s: Spec, f: Facts, pictures: dict[str, Path | None]) -> str:

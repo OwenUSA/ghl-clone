@@ -64,3 +64,15 @@ def test_the_new_facts_survive_a_save():
     back = report.facts_from_dict(report.facts_to_dict(f))
     assert (back.geo, back.ahs_job, back.ahs_authorized, back.ahs_dispatch) == \
         ([26.2, -80.2], True, 1100.0, "1")
+
+
+def test_retail_leaves_the_ahs_section_out_even_on_the_ahs_board():
+    """#829: on the AHS board with an AHS Job ID, but Owen says she has no AHS coverage."""
+    f = facts(ahs_job=True)
+    ahs_spec = spec(("Two stories", "Access needs more safety equipment."))
+    ahs_spec.retail = False
+    assert "Why AHS doesn&#39;t pay" in report.price_page_html(ahs_spec, f)
+    ahs_spec.retail = True
+    page = report.price_page_html(ahs_spec, f)
+    assert "Why AHS doesn&#39;t pay" not in page and "What goes into your price" in page
+    assert "retail" in report.Spec.model_fields
