@@ -46,7 +46,8 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    Every finding goes either into a tier or into `notes_for_owen` as "seen, not priced".
 6. **Prices:** Owen's prices (chat or job notes) win; GOOD on an AHS job = the Frontdoor price (step 1). Otherwise
    the estimate from guide §4: base row + adders → round ($25 / $50) → check the ladder: each step up bigger than
-   the last, **BEST total at least $3,500**. Then build the price block: P = price, M = P + C, R = the tier anchor,
+   the last, **BEST total at least $3,500**. **Out of pocket, BETTER ≈ 2× GOOD (a step the customer can take) and
+   BEST ≈ $3,000+ as the anchor** (owner, 2026-11-18; DTR-182: $475 / $950 / $3,000). Then build the price block: P = price, M = P + C, R = the tier anchor,
    S = R − P. Deposit = 50%.
 7. **Spec:** `{job_uid, template, title, options: [{name, option_description, is_recommended, price, deposit,
    warranty, scope_html}], allow_second?, notes_for_owen}`. Title = `Active Leak Repair - <street address>`.

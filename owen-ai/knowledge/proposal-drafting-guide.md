@@ -18,6 +18,17 @@ in Zuper, and only as a Zuper DRAFT. Nothing is ever sent to a customer. Never s
 | Warranty | **1 month** | **3 months** | **6 months** |
 | Option total, BEFORE the AHS credit (= M, the member price; R−D… on a retail job = P) | lowest | a clear step up | **$3,500 – $4,000 or more** |
 
+**BETTER stays close to GOOD; BEST is the anchor (owner, 2026-11-18 — overrides the curve below for what the
+customer pays):** a customer whose GOOD is $475 out of pocket will not jump to $1,575 for BETTER. Price by what the
+CUSTOMER PAYS:
+- **BETTER ≈ 2× GOOD's out-of-pocket** (round to $25 / $50) - a step the customer can say yes to. DTR-182 (#182
+  Daniel Trigo): GOOD $475 → BETTER $950 (it was $1,575).
+- **BEST ≈ $3,000 out of pocket, or more** - it is there to make BETTER look reasonable (the "scare" option). BEST
+  stays the recommended one and its total stays at least $3,500. DTR-182: BEST $3,000 (it was $3,375).
+- When GOOD's out-of-pocket is already high (over ~$1,000, e.g. a $2,075 portal share), keep BETTER a modest step
+  (about +$1,000) and BEST clearly above it.
+- Say in `notes_for_owen`: "BETTER ≈ 2× GOOD, BEST as the anchor".
+
 - The three totals climb like an **exponential curve**: each step is bigger than the one before
   (BEST − BETTER > BETTER − GOOD), never a flat ladder. A shape that fits: BETTER ≈ 1.6–2× GOOD and BEST ≈ 1.6–2×
   BETTER, with BEST never under $3,500. Pick the actual figures per job from the scope (§4's table tells you which
