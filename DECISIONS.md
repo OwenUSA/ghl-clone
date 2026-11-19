@@ -8273,3 +8273,22 @@ became a second proposal (#766 ended with two sent, #828 with two drafts).
 - `read_proposal` gives Owen AI a proposal's full text (zuper_get cut it off before the options).
 - Tests: `tests/test_owen_ai_proposals.py` (changing a draft: one PUT, no second proposal; refused when
   sent; refused when edited since; the full-text read).
+
+## AMENDMENT (2026-11-19): Owen AI sub-chats — one main chat runs many customers (phase 1)
+
+Asked by the user: "i should be able to work in a chat there and that chat use other multiple ones to build
+the proposals for each client, or make corrections". Plan: Downloads/"Owen AI - multi-chat proposals plan.md";
+decided: the main chat will approve drafts that pass every rule check (phase 2), 3 at once (phase 3).
+
+Phase 1 (this change, `app/owen_ai/delegate.py`):
+- `owen_ai_threads.parent_id` (migration a7c3e5f1b902, nullable). A sub-chat is a task thread of the same
+  owner with the main chat as parent; one queued message (kind "delegate") holds the job, Owen's instructions
+  and the standing rules. The runner ranks: Owen's own chat messages, then sub-chats, then reviews / audits.
+- Tools on the main chat: `delegate_jobs` (1-15 customers, each job once), `delegated_status` (each
+  sub-chat's state, last answer and proposal draft), `send_to_sub_chat` (only this chat's own sub-chats).
+  A sub-chat cannot start sub-chats.
+- When the last sub-chat of a main chat has nothing queued or running, the runner queues ONE
+  "[sub-chats finished]" follow-up in the main chat (also on the runner's error path) — like the customer
+  review's follow-up. Nothing here writes to Zuper; drafts still reach Zuper only through Approve.
+- The chat list draws sub-chats under their main chat.
+- Tests: tests/test_owen_ai_delegate.py.

@@ -22,7 +22,7 @@ export function owenAiVisible(q: { isSuccess: boolean; data?: unknown }): boolea
   return q.isSuccess && q.data != null
 }
 
-export type ThreadLike = { id: number; kind: string; updated_at: string | null; archived?: boolean }
+export type ThreadLike = { id: number; kind: string; updated_at: string | null; archived?: boolean; parent_id?: number | null }
 export type ThreadGroupName = 'Daily' | 'Jobs' | 'Other' | 'Audits'
 // Audits (2026-11-03) are the scheduled sweep's conversations: read-only, listed last.
 export const THREAD_GROUPS: readonly ThreadGroupName[] = ['Daily', 'Jobs', 'Other', 'Audits']
@@ -39,11 +39,25 @@ const time = (iso: string | null | undefined) => {
   return Number.isNaN(t) ? 0 : t
 }
 
-/** Daily / Jobs / Other / Audits, each newest first by updated_at. Empty groups are left out. */
+/** A main chat's sub-chats (2026-11-19), oldest first: they are listed under it, not on their own. */
+export function subChats<T extends ThreadLike>(threads: T[]): Map<number, T[]> {
+  const ids = new Set(threads.map((t) => t.id))
+  const out = new Map<number, T[]>()
+  for (const t of threads) {
+    if (t.parent_id != null && ids.has(t.parent_id)) out.set(t.parent_id, [...(out.get(t.parent_id) ?? []), t])
+  }
+  for (const list of out.values()) list.sort((a, b) => a.id - b.id)
+  return out
+}
+
+/** Daily / Jobs / Other / Audits, each newest first by updated_at. Empty groups are left out.
+ * A sub-chat whose main chat is in the list is left out here (it is drawn under its main chat). */
 export function groupThreads<T extends ThreadLike>(threads: T[]): { group: ThreadGroupName; threads: T[] }[] {
+  const ids = new Set(threads.map((t) => t.id))
+  const top = threads.filter((t) => t.parent_id == null || !ids.has(t.parent_id))
   return THREAD_GROUPS.map((group) => ({
     group,
-    threads: threads.filter((t) => threadGroup(t.kind) === group)
+    threads: top.filter((t) => threadGroup(t.kind) === group)
       .sort((a, b) => time(b.updated_at) - time(a.updated_at) || b.id - a.id),
   })).filter((g) => g.threads.length > 0)
 }

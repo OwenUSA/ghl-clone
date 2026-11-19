@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, aliased
 
 from ..models import OwenAiMessage, OwenAiThread
 from ..registry import service as registry
-from . import agent, alerts, config, proposals
+from . import agent, alerts, config, delegate, proposals
 
 log = logging.getLogger("owen_ai")
 NY = ZoneInfo("America/New_York")
@@ -59,7 +59,8 @@ def claim(db: Session) -> OwenAiMessage | None:
     m = db.scalars(select(OwenAiMessage).where(
         OwenAiMessage.status == "queued", OwenAiMessage.role == "user",
         ~busy_chat, ~older_waiting)
-        .order_by(case((OwenAiMessage.kind == "chat", 0), else_=1), OwenAiMessage.id)
+        .order_by(case((OwenAiMessage.kind == "chat", 0), (OwenAiMessage.kind == delegate.KIND, 1),
+                       else_=2), OwenAiMessage.id)
         .limit(1)).first()
     if m is None:
         return None
@@ -120,6 +121,8 @@ def answer(db: Session, m: OwenAiMessage, turn: TurnFn) -> OwenAiMessage:
         th.updated_at = now
     db.commit()
     db.refresh(reply)
+    if th is not None and th.parent_id:
+        delegate.after_answer(db, th)      # the last sub-chat done -> one summary in the main chat
     if m.kind == "audit" and th is not None:
         if not result.error and m.job_uid and m.started_at:
             alerts.settle_job(db, m.job_uid, m.started_at)
@@ -261,6 +264,7 @@ def answer_in_own_session(message_id: int, turn: TurnFn, session_factory) -> Non
                 status="error", error="Internal error in the runner (see owen_ai logs).",
                 finished_at=_now()))
             db.commit()
+            delegate.after_answer(db, db.get(OwenAiThread, m.thread_id))
     finally:
         db.close()
 
