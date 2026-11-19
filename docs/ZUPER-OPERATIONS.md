@@ -547,6 +547,7 @@ Details"). Always send `label, value, group_name, group_uid, type`.
 | Product | `PUT /product/{uid} {"product":{…}}` |
 | Invoice template | `PUT /invoice_estimate/template/{uid} {"template":{…}}` |
 | Copy gallery pictures / videos to another job (web JS, 2026-11-19) | `POST /attachments/bulk_actions` — see 8b. **Never** `"action":"move"` |
+| Upload a picture into a job gallery (web JS, 2026-11-19) | `POST /misc/upload` multipart + `module=JOB`, `module_uid=<job>` — see 8b |
 
 ### 8b. Copying gallery pictures and videos to another job (2026-11-19)
 
@@ -579,6 +580,16 @@ POST /api/attachments/bulk_actions
   Attachments section only. Both were measured on #753.
 - Before copying, download the files and keep a checksum copy (as below); afterwards, download
   each from the target and compare.
+
+**Uploading a NEW picture straight into a job's gallery** (the web app's gallery uploader):
+`POST /api/misc/upload`, multipart, fields `attachment_type=ATTACHMENT`, `module=JOB`,
+`module_uid=<job_uid>`, file field `attachment`. Without `module` / `module_uid` the same request
+only stores a loose file (what a note or proposal then points at) and nothing reaches the gallery.
+Done for **#803 Chadi Irani** on 2026-11-19 (the user asked): 4 WhatsApp pictures of the cracked
+wall flashing above the tile, named `Chadi-Irani-803-2026-11-19-01..04.jpg`; gallery 10 → 14, the
+10 earlier items kept, all 4 downloaded back with matching SHA-256. Script dispatch
+`/opt/ops/zuper/zbrowser/gallery803/gallery_upload.py` (dry run / `--one` / `--commit`); backup
+owen-main `zuper-backup/before-changes/2026-11-19/job803_gallery_upload/`.
 
 **Done for job #355 → #753 (2026-11-19, the user asked).** Owen uploaded 4 pictures and 1 video
 (`IMG_20261119131147/152/205/211.jpg`, `VID_20261119131330.mp4`, 2026-11-19 13:11–13:13) to
