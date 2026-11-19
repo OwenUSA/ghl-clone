@@ -1007,6 +1007,16 @@ connection (the one picked for transcription in Dispatch → Settings, else the 
 and the words are ADDED to the box for the person to read and send. Nothing is sent by itself;
 the recording is not kept; 2 minutes / 10 MB; "Pause all AI agents" stops it.
 
+## Owen AI creates new customers and jobs, on Approve (2026-11-19)
+
+Owen pastes a lead in an Owen AI chat; `propose_new_lead` (`app/owen_ai/leads.py`) stores a PENDING
+customer + job (board Retail by default, title `<First Last> Retail`, the lead as a private note) after a
+duplicate check (email, full name, CRM phone). **Only Owen's Approve** (Proposals tab → New customers)
+creates them, inside `client.owen_ai_lead_create()`: at most `POST /customers_new`, `POST /jobs` for that
+customer (no status, visit or technician — it lands in the board's NEW column) and one wrapped private
+note on that job; no PUT, no DELETE. Off unless `OWEN_AI_LEADS_ENABLED=true`; registry action
+`zuper_create`. See DECISIONS.md.
+
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 
 `backend/app/ahs_authorizations.py`, `POST /api/ahs-jobs/authorizations` (the feed's

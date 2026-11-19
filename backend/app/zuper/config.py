@@ -126,6 +126,20 @@ def owen_ai_proposal_pictures_enabled() -> bool:
     return _flag("OWEN_AI_PROPOSAL_PICTURES_ENABLED", False)
 
 
+OWEN_AI_LEADS_OFF_SENTENCE = (
+    "Owen AI may not create customers and jobs in Zuper on this server "
+    "(OWEN_AI_LEADS_ENABLED is not true).")
+
+
+def owen_ai_leads_enabled() -> bool:
+    """The server's gate on Owen AI's approved NEW LEADS (2026-11-19, app/owen_ai/leads.py): a
+    customer, a job in its board's first column and the lead's message as a private note,
+    created only when the owner presses Approve. Off unless the deployment says so; with it off
+    `client.owen_ai_lead_create` allows nothing. Owen AI can still PREPARE a lead — that writes
+    only to the CRM's database."""
+    return _flag("OWEN_AI_LEADS_ENABLED", False)
+
+
 OWEN_AI_REPORT_ATTACH_OFF_SENTENCE = (
     "Attaching reports to proposals is switched off on this server (OWEN_AI_REPORT_ATTACH_ENABLED "
     "is not true), so nothing was put on the proposal.")

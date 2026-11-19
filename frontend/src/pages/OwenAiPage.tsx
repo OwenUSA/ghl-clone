@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PAGE_BG } from '../components/ai/aiUi'
 import { AlertsView } from '../components/owenAi/AlertsView'
+import { LEADS_KEY, LeadsSection } from '../components/owenAi/LeadsView'
 import { ProposalsView, type PicturesAction } from '../components/owenAi/ProposalsView'
 import { ReportsView } from '../components/owenAi/ReportsView'
 import { Conversation } from '../components/owenAi/Conversation'
@@ -11,7 +12,7 @@ import { OWEN_AI_STATUS_KEY, useOwenAiStatus } from '../components/owenAi/useOwe
 import { INK, MUTED, NARROW, chipBtn } from '../components/owenAi/tokens'
 import {
   ApiError, owenAiAlerts, owenAiApproveProposal, owenAiDismissAlert, owenAiEditThread, owenAiOpenThread,
-  owenAiProposalPictures, owenAiProposals, owenAiRejectProposal, owenAiSend, owenAiThread, owenAiThreads, type OwenAiAlert, type OwenAiAlertStatus, type OwenAiOpenKind, type OwenAiThreadDetail,
+  owenAiLeads, owenAiProposalPictures, owenAiProposals, owenAiRejectProposal, owenAiSend, owenAiThread, owenAiThreads, type OwenAiAlert, type OwenAiAlertStatus, type OwenAiOpenKind, type OwenAiThreadDetail,
 } from '../lib/api'
 import type { Focus } from '../lib/focus'
 import { threadBusy, type OwenAiTab } from '../lib/owenAi'
@@ -92,6 +93,9 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
     queryKey: PROPOSALS_KEY, queryFn: () => owenAiProposals(), enabled: status.visible,
     refetchInterval: tab === 'proposals' ? 10_000 : 30_000,
   })
+  // New customers (2026-11-19): only the count here, for the tab's badge; LeadsSection shows them.
+  const newLeads = useQuery({ queryKey: LEADS_KEY, queryFn: owenAiLeads, enabled: status.visible,
+    refetchInterval: 30_000 })
 
   // A remembered conversation that is gone opens nothing instead of an error.
   useEffect(() => {
@@ -229,7 +233,7 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
             onArchive={(id) => archive.mutate(id)} opening={start.isPending} problem={problem}
             narrow={narrow} onClose={() => setDrawer(false)}
             tab={tab} onTab={switchTab} openCounts={openAlerts.data?.open_counts}
-            pendingProposals={drafts.data?.pending ?? 0} />
+            pendingProposals={(drafts.data?.pending ?? 0) + (newLeads.data?.pending ?? 0)} />
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 0' }}>
@@ -244,7 +248,9 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
           {tab === 'reports' ? (
             <ReportsView />
           ) : tab === 'proposals' ? (
-            <ProposalsView proposals={drafts.data?.proposals ?? []} loading={drafts.isLoading}
+            <ProposalsView before={<LeadsSection onDecided={(id) => {
+                if (id != null) qc.invalidateQueries({ queryKey: threadKey(id) }) }} />}
+              proposals={drafts.data?.proposals ?? []} loading={drafts.isLoading}
               error={drafts.isError ? (drafts.error as Error).message : null} sentence={drafts.data?.sentence ?? null}
               onApprove={(p) => approve.mutateAsync(p.id).then((r) => r.status === 'created', () => false)}
               onReject={(p, why) => rejectDraft.mutateAsync({ id: p.id, why }).then(() => true, () => false)}
