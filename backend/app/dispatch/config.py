@@ -15,11 +15,24 @@ TZ = ZoneInfo("America/New_York")
 INSPECTION_BOARD = "AHS - Inspection"
 REPAIR_BOARD = "AHS - Repair & Review"
 RETAIL_BOARD = "Retail"
-BOARDS = (INSPECTION_BOARD, REPAIR_BOARD, RETAIL_BOARD)
+# 2026-11-06: every new AHS job starts here, inspection and repair on one board (the old two
+# boards are legacy; the owner, 2026-11-19: "we are only using for now the AHS simple flow and
+# the retail pipelines"). Its stages mean something only to the week planner
+# (scheduling.SIMPLE_FLOW_NEED): its first column also holds BOOKED inspections, so it is in
+# no BOOK / NEEDS_DATE group here.
+SIMPLE_FLOW_BOARD = "AHS Simple Flow"
+SF_NEW, SF_INSPECTION_DAY = "Got a job from AHS", "Day of Inspection"
+SF_PROPOSAL, SF_HANDOFF, SF_REPAIR_DAY = "Proposal Creation", "Handoff Meeting", "Repair Day"
+SF_QUALITY, SF_DONE = "Quality Call", "Job Completed"
+SIMPLE_FLOW_STAGES = (SF_NEW, SF_INSPECTION_DAY, SF_PROPOSAL, SF_HANDOFF, SF_REPAIR_DAY,
+                      SF_QUALITY, SF_DONE)
+BOARDS = (INSPECTION_BOARD, REPAIR_BOARD, RETAIL_BOARD, SIMPLE_FLOW_BOARD)
 # Boards the team uses that are pipelines nonetheless (copies of Retail). Read, never flagged
 # as "off a pipeline".
 OTHER_PIPELINES = ("Miami Retail Repair", "Miami Retail Roof Replacement", "Miami Gutters",
                    "Sarasota Repairs", "Sarasota Roof Replacement", "Sarasota Gutters")
+# The boards the team works on now (2026-11-19): what the week planner reads by default.
+ACTIVE_BOARDS = (SIMPLE_FLOW_BOARD, RETAIL_BOARD, *OTHER_PIPELINES)
 IGNORED_BOARDS = ("Inspection TEST",)
 
 CLOSED = {"Paid", "Cancelled", "Estimate Declined", "Review Received"}

@@ -7,7 +7,8 @@ How a slot is chosen:
   * who: the technician who PREFERS this kind of visit (Antonio repairs, Owen inspections) is
     tried first; the other one too, when he does that kind of visit — and wins only with a
     clearly better slot (less driving, or sooner);
-  * when: business days from tomorrow, inside the technician's hours, under his daily maximum,
+  * when: business days from tomorrow he works (`works`: his weekdays, never a day off, an
+    on-call technician only on the days he gave), inside his hours, under his daily maximum,
     never overlapping a visit he already has (driving time included);
   * where: the slot that adds the LEAST driving to his day. Distance is straight-line between
     Zuper's map coordinates x ROAD_FACTOR, at AVERAGE_KMH. No address leaves the CRM.
@@ -21,7 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from . import config as c
 
@@ -119,6 +120,37 @@ def _hhmm(value: str) -> time:
     return time(int(h), int(m))
 
 
+def _range_day(r, key: str) -> date | None:
+    try:
+        return date.fromisoformat(str((r or {}).get(key) or "")[:10])
+    except ValueError:
+        return None
+
+
+def _in(r, day) -> bool:
+    a, z = _range_day(r, "from"), _range_day(r, "to")
+    return a is not None and z is not None and a <= day <= z
+
+
+def works(t: dict, day) -> bool:
+    """Does this technician work that day? (2026-11-19: days are told in Owen AI's chat and
+    kept on the technician.) `off` ranges never; an ON-CALL technician (Owen) only inside his
+    `only` ranges; everyone else on his weekdays."""
+    if any(_in(r, day) for r in t.get("off") or []):
+        return False
+    if t.get("on_call"):
+        return any(_in(r, day) for r in t.get("only") or [])
+    return day.weekday() in t.get("days", c.BUSINESS_DAYS)
+
+
+def day_max(t: dict, day, default: int = 5) -> int:
+    """His most visits that day: an on-call range may carry its own (Owen says how many)."""
+    for r in t.get("only") or []:
+        if _in(r, day) and r.get("max"):
+            return int(r["max"])
+    return int(t.get("max", default))
+
+
 def _at(day, t: time) -> datetime:
     return datetime.combine(day, t, tzinfo=c.TZ)
 
@@ -161,12 +193,12 @@ def slots(*, lat: float | None, lng: float | None, kind: str, visits: list[Visit
         home = tuple(t["home"]) if t.get("home") else None
         for offset in range(days_ahead):
             day = first_day + timedelta(days=offset)
-            if day.weekday() not in t.get("days", c.BUSINESS_DAYS):
+            if not works(t, day):
                 continue
             if not _day_ok(rules, t["name"], day):
                 continue
             today = [v for v in mine if c.local(v.start).date() == day]
-            if len(today) >= int(t.get("max", 3)):
+            if len(today) >= day_max(t, day, 3):
                 continue
             open_at, close_at = _at(day, _hhmm(t["start"])), _at(day, _hhmm(t["end"]))
             if rules is not None and getattr(rules, "earliest", None):

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Map as LeafletMap } from 'leaflet'
 import { LINE } from '../ai/aiUi'
 import type { DispatchPlan } from '../../lib/api'
-import { visitRange, visitTitle } from '../../lib/dispatch'
+import { visitRange, visitTitle, visitNotes } from '../../lib/dispatch'
 
 const MUTED = 'rgb(102,112,133)'
 const ORANGE = '#ea580c'
@@ -62,7 +62,8 @@ export function PlanMap({ plan, dates }: { plan: DispatchPlan; dates: string[] }
                 zIndexOffset: sug ? 500 : 0 })
                 .bindPopup(`<b>${esc(visitTitle(v))}</b><br>${esc(d.label)} · `
                   + `${esc(visitRange(v.start, v.end))} · ${esc(t.tech)}`
-                  + `${sug ? '<br><b style="color:#ea580c">Suggested</b>' : '<br>Booked'}`)
+                  + `${sug ? '<br><b style="color:#ea580c">Suggested</b>' : '<br>Booked'}`
+                  + visitNotes(v).map((x) => `<br>${esc(x)}`).join(''))
                 .addTo(m)
               bounds.push([v.lat as number, v.lng as number])
             })

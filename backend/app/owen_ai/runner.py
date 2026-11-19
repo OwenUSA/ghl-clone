@@ -163,7 +163,7 @@ def due_slot(db: Session, now_ny: datetime) -> str | None:
 
 def start_sweep(db: Session, hhmm: str, jobs: list[dict], now_ny: datetime) -> OwenAiThread:
     """One audit thread for this slot, one queued audit message per open job."""
-    owner = alerts._owner(db)
+    owner = alerts.owner(db)
     th = OwenAiThread(user_id=owner.id if owner else 0, kind="audit", day=now_ny.date(),
                       title=slot_title(now_ny.date(), hhmm))
     db.add(th)

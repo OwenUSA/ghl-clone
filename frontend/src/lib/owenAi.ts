@@ -171,23 +171,31 @@ export function codeSpans(text: string): { text: string; code: boolean }[] {
     an inspection report file on this server (`/api/owen-ai/reports/<id>/report.html|pdf`,
     drawn as a download button), a proposal's step-picture preview on this server
     (`/api/owen-ai/proposals/<id>/pictures/<tier>-<hex>.jpg`, drawn as a thumbnail that zooms)
-    and an absolute https URL. Any other target (javascript:,
+    and an absolute https URL. Since 2026-11-19 also a route plan
+    (`/dispatch?tab=book&plan=<id>`, plan_routes): a chip, and the plan's card under the answer.
+    Any other target (javascript:,
     http:, another /api path, a relative path) stays plain text: its label only. */
 export type LinkSpan =
   | { kind: 'text'; text: string }
   | { kind: 'report'; text: string; href: string; file: 'html' | 'pdf' }
   | { kind: 'picture'; text: string; href: string }
+  | { kind: 'plan'; text: string; href: string; plan: number }
   | { kind: 'link'; text: string; href: string }
 
 export const REPORT_LINK = /^\/api\/owen-ai\/reports\/[A-Za-z0-9]{1,20}-\d{8}-\d{6}\/report\.(html|pdf)$/
 /** A proposal's step-picture preview on this server (2026-11-09): drawn as a thumbnail. */
 export const PICTURE_LINK = /^\/api\/owen-ai\/proposals\/\d{1,9}\/pictures\/(good|better|best)-[0-9a-f]{8}\.jpg$/
+/** A route plan (2026-11-19, plan_routes): the Dispatch calendar's own address for it. */
+export const PLAN_LINK = /^\/dispatch\?tab=book&plan=(\d{1,9})$/
 
-export function safeLink(href: string): { kind: 'report'; file: 'html' | 'pdf' } | { kind: 'picture' } | { kind: 'link' } | null {
+export function safeLink(href: string): { kind: 'report'; file: 'html' | 'pdf' } | { kind: 'picture' }
+  | { kind: 'plan'; plan: number } | { kind: 'link' } | null {
   const h = href.trim()
   const r = REPORT_LINK.exec(h)
   if (r) return { kind: 'report', file: r[1] as 'html' | 'pdf' }
   if (PICTURE_LINK.test(h)) return { kind: 'picture' }
+  const p = PLAN_LINK.exec(h)
+  if (p) return { kind: 'plan', plan: Number(p[1]) }
   if (/^https:\/\/[^\s/?#]+([/?#][^\s]*)?$/i.test(h)) {
     try { if (new URL(h).protocol === 'https:') return { kind: 'link' } } catch { /* not a URL */ }
   }
@@ -210,6 +218,7 @@ export function linkSpans(text: string): LinkSpan[] {
     const ok = safeLink(m[2])
     if (ok?.kind === 'report') out.push({ kind: 'report', text: m[1], href: m[2].trim(), file: ok.file })
     else if (ok?.kind === 'picture') out.push({ kind: 'picture', text: m[1], href: m[2].trim() })
+    else if (ok?.kind === 'plan') out.push({ kind: 'plan', text: m[1], href: m[2].trim(), plan: ok.plan })
     else if (ok) out.push({ kind: 'link', text: m[1], href: m[2].trim() })
     else push(m[1])
     last = m.index + m[0].length
@@ -291,4 +300,20 @@ export const PROPOSAL_STATUS_LABEL: Record<string, string> = {
     <p> <br> survive; any other tag (or one with attributes) is dropped, its text kept. */
 export function safeScopeHtml(html: string | null | undefined): string {
   return (html ?? '').replace(/<(?!\/?(?:b|i|ul|li|p)>|br\s*\/?>)[^>]*>?/gi, '')
+}
+
+/** The route plan an answer is about (2026-11-19): the LAST plan link in its text, else a
+    plan_routes step whose result starts "Plan #N" (the step log keeps only 600 characters, so
+    the id comes first). null when the answer has no plan. */
+export function lastPlanId(content: string | null | undefined,
+  steps: { tool: string; result?: unknown }[] = []): number | null {
+  let found: number | null = null
+  for (const s of linkSpans(content ?? '')) if (s.kind === 'plan') found = s.plan
+  if (found !== null) return found
+  for (const s of steps) {
+    if (s.tool !== 'plan_routes') continue
+    const m = typeof s.result === 'string' ? /^Plan #(\d{1,9}) saved/.exec(s.result) : null
+    if (m) found = Number(m[1])
+  }
+  return found
 }

@@ -56,6 +56,18 @@ function Links({ text, bold }: { text: string; bold: boolean }) {
           )
         }
         if (s.kind === 'picture') return <PictureThumb key={i} src={s.href} label={s.text} />
+        if (s.kind === 'plan') {
+          // The route plan (2026-11-19): the card itself is drawn under the answer; this chip
+          // opens the full Dispatch calendar in the same tab.
+          return (
+            <a key={i} href={s.href}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: '2px 6px 2px 0',
+                padding: '3px 10px', borderRadius: 999, border: `1px solid ${BLUE}`, color: BLUE,
+                fontSize: 13, fontWeight: 600, textDecoration: 'none', lineHeight: '18px' }}>
+              <span aria-hidden="true">🗺</span>{s.text}
+            </a>
+          )
+        }
         if (s.kind === 'link') {
           return <a key={i} href={s.href} target="_blank" rel="noopener noreferrer"
             style={{ color: BLUE, fontWeight: bold ? 600 : undefined }}>{s.text}</a>

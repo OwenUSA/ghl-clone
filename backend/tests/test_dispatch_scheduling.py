@@ -71,21 +71,24 @@ def test_every_job_that_needs_a_visit_goes_in_and_nothing_else(db):
         job("e", 705, "Scheduled"),                                      # visit stage, no time
         job("f", 706, "Scheduled", start=ny(9, 9)),                      # booked ahead: out
         job("g", 707, "Awaiting AHS Decision"),                          # waiting on AHS: out
-        job("h", 708, "New Lead", board=c.RETAIL_BOARD),                 # Retail: out by default
+        job("h", 708, "New Lead", board=c.RETAIL_BOARD),                 # Retail: not "ahs"
         job("i", 709, "Reschedule Required", start=ny(12, 9)),           # has a new date: out
     ])
     db.commit()
-    got = {j.number: j for j in scheduling.waiting_jobs(db, NOW, hidden=set())}
+    # The old AHS boards are legacy (2026-11-19): read on "ahs" or "all", never by default.
+    assert {j.number for j in scheduling.waiting_jobs(db, NOW, hidden=set())} == {"708"}
+    got = {j.number: j for j in scheduling.waiting_jobs(db, NOW, hidden=set(), boards="ahs")}
     assert set(got) == {"701", "702", "703", "704", "705"}
     assert got["701"].tentative and not got["702"].tentative
     assert got["702"].kind == "repair" and got["701"].kind == "inspection"
     assert "has passed" in got["704"].why and "Wed 10/07" in got["704"].why
     assert "no visit time" in got["705"].why
-    reached = scheduling.waiting_jobs(db, NOW, hidden=set(), include_unreached=False)
+    reached = scheduling.waiting_jobs(db, NOW, hidden=set(), include_unreached=False,
+                                      boards="ahs")
     assert "701" not in {j.number for j in reached}
     every = scheduling.waiting_jobs(db, NOW, hidden=set(), boards="all")
     assert "708" in {j.number for j in every}
-    hidden = scheduling.waiting_jobs(db, NOW, hidden={c.REPAIR_BOARD})
+    hidden = scheduling.waiting_jobs(db, NOW, hidden={c.REPAIR_BOARD}, boards="ahs")
     assert "703" not in {j.number for j in hidden}
 
 
@@ -167,7 +170,8 @@ def test_a_plan_is_kept_and_only_its_maker_and_an_admin_open_it(db, people):  # 
     db.add_all([job("a", 701, "Welcome Call!"), job("b", 702, "AHS Approved", where=MIAMI)])
     db.commit()
     cl = TestClient(app)
-    r = cl.post("/api/dispatch/plans", json={"days": 6}, headers=people["dispatcher"][1])
+    r = cl.post("/api/dispatch/plans", json={"days": 6, "boards": "ahs"},
+                headers=people["dispatcher"][1])
     assert r.status_code == 200, r.text
     plan = r.json()
     assert plan["id"] and plan["summary"]["placed"] == 2 and plan["summary"]["tentative"] == 1
@@ -235,9 +239,9 @@ def test_the_chat_plans_with_the_limits_it_read_and_hands_out_the_links(db, assi
     db.commit()
     script.responses = [
         openai_completion(content=None, finish="tool_calls", tool_calls=[
-            openai_call("plan_schedule", json.dumps({"days": 6}), "c1")]),
+            openai_call("plan_schedule", json.dumps({"days": 6, "boards": "ahs"}), "c1")]),
         openai_completion(content=None, finish="tool_calls", tool_calls=[
-            openai_call("plan_schedule", json.dumps({"days": 6, "limits": [{
+            openai_call("plan_schedule", json.dumps({"days": 6, "boards": "ahs", "limits": [{
                 "job_number": "721", "after": "3 PM",
                 "evidence": "text Thu 10/08: only after 3 PM"}]}), "c2")]),
         openai_completion(content="#721 goes after 3 PM."),

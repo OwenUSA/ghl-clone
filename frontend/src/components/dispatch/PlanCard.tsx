@@ -3,7 +3,8 @@ import { lazy, Suspense, useMemo, useState } from 'react'
 import { BLUE, INK, LINE } from '../ai/aiUi'
 import { dispatchPlanExcelUrl, getDispatchPlan, type DispatchPlan, type DispatchPlanVisit }
   from '../../lib/api'
-import { visitRange, visitTitle } from '../../lib/dispatch'
+import { rainLabel, visitNotes, visitRange, visitTitle } from '../../lib/dispatch'
+import { PlanExtras } from './PlanExtras'
 
 // The map (and its library) is fetched only when someone presses "Show map".
 const PlanMap = lazy(() => import('./PlanMap').then((m) => ({ default: m.PlanMap })))
@@ -15,6 +16,7 @@ const ORANGE_BG = 'rgb(255,241,230)'
 const ORANGE_LINE = 'rgb(251,146,60)'
 const RED = 'rgb(185,28,28)'
 const AMBER = 'rgb(181,71,8)'
+const SKY = 'rgb(23,92,211)'
 
 function weekOf(iso: string): string {
   const d = new Date(`${iso}T12:00:00Z`)
@@ -86,6 +88,10 @@ function PlanBody({ plan, planId }: { plan: DispatchPlan; planId: number }) {
         <Stat label="need a decision" value={plan.unplaced.length} tone={plan.unplaced.length ? RED : undefined} />
         <Stat label="driving" value={`${(drive / 60).toFixed(1)}h`} />
         {!!plan.flags?.length && <Stat label="customers with limits" value={plan.flags.length} />}
+        {!!plan.waiting_ok?.length && <Stat label="repairs waiting for OK"
+          value={plan.waiting_ok.length} tone={AMBER} />}
+        {!!plan.weather?.flagged?.length && <Stat label="rain flags"
+          value={plan.weather.flagged.length} tone={SKY} />}
       </div>
 
       {weeks.length > 0 && (
@@ -144,6 +150,7 @@ function PlanBody({ plan, planId }: { plan: DispatchPlan; planId: number }) {
                               <span style={{ width: `${Math.max(0, fill - (booked / Math.max(1, t.capacity)) * 100)}%`, background: ORANGE }} />
                             </div>
                             <div style={{ fontSize: 11, color: MUTED }}>
+                              {t.working === false ? 'off — booked only · ' : ''}
                               {booked} booked {sug > 0 && <Pill>+{sug}</Pill>}</div>
                             <div style={{ fontSize: 11, color: MUTED }}>
                               ends {hm(t.last_end ?? visits[visits.length - 1]?.end)} · ~{t.drive_minutes} min drive</div>
@@ -151,7 +158,8 @@ function PlanBody({ plan, planId }: { plan: DispatchPlan; planId: number }) {
                               {visits.map((v, i) => <Stop key={`${v.job_uid}-${v.start}`} v={v} n={i + 1} />)}
                             </div>
                           </>
-                        ) : <span style={{ fontSize: 11, color: FAINT }}>{t ? 'Free' : '—'}</span>}
+                        ) : <span style={{ fontSize: 11, color: FAINT }}>
+                          {t ? (t.working === false ? 'Off' : 'Free') : '—'}</span>}
                       </td>
                     )
                   })}
@@ -186,6 +194,7 @@ function PlanBody({ plan, planId }: { plan: DispatchPlan; planId: number }) {
           ))}
         </Section>
       )}
+      <PlanExtras plan={plan} />
       {!!plan.left_out?.length && (
         <Section title={`Left out of the plan (${plan.left_out.length})`}>
           {plan.left_out.map((x) => (
@@ -209,7 +218,8 @@ function PlanBody({ plan, planId }: { plan: DispatchPlan; planId: number }) {
       )}
       <div style={{ marginTop: 8, fontSize: 11, color: MUTED }}>
         A draft. Confirm each suggested visit with the customer, then set it in Zuper (date, time,
-        Technician field). Driving is an estimate.</div>
+        Technician field). Driving is an estimate. CALL FIRST = nobody has verified the
+        information with the customer by phone yet; rain is a flag only.</div>
     </Shell>
   )
 }
@@ -221,8 +231,9 @@ const td: React.CSSProperties = { borderBottom: `1px solid ${LINE}`, padding: '6
 
 function Stop({ v, n }: { v: DispatchPlanVisit; n: number }) {
   const sug = !v.existing
-  const tip = [visitTitle(v), visitRange(v.start, v.end), v.why, ...(v.limits ?? [])]
-    .filter(Boolean).join(' · ')
+  const tip = [visitTitle(v), visitRange(v.start, v.end), v.why, ...(v.limits ?? []),
+    ...visitNotes(v)].filter(Boolean).join(' · ')
+  const rain = rainLabel(v.weather)
   return (
     <div title={tip} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, lineHeight: 1.3,
       padding: '2px 4px', borderRadius: 5, minWidth: 0,
@@ -235,6 +246,10 @@ function Stop({ v, n }: { v: DispatchPlanVisit; n: number }) {
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
         {v.job_number ? `#${v.job_number} ` : ''}{v.customer ?? 'Booked'}</span>
       {sug && v.tentative && <span style={{ fontSize: 9, color: AMBER, flex: 'none' }}>call</span>}
+      {sug && v.one_day && <span style={{ fontSize: 9, color: RED, flex: 'none' }}
+        title="The only day the customer can">only day</span>}
+      {rain && <span style={{ fontSize: 9, color: v.weather?.less_certain ? AMBER : SKY, flex: 'none' }}>
+        {rain.replace(' (less certain)', '')}</span>}
     </div>
   )
 }

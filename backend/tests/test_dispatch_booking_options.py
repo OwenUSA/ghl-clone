@@ -110,7 +110,7 @@ def test_the_plan_leaves_out_and_flags_from_the_calls(db):
     zcall(db, "3055550501", ny(9, 12, 36), "Frederick is out of town but available Friday, "
           "Monday, or possibly late Thursday afternoon.")
     db.commit()
-    out = scheduling.make_plan(db, FRI, days=12, store=False)
+    out = scheduling.make_plan(db, FRI, days=12, store=False, boards="ahs")
     left = {x["job_number"]: x["reason"] for x in out["left_out"]}
     assert "already booked" in left["321"]
     assert "687" in {x["job_number"] for x in out["flags"]}

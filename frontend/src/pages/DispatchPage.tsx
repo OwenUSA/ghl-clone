@@ -20,7 +20,9 @@ import type { Me } from '../lib/auth'
 import { followupsSummary } from '../lib/api'
 import { openRecord } from '../lib/openRecord'
 import { canOpenAiAgents, isAiAdmin } from '../lib/aiAgents'
-import { checkedLabel, dueLabel, formatPhone, queueLabel, slotLabel } from '../lib/dispatch'
+import {
+  checkedLabel, crewDaysText, dueLabel, formatPhone, forPageSave, queueLabel, slotLabel,
+} from '../lib/dispatch'
 
 const MUTED = 'rgb(102,112,133)'
 const RED = 'rgb(180,35,24)'
@@ -444,10 +446,12 @@ function SettingsTab({ admin }: { admin: boolean }) {
         <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>Booking — who goes, when</div>
         <div style={{ fontSize: 13, color: MUTED, margin: '4px 0 10px' }}>
           The three slots go to the technician who prefers that kind of visit first, next to
-          what he already has that day.</div>
+          what he already has that day. The days a technician works or is off (and Owen's
+          on-call days) are told in Owen AI's chat; they show here and every plan uses them.</div>
         <table style={{ fontSize: 13, borderCollapse: 'collapse', width: '100%' }}>
           <thead><tr style={{ color: MUTED, textAlign: 'left' }}>
-            <th>Technician</th><th>Prefers</th><th>Days</th><th>From</th><th>To</th><th>Max/day</th></tr></thead>
+            <th>Technician</th><th>Prefers</th><th>Days</th><th>From</th><th>To</th><th>Max/day</th>
+            <th>Does</th><th>Days told in chat</th></tr></thead>
           <tbody>
             {rows.map((t, n) => (
               <tr key={t.name}>
@@ -467,13 +471,16 @@ function SettingsTab({ admin }: { admin: boolean }) {
                   onChange={(e) => set(n, { end: e.target.value })} /></td>
                 <td><input disabled={!admin} type="number" value={t.max} style={{ ...field, width: 50 }}
                   onChange={(e) => set(n, { max: Number(e.target.value) })} /></td>
+                <td style={{ color: MUTED }}>{t.does.length === 1 ? `${t.does[0]}s only` : 'both'}</td>
+                <td style={{ color: MUTED, fontSize: 12 }}>{crewDaysText(t) || '—'}</td>
               </tr>
             ))}
           </tbody>
         </table>
         {admin && techs && (
           <button type="button" disabled={save.isPending}
-            onClick={() => save.mutate({ technicians: techs }, { onSuccess: () => setTechs(null) })}
+            onClick={() => save.mutate({ technicians: forPageSave(techs) },
+              { onSuccess: () => setTechs(null) })}
             style={{ marginTop: 10, color: '#fff', background: BLUE, borderRadius: 6,
               padding: '4px 12px', fontWeight: 500 }}>Save booking rules</button>
         )}
