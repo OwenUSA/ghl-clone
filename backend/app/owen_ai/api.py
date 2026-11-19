@@ -60,7 +60,8 @@ def _iso(dt):
 def _thread(th: OwenAiThread, busy: bool = False) -> dict:
     return {"id": th.id, "kind": th.kind, "title": th.title, "job_uid": th.job_uid,
             "job_number": th.job_number, "day": th.day.isoformat() if th.day else None,
-            "archived": th.archived, "busy": busy, "created_at": _iso(th.created_at),
+            "archived": th.archived, "busy": busy, "parent_id": th.parent_id,
+            "created_at": _iso(th.created_at),
             "updated_at": _iso(th.updated_at)}
 
 

@@ -175,6 +175,60 @@ def read_proposal(job: str, number: str) -> str:
                   "options": opts})
 
 
+def _db():
+    from ..db import SessionLocal
+    return SessionLocal()
+
+
+def delegate_jobs(items: list) -> str:
+    """Start one sub-chat per customer from the chat this tool runs in (2026-11-19)."""
+    from . import delegate
+    parent = proposals.current_thread()
+    if parent is None:
+        return "ERROR: sub-chats can only be started from a chat."
+    db = _db()
+    try:
+        kids = delegate.start(db, parent, items)
+        return _text({"started": [{"sub_chat": k.id, "job": k.job_number, "title": k.title}
+                                  for k in kids],
+                      "note": ("They run on their own (3 at a time); Owen can open each one. "
+                               "When the last one finishes you get a message here: then call "
+                               "delegated_status and write the summary. Tell Owen they started "
+                               "and end your answer now - do not wait or poll.")})
+    except ValueError as exc:
+        return "ERROR: %s" % exc
+    finally:
+        db.close()
+
+
+def delegated_status() -> str:
+    from . import delegate
+    parent = proposals.current_thread()
+    if parent is None:
+        return "ERROR: no chat."
+    db = _db()
+    try:
+        return _text(delegate.status(db, parent))
+    finally:
+        db.close()
+
+
+def send_to_sub_chat(sub_chat: int, message: str) -> str:
+    from . import delegate
+    parent = proposals.current_thread()
+    if parent is None:
+        return "ERROR: no chat."
+    db = _db()
+    try:
+        th = delegate.send(db, parent, int(sub_chat), message)
+        return ("Queued in sub-chat %d (job #%s). It answers on its own; you get a message here "
+                "when all sub-chats are done." % (th.id, th.job_number))
+    except (ValueError, TypeError) as exc:
+        return "ERROR: %s" % exc
+    finally:
+        db.close()
+
+
 def find_ahs_dispatch(job: str) -> str:
     """Every AHS dispatch number tied to a Zuper job, with its source (`ahs_ids`, 2026-11-18)."""
     from . import ahs_ids
@@ -343,6 +397,34 @@ SPECS = (
                                                   "description": "e.g. DTR-195"}},
       "required": ["job", "number"]},
      lambda a: read_proposal(str(a["job"]), str(a["number"]))),
+    ("delegate_jobs",
+     ("START SUB-CHATS: one per customer, for many proposals or corrections at once (\"make "
+      "proposals for #843, #836, #841\", \"fix these 5 drafts\"). `items` = [{job, "
+      "instructions}] - one item per customer, with EVERYTHING Owen said for that customer "
+      "(prices, leak count, what to change, which DTR to change with replace). Each sub-chat "
+      "works on its own and follows all the rules; Owen sees them under this chat. After "
+      "starting them, tell Owen and END your answer - a message arrives here when all are done. "
+      "Not for one customer: do that yourself."),
+     {"type": "object", "properties": {"items": {"type": "array", "items": {
+         "type": "object", "properties": {"job": {"type": "string"},
+                                          "instructions": {"type": "string"}},
+         "required": ["job", "instructions"]}, "minItems": 1, "maxItems": 15}},
+      "required": ["items"]},
+     lambda a: delegate_jobs(a.get("items"))),
+    ("delegated_status",
+     ("The sub-chats this chat started: each one's state (waiting its turn / working / "
+      "finished / error), its last answer, and its proposal draft (status, proposal number, "
+      "customer pays per option). Use it for the summary, or when Owen asks how they are going."),
+     {"type": "object", "properties": {}},
+     lambda a: delegated_status()),
+    ("send_to_sub_chat",
+     ("A correction or follow-up for ONE customer's sub-chat (from delegated_status), e.g. "
+      "\"Good is the closet leak only, $625\". It is queued in that sub-chat, which changes its "
+      "own draft (with replace) - never a second proposal."),
+     {"type": "object", "properties": {"sub_chat": {"type": "integer"},
+                                       "message": {"type": "string"}},
+      "required": ["sub_chat", "message"]},
+     lambda a: send_to_sub_chat(a.get("sub_chat"), a.get("message"))),
     ("find_ahs_dispatch",
      ("Which AHS dispatch number(s) belong to a Zuper job (CRM read, instant). Use it whenever "
       "the job's \"AHS Job ID\" field is empty, BEFORE pricing an AHS job: it also looks at "

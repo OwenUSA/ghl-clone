@@ -2786,6 +2786,8 @@ export type OwenAiOpenKind = Exclude<OwenAiThreadKind, 'audit'>
 export type OwenAiThread = {
   id: number; kind: OwenAiThreadKind; title: string; job_uid: string | null; job_number: string | null
   day: string | null; archived: boolean; busy: boolean; created_at: string | null; updated_at: string | null
+  /** The main chat that started this sub-chat for one customer (2026-11-19); null = Owen's own chat. */
+  parent_id?: number | null
 }
 export type OwenAiStep = { tool: string; input: unknown; result?: unknown; error?: string | null }
 export type OwenAiMessage = {

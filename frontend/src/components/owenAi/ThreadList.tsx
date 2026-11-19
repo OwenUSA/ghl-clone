@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { OwenAiAlertSeverity, OwenAiThread } from '../../lib/api'
-import { SEVERITIES, SEVERITY_LABEL, alertsBadge, groupThreads, jobNumber, type OwenAiTab } from '../../lib/owenAi'
+import { SEVERITIES, SEVERITY_LABEL, alertsBadge, groupThreads, jobNumber, subChats, type OwenAiTab } from '../../lib/owenAi'
 import { BLUE, INK, LINE, MUTED, RED, SEVERITY_COLORS, SIDEBAR_BG, chipBtn } from './tokens'
 
 /**
@@ -30,6 +30,7 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
     setJobOpen(false)
   }
   const groups = groupThreads(threads)
+  const kids = subChats(threads)
   const badge = alertsBadge(openCounts)
   return (
     <aside aria-label="Owen AI conversations" style={{ width: 260, flexShrink: 0, background: SIDEBAR_BG,
@@ -122,10 +123,13 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
           <div key={g.group} style={{ marginTop: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, padding: '0 8px 4px',
               textTransform: 'uppercase', letterSpacing: 0.4 }}>{g.group}</div>
-            {g.threads.map((t) => {
+            {g.threads.flatMap((p) => [p, ...(kids.get(p.id) ?? [])]).map((t) => {
               const active = t.id === activeId
+              const sub = t.parent_id != null && kids.has(t.parent_id)
+              const n = kids.get(t.id)?.length ?? 0
               return (
-                <div key={t.id} className="group" style={{ position: 'relative', margin: '1px 0' }}>
+                <div key={t.id} className="group" style={{ position: 'relative', margin: '1px 0',
+                  marginLeft: sub ? 14 : 0, borderLeft: sub ? `2px solid ${LINE}` : undefined }}>
                   <button type="button" onClick={() => onOpen(t.id)} title={t.title}
                     aria-current={active ? 'true' : undefined}
                     className={active ? '' : 'hover:bg-[rgb(234,236,240)]'}
@@ -134,9 +138,11 @@ export function ThreadList({ threads, loading, error, activeId, onOpen, onToday,
                       alignItems: 'center', gap: 6 }}>
                     {t.busy && <span className="owen-ai-pulse" aria-label="Working" title="Owen AI is working"
                       style={{ width: 7, height: 7, borderRadius: 4, background: BLUE, flexShrink: 0 }} />}
-                    <span style={{ fontSize: 13, color: INK, fontWeight: active ? 500 : 400, minWidth: 0,
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: sub ? 12 : 13, color: sub ? MUTED : INK, fontWeight: active ? 500 : 400,
+                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.title || 'New chat'}</span>
+                    {n > 0 && <span title={`${n} sub-chats`} style={{ fontSize: 11, color: MUTED, flexShrink: 0 }}>
+                      {n} sub</span>}
                   </button>
                   <button type="button" aria-label={`Archive ${t.title}`} title="Archive"
                     onClick={(e) => { e.stopPropagation(); onArchive(t.id) }}
