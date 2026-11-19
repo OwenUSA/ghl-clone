@@ -8335,7 +8335,7 @@ signed / accepted proposal, by AHS authorizing it, or by a yes in a call / text 
 not enough — except that "AHS Approved" counts, "even though we are only using for now the AHS simple
 flow and the retail pipelines"); callbacks get the same check; an unverified inspection is placed as
 CALL FIRST; day ranges are the technicians'; Marx does repairs only; Owen's maximum is asked each time
-(default 2); the weather agent stays OFF for now; and the SAME rules for the Dispatch page and its
+(default 2); the weather agent left as it is (it was believed off; it is on); and the SAME rules for the Dispatch page and its
 chat ("same rules everywhere"), so the office and Owen AI always see the same plan.
 
 **One planner, not a second agent.** `owen_ai/routes.py` (`plan_routes`, `crew_days`,
@@ -8388,7 +8388,8 @@ longer dropped on save.
 
 **Weather:** `scheduling.weather_flags` puts the kept NWS chance of rain on each visit and lists the
 flagged ones, next day first, "less certain" past 3 days — never a reason to move or leave out a
-visit. With `WEATHER_ENABLED` off (production today) every plan says so. (`booking.slots` for one job
+visit. With `WEATHER_ENABLED` off every plan says so. (Production has it ON — the first live dry
+run on 2026-11-19 showed rain flags; the user had been told it was off, and was told the truth.) (`booking.slots` for one job
 keeps skipping rainy times, 2026-10-22.)
 
 **What changes for the Dispatch page:** its plans default to Simple Flow + Retail; repairs without an
