@@ -77,6 +77,12 @@ class PlanJob:
     technician: str | None = None
     blocked: list[tuple[date, date]] = field(default_factory=list)   # away, both days included
     limits: list[str] = field(default_factory=list)   # the evidence, in words
+    # 2026-11-19 (the owner's rules): the customer can do ONE day only -> placed first; the
+    # repair's "yes" and the inspection's verifying call, in words; why it is CALL FIRST.
+    one_day: bool = False
+    agreed: str | None = None
+    verified: str | None = None
+    call_first_why: str | None = None
 
 
 @dataclass
@@ -98,6 +104,8 @@ class Day:
     tech: dict
     day: date
     stops: list[Stop] = field(default_factory=list)
+    cap: int = 5                  # his most visits that day (booked ones count)
+    locked: bool = False          # a day he does not work, shown for its booked visits only
 
 
 def learned_minutes(history: list[tuple[str, str, float]]) -> dict[str, dict[str, int]]:
@@ -199,7 +207,8 @@ class _Plan:
 
     def __init__(self, base: dict, minutes: dict, dates: list[date], mode: str, now: datetime,
                  drive: Callable):
-        self.grid = {k: Day(d.tech, d.day, list(d.stops)) for k, d in base.items()}
+        self.grid = {k: Day(d.tech, d.day, list(d.stops), d.cap, d.locked)
+                     for k, d in base.items()}
         self.minutes, self.dates, self.mode, self.now, self.drive = (minutes, dates, mode, now,
                                                                      drive)
         self.unplaced: list[dict] = []
@@ -240,12 +249,16 @@ class _Plan:
     def placed(self) -> int:
         return sum(1 for d in self.grid.values() for s in d.stops if not s.existing)
 
+    def one_day_placed(self) -> int:
+        return sum(1 for d in self.grid.values() for s in d.stops
+                   if not s.existing and s.job and s.job.one_day)
+
     def best_insert(self, job: PlanJob, skip: tuple | None = None):
         """(added cost, key, stops) of the cheapest place for the job, or None."""
         best = None
         for key, day in self.grid.items():
-            if key == skip or not _allowed(job, day.tech, key[1]) or \
-                    len(day.stops) >= int(day.tech.get("max", 5)):
+            if key == skip or day.locked or not _allowed(job, day.tech, key[1]) or \
+                    len(day.stops) >= day.cap:
                 continue
             base = self.day_cost(key)
             if base == math.inf:
@@ -359,11 +372,24 @@ class _Plan:
                 break
 
     def score(self) -> tuple:
-        return (-self.placed(), self.total())
+        # The owner (2026-11-19): a customer who can only do one day gets that day FIRST —
+        # before fitting more flexible jobs; then as many jobs as possible, then least driving.
+        return (-self.one_day_placed(), -self.placed(), self.total())
+
+
+def _open_dates(job: PlanJob, grid: dict) -> set[date]:
+    return {k[1] for k, d in grid.items() if not d.locked and _allowed(job, d.tech, k[1])}
 
 
 def _reason(job: PlanJob, grid: dict, days: int) -> str:
-    if not any(_allowed(job, d.tech, k[1]) for k, d in grid.items()):
+    if job.one_day:
+        d = next(iter(_open_dates(job, grid)))
+        full = ["%s %d of %d" % (day.tech["name"].split()[0], len(day.stops), day.cap)
+                for k, day in grid.items() if k[1] == d and not day.locked
+                and _allowed(job, day.tech, d)]
+        return "The customer can only do %s and that day is full (%s)." % (
+            d.strftime("%a %m/%d"), ", ".join(full))
+    if not any(not d.locked and _allowed(job, d.tech, k[1]) for k, d in grid.items()):
         limit = "; ".join(job.limits) if job.limits else "its limits"
         return "No day in the next %d business days meets the customer's limits (%s)." % (
             days, limit)
@@ -403,16 +429,21 @@ def plan(*, jobs: list[PlanJob], booked: list[booking.Visit], technicians: list[
     base: dict[tuple[str, date], Day] = {}
     for t in technicians:
         for d in dates:
-            if d.weekday() not in t.get("days", c.BUSINESS_DAYS):
-                continue
             mine = sorted((v for v in booked if v.tech == t["name"]
                            and c.local(v.start).date() == d), key=lambda v: v.start)
+            working = booking.works(t, d)
+            if not working and not mine:
+                continue
+            # A day he does not work (off, or on call and not called in) that still has a
+            # booked visit is shown as it is, LOCKED: nothing new goes there.
             base[(t["name"], d)] = Day(t, d, [
                 Stop(None, v.label or "booked visit", v.start, v.end, v.lat, v.lng, True)
-                for v in mine])
+                for v in mine], booking.day_max(t, d), not working)
     placeable = [j for j in jobs if j.lat is not None and j.lng is not None]
     no_map = [{"job": j, "final": True, "reason": "No map position in Zuper - book it by hand."}
               for j in jobs if j.lat is None or j.lng is None]
+    for j in placeable:
+        j.one_day = len(_open_dates(j, base)) == 1
 
     def build(order: list[PlanJob]) -> _Plan:
         p = _Plan(base, minutes, dates, mode, now, drive)
@@ -424,7 +455,10 @@ def plan(*, jobs: list[PlanJob], booked: list[booking.Visit], technicians: list[
                 p.set_day(best[1], best[2])
         return p
 
-    orders = _orders(placeable, now)
+    # One-day customers go first in every starting order, so a flexible job never takes the
+    # only day they have.
+    orders = [[j for j in o if j.one_day] + [j for j in o if not j.one_day]
+              for o in _orders(placeable, now)]
     simple = build(orders[0])                       # one pass, longest waiting first
     baseline = {"placed": simple.placed(), "drive_minutes": _plan_drive(simple)}
     best = None
@@ -449,7 +483,8 @@ def plan(*, jobs: list[PlanJob], booked: list[booking.Visit], technicians: list[
             timed = _schedule(day, minutes.get(t["name"], {}), drive) or []
             techs.append({
                 "tech": t["name"], "start_from": "home" if t.get("home") else "first job",
-                "count": len(timed), "capacity": int(t.get("max", 5)),
+                "working": not day.locked,
+                "count": len(timed), "capacity": day.cap,
                 "drive_minutes": _drive_total(timed),
                 "first_start": c.local(timed[0].start).isoformat() if timed else None,
                 "last_end": c.local(timed[-1].end).isoformat() if timed else None,
@@ -465,6 +500,7 @@ def plan(*, jobs: list[PlanJob], booked: list[booking.Visit], technicians: list[
             "customer": u["job"].customer, "city": u["job"].city, "kind": u["job"].kind,
             "stage": u["job"].stage, "tentative": u["job"].tentative,
             "limits": u["job"].limits or None, "reason": u["reason"],
+            "one_day": u["job"].one_day or None, "agreed": u["job"].agreed,
             "zuper_url": u["job"].zuper_url} for u in best.unplaced],
         "pending": len(jobs),
         "summary": {"placed": new, "not_placed": len(best.unplaced),
@@ -472,6 +508,8 @@ def plan(*, jobs: list[PlanJob], booked: list[booking.Visit], technicians: list[
                                      if v.get("tentative")),
                     "drive_minutes": sum(t["drive_minutes"] for d in out_days
                                          for t in d["techs"]),
+                    "one_day": {"placed": best.one_day_placed(),
+                                "total": sum(1 for j in placeable if j.one_day)},
                     "starts_tried": len(candidates)},
         "baseline": baseline,
     }
@@ -497,5 +535,8 @@ def _visit_out(s: Stop) -> dict:
             "existing": s.existing, "drive_minutes_before": s.drive_before,
             "tentative": bool(j and j.tentative), "why": j.why if j else None,
             "limits": (j.limits or None) if j else None,
+            "one_day": bool(j and j.one_day) or None,
+            "agreed": j.agreed if j else None, "verified": j.verified if j else None,
+            "call_first_why": j.call_first_why if j else None,
             "lat": s.lat, "lng": s.lng,
             "zuper_url": j.zuper_url if j else None}

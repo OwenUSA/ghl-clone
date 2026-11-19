@@ -8319,3 +8319,82 @@ read-only" for exactly that, through the same approve-first pattern as proposal 
   (Approve / Never). Nothing here texts, emails, schedules or assigns. Zuper's own workflows were checked
   that day: none of the active ones starts on a new job.
 - Tests: `tests/test_owen_ai_leads.py`.
+
+## AMENDMENT (2026-11-19): technician routes — the owner's scheduling rules, in Owen AI and Dispatch (amends 2026-10-08, 2026-10-14, 2026-10-22)
+
+Asked by the user: "in the CRM there is an AI agent that handles how the routes are created for the
+technician, showing map and stuff — I want Owen AI to be able to do something similar", with the rules
+they use: (1) the customer who cannot do another day gets that day first; (2) customers on a route
+close to each other; a repair only after the customer agreed or signed the proposal; a call to get /
+verify the information before an inspection; Antonio and a new technician Marx, 2 jobs a day maximum;
+Owen works the days he says, and technicians' day ranges are told in the chat; weather FLAGGED for the
+next day, "we don't put it in the equation".
+
+**The user's answers (2026-11-19):** suggest only — nothing booked in Zuper; a repair is agreed by a
+signed / accepted proposal, by AHS authorizing it, or by a yes in a call / text (sitting in a column is
+not enough — except that "AHS Approved" counts, "even though we are only using for now the AHS simple
+flow and the retail pipelines"); callbacks get the same check; an unverified inspection is placed as
+CALL FIRST; day ranges are the technicians'; Marx does repairs only; Owen's maximum is asked each time
+(default 2); the weather agent stays OFF for now; and the SAME rules for the Dispatch page and its
+chat ("same rules everywhere"), so the office and Owen AI always see the same plan.
+
+**One planner, not a second agent.** `owen_ai/routes.py` (`plan_routes`, `crew_days`,
+`set_crew_days`) calls `dispatch/scheduling.make_plan` like the Dispatch chat does. A plan is a
+`dispatch_plans` row (source `owen_ai`, made by the owner); the answer carries
+`[Plan #N — map and list](/dispatch?tab=book&plan=N)`, which the Owen AI page turns into a chip and
+the plan's card under the answer (`PlanCard`: week grid, map, Excel). The tool result starts with the
+plan id because the step log keeps 600 characters.
+
+**The boards.** `boards="active"` is the new default (AHS Simple Flow + Retail + its regional copies);
+`ahs` = the old AHS boards + Simple Flow; `all`. Simple Flow joins `config.BOARDS` (its jobs stop being
+`off_board` items, and the availability reader now reads those customers' calls — within its 150 a
+day). Its columns are read by the planner only (`simple_flow_need`): first column / Day of Inspection
+with no visit, or a past one with no pictures → inspection; with pictures → the repair (waits for
+AHS); Proposal Creation → repair; Handoff Meeting / Repair Day with no visit or a past one with no
+pictures → repair; Quality Call / Job Completed → nothing. Retail: New Lead / Contact Attempted /
+Inspection-Estimate → inspection; Proposal Made / Estimate Sent / Follow Up / Waiting for Customer →
+repair; Scheduled / Repair In Process / Reschedule Required / Call Back → repair when the job has a
+proposal, else inspection. A board hidden as AHS - Inspection hides Simple Flow too.
+
+**The repair's OK** (`dispatch/readiness.py`, read from the CRM's copies, never live Zuper):
+`ZuperDocument` quotes APPROVED / ACCEPTED (the 15-minute sweep keeps every estimate, Simple Flow
+included), `ZuperProposalLine` (signed), an "AHS Approved" move or current column, on Simple Flow a
+move into Proposal Creation / Handoff / Repair Day AFTER the first two columns (AHS authorizes there;
+a callback made straight in Repair Day did not go through it), an AUTHO # in a Zuper note, the "AHS
+authorized ($)" field, the `ahs_approved` event, Retail's "Option chosen" answer, or a yes passed in
+`agreed` {job, source, the customer's own words, when} — refused without the words. A yes is kept in
+the plan's `params` and reused by every plan for 21 days (no table). A DECLINED proposal newer than
+the yes wins. No OK → `waiting_ok` (waiting on AHS / the customer / no proposal, with what was
+checked), not planned.
+
+**The inspection's call:** verified by a talked call (TALK_SECONDS, a person — an AI-answered call
+does not count — on any of the customer's numbers, after the job came in), "Service address verified"
+= Yes (field or checklist), or Welcome Call! followed by a booked stage (the migration's move off
+Welcome Call! into "Got a job from AHS" does not count). Otherwise CALL FIRST, with the reason. A
+repair's customer in a "Not Answering" stage is still CALL FIRST by its stage.
+
+**One-day customers first:** a job with exactly one open date in the window is `one_day`; it goes
+first in every start order and the score is (one-day placed, placed, driving). Measured in the test:
+without the rule the far one-day customer is dropped for two nearby flexible ones.
+
+**The crew** (`dispatch/crew.py`, `dispatch_settings.technicians`, no migration): `on_call` + `only`
+ranges (with their own `max`), `off` ranges; `booking.works` / `day_max` decide every grid day and the
+one-job booking slots. A day off with a booked visit is shown LOCKED (booked only). The decided crew
+(`CREW_2026_11`: Antonio both kinds 2/day, Marx repairs 2/day, Owen on call 2/day) is applied by the
+operator's `python -m app.dispatch.crew --marx "<exact Zuper name>" --commit` on top of the saved list
+(hours, homes and days off kept); `DEFAULT_TECHNICIANS` is unchanged. The Settings page's save keeps
+the chat's keys (`crew.merge_page_save`; the page strips them, `forPageSave`), and `minutes` is no
+longer dropped on save.
+
+**Weather:** `scheduling.weather_flags` puts the kept NWS chance of rain on each visit and lists the
+flagged ones, next day first, "less certain" past 3 days — never a reason to move or leave out a
+visit. With `WEATHER_ENABLED` off (production today) every plan says so. (`booking.slots` for one job
+keeps skipping rainy times, 2026-10-22.)
+
+**What changes for the Dispatch page:** its plans default to Simple Flow + Retail; repairs without an
+OK leave its plans; CALL FIRST follows the calls, not the stage; Antonio's 2 a day and Owen's on-call
+days apply to its booking options once the crew is saved.
+
+Tests: `tests/test_dispatch_route_rules.py`, `tests/test_dispatch_planner.py` (the rules),
+`tests/test_owen_ai_routes.py`, `tests/test_owen_ai_routes_ui.py`; legacy-board tests now pass
+`boards="ahs"`. No migration.

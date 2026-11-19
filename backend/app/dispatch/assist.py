@@ -8,7 +8,7 @@ agent do it" is act.py, off unless the server and an ADMIN both say so.)
 from __future__ import annotations
 
 import io
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -27,7 +27,7 @@ from ..models import (
     DispatchSuggestion,
     Role,
 )
-from . import ai, availability, booking, plan_excel, planner, scheduling, writes
+from . import ai, availability, booking, crew, plan_excel, planner, scheduling, writes
 from . import config as c
 from .api import SHOWN, VIEW, _hidden, _item, _suggestion, _viewer, _with_suggestions
 
@@ -130,7 +130,7 @@ class PlanBody(BaseModel):
     days: int = Field(6, ge=1, le=18)
     kind: str = "all"
     mode: str = "most_jobs"
-    boards: str = "ahs"
+    boards: str = "active"
     include_unreached: bool = True
 
 
@@ -144,8 +144,8 @@ def dispatch_make_plan(body: PlanBody, principal: auth.Principal = VIEW,
         raise HTTPException(400, "kind is all, inspection or repair")
     if body.mode not in planner.MODES:
         raise HTTPException(400, "mode is most_jobs or oldest_first")
-    if body.boards not in ("ahs", "all"):
-        raise HTTPException(400, "boards is ahs or all")
+    if body.boards not in scheduling.BOARD_SETS:
+        raise HTTPException(400, "boards is active, ahs or all")
     return scheduling.make_plan(db, datetime.now(UTC), days=body.days, kind=body.kind,
                                 mode=body.mode, boards=body.boards,
                                 include_unreached=body.include_unreached,
@@ -287,6 +287,15 @@ def dispatch_get_settings(principal: auth.Principal = VIEW, db: Session = Depend
 HHMM = r"^\d{2}:\d{2}$"
 
 
+class DayRange(BaseModel):
+    """Days a technician works (on call) or is off, both included (2026-11-19)."""
+    model_config = {"populate_by_name": True}
+    from_: date = Field(alias="from")
+    to: date
+    max: int | None = Field(default=None, ge=1, le=12)
+    note: str | None = Field(default=None, max_length=120)
+
+
 class Technician(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     does: list[str] = Field(min_length=1)
@@ -296,6 +305,12 @@ class Technician(BaseModel):
     end: str = Field(pattern=HHMM)
     max: int = Field(ge=1, le=12)
     home: list[float] | None = None
+    # Kept when the page leaves them out (crew.merge_page_save): visit lengths an admin set
+    # (they were dropped on every save before 2026-11-19), on call, and the days told in chat.
+    minutes: dict[str, int] | None = None
+    on_call: bool | None = None
+    only: list[DayRange] | None = None
+    off: list[DayRange] | None = None
 
 
 class SettingsIn(BaseModel):
@@ -312,7 +327,7 @@ def dispatch_put_settings(body: SettingsIn, principal: auth.Principal = ADMIN,
     """ADMIN. With the AI on, job details and call summaries / transcripts go to the chosen
     provider when it explains an item or answers the chat."""
     s = ai.settings(db, for_update=True)
-    data = body.model_dump(exclude_unset=True)
+    data = body.model_dump(exclude_unset=True, by_alias=True, mode="json")
     if data.get("connection_id") is not None and \
             db.get(AiConnection, data["connection_id"]) is None:
         raise HTTPException(400, "no such AI connection")
@@ -326,7 +341,12 @@ def dispatch_put_settings(body: SettingsIn, principal: auth.Principal = ADMIN,
                     any(d not in range(7) for d in t["days"]):
                 raise HTTPException(400, "a technician's visits are inspection / repair and "
                                          "days are 0 (Monday) to 6")
-        s.technicians = data["technicians"]
+            if any(k not in booking.SLOT_MINUTES or not 15 <= int(v) <= 600
+                   for k, v in (t.get("minutes") or {}).items()):
+                raise HTTPException(400, "visit minutes are per inspection / repair, 15 to 600")
+            if any(r["to"] < r["from"] for r in (t.get("only") or []) + (t.get("off") or [])):
+                raise HTTPException(400, "a range of days ends before it starts")
+        s.technicians = crew.merge_page_save(s.technicians, data["technicians"] or [])
     if data.get("ai_enabled") is not None:
         if data["ai_enabled"] and s.connection_id is None:
             raise HTTPException(400, "choose an AI connection first")

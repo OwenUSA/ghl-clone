@@ -397,8 +397,12 @@ with evidence and its time, and say it is an inference.
 have the visit is already read from all their calls and texts and applied (`limits`); if a \
 proposed visit's last calls and texts show something newer or missed (a day, a time, "away \
 next week", a technician), call plan_schedule again with those limits and their evidence. \
-Then give the summary (visits placed, not placed, \
-driving), a table per day and technician, the tentative ones (call first) and the links. \
+A REPAIR is planned only with the customer's OK; for each job in waiting_for_customer_ok look \
+for a clear yes in its last calls and texts and, when there is one, plan again with agreed \
+(their exact words and the day) — never a yes without their words. Then give the summary \
+(visits placed, not placed, driving), a table per day and technician, the tentative ones \
+(CALL FIRST: nobody has verified the information by phone), the repairs waiting for the \
+customer's OK, any rain flags (a flag only) and the links. \
 Nothing is booked: the office books each visit in Zuper.
 - A stage changes only on its evidence, never on a plan or an agreed time: "On the way" \
 only after an on-the-way text or call (or the technician's move); "Inspection Completed" / \
@@ -458,6 +462,31 @@ def writes_on(db: Session) -> bool:
 def chat_tools(db: Session) -> list:
     return TOOLS if writes_on(db) else [t for t in TOOLS if t.name != "suggest_change"]
 
+
+# What a customer said about WHEN, per job, for plan_schedule (and Owen AI's plan_routes).
+LIMITS_SCHEMA = {"type": "array", "items": {
+    "type": "object", "properties": {
+        "job_number": {"type": "string"},
+        "not_before": {"type": "string"},
+        "blocked": {"type": "array", "items": {
+            "type": "object", "properties": {"from": {"type": "string"},
+                                             "to": {"type": "string"}},
+            "required": ["from", "to"], "additionalProperties": False}},
+        "not_days": {"type": "array", "items": {"type": "string"}},
+        "days": {"type": "array", "items": {"type": "string"}},
+        "after": {"type": "string"},
+        "before": {"type": "string"},
+        "technician": {"type": "string"},
+        "evidence": {"type": "string"}},
+    "required": ["job_number"], "additionalProperties": False}}
+# The customer's yes to a repair, read in a call or text (2026-11-19): job, where, their words.
+AGREED_SCHEMA = {"type": "array", "items": {
+    "type": "object", "properties": {
+        "job_number": {"type": "string"},
+        "source": {"type": "string", "enum": ["call", "text", "proposal", "ahs", "other"]},
+        "quote": {"type": "string", "description": "the customer's own words"},
+        "said_at": {"type": "string", "description": "when, e.g. 2026-11-18 or 11/18"}},
+    "required": ["job_number", "source", "quote", "said_at"], "additionalProperties": False}}
 
 TOOLS = [
     providers.ToolSpec("list_items", "The open Dispatch items (what the office must do), "
@@ -549,34 +578,23 @@ TOOLS = [
                        "needs a visit (new inspections, AHS-approved repairs, reschedules, "
                        "visits that did not happen or have no time), fitted Monday to Saturday "
                        "for the technicians around what is booked, as many jobs as possible "
-                       "with the least driving. Returns the plan, each proposed visit's last "
+                       "with the least driving; a customer who can only do one day gets it "
+                       "first. Returns the plan, each proposed visit's last "
                        "calls and texts, and links to an Excel and a calendar. Customers' "
-                       "limits from the calls go in `limits`; call it again with them. "
+                       "limits from the calls go in `limits`; call it again with them. A REPAIR "
+                       "is planned only with the customer's OK (accepted proposal, AHS "
+                       "authorization, or a yes in a call / text you pass in `agreed` with "
+                       "their exact words); the others come back in waiting_for_customer_ok. "
                        "mode: most_jobs (default) or oldest_first; kind: all, inspection or "
-                       "repair; days: business days ahead (6 = a week, 12 = two); boards: ahs "
-                       "(default) or all; include_unreached: place customers nobody reached "
-                       "yet as tentative (default true).",
+                       "repair; days: business days ahead (6 = a week, 12 = two); boards: "
+                       "active (default: AHS Simple Flow + Retail), ahs (the AHS boards, old "
+                       "ones too) or all; include_unreached: place inspections nobody has "
+                       "called about as CALL FIRST (default true).",
                        {"type": "object", "properties": {
                            "days": {"type": "integer"}, "kind": {"type": "string"},
                            "mode": {"type": "string"}, "boards": {"type": "string"},
                            "include_unreached": {"type": "boolean"},
-                           "limits": {"type": "array", "items": {
-                               "type": "object", "properties": {
-                                   "job_number": {"type": "string"},
-                                   "not_before": {"type": "string"},
-                                   "blocked": {"type": "array", "items": {
-                                       "type": "object", "properties": {
-                                           "from": {"type": "string"},
-                                           "to": {"type": "string"}},
-                                       "required": ["from", "to"],
-                                       "additionalProperties": False}},
-                                   "not_days": {"type": "array", "items": {"type": "string"}},
-                                   "days": {"type": "array", "items": {"type": "string"}},
-                                   "after": {"type": "string"},
-                                   "before": {"type": "string"},
-                                   "technician": {"type": "string"},
-                                   "evidence": {"type": "string"}},
-                               "required": ["job_number"], "additionalProperties": False}}},
+                           "limits": LIMITS_SCHEMA, "agreed": AGREED_SCHEMA},
                         "additionalProperties": False}),
     providers.ToolSpec("read_file", "Read rows of a spreadsheet attached to this chat, in order "
                        "(top to bottom). Page with offset; up to 100 rows a call.",
@@ -909,9 +927,11 @@ def run_tool(db: Session, name: str, args: dict, now: datetime, hidden: set[str]
         out = scheduling.make_plan(
             db, now, days=int(args.get("days") or 6),
             kind=kind if kind in ("all", "inspection", "repair") else "all",
-            mode=str(args.get("mode") or "most_jobs"), boards=str(args.get("boards") or "ahs"),
+            mode=str(args.get("mode") or "most_jobs"),
+            boards=str(args.get("boards") or "active"),
             include_unreached=args.get("include_unreached") is not False,
             limits=args.get("limits") if isinstance(args.get("limits"), list) else None,
+            agreed=args.get("agreed") if isinstance(args.get("agreed"), list) else None,
             hidden=hidden, user_id=user_id, source="chat")
         if downloads is not None and out.get("id"):
             for link in ({"label": "Schedule plan #%d (Excel)" % out["id"],

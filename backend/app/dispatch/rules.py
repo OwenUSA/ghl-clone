@@ -194,7 +194,8 @@ def evaluate(jobs, comms: dict[str, list[Comm]], now: datetime,
             job_items.append(Item(
                 key="offboard:%s:%s" % (j.job_uid, j.board), kind="off_board", queue="zuper",
                 title="%s is on \"%s\", not a pipeline" % (_label(j), j.board),
-                why="Jobs outside AHS - Inspection, AHS - Repair & Review and Retail are not "
+                why="Jobs outside AHS Simple Flow, Retail (and its regional copies) and the "
+                    "old AHS - Inspection / AHS - Repair & Review boards are not "
                     "tracked by the boards, the routes or this page.",
                 todo="In Zuper: open #%s, change its Category to the right pipeline and set "
                      "its stage." % j.job_number,

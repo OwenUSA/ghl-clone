@@ -3,10 +3,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { BLUE, INK, LINE } from '../ai/aiUi'
 import {
   dispatchPlanExcelUrl, getDispatchPlan, makeDispatchPlan, type DispatchPlan,
-  type DispatchPlanKind, type DispatchPlanMode, type DispatchPlanTech, type DispatchPlanVisit,
+  type DispatchPlanBoards, type DispatchPlanKind, type DispatchPlanMode, type DispatchPlanTech,
+  type DispatchPlanVisit,
 } from '../../lib/api'
-import { driveLabel, KIND_LABEL, planText, visitRange, visitTitle } from '../../lib/dispatch'
+import {
+  driveLabel, KIND_LABEL, planText, rainLabel, visitNotes, visitRange, visitTitle,
+} from '../../lib/dispatch'
 import { CustomerAvailability } from './CustomerAvailability'
+import { PlanExtras } from './PlanExtras'
 
 const MUTED = 'rgb(102,112,133)'
 const RED = 'rgb(180,35,24)'
@@ -48,7 +52,7 @@ export function WeekPlan() {
   const [days, setDays] = useState(6)
   const [kind, setKind] = useState<Kind>('all')
   const [mode, setMode] = useState<DispatchPlanMode>('most_jobs')
-  const [boards, setBoards] = useState<'ahs' | 'all'>('ahs')
+  const [boards, setBoards] = useState<DispatchPlanBoards>('active')
   const [unreached, setUnreached] = useState(true)
   const [view, setView] = useState<View>('calendar')
   const [limitsChanged, setLimitsChanged] = useState(false)
@@ -67,8 +71,9 @@ export function WeekPlan() {
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>Remake the schedule</div>
           <div style={{ fontSize: 13, color: MUTED }}>
-            Every job that needs a visit — new inspections, AHS-approved repairs, reschedules —
-            fitted Monday to Saturday with the least driving. Nothing is booked.</div>
+            Every job that needs a visit — new inspections, repairs the customer agreed to,
+            reschedules — fitted to the crew's days with the least driving; a customer who can
+            only do one day gets it first. Nothing is booked.</div>
         </div>
         <button type="button" onClick={() => setOpen(true)} style={primary}>Plan the week</button>
       </div>
@@ -99,14 +104,15 @@ export function WeekPlan() {
             <option value="oldest_first">Oldest waiting first</option>
           </select></label>
         <label style={{ fontSize: 12, color: MUTED }}>Boards{' '}
-          <select value={boards} onChange={(e) => setBoards(e.target.value as 'ahs' | 'all')}
+          <select value={boards} onChange={(e) => setBoards(e.target.value as DispatchPlanBoards)}
             style={field} aria-label="Boards">
-            <option value="ahs">AHS Inspection + Repair</option>
+            <option value="active">AHS Simple Flow + Retail</option>
+            <option value="ahs">AHS (old boards too)</option>
             <option value="all">All boards</option>
           </select></label>
         <label style={{ fontSize: 12, color: MUTED, display: 'flex', alignItems: 'center', gap: 4 }}>
           <input type="checkbox" checked={unreached} onChange={(e) => setUnreached(e.target.checked)} />
-          Include customers not reached yet</label>
+          Include inspections not verified by phone (CALL FIRST)</label>
         <button type="button" onClick={() => make.mutate()} disabled={make.isPending}
           style={{ ...primary, opacity: make.isPending ? 0.6 : 1 }}>
           {make.isPending ? 'Planning…' : plan ? 'Plan again' : 'Make the plan'}</button>
@@ -140,6 +146,8 @@ function Summary({ plan }: { plan: DispatchPlan }) {
       <Stat label="Visits planned" value={String(s.placed)} />
       <Stat label="Not placed" value={String(s.not_placed)} tone={s.not_placed ? RED : undefined} />
       <Stat label="Call first" value={String(s.tentative)} tone={s.tentative ? AMBER : undefined} />
+      {!!s.waiting_ok && <Stat label="Repairs waiting for OK" value={String(s.waiting_ok)}
+        tone={AMBER} />}
       <Stat label="Driving" value={driveLabel(s.drive_minutes).replace(' driving', '')} />
       {plan.availability && <Stat label="Customers' calls read"
         value={`${plan.availability.read} of ${plan.availability.jobs}`}
@@ -192,8 +200,11 @@ function Assumptions({ plan }: { plan: DispatchPlan }) {
         const parts: string[] = []
         if (m) parts.push(`inspection ${m.inspection} min, repair ${m.repair} min (${SOURCE[m.source] ?? m.source})`)
         if (h) {
-          const dayNames = h.days.map((d) => DAY_NAMES[d] ?? String(d)).join(' ')
+          const dayNames = h.on_call ? 'on call' : h.days.map((d) => DAY_NAMES[d] ?? String(d)).join(' ')
           parts.push(`${dayNames} ${h.start}–${h.end}, max ${h.max} a day`)
+          if (h.does?.length === 1) parts.push(`${h.does[0]}s only`)
+          if (h.only?.length) parts.push(`works ${h.only.map((r) => r.from === r.to ? r.from : `${r.from}–${r.to}`).join(', ')}`)
+          if (h.off?.length) parts.push(`off ${h.off.map((r) => r.from === r.to ? r.from : `${r.from}–${r.to}`).join(', ')}`)
         }
         return <span key={t}><span style={{ color: INK }}>{t}</span>: {parts.join(' · ')}</span>
       })}
@@ -272,6 +283,7 @@ function PlanBody({ plan, view, setView }: { plan: DispatchPlan; view: View
         </div>
       ))}
       <NotPlaced plan={plan} />
+      <PlanExtras plan={plan} />
     </div>
   )
 }
@@ -318,12 +330,14 @@ function TechRow({ tech, dates, byDate }: { tech: string; dates: string[]
             {t && t.visits.length > 0 ? (
               <>
                 <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>
+                  {t.working === false ? 'Off — booked only · ' : ''}
                   {t.count} of {t.capacity} · {driveLabel(t.drive_minutes)}</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {t.visits.map((v) => <CalendarVisit key={`${v.job_uid}-${v.start}`} v={v} />)}
                 </div>
               </>
-            ) : <div style={{ fontSize: 11, color: MUTED }}>Free</div>}
+            ) : <div style={{ fontSize: 11, color: MUTED }}>
+              {t?.working === false ? 'Off' : 'Free'}</div>}
           </div>
         )
       })}
@@ -333,7 +347,8 @@ function TechRow({ tech, dates, byDate }: { tech: string; dates: string[]
 
 function CalendarVisit({ v }: { v: DispatchPlanVisit }) {
   const tentative = !v.existing && v.tentative
-  const title = [v.why, ...(v.limits ?? [])].filter(Boolean).join(' · ')
+  const title = [v.why, ...(v.limits ?? []), ...visitNotes(v)].filter(Boolean).join(' · ')
+  const rain = rainLabel(v.weather)
   return (
     <div title={title || undefined} style={{ background: tentative ? AMBER_BG : '#fff',
       border: `1px solid ${tentative ? 'rgb(254,200,75)' : LINE}`, borderRadius: 6,
@@ -347,6 +362,11 @@ function CalendarVisit({ v }: { v: DispatchPlanVisit }) {
       <div style={{ overflowWrap: 'anywhere' }}>{visitTitle(v)}</div>
       {v.existing && <div style={{ fontSize: 10 }}>Booked</div>}
       {tentative && <div style={{ fontSize: 10, color: AMBER, fontWeight: 600 }}>Call first</div>}
+      {!v.existing && v.one_day && <div style={{ fontSize: 10, color: RED, fontWeight: 600 }}>
+        Only day the customer can</div>}
+      {!v.existing && v.agreed && <div style={{ fontSize: 10, color: GREEN }}>OK: {v.agreed}</div>}
+      {rain && <div style={{ fontSize: 10, color: 'rgb(23,92,211)', fontWeight: 600 }}>
+        {rain} — flag only</div>}
       {!!v.limits?.length && <div style={{ fontSize: 10, color: MUTED }}>{v.limits.join('; ')}</div>}
       {!v.existing && v.zuper_url && <a href={v.zuper_url} target="_blank" rel="noreferrer"
         style={{ ...link, fontSize: 11 }}>Open in Zuper ↗</a>}

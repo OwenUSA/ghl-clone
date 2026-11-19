@@ -39,6 +39,7 @@ from . import (
     report,
     report_attach,
     review,
+    routes,
     saved_reports,
 )
 
@@ -473,6 +474,9 @@ SPECS = SPECS + report_attach.SPECS
 # New leads (2026-11-19): a customer + job stored PENDING in the CRM; Zuper is written only when
 # the owner approves one (leads.approve, client.owen_ai_lead_create: three POSTs, no PUT/DELETE).
 SPECS = SPECS + leads.SPECS
+# Technicians' routes (2026-11-19): the Dispatch planner's DRAFT plan (nothing booked, nothing
+# sent to Zuper), drawn under the answer; set_crew_days writes the CRM's crew settings only.
+SPECS = SPECS + routes.SPECS
 
 TOOL_NAMES = tuple("mcp__%s__%s" % (SERVER_NAME, name) for name, *_ in SPECS)
 

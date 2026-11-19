@@ -99,3 +99,86 @@ def test_a_day_that_starts_with_a_booked_visit_at_opening_still_takes_new_visits
     visits = out["days"][0]["techs"][0]["visits"]
     assert [v["existing"] for v in visits] == [True, False]
     assert datetime.fromisoformat(visits[1]["start"]) >= first + timedelta(hours=2)
+
+
+# ---- the owner's rules (2026-11-19) -------------------------------------------------------------
+# "prioritize for that day the customer that cannot do other day"; Antonio and Marx, 2 jobs a
+# day; Marx does repairs only; Owen works only the days he says.
+
+MARX = {"name": "Marx Test", "does": ["repair"], "prefers": "repair",
+        "days": [0, 1, 2, 3, 4, 5], "start": "07:30", "end": "17:00", "max": 2, "home": None}
+TWO = {**ANTONIO, "max": 2}
+
+
+def test_a_customer_who_can_only_do_one_day_gets_it_before_flexible_jobs():
+    # Two days (Thu, Fri), ONE visit a day: three customers, room for two. The two flexible
+    # ones are next to Antonio's home, the one who can ONLY do Thursday is far away — on driving
+    # alone the plan would take the two near ones and drop her. The owner's rule: she goes first.
+    one = {**ANTONIO, "max": 1}
+    flex = [job(1, WESTON, waited=9), job(2, WESTON, waited=8)]
+    only = job(3, HOMESTEAD, waited=0)
+    only.weekdays = frozenset({3})                          # Thursdays only
+    out = planner.plan(jobs=[*flex, only], booked=[], technicians=[one], minutes=MINUTES,
+                       now=NOW, days=2)
+    where = placed(out)
+    assert where["3"] == ("2026-10-01", "Antonio Brown")
+    assert len(where) == 2 and where.keys() & {"1", "2"}    # one flexible one on Friday
+    v = next(v for d in out["days"] for t in d["techs"] for v in t["visits"]
+             if v["job_number"] == "3")
+    assert v["one_day"] is True
+    assert out["summary"]["one_day"] == {"placed": 1, "total": 1}
+    left = next(u for u in out["unplaced"] if u["job_number"] in ("1", "2"))
+    assert "No room" in left["reason"] and not left.get("one_day")
+
+
+def test_a_full_one_day_is_named_when_the_customer_cannot_fit():
+    booked = [booking.Visit("Antonio Brown", datetime(2026, 10, 1, 12, tzinfo=c.TZ),
+                            datetime(2026, 10, 1, 14, tzinfo=c.TZ), *WESTON, "#600"),
+              booking.Visit("Antonio Brown", datetime(2026, 10, 1, 14, 30, tzinfo=c.TZ),
+                            datetime(2026, 10, 1, 16, tzinfo=c.TZ), *WESTON, "#601")]
+    only = job(3, WESTON)
+    only.not_before = datetime(2026, 10, 1).date()
+    only.blocked = [(datetime(2026, 10, 2).date(), datetime(2026, 10, 31).date())]
+    out = planner.plan(jobs=[only], booked=booked, technicians=[TWO], minutes=MINUTES, now=NOW,
+                       days=6)
+    why = next(u for u in out["unplaced"] if u["job_number"] == "3")["reason"]
+    assert "can only do Thu 10/01" in why and "Antonio 2 of 2" in why
+
+
+def test_an_on_call_technician_works_only_the_days_he_gave_and_a_day_off_is_kept_free():
+    owen = {**OWEN, "max": 2, "on_call": True,
+            "only": [{"from": "2026-10-02", "to": "2026-10-02", "max": 1}]}
+    antonio = {**TWO, "off": [{"from": "2026-10-01", "to": "2026-10-01"}]}
+    booked = [booking.Visit("Antonio Brown", datetime(2026, 10, 1, 9, tzinfo=c.TZ),
+                            datetime(2026, 10, 1, 11, tzinfo=c.TZ), *WESTON, "#600 booked")]
+    jobs = [job(n, WESTON, kind="inspection") for n in range(1, 5)]
+    out = planner.plan(jobs=jobs, booked=booked, technicians=[antonio, owen], minutes=MINUTES,
+                       now=NOW, days=3)
+    cells = {(d["date"], t["tech"]): t for d in out["days"] for t in d["techs"]}
+    # Owen: Friday only, and only ONE that day (what he said).
+    assert {k[0] for k in cells if k[1] == "Owen Buzaglo"} == {"2026-10-02"}
+    assert cells[("2026-10-02", "Owen Buzaglo")]["capacity"] == 1
+    assert cells[("2026-10-02", "Owen Buzaglo")]["count"] <= 1
+    # Antonio's day off still shows the visit already booked — and gets nothing new.
+    off = cells[("2026-10-01", "Antonio Brown")]
+    assert off["working"] is False
+    assert [v["existing"] for v in off["visits"]] == [True]
+    assert booking.works(owen, datetime(2026, 10, 5).date()) is False
+    assert booking.day_max(owen, datetime(2026, 10, 2).date()) == 1
+
+
+def test_a_repairs_only_technician_never_gets_an_inspection_and_booked_visits_count_toward_two():
+    booked = [booking.Visit("Marx Test", datetime(2026, 10, 1, 8, tzinfo=c.TZ),
+                            datetime(2026, 10, 1, 10, tzinfo=c.TZ), *WESTON, "#700 booked")]
+    jobs = [job(n, WESTON, kind="inspection") for n in range(1, 4)] + \
+        [job(n, WESTON, kind="repair") for n in range(4, 8)]
+    out = planner.plan(jobs=jobs, booked=booked, technicians=[TWO, MARX],
+                       minutes={**MINUTES, "Marx Test": {"repair": 120}}, now=NOW, days=2)
+    for d in out["days"]:
+        for t in d["techs"]:
+            assert t["count"] <= 2
+            if t["tech"] == "Marx Test":
+                assert all(v["kind"] == "repair" for v in t["visits"])
+    marx_thu = next(t for d in out["days"] for t in d["techs"]
+                    if t["tech"] == "Marx Test" and d["date"] == "2026-10-01")
+    assert sum(1 for v in marx_thu["visits"] if not v["existing"]) <= 1   # 1 booked + 1 new

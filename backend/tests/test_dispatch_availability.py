@@ -35,6 +35,7 @@ from app.models import (
     EventType,
     Pipeline,
     PipelinePermission,
+    ZuperStatusHistory,
 )
 from fastapi.testclient import TestClient
 from tests.ai_support import openai_completion
@@ -152,7 +153,7 @@ def test_nothing_is_read_while_the_ai_is_paused_and_saved_readings_still_apply(d
     db.commit()
     counts = availability.refresh(db, NOW)
     assert counts["read"] == 0 and "paused" in counts["skipped"] and script.calls == 0
-    jobs = scheduling.waiting_jobs(db, NOW, hidden=set())
+    jobs = scheduling.waiting_jobs(db, NOW, hidden=set(), boards="ahs")
     assert jobs[0].blocked == [(date(2026, 10, 12), date(2026, 10, 17))]
 
 
@@ -161,6 +162,10 @@ def test_every_plan_keeps_the_visit_out_of_the_week_the_customer_is_away(db):
         db.add(DispatchJob(job_uid="j%d" % n, job_number=str(n), board=c.REPAIR_BOARD,
                            status="Reschedule Required", customer_name="C%d" % n, lat=25.8,
                            lng=-80.2, city="Miami", is_open=True, phones=[phone]))
+        # A repair goes on the plan only with the customer's OK (2026-11-19): AHS approved it.
+        db.add(ZuperStatusHistory(history_uid="h%d" % n, job_uid="j%d" % n,
+                                  job_number=str(n), status_name="AHS Approved",
+                                  changed_at=NOW - timedelta(days=5)))
     db.add(DispatchAvailability(job_uid="j503", job_number="503", source="ai", read_at=NOW,
                                 limits={"blocked": [{"from": "2026-10-09",
                                                      "to": "2026-10-14"}]},
@@ -168,7 +173,7 @@ def test_every_plan_keeps_the_visit_out_of_the_week_the_customer_is_away(db):
     db.add(DispatchAvailability(job_uid="j504", job_number="504", source="ai", read_at=NOW,
                                 limits={"not_before": "2026-11-30"}))
     db.commit()
-    out = scheduling.make_plan(db, NOW, days=6, store=False)
+    out = scheduling.make_plan(db, NOW, days=6, store=False, boards="ahs")
     placed = {v["job_number"]: d["date"] for d in out["days"] for t in d["techs"]
               for v in t["visits"] if not v["existing"]}
     assert placed["503"] >= "2026-10-15"

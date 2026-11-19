@@ -3,7 +3,7 @@
   Schedule      one row per visit, a day / technician heading row above each group
   Calendar      week by week: a row per technician, a column per day, the visits in each cell
   By day        visits, driving, first start and last finish per technician per day
-  Not placed    what did not fit, and why
+  Not placed    what did not fit, and why — and the repairs waiting for the customer's OK
   How it was planned   the visit lengths, the hours, the driving estimate, this plan vs a
                 simple one-pass plan
 
@@ -44,7 +44,23 @@ def _window(v: dict) -> str:
 def _status(v: dict) -> str:
     if v["existing"]:
         return "Booked"
-    return "Proposed - CALL FIRST (not reached yet)" if v.get("tentative") else "Proposed"
+    if v.get("tentative"):
+        return "Proposed - CALL FIRST (info not verified by phone)"
+    return "Proposed - only day the customer can" if v.get("one_day") else "Proposed"
+
+
+def _rain(v: dict) -> str:
+    """The weather agent's flag (2026-11-19): a flag, never a reason the visit moved."""
+    w = v.get("weather") or {}
+    if not w.get("risk"):
+        return ""
+    return "%s%% rain%s" % (w.get("pop"), " (less certain)" if w.get("less_certain") else "")
+
+
+def _evidence(v: dict) -> str:
+    return "; ".join(x for x in (v.get("agreed") and "OK: " + v["agreed"],
+                                 v.get("verified") and "Called: " + v["verified"],
+                                 v.get("call_first_why")) if x)
 
 
 def _map(v: dict) -> str:
@@ -66,7 +82,8 @@ def _schedule(ws, plan: dict) -> None:
     _header(ws, [("Day", 12), ("Tech", 15), ("Window", 18), ("Customer", 24), ("Job #", 8),
                  ("Type", 11), ("City", 16), ("Address", 32), ("Zuper stage now", 24),
                  ("Status", 24), ("Drive before (min)", 10), ("Why it needs a visit", 40),
-                 ("Customer limits", 40), ("Map", 14), ("Zuper", 14)])
+                 ("Customer limits", 40), ("Map", 14), ("Zuper", 14), ("Rain", 14),
+                 ("Customer's OK / call", 44)])
     for d in plan["days"]:
         for t in d["techs"]:
             if not t["visits"]:
@@ -74,7 +91,7 @@ def _schedule(ws, plan: dict) -> None:
             ws.append(["%s  -  %s   |   %d visits, ~%d min driving, from %s" % (
                 d["label"], t["tech"], t["count"], t["drive_minutes"], t["start_from"])])
             row = ws.max_row
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=15)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=17)
             ws.cell(row=row, column=1).font, ws.cell(row=row, column=1).fill = BOLD, GROUP
             for v in t["visits"]:
                 ws.append([
@@ -82,14 +99,15 @@ def _schedule(ws, plan: dict) -> None:
                     _window(v), v["customer"] or "", v["job_number"] or "",
                     KIND.get(v["kind"], v["kind"]), v.get("city") or "", v.get("address") or "",
                     v.get("stage") or "", _status(v), v["drive_minutes_before"],
-                    v.get("why") or "", "; ".join(v.get("limits") or []), "", ""])
+                    v.get("why") or "", "; ".join(v.get("limits") or []), "", "",
+                    _rain(v), _evidence(v)])
                 r = ws.max_row
                 for col, url, text in ((14, _map(v), "Map"), (15, v.get("zuper_url"), "Open")):
                     if url:
                         cell = ws.cell(row=r, column=col, value=text)
                         cell.hyperlink, cell.font = url, Font(color="0563C1", underline="single")
                 fill = BOOKED if v["existing"] else TENTATIVE if v.get("tentative") else None
-                for col in range(1, 16):
+                for col in range(1, 18):
                     cell = ws.cell(row=r, column=col)
                     cell.alignment, cell.border = WRAP, THIN
                     if fill:
@@ -133,6 +151,8 @@ def _calendar(ws, plan: dict) -> None:
                 for v in t["visits"]:
                     mark = "BOOKED " if v["existing"] else "CALL FIRST " if v.get("tentative") \
                         else ""
+                    if (v.get("weather") or {}).get("risk"):
+                        mark += "RAIN %s%% " % v["weather"]["pop"]
                     lines.append("%s %s#%s %s (%s) %s" % (
                         _t(v["start"]), mark, v["job_number"] or "?", v["customer"] or "",
                         v.get("city") or "", "I" if v["kind"] == "inspection" else "R"))
@@ -146,7 +166,8 @@ def _calendar(ws, plan: dict) -> None:
         ws.append([])
         week += timedelta(days=7)
     ws.append([("I = inspection, R = repair. BOOKED = already in Zuper. CALL FIRST = nobody "
-                "has reached the customer yet.")])
+                "has verified the information with the customer by phone yet. RAIN = a flag "
+                "only.")])
 
 
 def _by_day(ws, plan: dict) -> None:
@@ -171,6 +192,20 @@ def _not_placed(ws, plan: dict) -> None:
             cell.hyperlink, cell.font = u["zuper_url"], Font(color="0563C1", underline="single")
     if not plan["unplaced"]:
         ws.append(["Every job that needs a visit is in the plan."])
+    waiting = plan.get("waiting_ok") or []
+    if waiting:
+        ws.append([])
+        ws.append([("Repairs waiting for the customer's OK (not planned: no accepted "
+                    "proposal, AHS authorization or yes in a call / text)")])
+        ws.cell(row=ws.max_row, column=1).font = BOLD
+        for w in waiting:
+            ws.append([w["job_number"] or "", w["customer"] or "", "Repair", w.get("city") or "",
+                       w.get("stage") or "", "Waiting on %s: %s" % (w["waiting_on"], w["checked"]),
+                       "", ""])
+            if w.get("zuper_url"):
+                cell = ws.cell(row=ws.max_row, column=8, value="Open")
+                cell.hyperlink, cell.font = w["zuper_url"], Font(color="0563C1",
+                                                                 underline="single")
 
 
 def _assumptions(ws, plan: dict) -> None:
@@ -191,8 +226,11 @@ def _assumptions(ws, plan: dict) -> None:
         rows.append(("Visit length - %s" % name, "inspection %s min, repair %s min (%s)" % (
             m.get("inspection"), m.get("repair"), m.get("source"))))
     for name, h in ((plan.get("assumptions") or {}).get("hours") or {}).items():
-        rows.append(("Hours - %s" % name, "%s-%s, up to %s visits a day" % (
-            h.get("start"), h.get("end"), h.get("max"))))
+        rows.append(("Hours - %s" % name, "%s-%s, up to %s visits a day%s%s" % (
+            h.get("start"), h.get("end"), h.get("max"),
+            ", %s only" % "/".join(h["does"]) if len(h.get("does") or []) == 1 else "",
+            ", on call (only the days he gave)" if h.get("on_call") else "")))
+    rows.append(("Weather", (plan.get("weather") or {}).get("note")))
     rows.append(("Draft", ("Nothing here is booked. The office books each visit in Zuper "
                            "after agreeing it with the customer.")))
     for k, v in rows:

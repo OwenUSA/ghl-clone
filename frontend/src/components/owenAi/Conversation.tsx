@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { MicButton } from '../MicButton'
 import type { OwenAiMessage, OwenAiStep, OwenAiThreadDetail } from '../../lib/api'
-import { auditPromptLabel, busySince, elapsed, excerpt, prettyJson, runFooter, threadBusy, toolsLabel } from '../../lib/owenAi'
+import { auditPromptLabel, busySince, elapsed, excerpt, lastPlanId, prettyJson, runFooter, threadBusy, toolsLabel } from '../../lib/owenAi'
+import { PlanCard } from '../dispatch/PlanCard'
 import { Markdown } from './Markdown'
 import { BLUE, INK, LINE, MONO, MUTED, RED } from './tokens'
 
@@ -152,9 +153,12 @@ function AssistantMessage({ m }: { m: OwenAiMessage }) {
   const [open, setOpen] = useState(false)
   const steps = m.steps ?? []
   const footer = runFooter(m)
+  // The technicians' routes (2026-11-19, plan_routes): the plan's map and week under the answer.
+  const plan = lastPlanId(m.content, steps)
   return (
     <div style={{ margin: '18px 0', fontSize: 15, lineHeight: '24px', color: INK, minWidth: 0 }}>
       {m.content && <Markdown text={m.content} />}
+      {plan !== null && <PlanCard planId={plan} />}
       {m.error && <div role="alert" style={errorBox}>{m.error}</div>}
       {(steps.length > 0 || footer) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap', fontSize: 12,

@@ -2311,7 +2311,10 @@ export type DispatchSlot = { tech: string; start: string; end: string;
   extra_drive_minutes: number; next_to: string | null }
 
 export type DispatchTechnician = { name: string; does: string[]; prefers: string;
-  days: number[]; start: string; end: string; max: number; home: number[] | null }
+  days: number[]; start: string; end: string; max: number; home: number[] | null
+  // 2026-11-19: set from Owen AI's chat (dispatch/crew.py); the Settings page only shows them.
+  minutes?: Record<string, number> | null; on_call?: boolean | null
+  only?: DispatchDayRange[] | null; off?: DispatchDayRange[] | null }
 
 export type DispatchSettings = {
   ai_enabled: boolean
@@ -2527,9 +2530,16 @@ export type DispatchPlanVisit = {
   // 2026-10-08: remaking the schedule
   address?: string | null; stage?: string | null; tentative?: boolean; why?: string | null
   limits?: string[] | null; lat?: number | null; lng?: number | null
+  // 2026-11-19, the owner's rules: the only day the customer can; the repair's OK and the
+  // inspection's verifying call (in words); why it is CALL FIRST; rain (a flag only).
+  one_day?: boolean | null; agreed?: string | null; verified?: string | null
+  call_first_why?: string | null; weather?: DispatchPlanWeather | null
 }
+export type DispatchPlanWeather = { known?: false; pop?: number | null; mm?: number
+  risk?: boolean; less_certain?: boolean; made?: string }
 export type DispatchPlanTech = {
   tech: string; start_from: 'home' | 'first job'; count: number; capacity: number
+  working?: boolean                     // false: a day off shown for its booked visits only
   drive_minutes: number; visits: DispatchPlanVisit[]
   first_start?: string | null; last_end?: string | null
 }
@@ -2537,8 +2547,15 @@ export type DispatchPlanDay = { date: string; label: string; techs: DispatchPlan
 export type DispatchPlanUnplaced = {
   job_uid: string; job_number: string | null; customer: string | null; city: string | null
   kind: DispatchPlanKind; reason: string; zuper_url: string | null
-  stage?: string | null; tentative?: boolean; limits?: string[] | null
+  stage?: string | null; tentative?: boolean; limits?: string[] | null; one_day?: boolean | null
 }
+/** A repair the plan leaves out until the customer's OK is found (2026-11-19). */
+export type DispatchWaitingOk = { job_number: string | null; job_uid: string
+  customer: string | null; city: string | null; board: string | null; stage: string | null
+  waiting_on: 'ahs' | 'customer' | 'proposal'; checked: string; zuper_url: string | null }
+export type DispatchRainFlag = { date: string; label: string; tech: string
+  job_number: string | null; customer: string | null; existing: boolean; start: string
+  pop: number; mm: number; text: string; less_certain: boolean; next_day: boolean }
 export type DispatchPlanMode = 'most_jobs' | 'oldest_first'
 export type DispatchPlan = {
   id?: number
@@ -2547,17 +2564,19 @@ export type DispatchPlan = {
   assumptions: {
     minutes: Record<string, { inspection: number; repair: number;
       source: 'history' | 'settings' | 'default' }>
-    hours: Record<string, { start: string; end: string; days: number[]; max: number }>
+    hours: Record<string, { start: string; end: string; days: number[]; max: number
+      does?: string[]; on_call?: boolean | null; only?: DispatchDayRange[] | null
+      off?: DispatchDayRange[] | null }>
     note: string | null
   }
   days: DispatchPlanDay[]
   unplaced: DispatchPlanUnplaced[]
   pending: number
   summary?: { placed: number; not_placed: number; tentative: number; drive_minutes: number
-    starts_tried: number }
+    starts_tried: number; waiting_ok?: number; one_day?: { placed: number; total: number } }
   baseline?: { placed: number; drive_minutes: number }
-  asked?: { days: number; kind: string; mode: DispatchPlanMode; boards: 'ahs' | 'all'
-    include_unreached: boolean; limits: unknown[] | null }
+  asked?: { days: number; kind: string; mode: DispatchPlanMode; boards: DispatchPlanBoards
+    include_unreached: boolean; limits: unknown[] | null; agreed?: unknown[] | null }
   availability?: { jobs: number; read: number; with_limits: number; office: number
     not_read_yet: number; note: string }
   // 2026-10-14: read from the calls — who was left out and why, who has times they cannot do
@@ -2565,7 +2584,15 @@ export type DispatchPlan = {
     reason: string; said: string | null }[]
   flags?: { job_number: string | null; customer: string | null; city: string | null
     limits: string[] }[]
+  // 2026-11-19
+  waiting_ok?: DispatchWaitingOk[]
+  weather?: { enabled: boolean; note: string; rain_pct?: number; flagged?: DispatchRainFlag[]
+    no_forecast?: number }
 }
+/** "active" = AHS Simple Flow + Retail (the boards in use, 2026-11-19); "ahs" adds the old AHS
+    boards; "all" is every board. */
+export type DispatchPlanBoards = 'active' | 'ahs' | 'all'
+export type DispatchDayRange = { from: string; to: string; max?: number | null; note?: string | null }
 /** The 3 best times to book one job (2026-10-14, the chat's booking_options tool). */
 export type DispatchBookingOption = { tech: string; start: string; end: string
   extra_drive_minutes: number; next_to: string | null; fit: string; why: string
@@ -2575,7 +2602,7 @@ export type DispatchBookingOptions = { job_number: string | null; job_uid: strin
   kind: string; visit_now: string | null; limits: string[] | null
   options: DispatchBookingOption[]; note: string | null }
 export type DispatchPlanRequest = { days: number; kind: 'all' | DispatchPlanKind
-  mode: DispatchPlanMode; boards: 'ahs' | 'all'; include_unreached: boolean }
+  mode: DispatchPlanMode; boards: DispatchPlanBoards; include_unreached: boolean }
 /** Remake the schedule (2026-10-08): a DRAFT, kept so the calendar and the Excel match. */
 export const makeDispatchPlan = (body: DispatchPlanRequest) =>
   send<DispatchPlan>('/api/dispatch/plans', 'POST', body)

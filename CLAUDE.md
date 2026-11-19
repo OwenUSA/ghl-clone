@@ -819,7 +819,10 @@ in `DECISIONS.md`.
   fit / why, respecting the customer's limits from calls — `briefs.booking_limits`) and
   `plan_schedule` (week-by-week plan; leaves out holds / visits that happened / visits on the
   customer's other job; `flags` = who cannot do which times). Shown as cards under the answer
-  (`BookingOptionsCard`, `PlanCard`, lazy Leaflet `PlanMap`); no booking buttons. See DECISIONS.md.
+  (`BookingOptionsCard`, `PlanCard`, lazy Leaflet `PlanMap`); no booking buttons. Since 2026-11-19
+  every plan follows the owner's rules (Simple Flow + Retail by default, repairs only with the
+  customer's OK, CALL FIRST, one-day customers first, crew days, rain flagged) — see "Technician
+  routes" below. See DECISIONS.md.
 - **Spreadsheets in the chat** (2026-10-01): "Attach Excel" (`POST /api/dispatch/chats/files`,
   .xlsx/.xlsm/.csv, 10 MB) — `dispatch/sheets.py` reads every sheet top to bottom (header = first
   row with text), `dispatch/compare.py` matches each row to a Zuper job (job # → phone → name →
@@ -1016,6 +1019,35 @@ creates them, inside `client.owen_ai_lead_create()`: at most `POST /customers_ne
 customer (no status, visit or technician — it lands in the board's NEW column) and one wrapped private
 note on that job; no PUT, no DELETE. Off unless `OWEN_AI_LEADS_ENABLED=true`; registry action
 `zuper_create`. See DECISIONS.md.
+
+## Technician routes: the owner's scheduling rules, in Owen AI and Dispatch (2026-11-19)
+
+Owen AI's `plan_routes` (`app/owen_ai/routes.py`) makes the SAME DRAFT plan as Dispatch → Remake
+the schedule and its chat's `plan_schedule` (`dispatch/scheduling.make_plan` → `planner.plan`), kept in
+`dispatch_plans` (source `owen_ai`) and drawn under the answer from the plan link
+`/dispatch?tab=book&plan=N` (`lib/owenAi.ts` `PLAN_LINK`, `PlanCard` + its lazy Leaflet map). **Nothing
+is booked and nothing reaches Zuper.** One set of rules for every plan:
+
+- **Boards:** `boards="active"` (default) = AHS Simple Flow + Retail (+ regional copies); `ahs` adds the
+  old AHS boards; `all`. Simple Flow's columns mean something only to the planner
+  (`scheduling.simple_flow_need`) — its first column also holds booked inspections, so it is in no
+  `BOOK` / `NEEDS_DATE` group. It IS in `config.BOARDS` now (no more `off_board` items for it).
+- **A repair goes in only with the customer's OK** (`dispatch/readiness.py`): an accepted / signed
+  proposal (`ZuperDocument`, `ZuperProposalLine`), AHS's authorization (an "AHS Approved" move or
+  column, Simple Flow's move into Proposal Creation after the inspection, an AUTHO # in a note, the
+  "AHS authorized" field, the AHS email event), Retail's "Option chosen", or a yes passed in
+  `agreed` with the customer's own words — remembered 21 days through `dispatch_plans.params`. A
+  newer DECLINED proposal wins. The rest are `waiting_ok`, with what was checked. Callbacks too.
+- **An inspection nobody verified by phone is CALL FIRST:** a talked call (30 s+, a person, after the
+  job came in), "Service address verified", or a welcome call followed by a booking.
+- **One-day customers first** (`planner` score + start order); **crew** in `dispatch_settings.technicians`
+  (`dispatch/crew.py`): `on_call` + `only` ranges (Owen), `off` ranges, per-range `max`; `booking.works`
+  / `day_max` also drive the one-job booking options. The Settings page never sends those keys back
+  (`forPageSave`; the server merges). Seed the decided crew: `python -m app.dispatch.crew` (dry run,
+  finds Marx's exact Zuper name) then `--marx "Name" --commit`.
+- **Rain is a flag only** (`scheduling.weather_flags`, the kept NWS forecast; off with `WEATHER_ENABLED`).
+- Tests: `test_dispatch_route_rules.py`, `test_dispatch_planner.py`, `test_owen_ai_routes*.py`. See
+  DECISIONS.md.
 
 ## AHS authorized a repair → Dispatch (2026-10-01, OFF on owen-main)
 

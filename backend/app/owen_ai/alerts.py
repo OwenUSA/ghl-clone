@@ -47,7 +47,8 @@ def out(a: OwenAiAlert) -> dict:
             "closed_at": _iso(a.closed_at)}
 
 
-def _owner(db: Session) -> User | None:
+def owner(db: Session) -> User | None:
+    """The user whose email is OWEN_AI_OWNER_EMAIL (Owen), or None."""
     email = config.owner_email()
     if not email:
         return None
@@ -55,10 +56,10 @@ def _owner(db: Session) -> User | None:
 
 
 def _ring(db: Session, a: OwenAiAlert) -> None:
-    owner = _owner(db)
-    if owner is None:
+    who = owner(db)
+    if who is None:
         return
-    db.add(AiAlert(user_id=owner.id, kind="owen_ai_issue", urgent=a.severity == "urgent",
+    db.add(AiAlert(user_id=who.id, kind="owen_ai_issue", urgent=a.severity == "urgent",
                    title=("Owen AI · #%s: %s" % (a.job_number or "?", a.title))[:300],
                    body=(a.evidence or "")[:2000] or None))
 

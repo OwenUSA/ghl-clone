@@ -334,3 +334,72 @@ export function fileSummary(rows: number, sheets?: number): string {
 export function isSpreadsheetName(name: string): boolean {
   return /\.(xlsx|xlsm|csv)$/i.test(name)
 }
+
+// ---- the owner's scheduling rules on a plan (2026-11-19) ---------------------------------
+
+type PlanRain = { known?: false; pop?: number | null; risk?: boolean; less_certain?: boolean }
+
+/** "☂ 60%" on a visit when rain is likely in its hours — a flag only, it never moved the visit.
+    null when there is no risk or no forecast. */
+export function rainLabel(w: PlanRain | null | undefined): string | null {
+  if (!w || w.known === false || !w.risk || w.pop == null) return null
+  return `☂ ${w.pop}%${w.less_certain ? ' (less certain)' : ''}`
+}
+
+/** Why a proposed visit may go (the repair's OK, the inspection's call), why it is CALL FIRST,
+    the only day the customer can, the rain — the tooltip's lines. */
+export function visitNotes(v: { existing?: boolean; agreed?: string | null; verified?: string | null
+  call_first_why?: string | null; tentative?: boolean; one_day?: boolean | null
+  weather?: PlanRain | null }): string[] {
+  if (v.existing) return []
+  const rain = rainLabel(v.weather)
+  return [
+    v.one_day ? 'The only day the customer can' : '',
+    v.agreed ? `Customer's OK: ${v.agreed}` : '',
+    v.verified ? `Info verified: ${v.verified}` : '',
+    v.tentative && v.call_first_why ? `CALL FIRST: ${v.call_first_why}` : '',
+    rain ? `Rain likely (${rain.replace('☂ ', '')}) — a flag only` : '',
+  ].filter(Boolean)
+}
+
+export const WAITING_ON_LABEL: Record<string, string> = {
+  ahs: 'Waiting on AHS', customer: 'Waiting on the customer', proposal: 'No proposal yet',
+}
+
+/** The repairs waiting for the customer's OK, grouped (AHS / customer / no proposal), in that
+    order; an empty group is left out. */
+export function waitingGroups<T extends { waiting_on: string }>(rows: T[]): [string, T[]][] {
+  const order = ['ahs', 'customer', 'proposal']
+  const keys = [...order, ...Array.from(new Set(rows.map((r) => r.waiting_on))).filter((k) => !order.includes(k))]
+  return keys.map((k) => [k, rows.filter((r) => r.waiting_on === k)] as [string, T[]])
+    .filter(([, rs]) => rs.length > 0)
+}
+
+type CrewRange = { from: string; to: string; max?: number | null }
+
+/** What Owen AI's chat keeps on a technician (2026-11-19) — on call, the days he works or is off,
+    visit lengths. The Settings page shows them and never sends them back (the server keeps
+    them), so an open page cannot wipe what was said in the chat. */
+export const CHAT_KEYS = ['on_call', 'only', 'off', 'minutes'] as const
+
+export function forPageSave<T extends object>(techs: T[]): T[] {
+  return techs.map((t) => {
+    const copy = { ...t } as Record<string, unknown>
+    for (const k of CHAT_KEYS) delete copy[k]
+    return copy as T
+  })
+}
+
+function span(r: CrewRange): string {
+  return (r.from === r.to ? r.from : `${r.from} to ${r.to}`) + (r.max ? ` (max ${r.max})` : '')
+}
+
+/** "On call · works 2026-11-20 (max 2)" / "Off 2026-11-28" / "" — the days told in the chat. */
+export function crewDaysText(t: { on_call?: boolean | null; only?: CrewRange[] | null
+  off?: CrewRange[] | null }): string {
+  const parts: string[] = []
+  if (t.on_call) parts.push(t.only?.length ? `On call · works ${t.only.map(span).join(', ')}`
+    : 'On call · no days given')
+  if (t.off?.length) parts.push(`Off ${t.off.map(span).join(', ')}`)
+  return parts.join(' · ')
+}
