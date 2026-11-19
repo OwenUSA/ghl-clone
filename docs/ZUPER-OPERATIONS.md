@@ -546,6 +546,55 @@ Details"). Always send `label, value, group_name, group_uid, type`.
 | Company profile | `GET /user/company` · `PUT /company {"company":{…}}` |
 | Product | `PUT /product/{uid} {"product":{…}}` |
 | Invoice template | `PUT /invoice_estimate/template/{uid} {"template":{…}}` |
+| Copy gallery pictures / videos to another job (web JS, 2026-11-19) | `POST /attachments/bulk_actions` — see 8b. **Never** `"action":"move"` |
+
+### 8b. Copying gallery pictures and videos to another job (2026-11-19)
+
+Pictures or videos uploaded to the wrong job are copied with the gallery's own **Copy to job**,
+the request next.zuperpro.com sends from Gallery → select → Copy to job (read from its bundle,
+`performBulkCopyMove` / `buildBulkSelectionPayload`). It is **not** in developers.zuper.co.
+
+```
+POST /api/attachments/bulk_actions
+{"group_by": "created_by", "sort": "ASC", "sort_by": "created_at",
+ "filter.module": "JOB", "filter.module_uid": "<SOURCE job_uid>", "filter.type": "IMAGE,VIDEO",
+ "users": [], "attachment_uids": ["<uid>", ...],
+ "action": "copy", "action_options": {"to_job_uid": "<TARGET job_uid>"}}
+→ 200 {"title": "Attachments copied", "data": {"source_count", "created_count",
+       "recovered_count", "skipped_duplicate_count"}}
+```
+
+- **`copy`, never `move`.** The app's `move` takes the files off the source job. Copy leaves them.
+- **Never send an empty `attachment_uids`.** Empty (with `users` / `dates` empty) is the app's
+  "select all" and copies the WHOLE source gallery. Always list the uids.
+- **A copy is the same file on two jobs**: same `attachment_uid`, same S3 path, same uploader
+  and description; only `module_uid` differs. Nothing is uploaded again, so a 33 MB video copies
+  in a second. Do not "clean up" the source afterwards: it is one stored file.
+- **Read the gallery with the app's view**, `GET /attachments/group?group_by=created_by&sort=ASC&
+  sort_by=created_at&filter.module=JOB&filter.module_uid=<job>&filter.type=IMAGE,VIDEO&page=1&limit=200`.
+  The plain `GET /attachments?filter.module_uid=` list does **not** show copied files.
+- **What does NOT reach the gallery:** a picture note (`POST /misc/upload` + `POST /jobs/{uid}/note`
+  `{"note":{note_type:"IMAGE", attachments:[…]}}`) shows in Notes only; the documented
+  `POST /jobs/{uid}/attachments` (`{"attachment":{file_name,url,…}}`) shows in the job's
+  Attachments section only. Both were measured on #753.
+- Before copying, download the files and keep a checksum copy (as below); afterwards, download
+  each from the target and compare.
+
+**Done for job #355 → #753 (2026-11-19, the user asked).** Owen uploaded 4 pictures and 1 video
+(`IMG_20261119131147/152/205/211.jpg`, `VID_20261119131330.mp4`, 2026-11-19 13:11–13:13) to
+**#355 Active Leak Repair - 4120 NE 1st Ave** (AHS - Repair & Review, Callback in Progress); they
+belong to **#753 Anita Mcgruder - 96443119 ROOF** (AHS Simple Flow, Repair Day), same customer.
+- Copied with the request above: one picture first, then the other four. #753's gallery went from
+  7 (Antonio's, 2026-11-06) to 12; #355 still has its 5. All 5 downloaded from #753 match the
+  originals' SHA-256.
+- Backup of the 5 files + both jobs before the change: owen-main
+  `/opt/santiagoproperties/zuper-backup/before-changes/2026-11-19/job355_media_for_753/`.
+- Script: dispatch `/opt/ops/zuper/zbrowser/move753/gallery_copy.py` (dry run by default;
+  `--one`; `--commit`; refuses an empty selection; log `gallery_copy.log`).
+- Left on #753 from the first two attempts, before the gallery request was found:
+  `IMG_20261119131147.jpg` also on a note ("Pictures copied from job #355…",
+  `64db4c58-34bd-4f4d-9e00-03e3f8c9a0fb`) and in the job's Attachments section
+  (`6ab3d3ab-0a68-4eae-98b0-81b3dbfa4d2a`). Same picture; removing either is the owner's call.
 
 ---
 
