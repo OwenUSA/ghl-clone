@@ -31,6 +31,7 @@ from . import (
     companycam_photos,
     config,
     dossier,
+    leads,
     photos,
     pictures,
     proposals,
@@ -469,6 +470,9 @@ SPECS = SPECS + pictures.SPECS
 # The saved report's PDF on its DRAFT proposal (2026-11-12): only when Owen asks; two writes
 # through client.owen_ai_report_attach (upload, attach), read back, never sent.
 SPECS = SPECS + report_attach.SPECS
+# New leads (2026-11-19): a customer + job stored PENDING in the CRM; Zuper is written only when
+# the owner approves one (leads.approve, client.owen_ai_lead_create: three POSTs, no PUT/DELETE).
+SPECS = SPECS + leads.SPECS
 
 TOOL_NAMES = tuple("mcp__%s__%s" % (SERVER_NAME, name) for name, *_ in SPECS)
 

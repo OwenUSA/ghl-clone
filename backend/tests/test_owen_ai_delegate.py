@@ -59,7 +59,8 @@ def test_a_sub_chat_cannot_start_its_own(db, people):  # noqa: F811
 
 def test_all_done_queues_one_summary_in_the_main_chat_and_owen_comes_first(db, people):  # noqa: F811
     main = main_chat(db, people)
-    kids = delegate.start(db, main.id, [{"job": j, "instructions": "x"} for j in ("11", "12", "13")])
+    kids = delegate.start(db, main.id,
+                          [{"job": j, "instructions": "x"} for j in ("11", "12", "13")])
     own = OwenAiThread(user_id=main.user_id, kind="task", title="Owen's other chat")
     db.add(own)
     db.flush()

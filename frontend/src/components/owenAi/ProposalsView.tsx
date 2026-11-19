@@ -19,7 +19,7 @@ import { BLUE, INK, LINE, MONO, MUTED, RED, chipBtn } from './tokens'
 export type PicturesAction = 'generate' | 'attach' | 'discard'
 
 export function ProposalsView({ proposals, loading, error, sentence, onApprove, onReject, busyId, actionError,
-  picturesSentence = null, onPictures, picturesBusy = null }: {
+  picturesSentence = null, onPictures, picturesBusy = null, before = null }: {
   proposals: OwenAiProposal[]; loading: boolean; error: string | null
   /** Why Approve would be refused right now (the server switch or the registry), or null. */
   sentence: string | null
@@ -30,12 +30,15 @@ export function ProposalsView({ proposals, loading, error, sentence, onApprove, 
   picturesSentence?: string | null
   onPictures?: (p: OwenAiProposal, action: PicturesAction) => Promise<boolean>
   picturesBusy?: { id: number; action: PicturesAction } | null
+  /** Shown first, inside the scroll area: the New customers section (2026-11-19). */
+  before?: React.ReactNode
 }) {
   const pending = proposals.filter((p) => p.status === 'pending')
   const rest = proposals.filter((p) => p.status !== 'pending')
   return (
     <div style={{ flex: 1, overflowY: 'auto' }}>
       <div style={{ maxWidth: 980, margin: '0 auto', padding: '12px 12px 24px' }}>
+        {before}
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
           Owen AI prepares these. Approve creates the proposal in Zuper as a <strong>draft</strong> — it is never
           sent to the customer.</div>

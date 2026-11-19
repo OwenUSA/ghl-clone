@@ -8292,3 +8292,30 @@ Phase 1 (this change, `app/owen_ai/delegate.py`):
   review's follow-up. Nothing here writes to Zuper; drafts still reach Zuper only through Approve.
 - The chat list draws sub-chats under their main chat.
 - Tests: tests/test_owen_ai_delegate.py.
+
+## AMENDMENT (2026-11-19): Owen AI creates new customers and jobs in Zuper, on Owen's Approve
+
+Asked by the user: "allow the owen ai chat that is in the crm system to also be able to create customers
+and jobs like we did here". That afternoon Owen forwarded three leads (two web forms, one call summary)
+and they were created by hand from dispatch: customer + Retail job in New Lead + the lead as a private
+note, no visit, no technician (#864-#866, gate passing, read back). This is a scoped lift of "Zuper is
+read-only" for exactly that, through the same approve-first pattern as proposal drafts.
+
+- Tool `propose_new_lead` (`app/owen_ai/leads.py`): validates the lead (10-digit phone, email shape, a zip
+  or a city, the note), READS the board (it must have a NEW-type column, or the job would show in no
+  column) and looks for the customer: same email, same full name (Zuper's keyword search does not match
+  phones — measured 2026-11-19), or a CRM contact with the same phone linked to a Zuper customer. A
+  possible duplicate is refused until Claude passes `customer_uid` (a job on that customer) or
+  `new_customer: true`, which Owen AI must ask Owen for. It stores a PENDING `owen_ai_lead_drafts` row
+  (migration d6b2f8a4c913) and writes nothing to Zuper.
+- Approve (`POST /api/owen-ai/leads/{id}/approve`, the owner only; Proposals tab → New customers): an
+  atomic pending → creating claim, then `client.owen_ai_lead_create()`, which allows at most ONE
+  `POST /customers_new` (skipped for an existing customer), ONE `POST /jobs` for THAT customer, and ONE
+  wrapped private `POST /jobs/{that job}/note` — key-whitelisted bodies (no status, visit, technician,
+  tag; only a mobile number), no PUT, no DELETE, nothing that sends. The job is read back (board, NEW
+  column, not scheduled, not assigned, the note not empty). A failure says what already exists in Zuper
+  and is never retried. Approve / Reject post a system note into the chat.
+- Off unless `OWEN_AI_LEADS_ENABLED=true` on the server; registry action `zuper_create` on `owen_ai`
+  (Approve / Never). Nothing here texts, emails, schedules or assigns. Zuper's own workflows were checked
+  that day: none of the active ones starts on a new job.
+- Tests: `tests/test_owen_ai_leads.py`.

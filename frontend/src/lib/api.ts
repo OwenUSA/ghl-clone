@@ -2869,6 +2869,26 @@ export const owenAiRejectProposal = (id: number, why: string) =>
 export const owenAiProposalPictures = (id: number, action: 'generate' | 'attach' | 'discard') =>
   send<OwenAiProposal>(`/api/owen-ai/proposals/${id}/pictures${action === 'generate' ? '' : `/${action}`}`, 'POST', {})
 
+// Owen AI's new leads (2026-11-19, app/owen_ai/leads.py): a customer + a job in its board's first
+// column with the lead's message as a private note, created in Zuper only when the owner presses
+// Approve. No visit, no technician, nothing sent. Pending first, then newest.
+export type OwenAiLeadStatus = 'pending' | 'creating' | 'created' | 'rejected' | 'failed'
+export type OwenAiLeadCustomer = { customer_uid: string; name: string; email: string | null; phone: string | null; why?: string[] }
+export type OwenAiLead = {
+  id: number; status: OwenAiLeadStatus; customer_name: string; first_name: string; last_name: string
+  phone: string; email: string; address: { street?: string; city?: string; state?: string; zip?: string }
+  note: string; board: string; first_column: string | null; job_title: string
+  existing_customer: OwenAiLeadCustomer | null; duplicates: OwenAiLeadCustomer[]
+  customer_uid: string | null; job_uid: string | null; job_number: string | null; job_url: string | null
+  error: string | null; thread_id: number | null; created_at: string | null; decided_at: string | null
+  decided_by: string | null
+}
+export type OwenAiLeads = { leads: OwenAiLead[]; pending: number; enabled: boolean; sentence: string | null }
+export const owenAiLeads = () => get<OwenAiLeads>('/api/owen-ai/leads')
+export const owenAiApproveLead = (id: number) => send<OwenAiLead>(`/api/owen-ai/leads/${id}/approve`, 'POST', {})
+export const owenAiRejectLead = (id: number, why: string) =>
+  send<OwenAiLead>(`/api/owen-ai/leads/${id}/reject`, 'POST', { why })
+
 // Saved after-inspection reports (2026-11-12, app/owen_ai/saved_reports.py): everything in a
 // report can be changed on the Reports tab; every save is a new version (restore is too), and a
 // save from an older version is 409. The spec's photo paths are relative to the report

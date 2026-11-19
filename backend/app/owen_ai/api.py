@@ -19,12 +19,20 @@ from sqlalchemy.orm import Session
 from .. import auth
 from ..db import get_db
 from ..frontdoor import config as frontdoor_config
-from ..models import OwenAiAlert, OwenAiMessage, OwenAiProposalDraft, OwenAiThread, Role
+from ..models import (
+    OwenAiAlert,
+    OwenAiLeadDraft,
+    OwenAiMessage,
+    OwenAiProposalDraft,
+    OwenAiThread,
+    Role,
+)
 from ..zuper import config as zuper_config
 from . import (
     alerts,
     config,
     infographics,
+    leads,
     pictures,
     proposals,
     report,
@@ -517,6 +525,55 @@ def reject_proposal(draft_id: int, body: Reject, p: auth.Principal = OWNER,
     except proposals.Refused as exc:
         raise HTTPException(409, str(exc)) from None
     return proposals.out(row)
+
+
+# ------------------------------------------------------------------------- new leads (2026-11-19)
+
+@router.get("/leads")
+def list_leads(p: auth.Principal = OWNER, db: Session = Depends(get_db)) -> dict:
+    """Owen AI's new leads (customer + job): pending first, then newest."""
+    rows = list(db.scalars(select(OwenAiLeadDraft).order_by(OwenAiLeadDraft.id.desc())
+                           .limit(200)))
+    rows.sort(key=lambda r: r.status != "pending")
+    why = leads.refusal(db)
+    return {"leads": [leads.out(r) for r in rows],
+            "pending": sum(1 for r in rows if r.status == "pending"),
+            "enabled": why is None, "sentence": why}
+
+
+def _lead(db: Session, lead_id: int) -> OwenAiLeadDraft:
+    row = db.get(OwenAiLeadDraft, lead_id)
+    if row is None:
+        raise HTTPException(404, "Not Found")
+    return row
+
+
+@router.post("/leads/{lead_id}/approve")
+def approve_lead(lead_id: int, p: auth.Principal = OWNER, db: Session = Depends(get_db)) -> dict:
+    """Create the customer (unless an existing one was chosen), the job in its board's first
+    column and the private note in Zuper, read the job back. Nothing is sent to anyone.
+    Refused (409, nothing sent) unless it is pending, OWEN_AI_LEADS_ENABLED is on and the
+    registry allows it. A Zuper failure is a 200 with status "failed" saying what exists."""
+    _lead(db, lead_id)
+    try:
+        row = leads.approve(db, lead_id, p.name or p.email or "the owner")
+    except leads.Refused as exc:
+        raise HTTPException(409, str(exc)) from None
+    except LookupError:
+        raise HTTPException(404, "Not Found") from None
+    return leads.out(row)
+
+
+@router.post("/leads/{lead_id}/reject")
+def reject_lead(lead_id: int, body: Reject, p: auth.Principal = OWNER,
+                db: Session = Depends(get_db)) -> dict:
+    """Writes nothing to Zuper."""
+    _lead(db, lead_id)
+    try:
+        row = leads.reject(db, lead_id, p.name or p.email or "the owner", body.why)
+    except leads.Refused as exc:
+        raise HTTPException(409, str(exc)) from None
+    return leads.out(row)
 
 
 # ----------------------------------------------------------------- step pictures (2026-11-09)

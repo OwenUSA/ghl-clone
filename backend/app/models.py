@@ -2948,6 +2948,33 @@ class OwenAiProposalDraft(Base):
     pictures_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class OwenAiLeadDraft(Base):
+    """A new customer + job Owen AI prepared from a lead Owen pasted (2026-11-19,
+    app/owen_ai/leads.py). Nothing reaches Zuper until the owner presses Approve: then the
+    server creates the customer (or uses the existing one recorded in `spec.customer_uid`), the
+    job on `board` with no status (it lands in the board's first column), and the lead's
+    message as a private note, and reads them back. Status: pending | creating | created |
+    rejected | failed. `spec`: the customer, address, note and what the duplicate check found."""
+    __tablename__ = "owen_ai_lead_drafts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_name: Mapped[str] = mapped_column(String(200))
+    board: Mapped[str] = mapped_column(String(120))
+    category_uid: Mapped[str] = mapped_column(String(64))
+    job_title: Mapped[str] = mapped_column(String(300))
+    spec: Mapped[dict] = mapped_column(JSONType)
+    status: Mapped[str] = mapped_column(String(10), default="pending", server_default="pending",
+                                        index=True)
+    customer_uid: Mapped[str | None] = mapped_column(String(64))
+    job_uid: Mapped[str | None] = mapped_column(String(64))
+    job_number: Mapped[str | None] = mapped_column(String(40))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(200))
+    thread_id: Mapped[int | None] = mapped_column(Integer, index=True)
+
+
 class OwenAiReport(Base):
     """An after-inspection report Owen AI made for one Zuper job (2026-11-12,
     app/owen_ai/saved_reports.py). Everything in it can be changed after it is made — on the

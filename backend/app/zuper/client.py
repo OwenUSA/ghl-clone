@@ -143,6 +143,36 @@ def owen_ai_proposal_write(fill_uids=()):
         _OWEN_AI_PROPOSAL.reset(token)
 
 
+_OWEN_AI_LEAD: ContextVar[dict | None] = ContextVar("zuper_owen_ai_lead", default=None)
+
+
+@contextlib.contextmanager
+def owen_ai_lead_create(customer_uid: str | None = None):
+    """Owen AI's NEW LEAD, created only when the owner pressed Approve (2026-11-19, a scoped
+    lift of "Zuper is read-only"; app/owen_ai/leads.py and nothing else opens it).
+
+    Inside this scope the ONLY non-GETs are, each AT MOST ONCE and in this order:
+      POST /customers_new    the customer — skipped when `customer_uid` (an existing one) is given
+      POST /jobs             the job, for THAT customer, with no status, visit or technician
+      POST /jobs/{uid}/note  one private note, on the job just created and no other
+    with the bodies `_owen_ai_lead_ok` accepts. No PUT, no DELETE, nothing that sends: an
+    existing record can never be changed from here. Nothing at all while OWEN_AI_LEADS_ENABLED
+    is off. GETs are allowed as in `owen_ai_read` (the denylist applies), for the read-back."""
+    token = _OWEN_AI_LEAD.set({"customer_uid": customer_uid, "job_uid": None, "done": set()})
+    try:
+        yield
+    finally:
+        _OWEN_AI_LEAD.reset(token)
+
+
+def owen_ai_lead_created(kind: str, uid: str) -> None:
+    """leads.approve records what it just created, so the next write may only point at it."""
+    st = _OWEN_AI_LEAD.get()
+    if st is None:
+        raise ZuperError("refused", "not inside the Owen AI lead scope")
+    st[kind + "_uid"] = uid
+
+
 _OWEN_AI_PICTURES: ContextVar[dict | None] = ContextVar("zuper_owen_ai_pictures", default=None)
 PICTURES_MAX_UPLOADS = 3            # one banner per option, GOOD / BETTER / BEST
 PICTURES_MAX_BYTES = 5 * 1024 * 1024
@@ -854,6 +884,70 @@ def _owen_ai_proposal_body_ok(method: str, path: str, body: Any, params: Any) ->
     return False
 
 
+# Owen AI's new lead (2026-11-19): exactly these three writes, inside its own scope only, and
+# only these keys in each body — no status, visit, technician, tag or anything that notifies.
+OWEN_AI_LEAD_CUSTOMER_KEYS = frozenset({"customer_first_name", "customer_last_name",
+                                        "customer_email", "customer_contact_no",
+                                        "customer_address"})
+OWEN_AI_LEAD_JOB_KEYS = frozenset({"job_title", "job_priority", "job_category", "customer_uid",
+                                   "customer_address", "due_date"})
+OWEN_AI_LEAD_ADDRESS_KEYS = frozenset({"street", "city", "state", "zip_code", "country"})
+
+
+def _lead_address_ok(a: Any) -> bool:
+    return (isinstance(a, dict) and set(a) <= OWEN_AI_LEAD_ADDRESS_KEYS
+            and all(isinstance(v, str) for v in a.values()))
+
+
+def _owen_ai_lead_ok(method: str, path: str, body: Any, params: Any) -> str | None:
+    """None when this is the lead scope's next allowed write; else why not. Records it."""
+    st = _OWEN_AI_LEAD.get()
+    if st is None or not config.owen_ai_leads_enabled():
+        return config.OWEN_AI_LEADS_OFF_SENTENCE
+    if params:
+        return "no query string"
+    if method != "POST" or not isinstance(body, dict) or len(body) != 1:
+        return "only POSTs with one wrapped body"
+    done = st["done"]
+    if path == PATHS["customer_create"]:
+        c = body.get("customer")
+        if "customer" in done or "job" in done or st["customer_uid"]:
+            return "one customer, before the job, and only when none was chosen"
+        if not (isinstance(c, dict) and set(c) <= OWEN_AI_LEAD_CUSTOMER_KEYS
+                and isinstance(c.get("customer_first_name"), str)
+                and c["customer_first_name"].strip()
+                and _lead_address_ok(c.get("customer_address", {}))):
+            return "the customer body has keys the lead may not send"
+        phones = c.get("customer_contact_no", {})
+        if not (isinstance(phones, dict) and set(phones) <= {"mobile"}
+                and all(isinstance(v, str) for v in phones.values())):
+            return "only a mobile number"
+        done.add("customer")
+        return None
+    if path == PATHS["jobs"]:
+        j = body.get("job")
+        if "job" in done or not st["customer_uid"]:
+            return "one job, for the customer this scope created or was given"
+        if not (isinstance(j, dict) and set(j) <= OWEN_AI_LEAD_JOB_KEYS
+                and j.get("customer_uid") == st["customer_uid"]
+                and isinstance(j.get("job_category"), str) and j["job_category"]
+                and _lead_address_ok(j.get("customer_address", {}))):
+            return "the job body has keys the lead may not send (no status, visit or technician)"
+        done.add("job")
+        return None
+    m = re.match(r"^/jobs/([^/]+)/note$", path)
+    if m:
+        n = body.get("note")
+        if "note" in done or not st["job_uid"] or m.group(1) != st["job_uid"]:
+            return "one note, on the job this scope created"
+        if not (isinstance(n, dict) and set(n) == {"note", "is_private"}
+                and n["is_private"] is True and isinstance(n["note"], str) and n["note"].strip()):
+            return "a note must be private text"
+        done.add("note")
+        return None
+    return "not one of the lead's three writes"
+
+
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None, files: dict | None = None,
             form: dict | None = None) -> Any:
@@ -896,6 +990,18 @@ def request(method: str, path: str, *, params: dict | None = None,
         raise ZuperError("refused", "a GET carries no upload")
     pictures_write = pictures is not None and method != "GET"     # passed the check above
     in_proposal = _OWEN_AI_PROPOSAL.get() is not None
+    lead = _OWEN_AI_LEAD.get()
+    if lead is not None and (in_proposal or pictures is not None or attach is not None
+                             or _READ_ONLY.get() or _DISPATCH_WRITE.get()
+                             or _PROPOSAL_LINES.get() or _AHS_CREATE.get()
+                             or _send_scope()[0]):
+        raise ZuperError("refused", "the Owen AI lead scope never runs inside another scope")
+    if lead is not None and method != "GET":
+        why_not = _owen_ai_lead_ok(method, path, body, params)
+        if why_not:
+            raise ZuperError("refused", "%s %s is not an Owen AI lead write: %s" % (
+                method, path, why_not))
+    lead_write = lead is not None and method != "GET"             # passed the check above
     # Inside Owen AI's proposal scope only its two checked writes exist; the denylist's
     # estimate rule is the one thing they get past, and only in that exact shape.
     if method != "GET" and in_proposal and not _owen_ai_proposal_body_ok(method, path, body,
@@ -922,7 +1028,8 @@ def request(method: str, path: str, *, params: dict | None = None,
     if why:
         raise ZuperError("refused", "%s %s is never called: %s" % (method, path, why))
     owen_ai_get = method == "GET" and (_OWEN_AI_READ.get() or in_proposal
-                                       or pictures is not None or attach is not None)
+                                       or pictures is not None or attach is not None
+                                       or lead is not None)
     if not (autoreply_send or proposal_write or pictures_write or attach_write or owen_ai_get
             or allowed(method, path)):
         raise ZuperError("refused", "%s %s is not on the sync's allowlist" % (method, path))
@@ -945,7 +1052,7 @@ def request(method: str, path: str, *, params: dict | None = None,
                                         method, path, "" if config.proposal_lines_enabled()
                                         else "; ZUPER_PROPOSAL_LINES is off"))
     if method != "GET" and config.pull_only() and not proposal_write and not pictures_write \
-            and not attach_write \
+            and not attach_write and not lead_write \
             and not _mirror_write_allowed(path) \
             and not _ahs_create_allowed(method, path) \
             and not _dispatch_write_allowed(method, path) \
