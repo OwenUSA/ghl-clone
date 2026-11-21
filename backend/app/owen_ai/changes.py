@@ -217,6 +217,13 @@ def _address(a: Any) -> dict:
             "state": a.get("state") or "", "zip_code": str(a.get("zip_code") or "")}
 
 
+def _country(a: Any) -> str:
+    """The record's own country, as Zuper wrote it ("USA" on this account, measured on #701
+    2026-11-21); "US" only when it has none. Sending "US" over "USA" changed the record."""
+    c = a.get("country") if isinstance(a, dict) else None
+    return c.strip() if isinstance(c, str) and c.strip() else "US"
+
+
 def _addr_text(a: dict) -> str:
     return ", ".join(x for x in (a.get("street"), a.get("city"),
                                  " ".join(x for x in (a.get("state"), a.get("zip_code")) if x))
@@ -611,7 +618,8 @@ def _prep_job_address(r, spec: dict, b: dict) -> dict:
     return {"title": "Job address: %s → %s" % (_addr_text(old), _addr_text(new)),
             "warning": "routes use the job's map position; check it moved",
             "before": {"address": old}, "after": {"address": new},
-            "do": {"address": {**new, "country": "US"}}}
+            "do": {"address": {**new,
+                               "country": _country(b["job"].get("customer_address"))}}}
 
 
 CUSTOMER_LABELS = {"customer_first_name": "first name", "customer_last_name": "last name",
@@ -662,7 +670,7 @@ def _prep_customer(r, spec: dict, b: dict | None) -> dict:
         new = spec["address"]
         if not all(norm(now["address"][k]) == norm(new[k]) for k in ("street", "city",
                                                                      "zip_code")):
-            body["customer_address"] = {**new, "country": "US"}
+            body["customer_address"] = {**new, "country": _country(c.get("customer_address"))}
             parts.append("address %s → %s" % (_addr_text(now["address"]), _addr_text(new)))
     if not body:
         raise SpecError(["customer %s already has those details" % (

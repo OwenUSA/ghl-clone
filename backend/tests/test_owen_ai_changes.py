@@ -523,6 +523,15 @@ def test_the_job_address_keeps_to_the_job(db, people):
     assert "DONE" in out
 
 
+def test_the_records_own_country_is_kept(db, people):
+    z = install()
+    z.job["customer_address"]["country"] = "USA"
+    th, _, row = proposed(db, people, {"kind": "job_address", "job": "812", "address": {
+        "street": "9 Oak St", "city": "Sarasota", "zip": "34236"}, "evidence": "call Nov 20"})
+    apply(th, says(db, th, "do it"), row.id, "do it")
+    assert z.bodies()[0][2]["job"]["customer_address"]["country"] == "USA"
+
+
 def test_a_note_is_private_and_says_owen_ai(db, people):
     z = install()
     th, _, row = proposed(db, people, {"kind": "note", "job": "812", "text": "Gate code 1234",
