@@ -140,6 +140,20 @@ def owen_ai_leads_enabled() -> bool:
     return _flag("OWEN_AI_LEADS_ENABLED", False)
 
 
+OWEN_AI_CHANGES_OFF_SENTENCE = (
+    "Owen AI may not change Zuper on this server (OWEN_AI_ZUPER_CHANGES_ENABLED is not true).")
+
+
+def owen_ai_changes_enabled() -> bool:
+    """The server's gate on the changes Owen AI makes in Zuper when Owen says so in the chat
+    (2026-11-21, app/owen_ai/changes.py): a column move on the job's own board, a visit's time,
+    the technicians, a job field or address, the customer's details, a private note, pictures
+    added to the gallery. Off unless the deployment says so; with it off
+    `client.owen_ai_change` allows nothing. Owen AI can still PROPOSE — that writes only to the
+    CRM's database."""
+    return _flag("OWEN_AI_ZUPER_CHANGES_ENABLED", False)
+
+
 OWEN_AI_REPORT_ATTACH_OFF_SENTENCE = (
     "Attaching reports to proposals is switched off on this server (OWEN_AI_REPORT_ATTACH_ENABLED "
     "is not true), so nothing was put on the proposal.")

@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { MicButton } from '../MicButton'
-import type { OwenAiMessage, OwenAiStep, OwenAiThreadDetail } from '../../lib/api'
-import { auditPromptLabel, busySince, elapsed, excerpt, lastPlanId, prettyJson, runFooter, threadBusy, toolsLabel } from '../../lib/owenAi'
+import { owenAiUploadPicture } from '../../lib/api'
+import type { OwenAiMessage, OwenAiStep, OwenAiThreadDetail, OwenAiUpload } from '../../lib/api'
+import { auditPromptLabel, bubbleText, busySince, changeSetPlacement, elapsed, excerpt, lastPlanId, prettyJson, runFooter, threadBusy, toolsLabel } from '../../lib/owenAi'
 import { PlanCard } from '../dispatch/PlanCard'
+import { ChangeSetCard } from './ChangeSetCard'
 import { Markdown } from './Markdown'
+import { PictureZoom } from './PictureZoom'
 import { BLUE, INK, LINE, MONO, MUTED, RED } from './tokens'
+
+/** A picture in the composer: uploading, ready (kept on the server, sent by id) or refused. */
+type Pending = { key: number; name: string; preview: string; upload?: OwenAiUpload; error?: string }
+const MAX_PICTURES = 10
+const PICTURE_NAME = /\.(heic|heif)$/i
 
 /**
  * One Owen AI conversation: the messages, "Owen AI is working…" while an answer is queued or
@@ -13,14 +21,21 @@ import { BLUE, INK, LINE, MONO, MUTED, RED } from './tokens'
  *
  * An audit conversation (2026-11-03, made by the scheduled sweep) is read-only: no composer, and
  * its machine prompts shrink to one grey line ("Audit #801") that opens to the full prompt.
+ *
+ * Pictures (2026-11-21): attach, paste or drop them on the composer; each is uploaded at once and
+ * sent with the message by id, so Owen AI can look at them and — on Owen's OK — add them to a
+ * job's gallery. Zuper change lists Owen AI proposed are drawn as cards under the answer that
+ * listed them (ChangeSetCard); Owen OKs one by saying so in the chat.
  */
 export function Conversation({ thread, loading, error, onSend, sending, sendError, disabledReason }: {
   thread: OwenAiThreadDetail | undefined; loading: boolean; error: string | null
-  onSend: (text: string) => Promise<boolean>; sending: boolean; sendError: string | null
+  onSend: (text: string, uploadIds: number[]) => Promise<boolean>; sending: boolean; sendError: string | null
   /** Set when the module is off: the composer explains instead of sending. */
   disabledReason: string | null
 }) {
   const [draft, setDraft] = useState('')
+  const [pics, setPics] = useState<Pending[]>([])
+  const nextKey = useRef(1)
   const bottom = useRef<HTMLDivElement>(null)
   const messages = thread?.messages ?? []
   const busy = threadBusy(thread)
@@ -31,14 +46,41 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) },
     [messages.length, busy, thread?.id, sendError])
 
+  // A new conversation starts with an empty composer (a picture belongs to one chat).
+  useEffect(() => { setPics([]) }, [thread?.id])
+
   const blocked = busy || sending || !!disabledReason || !thread
+  const uploading = pics.some((p) => !p.upload && !p.error)
+  const ready = pics.filter((p) => p.upload)
+  const addPictures = (files: File[]) => {
+    const threadId = thread?.id
+    if (!threadId || blocked) return
+    const room = Math.max(0, MAX_PICTURES - pics.length)
+    const wanted = files.filter((f) => f.type.startsWith('image/') || PICTURE_NAME.test(f.name)).slice(0, room)
+    for (const file of wanted) {
+      const key = nextKey.current++
+      const preview = URL.createObjectURL(file)
+      setPics((old) => [...old, { key, name: file.name || 'picture', preview }])
+      owenAiUploadPicture(threadId, file).then(
+        (upload) => setPics((old) => old.map((p) => p.key === key ? { ...p, upload } : p)),
+        (e: unknown) => setPics((old) => old.map((p) => p.key === key
+          ? { ...p, error: e instanceof Error ? e.message : 'Could not add it' } : p)))
+    }
+  }
+  const removePicture = (key: number) => setPics((old) => old.filter((p) => p.key !== key))
   const send = () => {
     const t = draft.trim()
-    if (!t || blocked) return
+    if ((!t && ready.length === 0) || blocked || uploading) return
+    const sent = pics
     setDraft('')
-    // A refused send (409, a blip) puts the words back rather than losing them.
-    void onSend(t).then((ok) => { if (!ok) setDraft((d) => d || t) })
+    setPics([])
+    // A refused send (409, a blip) puts the words and pictures back rather than losing them.
+    void onSend(t, ready.map((p) => p.upload!.id)).then((ok) => {
+      if (!ok) { setDraft((d) => d || t); setPics((old) => old.length ? old : sent) }
+    })
   }
+  const placed = changeSetPlacement(messages, thread?.changes ?? [])
+  const cards = (key: number) => (placed.get(key) ?? []).map((cs) => <ChangeSetCard key={`cs${cs.id}`} set={cs} />)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -60,7 +102,8 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
                 label="The customer review finished — Owen AI is writing the list" />
               : <UserBubble key={m.id} m={m} />)
             : m.role === 'system' ? <SystemNote key={m.id} m={m} />
-            : <AssistantMessage key={m.id} m={m} />)}
+            : <div key={m.id}><AssistantMessage m={m} />{cards(m.id)}</div>)}
+          {cards(-1)}
           {busy && (
             <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '18px 0',
               color: MUTED, fontSize: 14 }}>
@@ -83,6 +126,7 @@ export function Conversation({ thread, loading, error, onSend, sending, sendErro
         <div style={{ padding: '8px 12px 18px', background: 'linear-gradient(transparent, rgb(249,250,251) 30%)' }}>
           <div style={{ maxWidth: 980, margin: '0 auto' }}>
             <Composer value={draft} onChange={setDraft} onSend={send} blocked={blocked}
+              pictures={pics} onPictures={addPictures} onRemovePicture={removePicture} uploading={uploading}
               placeholder={disabledReason ?? (busy ? 'Owen AI is working — wait for the answer…'
                 : messages.length ? 'Reply to Owen AI…' : 'How can I help?')} />
           </div>
@@ -109,16 +153,42 @@ function useNow(on: boolean): number {
 }
 
 function UserBubble({ m }: { m: OwenAiMessage }) {
+  const pictures = m.uploads ?? []
+  const text = bubbleText(m.content, pictures.length)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', margin: '14px 0' }}>
-      <div style={{ maxWidth: '80%', background: 'rgb(240,238,232)', color: INK, borderRadius: 18,
-        padding: '10px 16px', fontSize: 15, lineHeight: '22px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {m.content}</div>
+      {pictures.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6, maxWidth: '80%',
+          marginBottom: text ? 6 : 0 }}>
+          {pictures.map((u) => <SentPicture key={u.id} u={u} />)}
+        </div>
+      )}
+      {text && (
+        <div style={{ maxWidth: '80%', background: 'rgb(240,238,232)', color: INK, borderRadius: 18,
+          padding: '10px 16px', fontSize: 15, lineHeight: '22px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {text}</div>
+      )}
       {/* The runner marks the QUESTION as failed when no answer could be written (a restart). */}
       {m.status === 'error' && m.error && (
         <div role="alert" style={{ ...errorBox, maxWidth: '80%' }}>{m.error}</div>
       )}
     </div>
+  )
+}
+
+/** A picture Owen sent: a small square that opens full size. */
+function SentPicture({ u }: { u: OwenAiUpload }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} title={`${u.file_name} — click to zoom`}
+        style={{ padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}>
+        <img src={u.url} alt={u.file_name} loading="lazy"
+          style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 10, border: `1px solid ${LINE}`,
+            background: 'rgb(243,244,246)' }} />
+      </button>
+      {open && <PictureZoom src={u.url} label={u.file_name} onClose={() => setOpen(false)} />}
+    </>
   )
 }
 
@@ -199,21 +269,52 @@ const pre: React.CSSProperties = { margin: '4px 0 0', padding: '6px 8px', backgr
   maxHeight: 320, overflowY: 'auto', border: `1px solid ${LINE}`, borderRadius: 6, fontSize: 11,
   lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: MONO }
 
-function Composer({ value, onChange, onSend, blocked, placeholder }: {
+function Composer({ value, onChange, onSend, blocked, placeholder, pictures, onPictures, onRemovePicture, uploading }: {
   value: string; onChange: (v: string) => void; onSend: () => void; blocked: boolean; placeholder: string
+  pictures: Pending[]; onPictures: (files: File[]) => void; onRemovePicture: (key: number) => void; uploading: boolean
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
+  const pick = useRef<HTMLInputElement>(null)
+  const [over, setOver] = useState(false)
   useEffect(() => {
     const el = ref.current
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [value])
-  const ready = value.trim().length > 0 && !blocked
+  const ready = (value.trim().length > 0 || pictures.some((p) => p.upload)) && !blocked && !uploading
   return (
-    <div style={{ background: '#fff', border: `1px solid ${LINE}`, borderRadius: 20,
-      boxShadow: '0 4px 20px rgba(16,24,40,0.06)', padding: '14px 14px 10px 18px' }}>
+    <div
+      onDragOver={(e) => { if (!blocked && e.dataTransfer.types.includes('Files')) { e.preventDefault(); setOver(true) } }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { if (blocked) return; e.preventDefault(); setOver(false); onPictures(Array.from(e.dataTransfer.files)) }}
+      style={{ background: '#fff', border: `1px solid ${over ? BLUE : LINE}`, borderRadius: 20,
+        boxShadow: '0 4px 20px rgba(16,24,40,0.06)', padding: '14px 14px 10px 18px' }}>
+      {pictures.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+          {pictures.map((p) => (
+            <div key={p.key} title={p.error ?? p.name} style={{ position: 'relative', width: 64 }}>
+              <img src={p.preview} alt={p.name} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8,
+                border: `1px solid ${p.error ? RED : LINE}`, opacity: p.upload ? 1 : 0.5 }} />
+              <button type="button" aria-label={`Remove ${p.name}`} onClick={() => onRemovePicture(p.key)}
+                style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10, fontSize: 12,
+                  lineHeight: '20px', color: '#fff', background: 'rgb(52,64,84)' }}>×</button>
+              <div style={{ fontSize: 10, lineHeight: '13px', color: p.error ? RED : MUTED, marginTop: 2,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {p.error ? 'Refused' : p.upload ? p.name : 'Adding…'}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {pictures.some((p) => p.error) && (
+        <div role="alert" style={{ fontSize: 12, color: RED, marginBottom: 8 }}>
+          {pictures.filter((p) => p.error).map((p) => `${p.name}: ${p.error}`).join(' · ')}</div>
+      )}
       <textarea ref={ref} value={value} rows={1} placeholder={placeholder} aria-label="Message Owen AI"
+        onPaste={(e) => {
+          const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
+          if (files.length) { e.preventDefault(); onPictures(files) }
+        }}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); onSend() }
@@ -224,6 +325,17 @@ function Composer({ value, onChange, onSend, blocked, placeholder }: {
         <span style={{ fontSize: 12, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           Enter to send · Shift+Enter for a new line</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input ref={pick} type="file" accept="image/*,.heic,.heif" multiple hidden
+            onChange={(e) => { onPictures(Array.from(e.target.files ?? [])); e.target.value = '' }} />
+          <button type="button" aria-label="Add pictures" title="Add pictures (or paste / drop them here)"
+            disabled={blocked || pictures.length >= MAX_PICTURES} onClick={() => pick.current?.click()}
+            style={{ width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', color: blocked ? 'rgb(152,162,179)' : MUTED }}>
+            <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+              strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
           <MicButton value={value} onChange={onChange} disabled={blocked} />
           <button type="button" aria-label="Send" disabled={!ready} onClick={onSend}
             style={{ width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center',

@@ -2825,8 +2825,25 @@ export type OwenAiMessage = {
   status: 'queued' | 'running' | 'done' | 'error'; steps: OwenAiStep[]; error: string | null
   model: string | null; cost_usd: number | null; duration_ms: number | null; num_turns: number | null
   created_at: string | null; finished_at: string | null
+  /** Pictures Owen sent with the message (2026-11-21). */
+  uploads?: OwenAiUpload[]
 }
-export type OwenAiThreadDetail = OwenAiThread & { messages: OwenAiMessage[] }
+/** A picture dropped in the composer (2026-11-21): kept on the server, sent by id. */
+export type OwenAiUpload = { id: number; file_name: string; content_type: string; size: number; url: string }
+/** One change of a Zuper change list (2026-11-21, app/owen_ai/changes.py). */
+export type OwenAiChange = {
+  n: number; kind: string; title: string; warning: string | null; job_number: string | null
+  customer_name: string | null; evidence: string | null; job_url: string | null
+  status: 'pending' | 'applying' | 'applied' | 'failed' | 'skipped' | 'not_asked'; result: string | null
+}
+export type OwenAiChangeSetStatus = 'pending' | 'applying' | 'applied' | 'partial' | 'failed' | 'superseded' | 'expired'
+/** What Owen AI proposed to change in Zuper. Nothing is made until Owen says so in the chat. */
+export type OwenAiChangeSet = {
+  id: number; thread_id: number; status: OwenAiChangeSetStatus; why: string | null
+  proposed_message_id: number | null; applied_message_id: number | null; owen_said: string | null
+  created_at: string | null; applied_at: string | null; expires_at: string | null; changes: OwenAiChange[]
+}
+export type OwenAiThreadDetail = OwenAiThread & { messages: OwenAiMessage[]; changes?: OwenAiChangeSet[] }
 export const owenAiStatus = () => get<OwenAiStatus>('/api/owen-ai/status')
 export const owenAiThreads = (archived = false, kind?: OwenAiThreadKind) => {
   const p = new URLSearchParams({ archived: String(archived) })
@@ -2838,8 +2855,11 @@ export const owenAiOpenThread = (body: { kind: OwenAiOpenKind; title?: string; j
 export const owenAiThread = (id: number) => get<OwenAiThreadDetail>(`/api/owen-ai/threads/${id}`)
 export const owenAiEditThread = (id: number, body: { title?: string; archived?: boolean }) =>
   send<OwenAiThread>(`/api/owen-ai/threads/${id}`, 'PATCH', body)
-export const owenAiSend = (id: number, content: string) =>
-  send<OwenAiMessage>(`/api/owen-ai/threads/${id}/messages`, 'POST', { content })
+export const owenAiSend = (id: number, content: string, uploadIds: number[] = []) =>
+  send<OwenAiMessage>(`/api/owen-ai/threads/${id}/messages`, 'POST', { content, upload_ids: uploadIds })
+/** A picture for the next message (JPEG / PNG / WebP / HEIC, 15 MB); the server checks the bytes. */
+export const owenAiUploadPicture = (threadId: number, file: File) =>
+  upload<OwenAiUpload>(`/api/owen-ai/threads/${threadId}/uploads`, file)
 
 // The scheduled audit's findings (2026-11-03): one open alert per job + rule until the audit
 // sees it fixed (resolved) or the owner dismisses it. Sorted urgent → watch, newest first.

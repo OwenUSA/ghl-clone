@@ -25,11 +25,13 @@ from ..models import (
     OwenAiMessage,
     OwenAiProposalDraft,
     OwenAiThread,
+    OwenAiUpload,
     Role,
 )
 from ..zuper import config as zuper_config
 from . import (
     alerts,
+    changes,
     config,
     infographics,
     leads,
@@ -39,6 +41,7 @@ from . import (
     report_attach,
     review,
     saved_reports,
+    uploads,
 )
 
 router = APIRouter(prefix="/api/owen-ai", tags=["owen-ai"])
@@ -73,9 +76,10 @@ def _thread(th: OwenAiThread, busy: bool = False) -> dict:
             "updated_at": _iso(th.updated_at)}
 
 
-def _message(m: OwenAiMessage) -> dict:
+def _message(m: OwenAiMessage, pics: list[OwenAiUpload] | None = None) -> dict:
     return {"id": m.id, "role": m.role, "content": m.content, "status": m.status,
             "kind": m.kind, "job_uid": m.job_uid,
+            "uploads": [uploads.view(u) for u in pics or []],
             "steps": m.steps or [], "error": m.error, "model": m.model,
             "cost_usd": m.cost_usd, "duration_ms": m.duration_ms, "num_turns": m.num_turns,
             "created_at": _iso(m.created_at), "finished_at": _iso(m.finished_at)}
@@ -171,7 +175,10 @@ def thread(thread_id: int, p: auth.Principal = OWNER, db: Session = Depends(get_
     msgs = db.scalars(select(OwenAiMessage).where(OwenAiMessage.thread_id == th.id)
                       .order_by(OwenAiMessage.id)).all()
     busy = any(m.status in ("queued", "running") for m in msgs)
-    return {**_thread(th, busy), "messages": [_message(m) for m in msgs]}
+    pics = uploads.of_messages(db, [m.id for m in msgs if m.role == "user"])
+    return {**_thread(th, busy), "messages": [_message(m, pics.get(m.id)) for m in msgs],
+            # Zuper change lists proposed in this chat (2026-11-21), drawn as cards.
+            "changes": [changes.out(r) for r in changes.for_thread(db, th.id)]}
 
 
 class EditThread(BaseModel):
@@ -192,7 +199,9 @@ def edit_thread(thread_id: int, body: EditThread, p: auth.Principal = OWNER,
 
 
 class NewMessage(BaseModel):
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field("", max_length=20_000)
+    # Pictures uploaded to this chat first (POST /threads/{id}/uploads), sent with the text.
+    upload_ids: list[int] = Field(default_factory=list, max_length=uploads.MAX_PER_MESSAGE)
 
 
 @router.post("/threads/{thread_id}/messages")
@@ -205,17 +214,54 @@ def send(thread_id: int, body: NewMessage, p: auth.Principal = OWNER,
         OwenAiMessage.thread_id == th.id, OwenAiMessage.status.in_(("queued", "running"))))
     if pending:
         raise HTTPException(409, "Owen AI is still answering in this conversation.")
+    text = body.content.strip()
+    if not text and not body.upload_ids:
+        raise HTTPException(422, "Write a message or add a picture.")
     now = datetime.now(UTC)
-    m = OwenAiMessage(thread_id=th.id, role="user", content=body.content.strip(),
+    m = OwenAiMessage(thread_id=th.id, role="user", content=text or "(pictures)",
                       status="queued", created_at=now)
     db.add(m)
+    db.flush()
+    try:
+        pics = uploads.attach(db, th.id, m.id, body.upload_ids)
+    except uploads.Invalid as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from None
     if th.kind == "task" and th.title == "New chat":
         first = " ".join(body.content.split())
         th.title = first[:config.TITLE_MAX] + ("…" if len(first) > config.TITLE_MAX else "")
     th.updated_at = now
     db.commit()
     db.refresh(m)
-    return _message(m)
+    return _message(m, pics)
+
+
+@router.post("/threads/{thread_id}/uploads")
+async def upload_picture(thread_id: int, file: UploadFile, p: auth.Principal = OWNER,
+                         db: Session = Depends(get_db)) -> dict:
+    """A picture Owen drops in the composer (2026-11-21): JPEG, PNG, WebP or HEIC, 15 MB. It
+    waits here until he sends the message with its id. Nothing reaches Zuper from here."""
+    th = _own(db, p, thread_id)
+    data = await file.read(uploads.MAX_BYTES + 1)
+    try:
+        return uploads.view(uploads.save(db, th.id, file.filename, data))
+    except uploads.Invalid as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.get("/uploads/{upload_id}")
+def upload_file(upload_id: int, p: auth.Principal = OWNER,
+                db: Session = Depends(get_db)) -> FileResponse:
+    row = db.get(OwenAiUpload, upload_id)
+    if row is None:
+        raise HTTPException(404, "Not Found")
+    _own(db, p, row.thread_id)
+    path = uploads.path_of(row)
+    if not path.is_file():
+        raise HTTPException(404, "Not Found")
+    return FileResponse(path, media_type=row.content_type,
+                        headers={"Cache-Control": "private, max-age=86400",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 # ------------------------------------------------------------------------------- alerts

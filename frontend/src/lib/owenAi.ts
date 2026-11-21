@@ -317,3 +317,51 @@ export function lastPlanId(content: string | null | undefined,
   }
   return found
 }
+
+// ---- Zuper change lists (2026-11-21, app/owen_ai/changes.py) --------------------------------
+
+type ChangeSetLike = { id: number; status: string; proposed_message_id: number | null }
+type MessageIdLike = { id: number; role: string }
+
+/** Where each change list is drawn: under the first answer written after the message it was
+ *  proposed under (that answer is the one that listed it). A list whose answer is not there yet
+ *  goes under the last message (key -1). */
+export function changeSetPlacement<T extends ChangeSetLike>(messages: MessageIdLike[], sets: T[]): Map<number, T[]> {
+  const out = new Map<number, T[]>()
+  for (const s of sets) {
+    const after = s.proposed_message_id ?? -Infinity
+    const host = messages.find((m) => m.role === 'assistant' && m.id > after)
+    const key = host ? host.id : -1
+    out.set(key, [...(out.get(key) ?? []), s])
+  }
+  return out
+}
+
+/** The sentence at the top of a change list's card. */
+export function changeSetHeadline(status: string): string {
+  switch (status) {
+    case 'pending': return 'Waiting for your OK — reply “do it”, or say which numbers'
+    case 'applying': return 'Making the changes in Zuper…'
+    case 'applied': return 'Done in Zuper'
+    case 'partial': return 'Partly done in Zuper — see each line'
+    case 'failed': return 'Not done in Zuper — see each line'
+    case 'superseded': return 'Replaced by a newer list'
+    case 'expired': return 'Expired — nothing was changed; ask again'
+    default: return status
+  }
+}
+
+/** One change's mark: what happened to it. */
+export function changeMark(status: string): { mark: string; label: string; tone: 'ok' | 'bad' | 'muted' | 'wait' } {
+  if (status === 'applied') return { mark: '✓', label: 'Done', tone: 'ok' }
+  if (status === 'failed') return { mark: '✕', label: 'Failed', tone: 'bad' }
+  if (status === 'skipped') return { mark: '↷', label: 'Skipped', tone: 'muted' }
+  if (status === 'not_asked') return { mark: '–', label: 'Not done', tone: 'muted' }
+  if (status === 'applying') return { mark: '…', label: 'Working', tone: 'wait' }
+  return { mark: '•', label: 'Waiting', tone: 'wait' }
+}
+
+/** A message sent with pictures and no words reads "(pictures)" on the server: not shown. */
+export function bubbleText(content: string, pictures: number): string {
+  return pictures > 0 && content.trim() === '(pictures)' ? '' : content
+}

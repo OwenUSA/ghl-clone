@@ -28,6 +28,7 @@ from ..frontdoor import service as frontdoor
 from ..zuper import client as zc
 from . import (
     alerts,
+    changes,
     companycam_photos,
     config,
     dossier,
@@ -477,6 +478,10 @@ SPECS = SPECS + leads.SPECS
 # Technicians' routes (2026-11-19): the Dispatch planner's DRAFT plan (nothing booked, nothing
 # sent to Zuper), drawn under the answer; set_crew_days writes the CRM's crew settings only.
 SPECS = SPECS + routes.SPECS
+# Changes in Zuper on Owen's word (2026-11-21): propose_zuper_changes stores a list in the CRM;
+# apply_zuper_changes makes it ONLY while answering a later message Owen typed in the same
+# chat (changes.apply), through client.owen_ai_change, each change read back.
+SPECS = SPECS + changes.SPECS
 
 TOOL_NAMES = tuple("mcp__%s__%s" % (SERVER_NAME, name) for name, *_ in SPECS)
 

@@ -173,6 +173,209 @@ def owen_ai_lead_created(kind: str, uid: str) -> None:
     st[kind + "_uid"] = uid
 
 
+_OWEN_AI_CHANGE: ContextVar[dict | None] = ContextVar("zuper_owen_ai_change", default=None)
+CHANGE_KINDS = ("move", "schedule", "technicians", "job_field", "job_address", "customer",
+                "note", "pictures")
+CHANGE_PICTURE_TYPES = {"image/jpeg": b"\xff\xd8\xff", "image/png": b"\x89PNG\r\n\x1a\n"}
+CHANGE_PICTURE_MAX_BYTES = 15 * 1024 * 1024
+CHANGE_ADDRESS_KEYS = frozenset({"street", "city", "state", "zip_code", "country"})
+CHANGE_CUSTOMER_KEYS = frozenset({"customer_uid", "customer_first_name", "customer_last_name",
+                                  "customer_email", "customer_contact_no", "customer_address"})
+CHANGE_PHONE_KEYS = frozenset({"mobile", "home", "work", "phone"})
+CHANGE_STATUS_KEYS = frozenset({"job_uid", "status_uid", "status_name", "remarks", "checklist",
+                                "customer_signature"})
+
+
+@contextlib.contextmanager
+def owen_ai_change(kind: str, job_uid: str | None = None, *, customer_uid: str | None = None,
+                   status_uid: str | None = None, label: str | None = None,
+                   assign: tuple = (), unassign: tuple = (), uploads: int = 0):
+    """ONE change Owen told Owen AI to make in Zuper, in the chat (2026-11-21, the owner's lift;
+    app/owen_ai/changes.py and nothing else opens it). Each kind has its own requests, for THIS
+    job / customer only, each at most once unless said:
+
+      move         PUT  /jobs/{job}/status       to `status_uid` only (changes.py keeps it on the
+                                                 job's own board), with the column's answers
+      schedule     PUT  /jobs/{job}/update       exactly [{scheduled_start/end_time, SCHEDULE}]
+      technicians  POST /jobs/assign             ASSIGN one user of `assign` per request
+                   PUT  /jobs/{job}/update       UNASSIGN one user of `unassign` per request
+                   PATCH /custom_fields          the job's one field named `label` (Technician)
+      job_field    PATCH /custom_fields          the job's one field named `label` (a merge)
+      job_address  PUT  /jobs                    {job_uid, customer_address} and nothing else
+      customer     PUT  /customers/{customer}    names, email, phones, address — nothing else
+      note         POST /jobs/{job}/note         one private note, nobody notified
+      pictures     POST /misc/upload             up to `uploads` JPEG/PNG files INTO this job's
+                                                 gallery (module JOB) — added, never replaced
+
+    No DELETE, no POST /jobs or /customers_new, nothing on proposals, invoices or payments,
+    nothing that sends (the denylist still applies first), no query string. GETs are allowed as
+    in `owen_ai_read` for the reads and read-backs. Nothing at all while
+    OWEN_AI_ZUPER_CHANGES_ENABLED is off."""
+    if kind not in CHANGE_KINDS:
+        raise ZuperError("refused", "not an Owen AI change kind: %s" % kind)
+    state = {"kind": kind, "job": str(job_uid or ""), "customer": str(customer_uid or ""),
+             "status_uid": status_uid, "label": label, "assign": set(assign),
+             "unassign": set(unassign), "uploads": uploads, "done": []}
+    token = _OWEN_AI_CHANGE.set(state)
+    try:
+        yield state
+    finally:
+        _OWEN_AI_CHANGE.reset(token)
+
+
+def _str_dict(d: Any, keys: frozenset) -> bool:
+    return isinstance(d, dict) and set(d) <= keys and all(isinstance(v, str) for v in d.values())
+
+
+def _one_field_ok(st: dict, body: Any) -> str | None:
+    if not (isinstance(body, dict) and set(body) == {"module_name", "module_uid", "custom_fields"}):
+        return "a field write is {module_name, module_uid, custom_fields}"
+    if body["module_name"] != "JOB" or body["module_uid"] != st["job"]:
+        return "only a field of this job"
+    fields = body["custom_fields"]
+    if not (isinstance(fields, list) and len(fields) == 1 and isinstance(fields[0], dict)
+            and fields[0].get("label") == st["label"] and isinstance(fields[0].get("value"), str)):
+        return "exactly one field, the one named %r, with a text value" % st["label"]
+    return None
+
+
+def _owen_ai_change_ok(method: str, path: str, body: Any, params: Any, files: Any,
+                       form: Any) -> str | None:
+    """None when this is an allowed write of the open change scope; else why not. Records it."""
+    st = _OWEN_AI_CHANGE.get()
+    if st is None or not config.owen_ai_changes_enabled():
+        return config.OWEN_AI_CHANGES_OFF_SENTENCE
+    if params:
+        return "no query string"
+    kind, job, done = st["kind"], st["job"], st["done"]
+    if kind == "pictures":
+        if method != "POST" or path != "/misc/upload" or body is not None:
+            return "only POST /misc/upload"
+        if form != {"attachment_type": "ATTACHMENT", "module": "JOB", "module_uid": job}:
+            return "a picture goes into THIS job's gallery and nowhere else"
+        if len(done) >= st["uploads"]:
+            return "no more pictures than Owen agreed to"
+        f = (files or {}).get("attachment") if isinstance(files, dict) and set(files) == {
+            "attachment"} else None
+        if not (isinstance(f, tuple) and len(f) == 3 and isinstance(f[0], str)
+                and isinstance(f[1], bytes) and f[2] in CHANGE_PICTURE_TYPES
+                and f[1].startswith(CHANGE_PICTURE_TYPES[f[2]])
+                and 0 < len(f[1]) <= CHANGE_PICTURE_MAX_BYTES):
+            return "one JPEG or PNG picture, at most 15 MB"
+        done.append("upload")
+        return None
+    if files is not None or form is not None:
+        return "only a picture is uploaded"
+    if kind == "move":
+        if method != "PUT" or path != "/jobs/%s/status" % job or done:
+            return "one PUT /jobs/{this job}/status"
+        if not (isinstance(body, dict) and set(body) <= CHANGE_STATUS_KEYS
+                and body.get("status_uid") == st["status_uid"] and st["status_uid"]
+                and body.get("job_uid", job) == job
+                and isinstance(body.get("remarks", ""), str)):
+            return "only to the column Owen agreed to"
+        cl = body.get("checklist", [])
+        if not (isinstance(cl, list) and all(
+                isinstance(a, dict) and set(a) == {"question", "answer", "type"}
+                and all(isinstance(v, str) for v in a.values()) for a in cl)):
+            return "the column's answers are [{question, answer, type}] text"
+        done.append("status")
+        return None
+    if kind == "schedule":
+        if method != "PUT" or path != "/jobs/%s/update" % job or done:
+            return "one PUT /jobs/{this job}/update"
+        rows = body.get("job") if isinstance(body, dict) and set(body) == {"job"} else None
+        if not (isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
+                and set(rows[0]) == {"scheduled_start_time", "scheduled_end_time", "type"}
+                and rows[0]["type"] == "SCHEDULE"
+                and all(isinstance(rows[0][k], str) for k in ("scheduled_start_time",
+                                                              "scheduled_end_time"))):
+            return "only the visit's start and end"
+        done.append("schedule")
+        return None
+    if kind == "technicians":
+        if method == "POST" and path == "/jobs/assign":
+            users = body.get("users") if isinstance(body, dict) else None
+            if not (isinstance(body, dict) and set(body) == {"job_uid", "type", "users"}
+                    and body["job_uid"] == job and body["type"] == "ASSIGN"
+                    and isinstance(users, list) and len(users) == 1
+                    and _str_dict(users[0], frozenset({"user_uid", "team_uid"}))
+                    and set(users[0]) == {"user_uid", "team_uid"}):
+                return "one ASSIGN of one user on this job"
+            uid = users[0]["user_uid"]
+            if uid not in st["assign"] or ("assign", uid) in done:
+                return "only a technician Owen agreed to assign, once"
+            done.append(("assign", uid))
+            return None
+        if method == "PUT" and path == "/jobs/%s/update" % job:
+            rows = body.get("job") if isinstance(body, dict) and set(body) == {"job"} else None
+            if not (isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
+                    and set(rows[0]) == {"user_uid", "team_uid", "type"}
+                    and rows[0]["type"] == "UNASSIGN"
+                    and _str_dict(rows[0], frozenset({"user_uid", "team_uid", "type"}))):
+                return "one UNASSIGN of one user on this job"
+            uid = rows[0]["user_uid"]
+            if uid not in st["unassign"] or ("unassign", uid) in done:
+                return "only a technician Owen agreed to take off, once"
+            done.append(("unassign", uid))
+            return None
+        if method == "PATCH" and path == "/custom_fields":
+            why = _one_field_ok(st, body)
+            if why or "field" in done:
+                return why or "the Technician field once"
+            done.append("field")
+            return None
+        return "not one of the technician writes"
+    if kind == "job_field":
+        if method != "PATCH" or path != "/custom_fields" or done:
+            return "one PATCH /custom_fields"
+        why = _one_field_ok(st, body)
+        if why:
+            return why
+        done.append("field")
+        return None
+    if kind == "job_address":
+        if method != "PUT" or path != "/jobs" or done:
+            return "one PUT /jobs"
+        j = body.get("job") if isinstance(body, dict) and set(body) == {"job"} else None
+        if not (isinstance(j, dict) and set(j) == {"job_uid", "customer_address"}
+                and j["job_uid"] == job and _str_dict(j["customer_address"],
+                                                      CHANGE_ADDRESS_KEYS)):
+            return "only this job's service address"
+        done.append("address")
+        return None
+    if kind == "customer":
+        if method != "PUT" or path != "/customers/%s" % st["customer"] or not st["customer"] \
+                or done:
+            return "one PUT /customers/{this customer}"
+        c = body.get("customer") if isinstance(body, dict) and set(body) == {"customer"} \
+            else None
+        if not (isinstance(c, dict) and set(c) <= CHANGE_CUSTOMER_KEYS
+                and c.get("customer_uid", st["customer"]) == st["customer"]):
+            return "only the customer's names, email, phones and address"
+        if "customer_contact_no" in c and not _str_dict(c["customer_contact_no"],
+                                                        CHANGE_PHONE_KEYS):
+            return "phones are mobile / home / work / phone text"
+        if "customer_address" in c and not _str_dict(c["customer_address"], CHANGE_ADDRESS_KEYS):
+            return "an address is street / city / state / zip_code / country"
+        if any(not isinstance(c[k], str) for k in ("customer_first_name", "customer_last_name",
+                                                   "customer_email") if k in c):
+            return "names and email are text"
+        done.append("customer")
+        return None
+    if kind == "note":
+        if method != "POST" or path != "/jobs/%s/note" % job or done:
+            return "one POST /jobs/{this job}/note"
+        n = body.get("note") if isinstance(body, dict) and set(body) == {"note"} else None
+        if not (isinstance(n, dict) and set(n) == {"note", "is_private", "notify_users"}
+                and n["is_private"] is True and n["notify_users"] is False
+                and isinstance(n["note"], str) and n["note"].strip()):
+            return "a private note, nobody notified"
+        done.append("note")
+        return None
+    return "not an Owen AI change"
+
+
 _OWEN_AI_PICTURES: ContextVar[dict | None] = ContextVar("zuper_owen_ai_pictures", default=None)
 PICTURES_MAX_UPLOADS = 3            # one banner per option, GOOD / BETTER / BEST
 PICTURES_MAX_BYTES = 5 * 1024 * 1024
@@ -951,16 +1154,32 @@ def _owen_ai_lead_ok(method: str, path: str, body: Any, params: Any) -> str | No
 def request(method: str, path: str, *, params: dict | None = None,
             body: dict | list | None = None, files: dict | None = None,
             form: dict | None = None) -> Any:
-    """`files` / `form` (a multipart upload) exist for TWO callers: the step-pictures scope's
-    and the report-attach scope's POST /misc/upload. Anywhere else a request carrying them is
-    refused."""
+    """`files` / `form` (a multipart upload) exist for THREE callers: the step-pictures scope's,
+    the report-attach scope's and an Owen AI change's (pictures) POST /misc/upload. Anywhere else
+    a request carrying them is refused."""
     method = method.upper()
     path = "/" + path.lstrip("/")
     pictures = _OWEN_AI_PICTURES.get()
     attach = _OWEN_AI_REPORT_ATTACH.get()
-    if (files is not None or form is not None) and pictures is None and attach is None:
-        raise ZuperError("refused", "a multipart upload is only made by the step-pictures or "
-                                    "report-attach scope")
+    change = _OWEN_AI_CHANGE.get()
+    if (files is not None or form is not None) and pictures is None and attach is None \
+            and change is None:
+        raise ZuperError("refused", "a multipart upload is only made by the step-pictures, "
+                                    "report-attach or Owen AI change scope")
+    if change is not None and (pictures is not None or attach is not None
+                               or _OWEN_AI_PROPOSAL.get() is not None
+                               or _OWEN_AI_LEAD.get() is not None or _READ_ONLY.get()
+                               or _DISPATCH_WRITE.get() or _PROPOSAL_LINES.get()
+                               or _AHS_CREATE.get() or _send_scope()[0]):
+        raise ZuperError("refused", "an Owen AI change never runs inside another scope")
+    if change is not None and method == "GET" and (files is not None or form is not None):
+        raise ZuperError("refused", "a GET carries no upload")
+    if change is not None and method != "GET":
+        why_not = _owen_ai_change_ok(method, path, body, params, files, form)
+        if why_not:
+            raise ZuperError("refused", "%s %s is not this Owen AI change: %s" % (
+                method, path, why_not))
+    change_write = change is not None and method != "GET"         # passed the check above
     if attach is not None and pictures is not None:
         raise ZuperError("refused", "the report-attach and step-pictures scopes never nest")
     if attach is not None and method != "GET":
@@ -1029,9 +1248,9 @@ def request(method: str, path: str, *, params: dict | None = None,
         raise ZuperError("refused", "%s %s is never called: %s" % (method, path, why))
     owen_ai_get = method == "GET" and (_OWEN_AI_READ.get() or in_proposal
                                        or pictures is not None or attach is not None
-                                       or lead is not None)
+                                       or lead is not None or change is not None)
     if not (autoreply_send or proposal_write or pictures_write or attach_write or owen_ai_get
-            or allowed(method, path)):
+            or change_write or allowed(method, path)):
         raise ZuperError("refused", "%s %s is not on the sync's allowlist" % (method, path))
     if not (config.env_enabled() or _OPERATOR.get()):
         raise ZuperError("off")
@@ -1052,7 +1271,7 @@ def request(method: str, path: str, *, params: dict | None = None,
                                         method, path, "" if config.proposal_lines_enabled()
                                         else "; ZUPER_PROPOSAL_LINES is off"))
     if method != "GET" and config.pull_only() and not proposal_write and not pictures_write \
-            and not attach_write and not lead_write \
+            and not attach_write and not lead_write and not change_write \
             and not _mirror_write_allowed(path) \
             and not _ahs_create_allowed(method, path) \
             and not _dispatch_write_allowed(method, path) \

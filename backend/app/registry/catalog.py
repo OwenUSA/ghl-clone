@@ -429,9 +429,19 @@ ENTRIES: tuple[Entry, ...] = (
                    "a private note — created in Zuper only when the owner presses Approve "
                    "(Proposals tab, New customers). No visit, no technician, nothing sent. Also "
                    "needs OWEN_AI_LEADS_ENABLED on the server."),
+            Action("zuper_change", APPROVE, (NEVER, APPROVE),
+                   "2026-11-21, owner lift: changes Owen AI proposes from the calls and texts — "
+                   "a column on the job's own board, the visit time, the technicians, a job "
+                   "field or address, the customer's details, a private note, pictures Owen sent "
+                   "in the chat added to the gallery — made only when Owen says so in a later "
+                   "message of the same chat, each read back. Also needs "
+                   "OWEN_AI_ZUPER_CHANGES_ENABLED on the server."),
         ),
         never=("Send a proposal to a customer",
-               "Write anything else in Zuper (only an approved proposal draft or new lead)",
+               ("Write anything else in Zuper (only an approved proposal draft or new lead, or "
+                "a change Owen OK'd in the chat)"),
+               "Delete anything in Zuper, or change or remove a gallery picture",
+               "Move a job to another board",
                "Submit, update or note anything in Frontdoor (AHS's portal)",
                "Text or call anyone", "Answer anyone but the owner"),
         owner_hint="Owen",

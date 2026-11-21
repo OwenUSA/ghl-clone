@@ -33,3 +33,6 @@ Output:
 ```
 
 Skip a section that is empty (say "none"). Never invent a number.
+
+Last: the changes Zuper needs from what you read (visits agreed, steps done, new numbers) as ONE
+`mcp__owen__propose_zuper_changes` list — `zuper-changes` skill. Owen says "do it" to make them.

@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from . import config, tools
+from . import config, tools, uploads
 
 BUILTIN_TOOLS = ["Read", "Glob", "Grep", "Skill"]
 STEP_RESULT_MAX = 600
@@ -70,9 +70,12 @@ async def _run(prompt: str, session_id: str | None, note: str) -> TurnResult:
     photo_dir.mkdir(parents=True, exist_ok=True)
     store = config.report_store_dir()
     store.mkdir(parents=True, exist_ok=True)
+    # Pictures Owen drops in the chat (2026-11-21, uploads.py): Claude looks at them with Read.
+    chat_pictures = uploads.folder()
+    chat_pictures.mkdir(parents=True, exist_ok=True)
     options = ClaudeAgentOptions(
         cwd=str(config.workspace()),
-        add_dirs=[str(photo_dir), str(store)],
+        add_dirs=[str(photo_dir), str(store), str(chat_pictures)],
         setting_sources=["project"],               # the workspace's CLAUDE.md and skills
         system_prompt={"type": "preset", "preset": "claude_code", "append": note},
         tools=BUILTIN_TOOLS,

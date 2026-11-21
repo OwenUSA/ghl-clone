@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, aliased
 
 from ..models import OwenAiMessage, OwenAiThread
 from ..registry import service as registry
-from . import agent, alerts, config, delegate, proposals
+from . import agent, alerts, changes, config, delegate, proposals, uploads
 
 log = logging.getLogger("owen_ai")
 NY = ZoneInfo("America/New_York")
@@ -92,17 +92,28 @@ def answer(db: Session, m: OwenAiMessage, turn: TurnFn) -> OwenAiMessage:
         # One job of a sweep: a FRESH session every time, never saved on the thread.
         note = agent.context_note("job", th.title, m.job_uid, None,
                                   datetime.now(NY).date().isoformat())
-        result = turn(m.content, None, note)
+        with changes.answering_message(m):          # an audit never proposes Zuper changes
+            result = turn(m.content, None, note)
     else:
         note = agent.context_note(th.kind, th.title, th.job_uid, th.job_number,
                                   datetime.now(NY).date().isoformat())
         # What the owner decided on the Proposals tab since his last message: Claude's session
         # never saw those notes, so they ride along with this one.
         crm = proposals.notes_for(db, m)
-        prompt = m.content if not crm else (
-            "[From the CRM since your last answer]\n%s\n\n%s" % (
-                "\n".join("- " + n for n in crm), m.content))
-        with proposals.answering(th.id):
+        prompt = m.content
+        # Pictures Owen sent with this message (2026-11-21): their ids and where to Read them.
+        pics = uploads.prompt_lines(db, m)
+        if pics:
+            prompt = "%s\n\n[%s]" % (prompt, "\n".join(pics))
+        if crm:
+            prompt = "[From the CRM since your last answer]\n%s\n\n%s" % (
+                "\n".join("- " + n for n in crm), prompt)
+        # A Zuper change list still waiting for Owen's OK in this chat (2026-11-21).
+        waiting = changes.pending_notes(db, th.id)
+        if waiting:
+            prompt = "[Waiting in this chat for Owen's OK]\n%s\n\n%s" % (
+                "\n".join(waiting), prompt)
+        with proposals.answering(th.id), changes.answering_message(m):
             result = turn(prompt, th.session_id, note)
     now = _now()
     reply = OwenAiMessage(
@@ -297,6 +308,10 @@ def main() -> None:                               # pragma: no cover - the conta
         n = recover(db)
         if n:
             log.warning("owen_ai: %d message(s) were mid-answer at start; marked error", n)
+        n = changes.recover(db)
+        if n:
+            log.warning("owen_ai: %d Zuper change list(s) were mid-apply at start; marked "
+                        "failed", n)
     finally:
         db.close()
     slots = config.parallel()
