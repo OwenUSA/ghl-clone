@@ -85,6 +85,21 @@ from tests.zuper_support import armed, fake, loaded, zuper_env, zworld  # noqa: 
 
 
 @pytest.fixture(autouse=True)
+def _return_forgotten_connections():
+    """A session a test forgot to close (`SessionLocal().scalar(...)`) keeps its pooled
+    connection until the garbage collector breaks the session's reference cycle. When enough
+    pile up the pool (5 + 10 overflow) is full and the NEXT test's drop_all waits 30 s and
+    errors — seen on CI 2026-11-21 (Python 3.14's collector runs at other moments) as 8 setup
+    errors in test_ai_triggers / test_ai_voice_agents. Collect only while the pool is filling,
+    so it costs nothing on most tests."""
+    checked_out = getattr(engine.pool, "checkedout", None)
+    if checked_out is not None and checked_out() >= 5:
+        import gc
+        gc.collect()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_owen_main_network():
     owen_guard.ATTEMPTS.clear()
     yield
