@@ -8447,9 +8447,9 @@ per-change OK those rules asked for.
 - **Verified live before this:** status moves with checklist answers (2026-11-18 cancellations), SCHEDULE
   and UNASSIGN on `/jobs/{uid}/update`, `POST /jobs/assign` + the Technician field (2026-11-02), `PATCH
   /custom_fields` merging (2026-10-27), the job address PUT (2026-11-18 restore), gallery upload with
-  module fields (2026-11-19). **UNVERIFIED:** `PUT /customers/{uid}` (never made live) and a job address
-  change with no map position (Zuper may keep the old pin — the read-back says so). Test both on the TEST
-  customer / job #701 before switching on.
+  module fields (2026-11-19). The two that were not — `PUT /customers/{uid}` and a job address change
+  with no map position — were **verified live on 2026-11-21** on test job #701 / the TEST customer (see
+  the test below).
 - **Pictures:** `POST /api/owen-ai/threads/{id}/uploads` (owner only; magic-number sniffed; WebP / HEIC
   turned into JPEG; 15 MB; 10 a message) on the owen_ai_pictures volume under `chat-uploads/`
   (`owen_ai_uploads`, the same migration); the message carries `upload_ids`; the runner lists them in the
@@ -8457,3 +8457,16 @@ per-change OK those rules asked for.
 - **The page:** a card per list under the answer that listed it (`ChangeSetCard.tsx`: before → after,
   evidence, then Done / Failed / Skipped per line); attach, paste or drop pictures on the composer.
 - Tests: `tests/test_owen_ai_changes.py` (52), `tests/test_owen_ai_changes_ui.py`.
+
+**Live test, 2026-11-21 (deployed 4fde550, `OWEN_AI_ZUPER_CHANGES_ENABLED=true`).** Through the real tools,
+in an archived TEST chat: the answer that proposed list #1 was refused when it tried to apply it; the next
+message ("do it") applied all six on #701 — column Proposal Made → Waiting for Customer, "Roof age
+(years)" → 99, job street changed, the TEST customer's last name changed, a private note, one picture into
+the gallery (7 → 8) — each read back DONE. A full before/after comparison: the customer changed ONLY its
+last name; the job changed only the field, the address, the embedded customer name, the gallery / note
+counts and its invoice's updated_at (no invoice content); Zuper re-geocoded the pin. List #2 put it all
+back the same way (the note and the picture stay — add-only). One difference found and fixed (PR #98):
+the change sent country "US" over the record's "USA"; it now keeps the record's own country, and #701
+was put back to "USA". Not tried live by Owen AI: `schedule` and `technicians` (their requests were
+verified by earlier scripts; on #701 they would ping a technician and start the RG3 workflows).
+Backup: owen-main zuper-backup/before-changes/2026-11-21/job701_and_test_customer_before_owen_ai_changes.json.
