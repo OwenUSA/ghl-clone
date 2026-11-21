@@ -8399,3 +8399,61 @@ days apply to its booking options once the crew is saved.
 Tests: `tests/test_dispatch_route_rules.py`, `tests/test_dispatch_planner.py` (the rules),
 `tests/test_owen_ai_routes.py`, `tests/test_owen_ai_routes_ui.py`; legacy-board tests now pass
 `boards="ahs"`. No migration.
+
+## AMENDMENT (2026-11-21): Owen AI changes Zuper when Owen says "do it" in the chat (amends 2026-09-27, 2026-09-30, 2026-11-02)
+
+Asked by the user, "Yes, Owen approved": Owen AI should advise what to change in Zuper from the
+customers' conversations, and "we just tell them to do it in the chat to do it without any other
+approval" — the dispatch board, customers' information, moving customers between columns, and
+pictures. The user's choices: any column on the job's OWN board, closing ones included, with the
+column's questions answered from the chat; pictures only from ones Owen drops in the chat;
+suggestions in its audits and whenever Owen asks. A scoped lift of "Zuper is read-only" (2026-09-27)
+and of "never move a job between columns" (2026-09-30) for exactly this — Owen's own chat word is the
+per-change OK those rules asked for.
+
+- **Propose** (`propose_zuper_changes`, `app/owen_ai/changes.py`): validates each change, READS Zuper
+  (the job, its board's columns, the target column's checklist from `GET /settings/checklist`, users
+  and teams, the customer, the gallery) and stores ONE pending `owen_ai_change_sets` row per chat
+  (migration e3a9c51d7f42; a newer list supersedes it). A column of another board, a required question
+  unanswered, a required photo / video question (a person moves that one in Zuper), a choice that is not
+  an option, a CLOSED-type column, an unknown technician — refused with a sentence. Nothing is written.
+  A scheduled audit may not propose (nobody can answer an audit thread; it writes the change into the
+  alert's action instead). Production runs no sweep today (OWEN_AI_SWEEP_TIMES unset), so "audits"
+  means the job-audit / review / briefing skills Owen asks for in his chat.
+- **The OK, in code:** `apply_zuper_changes` refuses unless the message being answered (a context
+  variable the runner sets, `changes.answering_message`) is kind `chat` — Owen typed it — in the same
+  chat, with a higher id than the message the list was proposed under, and `owen_said` is words from
+  that message. So the answer that proposed a list can never apply it, nor can a sub-chat's
+  instruction, a finished review's message, a note or a customer text. Lists expire after 24 hours.
+  Deliberately no Approve button: the user asked for the chat to be the approval.
+- **Then, before any request:** `OWEN_AI_ZUPER_CHANGES_ENABLED`, the sync's switch and key, the
+  registry's owen_ai `zuper_change` level (Approve / Never), and a safety read: no customer notification
+  rule active, `jobs.enable_customer_feedback` off, Zuper's system texts only from 19544207373. Workflows
+  are NOT read (another host); the team's active ones run as they would for a person's move — "Ready to
+  Invoice" creates an invoice, the RG3 workflows move a job when it is assigned or scheduled, and the
+  read-back reports such a follow-on move.
+- **Apply:** one atomic pending → applying claim (a second "do it" applies nothing); per change a
+  re-read — a record that changed since the proposal is SKIPPED untouched — then the writes inside
+  `client.owen_ai_change(kind, ...)`, which allows only that kind's requests for that job / customer,
+  bodies key-checked: `PUT /jobs/{uid}/status` (the agreed status_uid; with answers the documented
+  `{job_uid, status_uid, status_name, customer_signature, remarks, checklist}`), `PUT /jobs/{uid}/update`
+  (SCHEDULE, UTC; or one UNASSIGN), `POST /jobs/assign` (one ASSIGN of an agreed user), `PATCH
+  /custom_fields` (one field of that job, with its group — a merge), `PUT /jobs {job_uid,
+  customer_address}`, `PUT /customers/{uid}` (names, email, phones, address only), `POST
+  /jobs/{uid}/note` (private, nobody notified), `POST /misc/upload` into that job's gallery (module JOB,
+  JPEG / PNG, the agreed count). No DELETE, no POST /jobs, nothing on money documents, nothing that sends
+  (the denylist still runs first). Every change is read back; nothing is retried; a list left applying
+  by a restart is marked failed with "check it in Zuper".
+- **Verified live before this:** status moves with checklist answers (2026-11-18 cancellations), SCHEDULE
+  and UNASSIGN on `/jobs/{uid}/update`, `POST /jobs/assign` + the Technician field (2026-11-02), `PATCH
+  /custom_fields` merging (2026-10-27), the job address PUT (2026-11-18 restore), gallery upload with
+  module fields (2026-11-19). **UNVERIFIED:** `PUT /customers/{uid}` (never made live) and a job address
+  change with no map position (Zuper may keep the old pin — the read-back says so). Test both on the TEST
+  customer / job #701 before switching on.
+- **Pictures:** `POST /api/owen-ai/threads/{id}/uploads` (owner only; magic-number sniffed; WebP / HEIC
+  turned into JPEG; 15 MB; 10 a message) on the owen_ai_pictures volume under `chat-uploads/`
+  (`owen_ai_uploads`, the same migration); the message carries `upload_ids`; the runner lists them in the
+  prompt and Claude may Read them. A `pictures` change only takes uploads sent in that same chat.
+- **The page:** a card per list under the answer that listed it (`ChangeSetCard.tsx`: before → after,
+  evidence, then Done / Failed / Skipped per line); attach, paste or drop pictures on the composer.
+- Tests: `tests/test_owen_ai_changes.py` (52), `tests/test_owen_ai_changes_ui.py`.

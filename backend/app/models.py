@@ -2975,6 +2975,46 @@ class OwenAiLeadDraft(Base):
     thread_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
 
+class OwenAiChangeSet(Base):
+    """A list of changes Owen AI proposed to make in Zuper (2026-11-21, app/owen_ai/changes.py):
+    a column move, a visit's time, the technicians, a job field or address, the customer's
+    details, a note, pictures for the gallery. Nothing reaches Zuper until Owen answers in the
+    SAME chat, in a later message, that it should be done — then `apply_zuper_changes` makes
+    them and reads each one back. `changes`: one dict per change (kind, job, before, after, the
+    request it needs, then status + result). Status: pending | applying | applied | partial |
+    failed | superseded | expired. `proposed_message_id`: the user message being answered when
+    it was proposed — only a later message of Owen's can say "do it"."""
+    __tablename__ = "owen_ai_change_sets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[int] = mapped_column(Integer, index=True)
+    proposed_message_id: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(12), default="pending", server_default="pending",
+                                        index=True)
+    why: Mapped[str | None] = mapped_column(Text)
+    changes: Mapped[list] = mapped_column(JSONType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    applied_message_id: Mapped[int | None] = mapped_column(Integer)
+    owen_said: Mapped[str | None] = mapped_column(Text)
+
+
+class OwenAiUpload(Base):
+    """A picture Owen dropped in an Owen AI chat (2026-11-21). The file is on the pictures
+    volume, named by its SHA-256 (owen_ai/uploads.py); `message_id` is set once it was sent with
+    a message. Owen AI can look at it and, on Owen's OK, add it to a job's gallery."""
+    __tablename__ = "owen_ai_uploads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[int] = mapped_column(Integer, index=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    file_name: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(40))
+    size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
 class OwenAiReport(Base):
     """An after-inspection report Owen AI made for one Zuper job (2026-11-12,
     app/owen_ai/saved_reports.py). Everything in it can be changed after it is made — on the

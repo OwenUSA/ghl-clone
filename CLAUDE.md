@@ -1020,6 +1020,29 @@ customer (no status, visit or technician — it lands in the board's NEW column)
 note on that job; no PUT, no DELETE. Off unless `OWEN_AI_LEADS_ENABLED=true`; registry action
 `zuper_create`. See DECISIONS.md.
 
+## Owen AI changes Zuper when Owen says "do it" in the chat (2026-11-21)
+
+`backend/app/owen_ai/changes.py` (docstring first). From the calls and texts Owen AI proposes what
+Zuper needs — a column on the job's OWN board (any, closing ones included, with that column's
+questions answered), the visit time, the technicians (+ the Technician field), one job field, the
+job's address, the customer's names / email / phones / address, a private note, pictures Owen
+dropped in the chat ADDED to the gallery. `propose_zuper_changes` reads Zuper and stores ONE pending
+`owen_ai_change_sets` row per chat; it writes nothing. **The OK is Owen's own later message in the
+same chat** — no button: `apply_zuper_changes` refuses unless the message being answered is kind
+`chat`, newer than the list, in that chat, and quoted in `owen_said` (`changes.answering_message`,
+set by the runner). Then the gate, the registry, a safety read (no customer notification rule, no
+customer feedback requests, system texts only from (954) 420-7373), an atomic claim, a re-read
+(changed since = SKIPPED), the writes inside `client.owen_ai_change()` (that change's requests only,
+no DELETE, no board change, nothing that sends), a read-back, never a retry. 24 h, then expired.
+
+- Off unless `OWEN_AI_ZUPER_CHANGES_ENABLED=true`; registry action `zuper_change` on `owen_ai`.
+- Pictures: `POST /api/owen-ai/threads/{id}/uploads` (owner, JPEG / PNG / WebP / HEIC sniffed;
+  WebP / HEIC become JPEG), on the owen_ai_pictures volume under `chat-uploads/`
+  (`app/owen_ai/uploads.py`); the message carries `upload_ids`; Claude Reads them.
+- The UI: `components/owenAi/ChangeSetCard.tsx` under the answer that listed it; the attach button,
+  paste and drop on the composer. Owen AI's rules: `owen-ai/.claude/skills/zuper-changes`.
+- Tests: `tests/test_owen_ai_changes.py`, `tests/test_owen_ai_changes_ui.py`. See DECISIONS.md.
+
 ## Technician routes: the owner's scheduling rules, in Owen AI and Dispatch (2026-11-19)
 
 Owen AI's `plan_routes` (`app/owen_ai/routes.py`) makes the SAME DRAFT plan as Dispatch → Remake

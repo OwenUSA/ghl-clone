@@ -189,7 +189,8 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
   }
 
   const ask = useMutation({
-    mutationFn: (v: { id: number; content: string }) => owenAiSend(v.id, v.content),
+    mutationFn: (v: { id: number; content: string; uploadIds: number[] }) =>
+      owenAiSend(v.id, v.content, v.uploadIds),
     onMutate: () => setSendError(null),
     onSuccess: (m, v) => {
       // The queued question goes straight into the cache, so the thread reads busy and polling starts.
@@ -284,7 +285,8 @@ export function OwenAiPage({ focus = null }: { focus?: Focus | null } = {}) {
             <Conversation thread={thread.data} loading={thread.isLoading}
               error={thread.isError && !(thread.error instanceof ApiError && thread.error.status === 404)
                 ? (thread.error as Error).message : null}
-              onSend={(content) => ask.mutateAsync({ id: activeId, content }).then(() => true, () => false)}
+              onSend={(content, uploadIds) => ask.mutateAsync({ id: activeId, content, uploadIds })
+                .then(() => true, () => false)}
               sending={ask.isPending} sendError={sendError?.id === activeId ? sendError.message : null}
               disabledReason={disabledReason} />
           )}

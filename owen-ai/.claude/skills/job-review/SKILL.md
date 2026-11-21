@@ -26,3 +26,6 @@ Output:
 ### Promises & open items
 ### For the technician
 ```
+
+If the conversations show something Zuper does not (a visit agreed, a step done, a new phone or
+address), end with `mcp__owen__propose_zuper_changes` and the list it returns — `zuper-changes` skill.

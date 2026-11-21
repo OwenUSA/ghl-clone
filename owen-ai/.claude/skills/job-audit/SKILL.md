@@ -30,6 +30,11 @@ the holds section and the evidence rules — before judging.
    and the one action to take.
 6. For each open alert that is now fixed: `mcp__owen__clear_issue` with what fixed it.
    (Alerts you neither raise nor clear are resolved automatically after a scheduled audit.)
+7. **In Owen's chat** (not a scheduled audit): when the evidence shows Zuper is behind — a visit
+   agreed but not booked, a step done but the column not moved, a new phone, a note the team
+   needs — propose those changes with `mcp__owen__propose_zuper_changes` (the `zuper-changes`
+   skill) after the answer below. In a scheduled audit, put the change in the alert's action
+   instead: nobody can answer an audit.
 
 ## Don'ts
 
@@ -39,7 +44,7 @@ the holds section and the evidence rules — before judging.
   in every title.
 - Jobs migrated from the old AHS boards: steps done before 2026-10-31 may only show in the old
   board's history or in the chats — look there before calling a step missing.
-- You cannot change anything in Zuper or contact anyone. Say what should be done.
+- You never contact anyone. Zuper changes only as a proposed list Owen OKs in the chat (step 7).
 
 ## Answer (short)
 
