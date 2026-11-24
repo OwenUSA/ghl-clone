@@ -254,6 +254,13 @@ FORBIDDEN = (
     (re.compile(r"(?:replac\w*|install\w*|new)\b[^.:;]{0,40}\bplywood|\bplywood\b[^.:;]{0,25}"
                 r"\breplac", re.IGNORECASE),
      ("GOOD", "BETTER"), "replaces plywood - plywood is only in BEST (\"if needed\") or an add-on"),
+    # GOOD patches the underlayment at the leak; BETTER may replace it (owner, 2026-11-24)
+    (re.compile(r"\b(?:replac\w*|remov\w*|tear\w*[- ]?off|strip\w*)\b"
+                r"(?:(?!\btiles?\b|\bshingles?\b)[^.:;]){0,30}\bunderlayment\b"
+                r"|\bnew\b[^.:;]{0,15}\bunderlayment\b|\bunderlayment\s+(?:replacement|replaced)\b",
+                re.IGNORECASE),
+     ("GOOD",), ("replaces the underlayment - GOOD only PATCHES it at the leak (a membrane "
+                 "patch); BETTER replaces it")),
 )
 
 
@@ -283,8 +290,8 @@ def wording_problems(options: list[dict]) -> list[str]:
     for o in options:
         text = promised(o.get("scope_html") or "") + " " + str(o.get("option_description") or "")
         for rx, names, why in FORBIDDEN:
-            if single and "plywood" in why:
-                continue
+            if single and ("plywood" in why or "PATCHES" in why):
+                continue          # a one-option job: its scope is the job itself
             m = rx.search(text) if o.get("name") in names else None
             if m:
                 out.append("%s %s (\"%s\") - rewrite it" % (

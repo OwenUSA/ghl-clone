@@ -611,6 +611,7 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
     ("GOOD", "You receive before-and-after photos.", "photos"),
     ("BETTER", "Double sealing of every seam.", "single sealing"),
     ("BETTER", "Replace damaged plywood decking.", "plywood"),
+    ("GOOD", "Underlayment Replacement: remove the old underlayment, install new.", "PATCHES"),
 ])
 def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name, text, word):
     """Each one was a correction Owen made by hand on sent proposals (2026-11-16..24)."""
@@ -649,7 +650,7 @@ def test_a_one_option_proposal_may_replace_plywood_but_not_the_rest():
 
 def test_the_not_included_note_and_add_ons_may_name_them(db, people):
     z = install()
-    scope = ("<p>Reinstall the original tiles. New underlayment.</p>"
+    scope = ("<p>Reinstall the original tiles. Patch the underlayment at the leak.</p>"
              "<p><i>This option does not include new shingles, plywood replacement or "
              "photos.</i></p><p>Optional add-ons (not included in the price): matching "
              "replacement tiles $75 each</p>")
