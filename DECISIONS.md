@@ -8470,3 +8470,14 @@ the change sent country "US" over the record's "USA"; it now keeps the record's 
 was put back to "USA". Not tried live by Owen AI: `schedule` and `technicians` (their requests were
 verified by earlier scripts; on #701 they would ping a technician and start the RG3 workflows).
 Backup: owen-main zuper-backup/before-changes/2026-11-21/job701_and_test_customer_before_owen_ai_changes.json.
+
+**First real use, 2026-11-21..23, and what it changed.** Owen's list #6 (2026-11-23): five private notes
+DONE; #842's new visit SKIPPED because the office had moved it in the meantime (the re-read working as
+meant); #777's FAILED — Zuper: "appointment_uid is required when job has multiple appointments". A job
+with several visits keeps them in `job_appointments.appointments` (each `appointment_uid`, start, end).
+Now a `schedule` change on such a job must name the visit (`visit` = its current start; the refusal lists
+them), the request carries that visit's `appointment_uid` inside the SCHEDULE row (the shape Zuper's own
+refusal implies — UNVERIFIED until the first one; a wrong shape is refused, nothing changes), and the
+read-back also checks every OTHER visit kept its times. `client.owen_ai_change(..., appointment_uid=)`
+allows that one uid only. Also: a span over days names its end day (#777 read "Thu Nov 12, 11:00 AM to
+9:30 AM"), and a pending list past 24 h reads "expired" on the page (list #5 read "waiting" for days).

@@ -79,7 +79,7 @@ WAITING = ("Nothing was changed in Zuper yet. Show Owen the list and wait for HI
 COMMON_KEYS = {"kind", "job", "evidence"}
 KIND_KEYS = {
     "move": {"to", "answers"},
-    "schedule": {"start", "end"},
+    "schedule": {"start", "end", "visit"},
     "technicians": {"technicians"},
     "job_field": {"field", "value"},
     "job_address": {"address"},
@@ -243,13 +243,37 @@ def _phone_text(raw: Any) -> str:
 
 
 def _when(start: datetime | None, end: datetime | None) -> str:
+    """"Mon Nov 23, 9:00 AM to 11:00 AM"; an end on another day names its day too (a job whose
+    visits span days read "Thu Nov 12, 11:00 AM to 9:30 AM" — wrong — on 2026-11-23)."""
     if not start:
         return "no visit"
     s = start.astimezone(NY)
     text = s.strftime("%a %b %d, %I:%M %p").replace(" 0", " ")
     if end:
-        text += " to " + end.astimezone(NY).strftime("%I:%M %p").lstrip("0")
+        e = end.astimezone(NY)
+        text += " to " + (e.strftime("%I:%M %p").lstrip("0") if e.date() == s.date()
+                          else e.strftime("%a %b %d, %I:%M %p").replace(" 0", " "))
     return text
+
+
+def _appointments(job: dict) -> list[dict]:
+    """A job's visits. Zuper keeps them in `job_appointments.appointments` (seen on #777,
+    2026-11-23: two visits); a job with more than one needs the visit's appointment_uid to
+    move it ("appointment_uid is required when job has multiple appointments")."""
+    raw = job.get("job_appointments")
+    rows = raw.get("appointments") if isinstance(raw, dict) else raw
+    out = []
+    for a in rows or [] if isinstance(rows, list) else []:
+        if isinstance(a, dict) and a.get("appointment_uid"):
+            out.append({"uid": a["appointment_uid"],
+                        "start": mapping.parse_time(a.get("scheduled_start_time")),
+                        "end": mapping.parse_time(a.get("scheduled_end_time")),
+                        "status": a.get("appointment_status")})
+    return sorted(out, key=lambda a: a["start"] or datetime.max.replace(tzinfo=UTC))
+
+
+def _local_text(dt: datetime | None) -> str:
+    return dt.astimezone(NY).strftime("%Y-%m-%d %H:%M") if dt else "no time"
 
 
 def _parse_local(value: Any, what: str, problems: list[str]) -> datetime | None:
@@ -312,6 +336,7 @@ def validate(raw: Any, n: int) -> dict:
     elif kind == "schedule":
         out["start"] = _parse_local(raw.get("start"), "start", p)
         out["end"] = _parse_local(raw.get("end"), "end", p)
+        out["visit"] = _parse_local(raw.get("visit"), "visit", p) if raw.get("visit") else None
         if out["start"] and out["end"]:
             if out["end"] <= out["start"]:
                 p.append("the visit ends before it starts")
@@ -499,15 +524,38 @@ def _needed(q: dict, qs: list[dict], answers: dict) -> bool:
 
 def _prep_schedule(r, spec: dict, b: dict) -> dict:
     job = b["job"]
-    s0 = mapping.parse_time(job.get("scheduled_start_time"))
-    e0 = mapping.parse_time(job.get("scheduled_end_time"))
     s1, e1 = spec["start"].astimezone(UTC), spec["end"].astimezone(UTC)
+    visits = _appointments(job)
+    appt, label = None, "Visit"
+    if len(visits) > 1:
+        # Several visits: Owen AI must say WHICH one moves, by its current start.
+        listing = "; ".join("%s (%s)" % (_local_text(v["start"]), _when(v["start"], v["end"]))
+                            for v in visits)
+        if spec.get("visit") is None:
+            raise SpecError(["job #%s has %d visits — say which one moves with `visit` = its "
+                             "current start: %s" % (b["job_number"], len(visits), listing)])
+        hit = [v for v in visits if v["start"] and abs(v["start"] - spec["visit"]) <= TIME_SLACK]
+        if len(hit) != 1:
+            raise SpecError(["job #%s has no visit starting %s; its visits: %s" % (
+                b["job_number"], _local_text(spec["visit"]), listing)])
+        appt = hit[0]
+        s0, e0 = appt["start"], appt["end"]
+        label = "Visit %d of %d" % (visits.index(appt) + 1, len(visits))
+    else:
+        s0 = mapping.parse_time(job.get("scheduled_start_time"))
+        e0 = mapping.parse_time(job.get("scheduled_end_time"))
     if s0 and e0 and abs(s0 - s1) <= TIME_SLACK and abs(e0 - e1) <= TIME_SLACK:
         raise SpecError(["job #%s is already booked %s" % (b["job_number"], _when(s0, e0))])
-    return {"title": "Visit: %s → %s" % (_when(s0, e0), _when(s1, e1)), "warning": None,
-            "before": {"start": _iso(s0), "end": _iso(e0)},
+    do = {"start": s1.strftime(ZUPER_TIME), "end": e1.strftime(ZUPER_TIME)}
+    if appt:
+        do["appointment_uid"] = appt["uid"]
+    return {"title": "%s: %s → %s" % (label, _when(s0, e0), _when(s1, e1)), "warning": None,
+            "before": {"start": _iso(s0), "end": _iso(e0),
+                       "appointment_uid": appt["uid"] if appt else None,
+                       "others": {v["uid"]: [_iso(v["start"]), _iso(v["end"])]
+                                  for v in visits if v is not appt}},
             "after": {"start": s1.isoformat(), "end": e1.isoformat()},
-            "do": {"start": s1.strftime(ZUPER_TIME), "end": e1.strftime(ZUPER_TIME)}}
+            "do": do}
 
 
 def _users(r) -> list[dict]:
@@ -865,6 +913,9 @@ PROPOSE_SCHEMA = {"type": "object", "properties": {
                         "column's questions (required ones must be given)"},
             "start": {"type": "string", "description": "schedule: 'YYYY-MM-DD HH:MM' Florida"},
             "end": {"type": "string", "description": "schedule: 'YYYY-MM-DD HH:MM' Florida"},
+            "visit": {"type": "string", "description": "schedule, only for a job with several "
+                      "visits: the CURRENT start ('YYYY-MM-DD HH:MM' Florida) of the visit that "
+                      "moves — the error lists them"},
             "technicians": {"type": "array", "items": {"type": "string"},
                             "description": "technicians: who should be on the job after the "
                                            "change (the first one also goes in the Technician "
@@ -1110,24 +1161,46 @@ def run_change(db: Session, c: dict) -> tuple[str, str]:
         return "failed", ("Zuper answered OK but the job reads %s. Check it in Zuper; nothing "
                           "was retried." % (cur.get("status_name") or "no column"))
     if kind == "schedule":
-        with zc.owen_ai_change("schedule", job_uid):
+        appt_uid = do.get("appointment_uid")
+
+        def visit_of(job: dict) -> tuple[datetime | None, datetime | None]:
+            if not appt_uid:
+                return (mapping.parse_time(job.get("scheduled_start_time")),
+                        mapping.parse_time(job.get("scheduled_end_time")))
+            v = next((a for a in _appointments(job) if a["uid"] == appt_uid), None)
+            return (v["start"], v["end"]) if v else (None, None)
+
+        def others_of(job: dict) -> dict:
+            return {v["uid"]: [_iso(v["start"]), _iso(v["end"])]
+                    for v in _appointments(job) if v["uid"] != appt_uid}
+
+        with zc.owen_ai_change("schedule", job_uid, appointment_uid=appt_uid):
             j = _job(job_uid)
-            s0 = mapping.parse_time(j.get("scheduled_start_time"))
+            s0, e0 = visit_of(j)
             if _iso(s0) != before["start"]:
                 return "skipped", "the visit is %s now, not as proposed — nothing changed." % (
-                    _when(s0, mapping.parse_time(j.get("scheduled_end_time"))))
-            zc.request("PUT", "/jobs/%s/update" % job_uid, body={"job": [{
-                "scheduled_start_time": do["start"], "scheduled_end_time": do["end"],
-                "type": "SCHEDULE"}]})
+                    _when(s0, e0))
+            if appt_uid is None and len(_appointments(j)) > 1:
+                return "skipped", ("the job has %d visits now; propose it again naming which "
+                                   "one moves — nothing changed." % len(_appointments(j)))
+            row = {"scheduled_start_time": do["start"], "scheduled_end_time": do["end"],
+                   "type": "SCHEDULE"}
+            if appt_uid:
+                row["appointment_uid"] = appt_uid
+            zc.request("PUT", "/jobs/%s/update" % job_uid, body={"job": [row]})
             after = _job(job_uid)
-        s1 = mapping.parse_time(after.get("scheduled_start_time"))
-        e1 = mapping.parse_time(after.get("scheduled_end_time"))
+        s1, e1 = visit_of(after)
         want_s = datetime.fromisoformat(c["after"]["start"])
         want_e = datetime.fromisoformat(c["after"]["end"])
-        if s1 and e1 and abs(s1 - want_s) <= TIME_SLACK and abs(e1 - want_e) <= TIME_SLACK:
-            return "applied", "booked %s." % _when(s1, e1)
-        return "failed", ("Zuper answered OK but the visit reads %s. Check it in Zuper; nothing "
-                          "was retried." % _when(s1, e1))
+        if not (s1 and e1 and abs(s1 - want_s) <= TIME_SLACK and abs(e1 - want_e) <= TIME_SLACK):
+            return "failed", ("Zuper answered OK but the visit reads %s. Check it in Zuper; "
+                              "nothing was retried." % _when(s1, e1))
+        moved = [u for u, t in (before.get("others") or {}).items() if others_of(after).get(u) != t]
+        if moved:
+            return "failed", ("the visit is booked %s, but %d other visit%s of the job changed "
+                              "too — check the job in Zuper now." % (
+                                  _when(s1, e1), len(moved), "" if len(moved) == 1 else "s"))
+        return "applied", "booked %s." % _when(s1, e1)
     if kind == "technicians":
         field = do.get("field")
         with zc.owen_ai_change("technicians", job_uid,
@@ -1289,9 +1362,19 @@ class _Plain:
 
 # ------------------------------------------------------------------------------- the API's view
 
+def shown_status(row: OwenAiChangeSet, now: datetime | None = None) -> str:
+    """A pending list past its 24 hours reads expired: it can no longer be applied (the row
+    itself is marked only when someone tries, 2026-11-23 — list #5 read "waiting" for days)."""
+    if row.status == "pending" and row.created_at and \
+            _aware(row.created_at) + EXPIRE < (now or _now()):
+        return "expired"
+    return row.status
+
+
 def out(row: OwenAiChangeSet) -> dict:
     tpl = zuper_config.job_url_template()
-    return {"id": row.id, "thread_id": row.thread_id, "status": row.status, "why": row.why,
+    return {"id": row.id, "thread_id": row.thread_id, "status": shown_status(row),
+            "why": row.why,
             "proposed_message_id": row.proposed_message_id,
             "applied_message_id": row.applied_message_id, "owen_said": row.owen_said,
             "created_at": _iso(row.created_at), "applied_at": _iso(row.applied_at),
