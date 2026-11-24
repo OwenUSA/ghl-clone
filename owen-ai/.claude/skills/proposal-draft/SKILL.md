@@ -48,7 +48,9 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    5-8 steps in Luis's canonical wording. Warranty **1 / 3 / 6 months** for GOOD / BETTER / BEST (owner,
    2026-11-13) and the payment terms in each option. **Never promise photos and never mention a magnetic sweep.** **We reuse the customer's own shingles / tiles in every
    option** - never "new (matching) shingles" or "supplying matching tiles"; broken pieces are an add-on. Never
-   "fresh commercial-grade waterproof underlayment": say "new underlayment" (owner, 2026-11-24). Team-call rules (guide §2.1, 2026-11-17): the
+   "fresh commercial-grade waterproof underlayment": say "new underlayment" (owner, 2026-11-24). **The tool refuses a draft that breaks these
+   wording rules** (new/matching shingles or tiles, fresh/commercial underlayment, magnetic sweep, photos, double
+   sealing in BETTER, plywood in GOOD/BETTER) and lists each one - rewrite those sentences and call it again. Team-call rules (guide §2.1, 2026-11-17): the
    not-included note says we do not repair ceilings / drywall; Antonio's extra findings become optional add-ons;
    never claim we inspected the flashing; non-round prices ($2,975, not $3,000).
    Every finding goes either into a tier or into `notes_for_owen` as "seen, not priced".
