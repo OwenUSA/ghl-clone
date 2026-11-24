@@ -624,6 +624,17 @@ def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name,
     assert db.query(OwenAiProposalDraft).count() == 0 and z.writes() == []
 
 
+def test_a_sentence_saying_what_is_not_included_is_not_a_promise():
+    """DTR-160 / 178 / 202 / 206: plain (not italic) 'it does not include ... plywood decking
+    replacement' was flagged as promising plywood."""
+    scope = ("<p>Inspect the plywood deck. This option repairs the wall corner only; it does not "
+             "include the open seam or plywood decking replacement (optional add-on if rotted "
+             "decking is found: $500 per sheet).</p>")
+    assert proposals.wording_problems([{"name": "GOOD", "scope_html": scope}]) == []
+    assert proposals.wording_problems([{"name": "GOOD", "scope_html": scope + "<p>Replace the "
+                                        "rotted plywood decking.</p>"}])
+
+
 def test_the_not_included_note_and_add_ons_may_name_them(db, people):
     z = install()
     scope = ("<p>Reinstall the original tiles. New underlayment.</p>"
