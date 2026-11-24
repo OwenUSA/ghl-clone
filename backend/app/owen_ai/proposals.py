@@ -257,12 +257,21 @@ FORBIDDEN = (
 )
 
 
+_EXCLUDED = re.compile(r"\b(?:does|do|did)\s*(?:not|n't)\s+(?:include|cover)|\bnot\s+included\b"
+                       r"|\badd-?ons?\b|\bexcluded\b|\bpriced\s+separately\b", re.IGNORECASE)
+
+
 def promised(scope_html: str) -> str:
-    """What an option promises: its text without the italic not-included note and the
-    "Optional add-ons" line."""
-    text = plain(re.sub(r"<i>.*?</i>", " ", scope_html or "", flags=re.DOTALL | re.IGNORECASE))
-    return re.split(r"Optional add-ons?|This option does not (?:include|cover)", text,
-                    flags=re.IGNORECASE)[0]
+    """What an option promises: its text without the italic not-included note, the "Optional
+    add-ons" line, and any sentence that says what is NOT included or is an add-on (2026-11-24:
+    "it does not include ... plywood decking replacement" is not a promise)."""
+    html_in = re.sub(r"<i>.*?</i>", " ", scope_html or "", flags=re.DOTALL | re.IGNORECASE)
+    # every paragraph / list item / line break is its own sentence, so a note never swallows
+    # the next step
+    parts = re.split(r"</(?:p|li|div)>|<br\s*/?>", html_in, flags=re.IGNORECASE)
+    text = "\n".join(plain(x) for x in parts)
+    return " ".join(x for x in re.split(r"(?<=[.!?])\s+|\n+", text)
+                    if x.strip() and not _EXCLUDED.search(x))
 
 
 def wording_problems(options: list[dict]) -> list[str]:
