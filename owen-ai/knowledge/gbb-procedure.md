@@ -29,7 +29,7 @@ the proposal does not price; label it "ask us for a price" instead.
 4. **Remove the old underlayment.** The wet, worn layer comes off around the leak.
 5. **Clean and inspect the deck.** Clean it, then check the plywood is solid.
 6. **New waterproof underlayment.** Tied into the roof around it, with the seams sealed.
-7. **Tiles back on, the same day.** Matching replacement tiles where one is broken.
+7. **Tiles back on, the same day.** The customer's own tiles / shingles are reused (owner 2026-11-24); a broken piece is an optional add-on, never "matching replacement tiles".
 8. **Cleanup** (never a magnetic sweep for nails - we do not do it, owner 2026-11-17), **a walk-through with the customer**, and **we
    ask for a review**.
 
