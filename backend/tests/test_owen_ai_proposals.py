@@ -605,7 +605,8 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
 
 @pytest.mark.parametrize("name,text,word", [
     ("GOOD", "Install new matching 3-tab shingles over the repaired section.", "new shingles"),
-    ("BETTER", "Install fresh commercial-grade waterproof underlayment.", "new underlayment"),
+    ("BETTER", "Install fresh waterproof underlayment.", "new underlayment"),
+    ("BETTER", "Heavy-duty commercial-grade elastomeric sealant on every seam.", "commercial"),
     ("BEST", "Reinstall tiles, supplying matching replacement tiles for broken pieces.", "REUSE"),
     ("GOOD", "Clean up and run a magnetic sweep.", "magnetic"),
     ("GOOD", "You receive before-and-after photos.", "photos"),

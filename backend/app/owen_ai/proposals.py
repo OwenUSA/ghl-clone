@@ -243,8 +243,11 @@ FORBIDDEN = (
                 r"[^.:;]{0,40}\btiles?\b|\bsource\b[^.:;]{0,20}\btiles?\b", re.IGNORECASE),
      OPTION_NAMES, ("promises new / matching tiles - we REUSE the customer's own tiles (a broken "
                     "one is an optional add-on, never a colour match)")),
-    (re.compile(r"\b(?:fresh|commercial)\b[^.:;]{0,30}\bunderlayment\b", re.IGNORECASE),
-     OPTION_NAMES, "says \"fresh / commercial(-grade) underlayment\" - write \"new underlayment\""),
+    (re.compile(r"\bfresh\b[^.:;]{0,30}\bunderlayment\b", re.IGNORECASE),
+     OPTION_NAMES, "says \"fresh underlayment\" - write \"new underlayment\""),
+    # owner, 2026-11-24: nothing in GOOD or BETTER says "commercial grade"
+    (re.compile(r"\bcommercial\b", re.IGNORECASE), ("GOOD", "BETTER"),
+     "says \"commercial\" / \"commercial-grade\" - never in GOOD or BETTER"),
     (re.compile(r"\bmagnet", re.IGNORECASE), OPTION_NAMES,
      "mentions a magnetic sweep - we do not do it"),
     (re.compile(r"\bphoto|\bpicture|before[- ]and[- ]after", re.IGNORECASE), OPTION_NAMES,
