@@ -119,10 +119,10 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | | GOOD | BETTER = everything in GOOD, plus | BEST = everything in BETTER, plus |
 |---|---|---|---|
 | Area | the targeted leak area (one per numbered area) | **expanded area** around the leak (the full valley run, the full wall line) | **2x / double-wide area** or the full roof section |
-| Underlayment | commercial-grade waterproof underlayment | **high-performance, high-temperature self-adhered** (peel & stick) | **double underlayment**: two full self-adhered layers |
+| Underlayment | new underlayment (never "fresh commercial-grade") | **high-performance, high-temperature self-adhered** (peel & stick) | **double underlayment**: two full self-adhered layers |
 | Deck | inspect the deck ("Underlayment & deck inspection") | inspect the deck again over the wider area; **NO plywood replacement in BETTER** (owner, 2026-11-16) - bad wood goes in the not-included note or an optional add-on | plywood decking replacement (allowance: "up to 1 sheet 4x8 CDX" or "as found"; whole 2x footprint when needed) |
 | Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | **sealing** (one layer) of seams, flashing, transition - never "double" in BETTER (owner, 2026-11-18, DTR-210) | **double sealing** (multi-layer elastomeric) of seams, flashing, transition; all penetrations, vents and boots resealed; **roof maintenance / tune-up** |
-| Materials | reinstall the original tiles; matching replacements for cracked pieces | matching replacement tiles as needed | tile bonding / structural reinstall |
+| Materials | reinstall the customer's own tiles / shingles (broken pieces = add-on) | same - reuse, never new or matching | same, with tile bonding / structural reinstall |
 | Close-out | cleanup + final inspection (NO magnetic sweep - owner, 2026-11-17) | same | same, plus a final quality sign-off (NO photo promises - owner, 2026-11-16) |
 | Warranty | **1 month** | **3 months** | **6 months** (owner, 2026-11-13) |
 | Usual extra findings | — | fascia board, hip re-mortar of the adjacent run, pipe boots, flat-junction recoat | full valley system, skylight or chimney re-flash, full flat recoat |
@@ -143,6 +143,15 @@ AHS):** take the HIGHEST count from every source and say each source in `notes_f
   leak and ask Owen when it suggests more leaks than you found.
 Every leak in the count gets its own place in GOOD's scope ("Leak 1 - ...", "Leak 2 - ..."); never fold two into
 one or drop one. Two stain spots inside one marked area are ONE leak area (#836: 11 x 9 ft over the dining table).
+
+**We REUSE the roof covering (owner, 2026-11-24) - in GOOD, BETTER and BEST:**
+- The customer's own shingles / tiles are lifted, set aside and **reinstalled**. Never write "new shingles",
+  "new matching shingles", "matching replacement tiles", "supplying matching tiles" or "source matching clay
+  tiles" in any option.
+- Broken or cracked pieces are an **optional add-on** with a price (about $75 per tile, DTR-123), never part of an
+  option's scope - and never promise a colour match.
+- Underlayment: write "new underlayment" (BETTER: self-adhered; BEST: two layers). Never "fresh commercial-grade
+  waterproof underlayment" - we do not say it.
 
 **Owen's rules from the team call (2026-11-17):**
 - **Every option's not-included note says we do NOT repair or paint ceilings or drywall inside the home.**
@@ -183,9 +192,9 @@ leak is - each option repairs more of the same system:
 **GOOD** (Tile, 1-story; DTR-129 / 131 / 108 style):
 1. **Diagnostic Prep & Access** (or **2-Story Access & Safety Rigging** when the photos show 2 stories): "Set up safe access to the roof. Perform a focused inspection over the <room> leak area."
 2. **Tile Removal & Substrate Inspection**: "Carefully remove surrounding concrete roof tiles at <the exact spot> to inspect the condition of the underlying underlayment and decking."
-3. **Underlayment & Waterproof Sealing**: "Remove degraded underlayment, install fresh commercial-grade waterproof underlayment, and seal all perimeter seams and transition joints with heavy-duty elastomeric/bull membrane sealant."
+3. **Underlayment & Waterproof Sealing**: "Remove degraded underlayment, install new underlayment, and seal all perimeter seams and transition joints with heavy-duty elastomeric/bull membrane sealant."
 4. **Flashing & Penetration Reseal** (only the joints that exist in the photos): "Inspect and reseal adjacent wall flashings, transition metal seams, and roof penetrations within the repair zone."
-5. **Tile Re-Integration**: "Reinstall original concrete tiles securely over the repaired section, supplying matching replacement tiles for any cracked or broken pieces."
+5. **Tile Re-Integration**: "Reinstall the original concrete tiles securely over the repaired section." (Broken pieces: optional add-on, owner 2026-11-24.)
 6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and execute a final quality inspection."
 
 **BETTER** (DTR-129 / 131):
@@ -193,7 +202,7 @@ leak is - each option repairs more of the same system:
 2. **Plywood Decking Inspection & Replacement**: "Evaluate structural wood decking upon material removal. Remove rotted or water-damaged deck sections and install new code-compliant exterior-grade CDX plywood decking (up to 1 sheet 4x8) across the expanded repair footprint."
 3. **Better Underlayment Upgrade**: "Install premium high-performance, high-temperature self-adhered waterproof underlayment across the expanded sector, securely lapped into surrounding roof sections."
 4. **<Transition / Valley / Wall> Flashing & Sealing**: "Apply heavy-duty elastomeric waterproofing sealant over all metal seams, wall flashings and perimeter tile overlaps." (Double sealing is BEST's, owner 2026-11-18.)
-5. **Tile Realignment & Reinstallation**: "Re-align, interlock, and mechanically reinstall concrete roof tiles across the expanded area, supplying matching replacement tiles as needed."
+5. **Tile Realignment & Reinstallation**: "Re-align, interlock, and mechanically reinstall the original concrete roof tiles across the expanded area" (broken pieces: add-on).
 6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and conduct a final quality inspection."
 
 **BEST** (DTR-129 / 131 / 135):
@@ -201,13 +210,13 @@ leak is - each option repairs more of the same system:
 2. **Plywood Decking Replacement (If Needed)**: "Remove any damaged, warped, or rotted wood decking found across the 2x expanded footprint and install fresh, code-compliant exterior-grade CDX plywood decking if needed." Always "if needed": not every roof has bad wood (owner, 2026-11-18, DTR-210).
 3. **Double Underlayment Protection System**: "Install two full layers of high-performance, high-temperature self-adhered waterproof underlayment across the entire expanded footprint for maximum multi-layer defense."
 4. **Premium Sealing & Overall Roof Maintenance**: "Apply multi-layer elastomeric waterproofing compound over all transition seams, flashing joints, and overlaps while resealing adjacent roof penetrations, vents, and boots in the work zone."
-5. **Tile Structural Repair & Reinstallation**: "Mechanically reinstall surface materials across the expanded perimeter, supplying matching replacements as needed."
+5. **Tile Structural Repair & Reinstallation**: "Mechanically reinstall the original roof covering across the expanded perimeter." (broken pieces: add-on)
 6. **Site Cleanup & Final Inspection**: "Execute meticulous job site cleanup and a final quality inspection." (Luis's old wording also had a grounds magnetic sweep - removed, owner 2026-11-17. Luis's old wording promised a photo-documented sign-off - removed, owner 2026-11-16.)
 
 **Material variants:**
 - **Shingle** (DTR-135): "Shingle Removal & … Teardown: carefully remove approximately N architectural/dimensional shingles …".
-  Then "Shingle Re-Integration & Perimeter Sealing: install **new matching** dimensional shingles (up to 1 bundle /
-  ~10 shingles) …". Shingles are replaced, not "reinstalled set-aside materials". Board or T&G decking → "T&G
+  Then "Shingle Re-Integration & Perimeter Sealing: reinstall the customer's **own** shingles, nailed and sealed into the existing courses …" (owner 2026-11-24: we reuse
+  them - never new or matching shingles; a shingle that breaks is an optional add-on). Board or T&G decking → "T&G
   Decking Repair / Plywood Replacement".
 - **Flat** (lessons from jobs 269, 683, 699, 757): name the **base sheet + granulated modified-bitumen cap sheet**
   (or the membrane you see), never "underlayment" or "tiles". GOOD = cut out the failed area, new base sheet + cap
@@ -399,7 +408,7 @@ point, and the interior stain**.
 | Lower roof valley dead-ending under an upper eave or fascia | diverter / kick-out or counter-flashing | GOOD |
 | Crumbling hip or ridge mortar, broken hip piece | re-mortar / re-set the hip caps on the affected run | BETTER or BEST (or add-on). Worn mortar with caps in place = note only. |
 | Cracked field tiles away from the leak | "replace up to N cracked tiles" (N = distinct count) | GOOD near the leak; a larger count in BETTER |
-| Clay tile | "source matching clay tiles" | every tier that lifts tiles |
+| Clay tile | "reinstall the original clay tiles" (never "source matching", owner 2026-11-24) | every tier that lifts tiles |
 | Deteriorated lead stacks or pipe boots | replace pipe boots | BETTER (GOOD if at the leak) |
 | Rusted turbine or gooseneck vent | replace vent + flashing (not just "reseal") | BETTER/BEST |
 | Single penetration with an old cement patch | reflash / replace that vent, about 8 shingles | GOOD (DTR-135) |

@@ -599,3 +599,40 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
                      "BEST - Complete repair"]
     assert [o["line_items"][0]["product_id"] for o in est["proposal_options"]] == [
         "DTR-CUSTOM-GOOD", "DTR-CUSTOM-BETTER", "DTR-TILE-BEST"]       # same products
+
+
+# ------------------------------------------------------------------------------- wording rules
+
+@pytest.mark.parametrize("name,text,word", [
+    ("GOOD", "Install new matching 3-tab shingles over the repaired section.", "new shingles"),
+    ("BETTER", "Install fresh commercial-grade waterproof underlayment.", "new underlayment"),
+    ("BEST", "Reinstall tiles, supplying matching replacement tiles for broken pieces.", "REUSE"),
+    ("GOOD", "Clean up and run a magnetic sweep.", "magnetic"),
+    ("GOOD", "You receive before-and-after photos.", "photos"),
+    ("BETTER", "Double sealing of every seam.", "single sealing"),
+    ("BETTER", "Replace damaged plywood decking.", "plywood"),
+])
+def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name, text, word):
+    """Each one was a correction Owen made by hand on sent proposals (2026-11-16..24)."""
+    z = install()
+    base = "<p>Reinstall the original tiles.</p>"
+    opts = [{"name": n, "title": "t", "price": p, "scope_html": base}
+            for n, p in (("GOOD", 500), ("BETTER", 1000), ("BEST", 3000))]
+    next(o for o in opts if o["name"] == name)["scope_html"] = "<p>%s</p>" % text
+    out = proposals.tool_propose(spec(options=opts))
+    assert out.startswith("ERROR") and name in out and word in out
+    assert db.query(OwenAiProposalDraft).count() == 0 and z.writes() == []
+
+
+def test_the_not_included_note_and_add_ons_may_name_them(db, people):
+    z = install()
+    scope = ("<p>Reinstall the original tiles. New underlayment.</p>"
+             "<p><i>This option does not include new shingles, plywood replacement or "
+             "photos.</i></p><p>Optional add-ons (not included in the price): matching "
+             "replacement tiles $75 each</p>")
+    opts = [{"name": n, "title": "t", "price": p, "scope_html": scope}
+            for n, p in (("GOOD", 500), ("BETTER", 1000), ("BEST", 3000))]
+    th = thread(db, people)
+    with proposals.answering(th.id):
+        assert proposals.WAITING in proposals.tool_propose(spec(options=opts))
+    assert z.writes() == []

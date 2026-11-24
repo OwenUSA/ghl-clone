@@ -231,6 +231,52 @@ def _text(d: dict, key: str, where: str, problems: list[str], max_len: int,
     return v.strip()
 
 
+# The owner's wording rules, checked in code (2026-11-24): each one was a correction Owen had to
+# make by hand on sent proposals. Checked on what the option PROMISES - the italic not-included note
+# and the "Optional add-ons" line may name these things. (pattern, which options, the sentence.)
+FORBIDDEN = (
+    (re.compile(r"\bnew\b[^.:;]{0,40}\bshingles?\b|\bshingles?\b[^.:;]{0,25}\b(?:are|is)\s+replaced\b"
+                r"|\breplace(?:s|d)?\b[^.:;]{0,15}\bshingles?\b", re.IGNORECASE),
+     OPTION_NAMES, ("promises new shingles - we REUSE the customer's own shingles (a broken one "
+                    "is an optional add-on)")),
+    (re.compile(r"\bmatching\b[^.:;]{0,30}\b(?:shingles?|tiles?)\b|\bsuppl(?:y|ying|ied)\b"
+                r"[^.:;]{0,40}\btiles?\b|\bsource\b[^.:;]{0,20}\btiles?\b", re.IGNORECASE),
+     OPTION_NAMES, ("promises new / matching tiles - we REUSE the customer's own tiles (a broken "
+                    "one is an optional add-on, never a colour match)")),
+    (re.compile(r"\b(?:fresh|commercial)\b[^.:;]{0,30}\bunderlayment\b", re.IGNORECASE),
+     OPTION_NAMES, "says \"fresh / commercial(-grade) underlayment\" - write \"new underlayment\""),
+    (re.compile(r"\bmagnet", re.IGNORECASE), OPTION_NAMES,
+     "mentions a magnetic sweep - we do not do it"),
+    (re.compile(r"\bphoto|\bpicture|before[- ]and[- ]after", re.IGNORECASE), OPTION_NAMES,
+     "promises photos - we do not provide them"),
+    (re.compile(r"\bdouble[- ]+seal", re.IGNORECASE), ("BETTER",),
+     "has double sealing - BETTER gets single sealing, BEST double"),
+    (re.compile(r"(?:replac\w*|install\w*|new)\b[^.:;]{0,40}\bplywood|\bplywood\b[^.:;]{0,25}"
+                r"\breplac", re.IGNORECASE),
+     ("GOOD", "BETTER"), "replaces plywood - plywood is only in BEST (\"if needed\") or an add-on"),
+)
+
+
+def promised(scope_html: str) -> str:
+    """What an option promises: its text without the italic not-included note and the
+    "Optional add-ons" line."""
+    text = plain(re.sub(r"<i>.*?</i>", " ", scope_html or "", flags=re.DOTALL | re.IGNORECASE))
+    return re.split(r"Optional add-ons?|This option does not (?:include|cover)", text,
+                    flags=re.IGNORECASE)[0]
+
+
+def wording_problems(options: list[dict]) -> list[str]:
+    out = []
+    for o in options:
+        text = promised(o.get("scope_html") or "") + " " + str(o.get("option_description") or "")
+        for rx, names, why in FORBIDDEN:
+            m = rx.search(text) if o.get("name") in names else None
+            if m:
+                out.append("%s %s (\"%s\") - rewrite it" % (
+                    o.get("name"), why, m.group(0).strip()[:60]))
+    return out
+
+
 def validate(spec: Any) -> dict:
     """The spec Claude sent -> a clean dict, or SpecError listing every problem."""
     problems: list[str] = []
@@ -306,6 +352,7 @@ def validate(spec: Any) -> dict:
                         "scope_html": description(scope, warranty, price, dep, terms)})
     if sum(1 for o in options if o["is_recommended"]) > 1:
         problems.append("only one option can be recommended")
+    problems += wording_problems(options)
     if problems:
         raise SpecError(problems)
     options.sort(key=lambda o: OPTION_NAMES.index(o["name"]))
