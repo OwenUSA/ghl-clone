@@ -119,7 +119,7 @@ Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares" for size. 
 | | GOOD | BETTER = everything in GOOD, plus | BEST = everything in BETTER, plus |
 |---|---|---|---|
 | Area | the targeted leak area (one per numbered area) | **expanded area** around the leak (the full valley run, the full wall line) | **2x / double-wide area** or the full roof section |
-| Underlayment | new underlayment (never "fresh commercial-grade") | **high-performance, high-temperature self-adhered** (peel & stick) | **double underlayment**: two full self-adhered layers |
+| Underlayment | **PATCH** the underlayment at the leak with a membrane patch - never replace it in GOOD (owner, 2026-11-24) | **high-performance, high-temperature self-adhered** (peel & stick) | **double underlayment**: two full self-adhered layers |
 | Deck | inspect the deck ("Underlayment & deck inspection") | inspect the deck again over the wider area; **NO plywood replacement in BETTER** (owner, 2026-11-16) - bad wood goes in the not-included note or an optional add-on | plywood decking replacement (allowance: "up to 1 sheet 4x8 CDX" or "as found"; whole 2x footprint when needed) |
 | Seals and flashing | flashing and penetration reseal **in the repair zone**; the wall or transition joint if it is the leak | **sealing** (one layer) of seams, flashing, transition - never "double" in BETTER (owner, 2026-11-18, DTR-210) | **double sealing** (multi-layer elastomeric) of seams, flashing, transition; all penetrations, vents and boots resealed; **roof maintenance / tune-up** |
 | Materials | reinstall the customer's own tiles / shingles (broken pieces = add-on) | same - reuse, never new or matching | same, with tile bonding / structural reinstall |
@@ -150,8 +150,9 @@ one or drop one. Two stain spots inside one marked area are ONE leak area (#836:
   tiles" in any option.
 - Broken or cracked pieces are an **optional add-on** with a price (about $75 per tile, DTR-123), never part of an
   option's scope - and never promise a colour match.
-- Underlayment: write "new underlayment" (BETTER: self-adhered; BEST: two layers). Never "fresh commercial-grade
-  waterproof underlayment" - we do not say it.
+- Underlayment: **GOOD only PATCHES it** at the leak (a self-adhered membrane patch) - never "Underlayment
+  Replacement" or "new underlayment" in GOOD. **BETTER replaces it** over the expanded area (self-adhered); BEST
+  two layers. Never "fresh commercial-grade waterproof underlayment" in any option.
 
 **Owen's rules from the team call (2026-11-17):**
 - **Every option's not-included note says we do NOT repair or paint ceilings or drywall inside the home.**
@@ -192,7 +193,7 @@ leak is - each option repairs more of the same system:
 **GOOD** (Tile, 1-story; DTR-129 / 131 / 108 style):
 1. **Diagnostic Prep & Access** (or **2-Story Access & Safety Rigging** when the photos show 2 stories): "Set up safe access to the roof. Perform a focused inspection over the <room> leak area."
 2. **Tile Removal & Substrate Inspection**: "Carefully remove surrounding concrete roof tiles at <the exact spot> to inspect the condition of the underlying underlayment and decking."
-3. **Underlayment & Waterproof Sealing**: "Remove degraded underlayment, install new underlayment, and seal all perimeter seams and transition joints with heavy-duty elastomeric/bull membrane sealant."
+3. **Underlayment Patch & Sealing** (GOOD): "Patch the damaged underlayment at the leak with a self-adhered membrane patch, and seal all perimeter seams and transition joints with heavy-duty elastomeric/bull membrane sealant."
 4. **Flashing & Penetration Reseal** (only the joints that exist in the photos): "Inspect and reseal adjacent wall flashings, transition metal seams, and roof penetrations within the repair zone."
 5. **Tile Re-Integration**: "Reinstall the original concrete tiles securely over the repaired section." (Broken pieces: optional add-on, owner 2026-11-24.)
 6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and execute a final quality inspection."
