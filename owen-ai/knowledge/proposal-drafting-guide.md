@@ -152,7 +152,8 @@ one or drop one. Two stain spots inside one marked area are ONE leak area (#836:
   option's scope - and never promise a colour match.
 - Underlayment: **GOOD only PATCHES it** at the leak (a self-adhered membrane patch) - never "Underlayment
   Replacement" or "new underlayment" in GOOD. **BETTER replaces it** over the expanded area (self-adhered); BEST
-  two layers. Never "fresh commercial-grade waterproof underlayment" in any option.
+  two layers. Never "fresh commercial-grade waterproof underlayment" in any option, and **nothing in GOOD or
+  BETTER says "commercial" or "commercial-grade"** (sealant, membrane, anything - owner, 2026-11-24).
 
 **Owen's rules from the team call (2026-11-17):**
 - **Every option's not-included note says we do NOT repair or paint ceilings or drywall inside the home.**
