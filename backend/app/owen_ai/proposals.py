@@ -275,10 +275,16 @@ def promised(scope_html: str) -> str:
 
 
 def wording_problems(options: list[dict]) -> list[str]:
+    """The owner's wording rules broken by these options. A ONE-option proposal may replace
+    plywood - then it is the job itself (#848: "replace up to 3 sheets"), not a step up the
+    Good / Better / Best ladder."""
     out = []
+    single = len(options) == 1
     for o in options:
         text = promised(o.get("scope_html") or "") + " " + str(o.get("option_description") or "")
         for rx, names, why in FORBIDDEN:
+            if single and "plywood" in why:
+                continue
             m = rx.search(text) if o.get("name") in names else None
             if m:
                 out.append("%s %s (\"%s\") - rewrite it" % (

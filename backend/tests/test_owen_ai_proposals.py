@@ -630,9 +630,21 @@ def test_a_sentence_saying_what_is_not_included_is_not_a_promise():
     scope = ("<p>Inspect the plywood deck. This option repairs the wall corner only; it does not "
              "include the open seam or plywood decking replacement (optional add-on if rotted "
              "decking is found: $500 per sheet).</p>")
-    assert proposals.wording_problems([{"name": "GOOD", "scope_html": scope}]) == []
+    assert proposals.wording_problems([{"name": "GOOD", "scope_html": scope},
+                                       {"name": "BEST", "scope_html": "<p>x</p>"}]) == []
+    better = {"name": "BETTER", "scope_html": "<p>Reinstall the original tiles.</p>"}
     assert proposals.wording_problems([{"name": "GOOD", "scope_html": scope + "<p>Replace the "
-                                        "rotted plywood decking.</p>"}])
+                                        "rotted plywood decking.</p>"}, better])
+
+
+def test_a_one_option_proposal_may_replace_plywood_but_not_the_rest():
+    """#848: Good only, 'replace up to three sheets of plywood' is the job itself."""
+    one = [{"name": "GOOD", "scope_html": "<p>Replace up to three sheets of damaged plywood.</p>"}]
+    assert proposals.wording_problems(one) == []
+    one[0]["scope_html"] += "<p>Run a magnetic sweep.</p>"
+    assert any("magnetic" in p for p in proposals.wording_problems(one))
+    two = [*one, {"name": "BETTER", "scope_html": "<p>Reinstall the original tiles.</p>"}]
+    assert any("plywood" in p for p in proposals.wording_problems(two))
 
 
 def test_the_not_included_note_and_add_ons_may_name_them(db, people):
