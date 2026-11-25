@@ -88,6 +88,18 @@ def ahs_email_board() -> str:
     return (os.environ.get("ZUPER_AHS_EMAIL_BOARD") or "").strip() or AHS_EMAIL_BOARD_DEFAULT
 
 
+def ahs_email_board_tasks() -> bool:
+    """The emailed AHS job is created WITH its board's own task list (2026-11-25, the user's OK).
+
+    Zuper attaches a board's tasks (Settings → Jobs → Job Category → Tasks) only when the request
+    that creates the job carries them — its own New Job screen does, the API does not add them —
+    so every emailed job landed with none and the office added the 21 by hand (measured on #819
+    to #880). With this on, the board's list rides inside the same `POST /jobs`: no request is
+    added, only a GET of the list first. Off unless the deployment says so.
+    """
+    return _flag("ZUPER_AHS_EMAIL_TASKS", False)
+
+
 DISPATCH_WRITES_OFF_SENTENCE = (
     "This server does not let the Dispatch page change Zuper (DISPATCH_ZUPER_WRITES is not "
     "true), so nothing is written whatever the switches on the page say.")

@@ -8481,3 +8481,39 @@ refusal implies — UNVERIFIED until the first one; a wrong shape is refused, no
 read-back also checks every OTHER visit kept its times. `client.owen_ai_change(..., appointment_uid=)`
 allows that one uid only. Also: a span over days names its end day (#777 read "Thu Nov 12, 11:00 AM to
 9:30 AM"), and a pending list past 24 h reads "expired" on the page (list #5 read "waiting" for days).
+
+
+## AMENDMENT (2026-11-25): an emailed AHS job is created WITH its board's task list (amends 2026-09-28, 2026-11-06)
+
+**Asked by the user:** the email script puts the job on AHS Simple Flow correctly, "the only issue is
+that once it creates the jobs there the tasks that are auto created in that pipeline do not create".
+Answered "ok" to building it, and chose to test it on the next real job rather than a test job.
+
+**Measured read-only first (2026-11-25):** all 45 emailed jobs on Simple Flow (#819 to #880) were
+created with 0 of the board's 21 tasks; Luis added them by hand on 35 (1 minute to ~5 days later,
+`created_by` Luis), 10 still had none. A job made in Zuper's own New Job screen (#877, #849, #827) has
+all 21 from the moment it exists. Zuper attaches a board's list (Settings → Jobs → Job Category →
+Tasks; `GET /jobs/category/{uid}/service_tasks`, 21 entries, last edited 2026-11-01) only when the
+create request carries it — `POST /jobs` documents a `job.service_task` block — and the CRM's create
+sent none. The workflow "Create task on job creation" is inactive since 2026-09-17. (The 3 "Confirm
+inspection …" tasks some jobs have come from the team's "Add Appointments for Inspection and
+Production" workflow, not from the board list. `GET /service_tasks` answers 10 a page unless asked
+for more, which made the jobs look like they had 10.)
+
+**What changed:**
+- With `ZUPER_AHS_EMAIL_TASKS=true` (default off) `engine._ahs_email_job` reads the board's list and
+  sends it as `service_task {is_enabled, execution_type, service_tasks: [{sequence_no,
+  service_task_master, service_task_title, service_task_description, estimated_duration}]}` inside
+  the same `POST /jobs` (`mapping.board_service_task`). No request is added to Zuper; the only new
+  call is that GET, now on the allowlist. Still three POSTs in `client.ahs_create()`.
+- Deleted / inactive / untitled entries are left out, and **no assignee is ever sent**: a task's
+  assignee is added to the JOB (`jobs.auto_add_task_assignee`).
+- **The body is UNVERIFIED live** (from Zuper's create-job reference). Should Zuper refuse a create
+  carrying it (a 4xx, or a 5xx it answered), the job is searched for by its CRM id and, if absent,
+  created again WITHOUT the tasks (`engine._create_ahs_email_job`) — the work order always reaches
+  Zuper. A timeout or 429 raises as before. An unreadable list creates the job without tasks.
+- The worker logs `AHS email job (card N): created with the board's 21 tasks`, or the refusal.
+
+**To check on the first real job:** its tasks in Zuper (`GET /service_tasks?filter.module=JOB&
+filter.module_uid=<job>&count=100`) — 21, `created_by` Owen (the API key's user), at the job's own
+minute — and the worker log line. Tests: `tests/test_ahs_email_creates_job.py` (8 new).

@@ -79,6 +79,11 @@ class FakeZuper:
     status_create_form: str | None = None
     category_embeds_statuses: bool = False       # GET /jobs/category carries job_statuses
     template_category_with_statuses: bool = False
+    # A board's own task list, by category uid, as GET /jobs/category/{c}/service_tasks answers
+    # it (live, 2026-11-25). A job created with a `service_task` block gets one task per row;
+    # `refuse_job_tasks` makes such a create answer an error instead (the fallback's test).
+    board_tasks: dict[str, dict] = field(default_factory=dict)
+    refuse_job_tasks: int = 0              # HTTP status to answer a create carrying tasks with
     webhooks_listable: bool = True          # False: both list endpoints answer 404 (live, 09-17)
     users: list[dict] = field(default_factory=lambda: [dict(SYNC_USER), dict(OFFICE_USER)])
     me: dict = field(default_factory=lambda: dict(SYNC_USER))
@@ -210,6 +215,8 @@ class FakeZuper:
                 self.customers, u))),
             (r"/jobs/category", ("GET", lambda p, b: self.ok(self.category_rows()))),
             (r"/jobs/category", ("POST", self.create_category)),
+            (r"/jobs/category/([^/]+)/service_tasks", ("GET", lambda p, b, c: self.ok(
+                self.board_tasks.get(c)))),
             (r"/jobs/status/([^/]+)", ("GET", lambda p, b, c: self.status_list(c))),
             (r"/jobs/status_new/([^/]+)", ("GET", lambda p, b, c: self.ok(
                 self.statuses.get(c, []) if "status_new" in self.statuses_listed_at else []))),
@@ -418,6 +425,14 @@ class FakeZuper:
         # had ever succeeded against Zuper; the fake did not ask, so no test noticed.
         if not (data.get("due_date") or data.get("scheduled_end_time")):
             return self.error("End / Due Date is Mandatory")
+        block = data.pop("service_task", None)
+        if block is not None and self.refuse_job_tasks:
+            return self.error("Invalid service task", self.refuse_job_tasks)
+        for row in (block or {}).get("service_tasks") or []:
+            self.tasks.setdefault(uid, []).append({
+                "service_task_uid": self.uid("task"), "module": "JOB", "module_uid": uid,
+                **row, "service_task_status": "OPEN", "created_by": dict(SYNC_USER),
+                "updated_at": self.tick()})
         data.update(job_uid=uid, job_category={"category_uid": cat},
                     customer={"customer_uid": customer} if customer else None,
                     created_at=self.tick(), updated_at=iso(self.clock), is_deleted=False,
