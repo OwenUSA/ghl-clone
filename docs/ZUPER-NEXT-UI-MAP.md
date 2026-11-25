@@ -356,7 +356,10 @@ Patterns worth knowing:
 
 ## 6. How to run the read-only browser again
 
-On dispatch, as user `qa`, in `/home/qa/zbrowser/nextmap/` (0700):
+On dispatch, in `/opt/ops/zuper/zbrowser/nextmap/` (0700; it was `/home/qa/zbrowser/nextmap/` until
+2026-11-06). Run as root with `PLAYWRIGHT_BROWSERS_PATH=/home/qa/.cache/ms-playwright` (the
+Chromium build is in qa's cache). The saved login is from 2026-10-05 and was not re-checked on
+2026-11-25 — expect to sign in again:
 
 | File | What it is |
 |---|---|

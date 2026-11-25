@@ -9,6 +9,12 @@ This page is the Zuper side: what Zuper itself can show, checked **read only** o
 switched on). Everything below that needs a click in Zuper is a **write**, so it needs the
 owner's OK under the add-only rule (`ZUPER-OPERATIONS.md` section 1). None of it has been done.
 
+> **2026-11-25: AHS leads now start on AHS Simple Flow**, whose first column is "Got a job from AHS",
+> not "Work Order Received". The CRM report does not count them yet: `dispatch/speed.py`
+> `LEAD_BOARDS` lists AHS - Inspection, Retail and the regional boards only (open item in
+> `ZUPER-OPERATIONS.md` section 10). The Zuper-side options below would need the same change of
+> board and column.
+
 ---
 
 ## 1. The short answer
@@ -112,7 +118,7 @@ not proven.
 ## 4. Evidence
 
 Raw metadata answers (no customer data) and the GET-only helper are on dispatch in
-`/tmp/stl_check/` (scripts, `out/`, `bundles/`). Endpoints read: `/reports/meta`,
+`/tmp/stl_check/` (scripts, `out/`, `bundles/`; gone by 2026-11-25). Endpoints read: `/reports/meta`,
 `/reports/meta/filters`, `/reports-service/v3/attributes?data_source=JOB`,
 `/reports-service/v3/meta/filter?module=JOB`, `/jobs/meta`, `/jobs/meta/filter`,
 `/jobs/delay_alert`, `/analytics/widgets`, `/jobs/status/{category}`, one `/jobs/{uid}` (the

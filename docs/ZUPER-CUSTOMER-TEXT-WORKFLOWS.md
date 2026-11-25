@@ -1,18 +1,34 @@
-# Zuper customer-text workflows — reminders, column texts, thank-yous (LIVE since 2026-10-13)
+# Zuper customer-text workflows — reminders, column texts, thank-yous (ALL OFF since 2026-10-26)
 
-Six Zuper **Workflow Builder** workflows text AHS customers automatically from the primary line
-**(954) 420-7373**. They were built and tested on 2026-10-12/13 and switched live on
-**2026-10-13 16:41 New York** at the user's request ("ok activate").
+> **State 2026-11-25: all seven are INACTIVE.** On **2026-10-26** the user stopped every automated
+> customer message: the seven workflows below were deactivated (backup
+> `workflows_before_stop_all_20261026-220947.json`, now in owen-main
+> `/opt/santiagoproperties/zuper-backup/before-changes/2026-10-26/`), and the CRM's auto-reply and
+> dropped-call texts were switched off the same day. One already-waiting run of the 1-day reminder
+> (job #698, visit Nov 9) could not be stopped by API — Zuper has no endpoint for it. Re-activate
+> anything here **only on the user's word**. The safety gate (`/opt/ops/zuper/zsafety.py`) still
+> has them on `APPROVED_WORKFLOWS`, so turning one on would not stop the routes job — decide
+> before you do it. The rest of this file is the record of what they do, for the day they come
+> back.
+>
+> They were bound to the OLD AHS boards (AHS - Inspection, AHS - Repair & Review) and their column
+> names. Since 2026-11-06 new AHS jobs go to **AHS Simple Flow**, so as built they would not fire
+> for those jobs.
+
+Seven Zuper **Workflow Builder** workflows texted AHS customers automatically from the primary
+line **(954) 420-7373**. Six were built and tested on 2026-10-12/13 and switched live on
+**2026-10-13 16:41 New York** at the user's request ("ok activate"); the welcome text (7) went live
+on 2026-10-22.
 
 They live **in Zuper** (Workflows page), not in this repo. The CRM's own automatic texts
-(`backend/app/reminders/`) are OFF since 2026-10-12 and must stay off, or customers get two
-texts. Read `ZUPER-OPERATIONS.md` section 1 (the owner's rules) first.
+(`backend/app/reminders/`) are OFF since 2026-10-12 and must stay off if these come back, or
+customers get two texts. Read `ZUPER-OPERATIONS.md` section 1 (the owner's rules) first.
 
 Nothing here contains customer data. Message wording below uses a sample customer.
 
 ---
 
-## 1. What runs
+## 1. What ran (all inactive since 2026-10-26)
 
 | # | Workflow (Zuper name) | uid | Starts on | Sends |
 |---|---|---|---|---|
@@ -31,8 +47,10 @@ Boards: reminders (1, 2) on **AHS - Inspection** (inspection wording) and **AHS 
 (repair wording). Column texts (3-5) on **AHS - Inspection** only. Retail and the regional boards
 are not covered.
 
-All the other 41 workflows in the account (Zuper templates, the two September "DTR - Appointment
-reminder" drafts) and all 21 customer-notification rules are **off** and must stay off.
+All the other workflows in the account (Zuper templates, the two September "DTR - Appointment
+reminder" drafts) and all 21 customer-notification rules are **off** and must stay off — except
+the team's six job workflows with no messaging step (`ZUPER-AUTOMATIONS.md` row M,
+the first of them active since 2026-10-31).
 
 ## 2. The messages (exact wording)
 
@@ -124,11 +142,13 @@ Communication → Message Settings, set by the user to **19544207373** with syst
 from (954) 420-7373.
 
 **Safety gate.** `zsafety.py` blocks every script that writes to Zuper when anything customer-facing
-is on. It was changed (three copies: dispatch `/home/qa/zsafety.py`, owen-main
+is on. It was changed (three copies: dispatch `/opt/ops/zuper/zsafety.py` — `/home/qa/` until 2026-11-06 — owen-main
 `/opt/santiagoproperties/zuper-tasks/app/zsafety.py` and `.../zuper-proposals/app/zsafety.py`; the two
 containers must be rebuilt with `docker compose up -d --force-recreate` after any edit) to allow:
 - `zuper_connect.system_notification_enabled` ON **only** with sender `19544207373`;
-- exactly these six workflows active (`APPROVED_WORKFLOWS`). Any other active workflow still fails the gate.
+- these workflows active (`APPROVED_WORKFLOWS`: the six, later seven). Since 2026-11-06 the team's
+  six job workflows are allowed too (`TEAM_WORKFLOWS`, only while none has a messaging step). Any
+  other active workflow still fails the gate.
 Backups `zsafety.py.bak-20261012`, `-20261012b/c/d`.
 
 **Incoming texts (workflow 6).** The "Inbound text message" trigger NEVER fires on this account.
@@ -153,7 +173,8 @@ gets 404 on every text — harmless, left alone.)
 
 ## 6. Scripts and backups (dispatch, not in git)
 
-Folder `/home/qa/zbrowser/ahs_reminders/` (run as root with `python3 -I`, helper `../zwf.py`):
+Folder `/opt/ops/zuper/zbrowser/ahs_reminders/` on dispatch (`/home/qa/zbrowser/` until 2026-11-06;
+run as root with `python3 -I`, helper `../zwf.py`):
 
 | Script | Does |
 |---|---|
@@ -170,12 +191,15 @@ Folder `/home/qa/zbrowser/ahs_reminders/` (run as root with `python3 -I`, helper
 read a script before re-running it on a live workflow.** Go-live was done by editing the live code
 in place (`TEST_MODE = false`), not by the builders.
 
-Backups `/root/backups/`: `workflows_before_*`, `wf_<uid8>_before_<change>_<time>.json` (one per change),
+Backups (moved from dispatch `/root/backups/` to owen-main
+`/opt/santiagoproperties/zuper-backup/before-changes/<date>/` on 2026-11-06): `workflows_before_*`, `wf_<uid8>_before_<change>_<time>.json` (one per change),
 `zuper_webhooks_before_thanks_*.json`. Go-live: `wf_*_before_golive_20261013-224110.json`.
 
 ## 7. Test customers and jobs
 
-- **Santiago Villahermosa (TEST)** `2dbd7187-a6e8-4452-8600-c3d029599d75`, mobile 561-878-8090 (the user's phone) — job **#701** `6abd527f-31a6-43e9-bb0a-6fe557dac596`, AHS - Inspection.
+- **Santiago Villahermosa (TEST)** `2dbd7187-a6e8-4452-8600-c3d029599d75` — Zuper shows mobile
+  **+1 954-914-7244** since about 2026-11-02 (561-878-8090 before). Confirm the number with the user
+  before any test text — job **#701** `6abd527f-31a6-43e9-bb0a-6fe557dac596`, AHS - Inspection.
 - **Owen Test** `9568609a-c6ca-4d9a-a882-b3ef858c6c76`, 561-690-5516 (Owen's phone) — job **#734** `2f14b7ff-7f94-4cc1-8aa2-dd62b067a6e7`, AHS - Inspection.
 - Never use +15618999051 (not ours; it once answered QUIT).
 - Quick live test: `python3 -I resched.py 123` (#701 visit in 2 h 3 min → 2-hour reminder in ~3 min), reply "Yes" from the phone → thank-you within seconds.
@@ -191,7 +215,7 @@ no reply → "not confirmed" alert fired (by email at the time); staff texts ign
 - **Stop everything customer-facing:** deactivate all six; optionally Settings → Communication → Message Settings → system notifications off (zsafety then passes again either way).
 - Adding a new workflow that texts customers: build it OFF, test with the test customers, add its uid to `APPROVED_WORKFLOWS` in all three zsafety copies, rebuild the containers, then publish + activate.
 
-## 9. Open items
+## 9. Open items (from 2026-10-13; on hold while everything is off)
 
 - [ ] Restrict reminders to visit columns (Scheduled / Day-Before Call / Same-Day Confirm / Repair Scheduling…)? Asked 2026-10-13, no answer yet. #410 (Invoice Submitted to AHS) and #720 (Call Back) had future dates at go-live.
 - [ ] Visits booked BEFORE go-live (#656, #410, #720, #724 Wed 10/14; #627 Fri 10/16) may not get reminders (their queued runs started in test mode) — check the outbound log Wednesday; re-saving the appointment in Zuper starts fresh reminders.
