@@ -171,7 +171,7 @@ def simple_flow_need(j: DispatchJob, start: datetime | None, day: date | None,
         return "repair", "in Proposal Creation - book the repair once the customer agrees"
     if j.status in (c.SF_HANDOFF, c.SF_REPAIR_DAY):
         return None if done else ("repair", _missed(j.status, day))
-    return None                                         # Quality Call, Job Completed, foreign
+    return None                          # Special Cases, Quality Call, Job Completed, foreign
 
 
 def retail_need(j: DispatchJob, start: datetime | None, day: date | None, today: date,
