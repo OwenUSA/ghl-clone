@@ -59,6 +59,12 @@ stage being moved on time; a stage lagging the facts is only `watch` (SF-HYG-01)
 
 ## 1. The lifecycle (7 stages, plus "Special Cases" since 2026-11-25)
 
+**How a job moves (2026-11-25):** each column accepts a job only from the column before it, from
+Special Cases, or — for Got a job from AHS and Special Cases — from any column. So jobs go forward
+one stage at a time; skipping a stage means moving through each one (or via Special Cases), and
+going back means a person's **Roll back status**. Read a lag between the facts and the column with
+that in mind (SF-HYG-01 stays `watch`).
+
 Board `AHS Simple Flow` `2fbc07ec-94e0-43ca-98d5-c902f12b59e5`. People: **Office** = Luis
 Candiales (office manager, Zuper login "Luis") with Marienne (CSR; texts/calls under Luis's Zuper
 login and Owen's Quo user); **Antonio** Brown = field tech (most repairs); **Owen** = owner, also
@@ -122,7 +128,7 @@ inspects; approves change orders and prices.
 | Purpose | **Not defined yet.** Added at the user's request after Repair Day, before Quality Call |
 | Owner | — |
 | Checklist | none |
-| Exit | — |
+| Exit | Any column (since 2026-11-25 22:00 UTC; before that its jobs could not leave it except by Roll back status) |
 | Audit | A job here was parked by a person: report that it is there (and since when), never judge it late by another stage's rule, and never suggest moving a job into it or out of it without Owen saying so. Dispatch's planner books nothing for it; the routes job still routes it if it has a date. No stale rule until Owen defines the column (§6 question 14) |
 
 ### Stage 6 — Quality Call · `a4906cd6-4571-4a84-b8b7-a709c0143aa4` · FOLLOW_UP

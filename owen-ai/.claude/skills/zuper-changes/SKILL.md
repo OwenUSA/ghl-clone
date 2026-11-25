@@ -41,6 +41,9 @@ A visit is confirmed only by a call or text with the customer (not by a note).
   On AHS Simple Flow: a move into **Proposal Creation** can make Zuper generate a Roof Replacement
   proposal by itself (that template's trigger) — say so in the list. **Special Cases** (new
   2026-11-25, purpose not defined yet): never propose a move into or out of it unless Owen asks.
+  A Simple Flow column accepts a job only from the column before it or from Special Cases (Got a
+  job from AHS and Special Cases accept any): a move that skips columns may be refused — if it is,
+  say so and let Owen choose the steps.
 - `schedule`: `start` and `end` as `YYYY-MM-DD HH:MM` Florida time. A job with SEVERAL visits
   (multi-day work) needs `visit` = the current start of the one that moves; the error lists them.
   Ask Owen which visit when it is not clear. It moves an existing visit — it cannot add a new day.
