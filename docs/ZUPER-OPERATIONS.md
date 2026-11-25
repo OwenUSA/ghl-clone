@@ -1,4 +1,4 @@
-# Zuper operations — handoff (validated against live Zuper 2026-10-12)
+# Zuper operations — handoff (validated 2026-10-12, updated 2026-11-25)
 
 Everything a new session needs to manage Dream Team Roofing's **Zuper** account: the rules, how to
 reach it, what is set up (the feature map), what runs on its own, and what is still open.
@@ -11,6 +11,26 @@ dispatch); cron, containers, logs and the CRM database read on both servers
 (`bash ops/zuper-automations-status.sh`). Sections marked *(2026-10-12)* were corrected then.
 The index of everything that runs by itself is `ZUPER-AUTOMATIONS.md`.
 
+**Updated 2026-11-25**, read-only again: the board list, AHS Simple Flow's columns and jobs, the
+active workflows, appointments, the test customer, the safety gate, cron, containers, logs and
+`.env.prod`. What changed since 2026-10-12, in short:
+- **AHS Simple Flow** (built by Owen 2026-10-31) is the AHS board in use; every new AHS job goes
+  there since 2026-11-06. AHS - Inspection and AHS - Repair & Review are legacy (owner,
+  2026-11-19: "we are only using for now the AHS simple flow and the retail pipelines"). 3.1.
+- **Every automated customer message is OFF since 2026-10-26** — the seven DTR workflows and the
+  CRM's auto-reply / dropped-call texts. Rule 1.
+- **The team's six job workflows are active** inside Zuper (2026-10-31 on): they create
+  appointments and invoices, copy quote lines and change a job's column on schedule / assignment.
+  4.5.
+- **`zuper_tasks` and `zuper_proposals` have written nothing since 2026-10-31**: their copy of the
+  safety gate refuses those workflows. 4.1, 4.2, `ZUPER-AUTOMATIONS.md` section 4.
+- **Dispatch moved.** Scripts, logs and the gate went from `/home/qa/` to `/opt/ops/zuper/`
+  (2026-11-06), and every backup from dispatch `/root/backups/` to owen-main
+  `/opt/santiagoproperties/zuper-backup/` (`ZUPER-BACKUPS.md`). A `/root/backups/<file>` named in
+  this file is now at `zuper-backup/before-changes/<date in the file name>/<file>`.
+- **Owen AI** writes to Zuper on Owen's approval (drafts, new leads, his "do it" changes).
+- Sections not re-read on 2026-11-25 keep their earlier date.
+
 The running log of every change (with backups and exact API bodies) is the memory note
 `zuper-automation-off.md` in the Claude memory folder for this project. This file is the
 organised summary.
@@ -20,37 +40,59 @@ organised summary.
 ## 1. The owner's rules (non-negotiable)
 
 1. **Never send a customer anything automatically.** On 2026-09-17 a customer load triggered
-   Zuper's template workflows and 231 customers got a mistaken email/SMS. Since then all 41
+   Zuper's template workflows and 231 customers got a mistaken email/SMS. Since then the template
    workflows and all 21 customer-notification rules are **inactive**, and the owner re-enables
-   automations himself, one at a time. (Still 0 of 41 and 0 of 21 active on 2026-10-12.)
-   **Exception since 2026-10-13 16:41 New York:** six DTR workflows that text AHS customers
-   (reminders, three column texts, thank-yous) are LIVE at the user's request — the only
-   automatic customer messaging in the account. Section 4.5 and `ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`.
-   The other 41 workflows and all 21 notification rules are still off.
+   automations himself, one at a time. Seven DTR workflows texted AHS customers from 2026-10-13
+   (the welcome text from 2026-10-22) — **all seven were switched off on 2026-10-26**, when the user
+   stopped every automated customer message (`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`). On 2026-11-25 no
+   workflow that can message a customer is active and 0 of 21 notification rules are on; the six
+   active workflows are the team's own job workflows (4.5), which the gate checks for messaging
+   steps every minute.
    The CRM's own automatic texts read from Zuper columns (appointment reminders, "report
    submitted to AHS", "AHS authorized", 2026-10-08/09) were **switched off completely on
-   2026-10-12** at the user's request: `ZUPER_REMINDERS_ENABLED=false` and every mode Off. The
-   code stays. Do not switch them back on unless asked.
-2. **Run the safety gate before every write:** `python3 /home/qa/zsafety.py` on dispatch
-   (exit 0 = safe). It checks workflows, notification rules and the company-config switches.
-   Every script and both containers below refuse to write when it fails.
+   2026-10-12** at the user's request: `ZUPER_REMINDERS_ENABLED=false` and every mode Off; the
+   auto-reply and dropped-call texts on 2026-10-26 (`ZUPER_AUTOREPLY_ENABLED=false`,
+   `DROPPED_CALL_TEXTS_ENABLED=false`). The code stays. Do not switch them back on unless asked.
+2. **Run the safety gate before every write:** `python3 /opt/ops/zuper/zsafety.py` on dispatch
+   (exit 0 = safe; `/home/qa/zsafety.py` until 2026-11-06). It checks workflows, notification
+   rules and the company-config switches. Every script and both containers below refuse to write
+   when it fails.
 3. **Never delete a job** — jobs carry photos. Move them (same job) instead. The only jobs ever
    deleted were test jobs created by us (#671 on 2026-09-22, #697 a minute after creating it).
-4. **Back up before changing anything** (`/root/backups/` on dispatch), read back after, and
-   compare. Test on the test job first (section 7).
+4. **Back up before changing anything**, read back after, and compare. Backups live on owen-main
+   in `/opt/santiagoproperties/zuper-backup/before-changes/<YYYY-MM-DD>/` (`ZUPER-BACKUPS.md`); a
+   script on dispatch that still writes to `/root/backups/` is moved there now and then. Test on
+   the test job first (section 7).
 5. **Zuper is where the team works now.** The CRM only *copies* Zuper (pull-only). An older
    Workiz export must never move a job backwards (the apply script enforces it, section 6).
 6. **Read-only by default (boss's rule, 2026-09-27):** "Zuper must work on its own, the only
    thing we can do is read from Zuper." Nothing new may write to Zuper without the owner lifting
-   the rule for that one thing. Lifts granted so far: AHS work-order emails create their job
-   (2026-09-28, section 4), `messaging.notify_users` set to Owen + Luis (2026-09-28), two saved
-   board views (2026-09-30), the KPI questions and their job fields (2026-09-30,
-   `ZUPER-KPI-SETUP.md`), the inspection questions (2026-10-12, 3.3a), the AHS - Inspection
-   column order (2026-10-12), and the six customer-text workflows plus the System Notification
-   Number 19544207373 (2026-10-13, 4.5), and the CRM's auto-reply — reading the Connect text
-   conversations, one `POST /customers/{uid}/send` per unanswered stretch and a private job
-   note (2026-10-19, owner; `DECISIONS.md` 2026-10-19). Each lift covers that one thing only. The jobs in section 4 that write (`zuper_tasks`, `zuper_proposals`,
-   routes) predate the rule; the owner said "ok leave that" on 2026-09-28.
+   the rule for that one thing, and **each lift covers that one thing only** — ask before assuming
+   another. The full log, with the owner's words, backups and exact bodies, is the memory note
+   `zuper-read-only-rule.md`. The lifts that still shape the account:
+   - **Settings added:** `messaging.notify_users` = Owen + Luis (2026-09-28); two saved board
+     views (2026-09-30); the KPI questions and their job fields (2026-09-30, `ZUPER-KPI-SETUP.md`);
+     the "Line items added?" question (2026-10-01); the inspection questions (2026-10-12, 3.3a;
+     +3 optional 2026-10-21); the AHS - Inspection (2026-10-12) and AHS - Repair & Review
+     (2026-10-27) column orders; the Repair Complete video made optional (2026-10-14); four default
+     job albums (2026-10-22); 11 expense categories and Luis's commission permissions
+     (2026-10-27); the "Outcome" question on Simple Flow / Job Completed and Simple Flow's intake
+     questions linked to job fields (2026-11-09); Antonio sees no prices or conversation history
+     (2026-11-19); the **"Special Cases"** column on AHS Simple Flow (2026-11-25, 3.1).
+   - **CRM writes that run:** AHS work-order emails create their customer, job and note (2026-09-28,
+     on AHS Simple Flow since 2026-11-06, with the board's task list since 2026-11-25); a signed
+     proposal's option copied onto its job (2026-10-02).
+   - **Owen AI, on Owen's approval:** DRAFT proposals and corrections to a draft (2026-11-09,
+     2026-11-18), the after-inspection report PDF on a draft (2026-11-12), new customers + jobs
+     (2026-11-19), and the changes he says "do it" to in the chat (2026-11-21, 4.4). Pictures are
+     only ever ADDED to a gallery.
+   - **Built, then switched off by the user:** the seven customer-text workflows and the System
+     Notification Number 19544207373 (2026-10-13 → 10-26); the CRM's auto-reply (2026-10-19 →
+     10-26); the Dispatch assistant's approve-then-apply writes (2026-10-13, off again).
+   - **One-off data fixes** (line items and commissions from history, callbacks as revisits,
+     missing AHS trips, Frontdoor lines, a few jobs moved or re-linked) are in the memory log.
+   The jobs in section 4 that write (`zuper_tasks`, `zuper_proposals`, routes) predate the rule;
+   the owner said "ok leave that" on 2026-09-28.
 
 ---
 
@@ -59,7 +101,7 @@ organised summary.
 | What | Where |
 |---|---|
 | API base | `https://us-east-1.zuperpro.com/api`, header `x-api-key` |
-| API key (dispatch, for scripts) | `/home/qa/.zuper.key` and `/root/secrets/zuper.key` (0600) |
+| API key (dispatch, for scripts) | `/root/secrets/zuper.key` (0600; `/home/qa/.zuper.key` is gone, 2026-11-25) |
 | API key (owen-main containers) | `/opt/santiagoproperties/zuper-proposals/secrets/zuper.key` (0600, mounted read-only into both containers) |
 | API key (CRM) | `ZUPER_API_KEY` in `/opt/santiagoproperties/ghl-clone/.env.prod` on owen-main |
 | Workflow host (workflows are here, not under /api) | `https://us-east-1-workflow.zuperpro.com/api` |
@@ -72,15 +114,15 @@ Buzaglo" in Zuper (this confused a test once — say so when you change somethin
 
 | What | Where |
 |---|---|
-| Saved Zuper login | `/home/qa/zbrowser/zuper_state.json` (Playwright `storage_state`, 0600, the token is in web.zuperpro.com localStorage). **Verified working 2026-09-25** (a read-only load of /jobs stayed signed in). |
-| Python + Playwright | `/home/qa/zbrowser/.venv` — run as the **qa** user (`su - qa`), the Chromium build is in qa's cache, not root's |
-| Write guard for browser scripts | `/home/qa/zbrowser/zb_common.py` (`make_guard`): blocks every non-GET except an allow-list; always blocks workflow / notification / send / invite / company-config / custom_fields URLs; logs to `guard.log` |
-| Captured web-app API calls | `/home/qa/zbrowser/probe_responses.json` |
+| Saved Zuper login | `/opt/ops/zuper/zbrowser/zuper_state.json` (Playwright `storage_state`, 0600, the token is in web.zuperpro.com localStorage). Saved 2026-09-30; **EXPIRED by 2026-11-19** — sign in again before any browser script |
+| Python + Playwright | `/opt/ops/zuper/zbrowser/.venv`; the Chromium build is in qa's cache — as root set `PLAYWRIGHT_BROWSERS_PATH=/home/qa/.cache/ms-playwright` (2026-11-19) |
+| Write guard for browser scripts | `/opt/ops/zuper/zbrowser/zb_common.py` (`make_guard`): blocks every non-GET except an allow-list; always blocks workflow / notification / send / invite / company-config / custom_fields URLs; logs to `guard.log` |
+| Captured web-app API calls | `/opt/ops/zuper/zbrowser/probe_responses.json` |
 | Example scripts | `board_probe*.py`, `card_*.py`, `zb_probe.py` (all load `zuper_state.json`) |
 
 **The new UI (`next.zuperpro.com`) is mapped in `ZUPER-NEXT-UI-MAP.md`** (2026-10-05): every
 module and settings page, the API behind each, and a separate read-only browser
-(`/home/qa/zbrowser/nextmap/`, login `zuper_next_state.json`). The login above does not work there.
+(`/opt/ops/zuper/zbrowser/nextmap/`, login `zuper_next_state.json`). The login above does not work there.
 
 If the login ever expires, the owner has to sign in again in a headed browser and save a new
 `storage_state` to the same path. Headless browsing needs `POST p.zuperpro.com/flags` allowed or
@@ -100,30 +142,45 @@ models jobs, categories, statuses, projects; API facts) live on dispatch in
 `zuper-decisions-v2.txt`. Earlier build reports: `/home/qa/zsup/*.md` (`ZBUILD-RESULT.md`,
 `ZMIG-RESULT.md`, `LOAD-PLAN.md`, `OWNER-TODO.md`).
 
-### 3.1 Pipelines (Zuper "job categories"), in the order Zuper shows them *(2026-10-12)*
+### 3.1 Pipelines (Zuper "job categories"), in the order Zuper shows them *(2026-11-25)*
 
-19 categories. Only three hold jobs.
+18 categories. **The team uses AHS Simple Flow and Retail** (owner, 2026-11-19); the two older AHS
+boards are legacy — their open jobs were moved to Simple Flow on 2026-11-01..06.
 
 | # | Pipeline | uid | Notes |
 |---|---|---|---|
-| 1 | **AHS - Inspection** | `f07e3c01-97b1-404d-8929-175845774a60` | the old "AHS", renamed 2026-09-25; ends at **AHS Approved** |
-| 2 | **AHS - Repair & Review** | `2d0160ea-cf71-46f5-9911-e43d80c42d96` | new 2026-09-25 |
-| 3 | **Retail** | `5939c976-002a-4d80-8bfd-2669a1f8843f` | |
-| 4–10 | Lead Qualification, Roof Inspection, Repair Service (`e35524d8-6080-473a-b522-ce492b3735b1`), Production - Roof / Metal Roof / Gutters / Siding | — | Zuper template pipelines. **No jobs on any of them on 2026-10-12.** Repair Service is still a route board (in case the team uses it) |
-| 11 | Miami Retail Repair | `520c342f-b1d6-4082-b047-2fd4039202c4` | Retail's 16 stages, no jobs yet |
-| 12 | Miami Retail Roof Replacement | `bce5119a-58cd-46d9-8fa9-cb420eb8c940` | 〃 |
-| 13 | Miami Gutters | `a29e16c7-590b-47ac-9527-162b71cdc488` | 〃 |
-| 14 | Sarasota Repairs | `6af83eaa-50f0-426b-93ad-ee46afcd0b43` | 〃 |
-| 15 | Sarasota Roof Replacement | `601fd5ee-5040-4d7f-8a9a-459e62e1a0e0` | 〃 |
-| 16 | Sarasota Gutters | `fda33634-1655-45fb-8503-d5d3111745d6` | 〃 |
-| 17 | Leak repair | `449461c8-4f24-411c-8215-004c7c94464f` | made by someone on the team. **Has no columns and no jobs** on 2026-10-12; still listed as a route board |
-| 18 | Inspection TEST | `dcfe9eee-e5fa-4f39-96a3-910174ac3a46` | test board, no columns, no jobs |
-| 19 | AHS - TEST | `d850b8e1-5026-4282-aa01-d55267c603f4` | the 2026-09-27 test board (9 columns), no jobs |
+| 1 | AHS - Inspection | `f07e3c01-97b1-404d-8929-175845774a60` | legacy since 2026-11; the old "AHS", renamed 2026-09-25; ends at **AHS Approved**. Test job #701 is here |
+| 2 | AHS - Repair & Review | `2d0160ea-cf71-46f5-9911-e43d80c42d96` | legacy since 2026-11; new 2026-09-25 |
+| 3 | **AHS Simple Flow** | `2fbc07ec-94e0-43ca-98d5-c902f12b59e5` | built by Owen 2026-10-31; one board from work order to completion. **Every new AHS job since 2026-11-06**, including the CRM's AHS-email jobs |
+| 4 | AHS - TEST | `d850b8e1-5026-4282-aa01-d55267c603f4` | the 2026-09-27 test board (9 columns), for rehearsing settings changes |
+| 5 | **Retail** | `5939c976-002a-4d80-8bfd-2669a1f8843f` | in use |
+| 6–12 | Lead Qualification, Roof Inspection, Repair Service (`e35524d8-6080-473a-b522-ce492b3735b1`), Production - Roof / Metal Roof / Gutters / Siding | — | Zuper template pipelines. **No jobs on any of them on 2026-10-12.** Repair Service is still a route board (in case the team uses it) |
+| 13 | Miami Retail Repair | `520c342f-b1d6-4082-b047-2fd4039202c4` | Retail's 16 stages, no jobs (2026-10-12) |
+| 14 | Miami Retail Roof Replacement | `bce5119a-58cd-46d9-8fa9-cb420eb8c940` | 〃 |
+| 15 | Miami Gutters | `a29e16c7-590b-47ac-9527-162b71cdc488` | 〃 |
+| 16 | Sarasota Repairs | `6af83eaa-50f0-426b-93ad-ee46afcd0b43` | 〃 |
+| 17 | Sarasota Roof Replacement | `601fd5ee-5040-4d7f-8a9a-459e62e1a0e0` | 〃 |
+| 18 | Sarasota Gutters | `fda33634-1655-45fb-8503-d5d3111745d6` | 〃 |
 
-Retail and AHS - Repair & Review used to be listed lower; Zuper now shows them 1–3.
+"Leak repair" (`449461c8…`) and "Inspection TEST" (`dcfe9eee…`), both empty on 2026-10-12, are no
+longer in the list on 2026-11-25.
 
-**Columns, live order, with Status Type** *(2026-10-12)*
+**Columns, live order, with Status Type** *(Simple Flow 2026-11-25, the others 2026-10-12)*
 
+- **AHS Simple Flow** (8): Got a job from AHS `NEW` → Day of Inspection `SCHEDULED` → Proposal
+  Creation `ESTIMATING` → Handoff Meeting `SCHEDULED` → Repair Day `STARTED` → **Special Cases**
+  `ON_HOLD` → Quality Call `FOLLOW_UP` → Job Completed `COMPLETED`. No side columns (no Cancelled,
+  no Reschedule Required). Checklists: 15 / 15 / 7 / 7 / 15 / none / 8 / 9 questions, mostly
+  one-line SOP checkboxes; the intake ones are linked to job fields since 2026-11-09, and Job
+  Completed has the "Outcome" question. The team keeps booked inspections in the FIRST column and
+  booked repairs in Handoff Meeting / Repair Day, so the date says more than the column. Stage by
+  stage: `owen-ai/knowledge/ahs-simple-flow-playbook.md`.
+  **Special Cases** (`34d495ce-14ab-42ad-a163-7697cd104afd`, colour `#1E88E5` like the other
+  boards' ON_HOLD columns) was added on 2026-11-25 at the user's request, after Repair Day, with
+  no checklist. What goes there is not defined yet. Owen AI counts its jobs as open, the Dispatch
+  planner books nothing for them, and the routes job still routes one that has a date. No active
+  workflow fires on a move into it. Backups: owen-main
+  `zuper-backup/before-changes/2026-11-25/ahs_simple_flow_*special_cases*`.
 - **AHS - Inspection** (17): Work Order Received `NEW` → Not Answering -Keep Call! `LEAD` →
   Welcome Call! `LEAD` → Scheduled `ESTIMATING` → Inspection: Day-Before Cal `ESTIMATING` →
   Inspection: Same-Day Confi `ESTIMATING` → Antonio On the Way `ON_MY_WAY` → Inspection In Progress
@@ -148,6 +205,10 @@ Retail and AHS - Repair & Review used to be listed lower; Zuper now shows them 1
 A job keeps the status it had when it was moved to another board, so a few jobs show a column
 name that board does not have (one AHS - Repair & Review job still reads "Scheduled").
 
+**AHS Simple Flow on 2026-11-25:** 129 jobs — Job Completed 68, Got a job from AHS 14, Handoff
+Meeting 14, Repair Day 12, Proposal Creation 7, Quality Call 6, Day of Inspection 4, and 4 still
+showing "Estimate Declined" from the board they came from.
+
 **Job counts on 2026-10-12:** 461 jobs. AHS - Inspection 65 (incl. test jobs #701 and #734),
 AHS - Repair & Review 305 (215 Paid, 34 Invoice Submitted to AHS), Retail 91 (38 Cancelled,
 21 Paid). Every other board: 0.
@@ -167,7 +228,7 @@ The tracker on a job's page (Lead → Estimating → Sold → Production → Acc
 Completed, plus Lost) follows each column's **Status Type**, not the column. Zuper offers the
 types LEAD / ESTIMATING / SOLD / LOST / PRODUCTION / INVOICING only to roofing and HVAC companies
 (ours is roofing). With the owner's OK, 18 AHS columns were set on 2026-09-30 by
-`/home/qa/zbrowser/set_types.py` (dry run by default; changes only `status_type`, compares every
+`/opt/ops/zuper/zbrowser/set_types.py` (dry run by default; changes only `status_type`, compares every
 other field of every column after each write). Backup:
 `/root/backups/ahs_statuses_before_types_20260930.json`.
 
@@ -178,6 +239,8 @@ other field of every column after each write). Backup:
   2026-10-01, verified 2026-10-12): a job created through the API with no status (the AHS email
   path) lands in the board's `NEW` column. With no `NEW` column it gets no status and shows in
   no column (that stranded #720–#724 for a day). Every board that receives API jobs needs one.
+  On **AHS Simple Flow** it is **Got a job from AHS** — the CRM's AHS-email jobs land there. Never
+  give a second Simple Flow column type `NEW` (that is why "Special Cases" is `ON_HOLD`).
 - AHS - Repair & Review: Not Answering, Repair Scheduling Call, Day-Before Call, Call Satisfaction
   Check → PRODUCTION · Invoice Submitted to AHS, Awaiting AHS Payment → INVOICING.
 - **Left alone on purpose:** Paid / Cancelled (PAID / CANCELED — `tasks_sync.CLOSED_TYPES` and the
@@ -240,7 +303,7 @@ Checklist field group shows on all three boards.
   camera, and how the task shows a video (the task job counts any link as "photos"). Test on #701.
 - The optional voice note is a to-do in the "2. Inspection" task, so a finished inspection without
   one reads 17 of 18 (In progress) there.
-- How it was done: `/home/qa/zbrowser/insp_checklist_v2.py` on dispatch (dry run by default; the
+- How it was done: `/opt/ops/zuper/zbrowser/insp_checklist_v2.py` on dispatch (dry run by default; the
   `test` step tried every question type on the empty AHS - TEST board and removed them). Backup:
   `/root/backups/zuper_checklists_fields_before_insp_v2_20261012_201200.json`. `zuper_tasks` was
   paused during the change; a simulated full run showed no task status change, only the new
@@ -275,7 +338,13 @@ Each description is that stage's checklist as a to-do list with the answers
 (`☑ Question: answer`, photos as "N photos"). A to-do is filled from the stage checklist OR the
 linked job field. Status follows: Open → In progress → Completed; **a status a person changed
 by hand is never overridden**. Never deletes a task. Retail / regional boards: not switched on
-yet (owner: "AHS first").
+yet (owner: "AHS first"). **The container has written nothing since 2026-10-31** (4.2).
+
+**AHS Simple Flow has its own board task list** (21 tasks, set on the board in Zuper). Zuper adds it
+to a job made in the New Job screen, never to a job made by API. Since 2026-11-25 the CRM sends the
+list inside its AHS-email `POST /jobs` (`ZUPER_AHS_EMAIL_TASKS=true`); before that Luis added them
+by hand. Three "Confirm inspection…" tasks on some jobs come from the team's "Add Appointments for
+Inspection and Production" workflow (4.5), not from the list.
 
 ### 3.6 Proposals (Good / Better / Best)
 
@@ -308,8 +377,12 @@ yet (owner: "AHS first").
 ### 3.8 Company config that matters
 
 `jobs.enforce_sequential_execution = false` (techs may close route jobs in any order) · all
-customer notification rules inactive, and every workflow inactive except the six in 4.5 ·
-System Notification Number 19544207373 with system notifications ON (2026-10-13) · `jobs.public_link = false` · invoice public /
+customer notification rules inactive, every workflow that can message a customer inactive (since
+2026-10-26), the team's six job workflows active (4.5) · System Notification Number 19544207373,
+**system notifications OFF** (on from 2026-10-13; off when re-read 2026-11-25) ·
+`estimate` / `invoice` `secondary_customers.notify` and `enable_payment_link` ON (turned on by the
+team; on the gate's `KNOWN_OK` list since 2026-11-06, re-read 2026-11-25) ·
+`jobs.auto_add_task_assignee = true` · `jobs.public_link = false` · invoice public /
 payment links off · `jobs.notify_user_on_assignment` on (staff only; `assign_sync.py` switches it
 off while it runs) · `messaging.notify_users` = 2 users (Owen, Luis) · company timezone
 America/New_York · vendor auto-emails on purchase/service orders are on (vendors, not customers).
@@ -332,29 +405,26 @@ since 09-22).
 
 ## 4. What runs on its own
 
-Verified on the servers 2026-09-30. Four jobs on two servers, plus the six customer-text
-workflows that run inside Zuper itself (4.5). **The routes job is on dispatch,
-not owen-main** — it was never moved (checked: no cron, timer, container or file for it on
-owen-main).
+Re-checked 2026-11-25. Four jobs on two servers, plus the team's six workflows that run inside
+Zuper itself (4.5) and Owen AI (4.6). **The routes job is on dispatch, not owen-main** — it was
+never moved.
 
-| # | Job | Server | Every | Writes to Zuper? |
-|---|---|---|---|---|
-| 4.1 | `zuper_proposals` container — proposal PDFs | owen-main | 60 s | yes (attachments on DRAFT proposals) |
-| 4.2 | `zuper_tasks` container — checklist tasks (hand-off OFF since 2026-09-30) | owen-main | 120 s | yes (tasks only) |
-| 4.3 | `zuper-routes` cron — technician routes | **dispatch** | 1 min (full run every 5) | yes (routes; toggles a staff setting) |
-| 4.4 | CRM mirror (`ghl_clone_api` / `ghl_clone_worker`) | owen-main | 15-min sweep (no webhook has ever arrived) | only the AHS-email create, and signed-proposal line items |
-| 4.5 | **Six Zuper workflows that TEXT AHS CUSTOMERS** (reminders, column texts, thank-yous) | inside Zuper | on schedule / column move / incoming text | no job writes; **sends customer texts** from (954) 420-7373 |
+| # | Job | Server | Every | Writes to Zuper? | 2026-11-25 |
+|---|---|---|---|---|---|
+| 4.1 | `zuper_proposals` container — proposal PDFs | owen-main | 60 s | yes (attachments on DRAFT proposals) | **stopped by its gate since 2026-10-31** |
+| 4.2 | `zuper_tasks` container — checklist tasks (hand-off OFF since 2026-09-30) | owen-main | 120 s | yes (tasks only) | **stopped by its gate since 2026-10-31** |
+| 4.3 | `zuper-routes` cron — technician routes | **dispatch** | 1 min (full run every 5) | yes (routes; toggles a staff setting) | working |
+| 4.4 | CRM mirror (`ghl_clone_api` / `ghl_clone_worker`) | owen-main | 15-min sweep (no webhook has ever arrived) | the AHS-email create, signed-proposal line items | working |
+| 4.5 | **The team's six job workflows** | inside Zuper | on their events | yes — Zuper's own: appointments, invoices, line items, a job's column | active |
+| 4.6 | Owen AI (inside the CRM) | owen-main | when Owen asks | only what Owen approves | on |
 
-All four were running on 2026-10-12. The three safety-gate failures in the recent routes log and
-the two in the proposals log were Zuper 502s (the gate could not read Zuper, so nothing was
-written); the tasks log shows the same occasional 502s, retried on the next loop.
+The scripts that write (4.1–4.3) run `zsafety.py` first and write nothing when it fails (the log
+says `SAFETY GATE FAILED`). None of them sends a customer anything. **4.1 and 4.2 carry an older
+copy of the gate** that refuses the team's workflows, so every run since 2026-10-31 11:41 ET has
+been refused — see `ZUPER-AUTOMATIONS.md` section 4 for the fix (owner's OK first).
 
-All three scripts that write run `zsafety.py` first and write nothing when it fails (the log
-says `SAFETY GATE FAILED`). None of them sends a customer anything.
-
-**4.5 is LIVE since 2026-10-13** — the only automatic customer messaging in the account. Everything
-about it (wording, rules, uids, the zsafety allow-list `APPROVED_WORKFLOWS`, how to stop it, test
-customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted for exactly those six.
+The seven DTR customer-text workflows that were 4.5 until 2026-10-26 are **off**; their record is
+`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`.
 
 ### 4.1 `zuper_proposals` (owen-main)
 
@@ -363,6 +433,8 @@ customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted
   `data/state.json`). Moved from dispatch cron `zuper-compare` on 2026-09-24 (old file in
   `/root/backups/cron.d-zuper-compare.disabled-20260924`).
 - What it does: section 3.6. Only lines with "rebuild", a traceback or ERROR reach the log.
+- **Stopped since 2026-10-31 11:42 ET** (gate refused); last rebuild DTR-138 on 2026-10-30. Once
+  its gate is fixed it will build PDFs for every DRAFT made since, Owen AI's included.
 
 ### 4.2 `zuper_tasks` (owen-main)
 
@@ -371,6 +443,7 @@ customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted
   `data/tasks_sync.log`, `data/tasks_state.json`). Env `TASKS_EXTRA_JOBS` kept test job #694 (deleted, see section 7) in
   scope.
 - What it does: the 4 tasks on every live AHS job (3.5). The hand-off (3.2) is switched off.
+  **Stopped since 2026-10-31 11:41 ET** (gate refused); last change 2026-10-30.
   It turns EVERY column that has a checklist into a task, except the KPI-question columns in
   `NO_TASK_STAGES` (AHS Approved, Invoice Submitted to AHS, Cancelled — 2026-09-30). **Add a
   column there before giving it a checklist that is not a to-do**, or ~100 AHS jobs get a new task. A run that changed something logs `APPLIED | {jobs, created, described, status,
@@ -378,9 +451,10 @@ customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted
 
 ### 4.3 `zuper-routes` (dispatch) — rewritten 2026-10-01
 
-- Cron `/etc/cron.d/zuper-routes`: `* * * * * root /home/qa/zbrowser/routes_sync.sh` (**every minute**
-  since 2026-10-01; 5 min before that). The wrapper takes a lock (`/tmp/zuper-routes.lock`), runs the
-  safety gate, then `routes_sync.py --apply --watch`.
+- Cron `/etc/cron.d/zuper-routes`: `* * * * * root /opt/ops/zuper/zbrowser/routes_sync.sh` (**every minute**
+  since 2026-10-01; 5 min before that). The wrapper takes a lock (`/opt/ops/zuper/state/zuper-routes.lock`),
+  runs the safety gate (output `/opt/ops/zuper/state/zuper-routes.gate`), then
+  `routes_sync.py --apply --watch`. (Until 2026-11-06 all of this lived in `/home/qa/` and `/tmp/`.)
 - **`--watch`:** the script lists every job and compares it with the last run (`routes_watch.json`:
   status, schedule, board, assignees with their `assigned_at`, Technician dropdown, map point). Nothing
   changed → it stops ("no job changed - nothing to do"). Something changed, or 5 min since the last full
@@ -401,15 +475,17 @@ customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted
 - **Which jobs:** scheduled, not Paid / Cancelled (by name or status type PAID / CANCELED), **not in a
   "Reschedule Required" column** (2026-10-06: such a job keeps its old date, and was still routed), today up to
   60 days ahead, on Retail, AHS - Inspection, AHS - Repair & Review (**required** — the run refuses if
-  one is missing) and Leak repair, Repair Service (optional). Every stop of the day stays on the route
+  one is missing), **AHS Simple Flow** (since 2026-11-06, with the visit words "day of inspection" and
+  "repair day") and Repair Service (optional; Leak repair no longer exists). A dated job in Simple
+  Flow's "Special Cases" is still routed. Every stop of the day stays on the route
   in appointment-time order, done or not.
 - **Logged once** (WARN, remembered in `routes_watch.json`): a scheduled job with no technician; an
   open job in a visit column (Scheduled / Day-Before / Same-Day / On the Way / Repair In Process /
   Arrived — not Reschedule Required) with no appointment time; two technicians on a job. A scheduled
   job on any other board is logged once as `SKIPPED` (`routes_skipped.json`).
-- The log `/home/qa/zbrowser/routes_sync.log` gets a run only when it printed CREATE / UPDATE /
+- The log `/opt/ops/zuper/zbrowser/routes_sync.log` gets a run only when it printed CREATE / UPDATE /
   REBUILD / REMOVE / TAKEN OFF / JOB CHANGED / SKIPPED / WARN / an error; the last output is always in
-  `/tmp/zuper-routes.out`.
+  `/opt/ops/zuper/state/zuper-routes.out`.
 - **The route:** "<Technician> - <Day>", assigned to the technician's login (`LOGINS`: Owen, Antonio;
   others unassigned, for the office). Antonio's starts at his home (North Lauderdale) with departure =
   first appointment minus a rough drive estimate; everyone else's at the first stop. Never calls
@@ -418,7 +494,7 @@ customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted
   (today's too) and the old `Repairs - <Day>` ones; never touches a route with any other name.
 - While it writes it switches `jobs.notify_user_on_assignment` off and restores it, and checks
   afterwards that no job's time, assignee or fields changed (`jobs verified unchanged: N of N`).
-- Dry run (reads only, saves no state): `python3 /home/qa/zbrowser/routes_sync.py` as root on dispatch.
+- Dry run (reads only, saves no state): `python3 /opt/ops/zuper/zbrowser/routes_sync.py` as root on dispatch.
   Backups: `routes_sync.py.bak-20260918/-20260922/-20260928/-20260930/-20261001/-20261006`,
   `routes_sync.sh.bak-20260930/-20261001`, `/root/backups/cron.d-zuper-routes.bak-20261001`.
 - **Pause:** comment out the line in `/etc/cron.d/zuper-routes`. Never run two copies (e.g. a
@@ -426,15 +502,19 @@ customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted
 
 ### 4.4 The CRM mirror (owen-main, repo `OwenUSA/ghl-clone`)
 
-- `.env.prod` (2026-10-12): `ZUPER_SYNC_ENABLED=true`, `ZUPER_PULL_ONLY=true`,
-  `ZUPER_AHS_EMAIL_CREATES_JOBS=true`, `ZUPER_PROPOSAL_LINES=true`, `DISPATCH_ENABLED=true`,
-  `ZUPER_REMINDERS_ENABLED=false`, `ZUPER_API_KEY` set. Production runs `966c0b7`.
+- `.env.prod` (2026-11-25): `ZUPER_SYNC_ENABLED=true`, `ZUPER_PULL_ONLY=true`,
+  `ZUPER_AHS_EMAIL_CREATES_JOBS=true`, `ZUPER_AHS_EMAIL_TASKS=true`, `ZUPER_PROPOSAL_LINES=true`,
+  `DISPATCH_ENABLED=true`, `DISPATCH_ZUPER_WRITES=false`, `ZUPER_REMINDERS_ENABLED=false`,
+  `ZUPER_AUTOREPLY_ENABLED=false`, `DROPPED_CALL_TEXTS_ENABLED=false`, the `OWEN_AI_*` writes on
+  (4.6), `ZUPER_API_KEY` set. Production runs `54a0ffa` (2026-11-25).
 - Reads Zuper with a **15-minute sweep only**. The code can take a webhook, but none is
   registered in Zuper and `last_webhook_at` has never been set (the one registration attempt,
   2026-09-23, was interrupted, and `webhook.EVENTS` uses `JOB_NEW`-style names; the real ones are
   lowercase and dotted, e.g. `job.schedule`). A synced card's Zuper-owned fields answer "Change
   this in Zuper".
-- **The CRM's boards are still the OLD ones (checked 2026-10-12).** It has two pipelines:
+- **The CRM's boards are still the OLD ones (re-checked 2026-11-25).** **AHS Simple Flow is not
+  mirrored at all** (it is in neither `mapping.CATEGORIES` nor `MIRROR_ONLY_CATEGORIES`); Dispatch,
+  the planner, Owen AI and the routes read it from Zuper directly. It has two pipelines:
   "Dream Team Roofing AHS" (19 stages: Work Order Received, Contact Attempted, Scheduled, On My Way,
   Inspecting, … Approved, Repair Scheduled … Paid, side columns) mapped to AHS - Inspection, and
   Retail (matches Zuper). **There is no AHS - Repair & Review pipeline and no regional pipeline**,
@@ -443,13 +523,36 @@ customers) is in **`ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`**. Rule 1 above was lifted
   current Zuper columns (Welcome Call!, Submit To AHS For Approval, AHS Approved, …).
   The Dispatch page and the KPI history read Zuper directly and are not affected.
 - **The one write:** an AHS work-order email that owen-main relays creates the customer, the job
-  (lands in AHS - Inspection / Work Order Received — no status is named) and the work order as a
-  note. Three POSTs, nothing else (DECISIONS.md, 2026-09-28).
+  and the work order as a note. Three POSTs, nothing else (DECISIONS.md, 2026-09-28). Since
+  2026-11-06 the job is made on **AHS Simple Flow** and lands in "Got a job from AHS" (no status is
+  named; `ZUPER_AHS_EMAIL_BOARD`, found by name). Since 2026-11-25 the `POST /jobs` also carries the
+  board's task list (3.5). **The note is sent flat-body first** (`zapi.create_note`): Zuper answers
+  200 to the flat body and stores an EMPTY note, so the wrapped body the docs give is never tried —
+  the AHS-email jobs checked on 2026-11-09 had one empty note each (open item, section 10).
 - The bell alerts admins and dispatchers about a new job (and the other Dispatch events) —
   `app/dispatch/alerts.py`, rung by the Dispatch pass.
 - **A new stage in Zuper is unknown to the CRM** until `python -m app.zuper.mirror --phase boards`
   is run (dry run first); until then a job moved into it does not move in the CRM. See the point
   above: on 2026-10-12 that is most of the AHS columns.
+
+### 4.5 The team's six job workflows (inside Zuper, 2026-11-25)
+
+Made by the team or from Zuper's templates, not by us; active since 2026-10-31 (the first). The
+gate allows them only while none has a messaging step (`TEAM_WORKFLOWS`, 2026-11-06). They are
+listed in `ZUPER-AUTOMATIONS.md` row M. What matters when reading a job: **its column can change
+with nobody moving it** — "RG3-T55 - Upon Job schedule / Upon job user assignment, update job
+status" move a job when it is scheduled or assigned, and "Add Appointments for Inspection and
+Production" runs on a move into Simple Flow's "Got a job from AHS" or "Handoff Meeting". Their
+activity lines carry `request_source.type = "WORKFLOW_BUILDER"`.
+
+### 4.6 Owen AI (inside the CRM)
+
+Owen AI writes to Zuper only through its own scopes in `backend/app/zuper/client.py`
+(`owen_ai_*`), each behind its server switch, and only on Owen's approval: a DRAFT proposal or a
+correction to a draft, a new customer + job, the after-inspection report PDF on a draft, and the
+changes he says "do it" to in a later chat message (a column on the job's own board, the visit,
+the technicians, a field, addresses, a private note, pictures ADDED to the gallery). Never a
+delete, never another board, never a send. CLAUDE.md "Owen AI changes Zuper…" and DECISIONS.md.
 
 **Changing a container's code:** edit `app/*.py` on owen-main, then
 `docker compose stop` → `docker compose build` → **`docker compose up -d --force-recreate`**, and
@@ -459,11 +562,11 @@ check the new code is inside (`docker exec <name> grep … /app/...`). `docker s
 
 ---
 
-## 5. Scripts on dispatch (`/home/qa/zbrowser/`, run as root with `python3`)
+## 5. Scripts on dispatch (`/opt/ops/zuper/zbrowser/`, run as root with `python3`)
 
 | Script | Does |
 |---|---|
-| `zsafety.py` (in `/home/qa/`) | the safety gate |
+| `zsafety.py` (in `/opt/ops/zuper/`) | the safety gate |
 | `ck_api.py` | checklist helpers (list, create, status lookup) |
 | `ck_copy_retail.py` | copy Retail's checklists to the 6 regional boards (idempotent) |
 | `insp_fields_link.py`, `insp_fields_link_retail.py` | 9 inspection job fields + link the inspection checklist to them |
@@ -502,12 +605,14 @@ Details"). Always send `label, value, group_name, group_uid, type`.
 ## 7. Test data (safe to use; only the owner's own email/phone)
 
 - Customer **Santiago Villahermosa (TEST)** `2dbd7187-a6e8-4452-8600-c3d029599d75`
-  (santiagovillahermosa@gmail.com, mobile **+15618788090** since 2026-10-09, "TEST - 100 Test St,
-  Bradenton"). The old number +15618999051 is **not** ours and nobody knows whose it is — never
-  use it.
+  (santiagovillahermosa@gmail.com, "TEST - 100 Test St, Bradenton"). Zuper shows mobile
+  **+19549147244** on 2026-11-25 (it was +15618788090 from 2026-10-09; changed in Zuper by about
+  2026-11-02). **Confirm the number with the user before any test text.** The old number
+  +15618999051 is **not** ours and nobody knows whose it is — never use it.
 - Customer **Owen Test** (+15616905516, Owen's phone).
-- Job **#701** `6abd527f-31a6-43e9-bb0a-6fe557dac596` ("TEST - AHS TEST pre-fill check"), now on
-  **AHS - Inspection / Submit To AHS For Approval** (2026-10-12), no technician.
+- Job **#701** `6abd527f-31a6-43e9-bb0a-6fe557dac596` ("TEST - AHS TEST pre-fill check"), on
+  **AHS - Inspection / Proposal Made** (2026-11-25), no technician. It is the test target for Owen
+  AI's writes (proposals DTR-28, DTR-139).
 - Job **#734** `2f14b7ff-7f94-4cc1-8aa2-dd62b067a6e7` ("TEST - Owen reminder test"), customer Owen
   Test, on **AHS - Inspection / AHS Approved**, no technician.
 - Both test jobs sit on a real board, so they are in the job counts and show as `WARN … no
@@ -546,6 +651,66 @@ Details"). Always send `label, value, group_name, group_uid, type`.
 | Company profile | `GET /user/company` · `PUT /company {"company":{…}}` |
 | Product | `PUT /product/{uid} {"product":{…}}` |
 | Invoice template | `PUT /invoice_estimate/template/{uid} {"template":{…}}` |
+| Copy gallery pictures / videos to another job (web JS, 2026-11-19) | `POST /attachments/bulk_actions` — see 8b. **Never** `"action":"move"` |
+| Upload a picture into a job gallery (web JS, 2026-11-19) | `POST /misc/upload` multipart + `module=JOB`, `module_uid=<job>` — see 8b |
+
+### 8b. Copying gallery pictures and videos to another job (2026-11-19)
+
+Pictures or videos uploaded to the wrong job are copied with the gallery's own **Copy to job**,
+the request next.zuperpro.com sends from Gallery → select → Copy to job (read from its bundle,
+`performBulkCopyMove` / `buildBulkSelectionPayload`). It is **not** in developers.zuper.co.
+
+```
+POST /api/attachments/bulk_actions
+{"group_by": "created_by", "sort": "ASC", "sort_by": "created_at",
+ "filter.module": "JOB", "filter.module_uid": "<SOURCE job_uid>", "filter.type": "IMAGE,VIDEO",
+ "users": [], "attachment_uids": ["<uid>", ...],
+ "action": "copy", "action_options": {"to_job_uid": "<TARGET job_uid>"}}
+→ 200 {"title": "Attachments copied", "data": {"source_count", "created_count",
+       "recovered_count", "skipped_duplicate_count"}}
+```
+
+- **`copy`, never `move`.** The app's `move` takes the files off the source job. Copy leaves them.
+- **Never send an empty `attachment_uids`.** Empty (with `users` / `dates` empty) is the app's
+  "select all" and copies the WHOLE source gallery. Always list the uids.
+- **A copy is the same file on two jobs**: same `attachment_uid`, same S3 path, same uploader
+  and description; only `module_uid` differs. Nothing is uploaded again, so a 33 MB video copies
+  in a second. Do not "clean up" the source afterwards: it is one stored file.
+- **Read the gallery with the app's view**, `GET /attachments/group?group_by=created_by&sort=ASC&
+  sort_by=created_at&filter.module=JOB&filter.module_uid=<job>&filter.type=IMAGE,VIDEO&page=1&limit=200`.
+  The plain `GET /attachments?filter.module_uid=` list does **not** show copied files.
+- **What does NOT reach the gallery:** a picture note (`POST /misc/upload` + `POST /jobs/{uid}/note`
+  `{"note":{note_type:"IMAGE", attachments:[…]}}`) shows in Notes only; the documented
+  `POST /jobs/{uid}/attachments` (`{"attachment":{file_name,url,…}}`) shows in the job's
+  Attachments section only. Both were measured on #753.
+- Before copying, download the files and keep a checksum copy (as below); afterwards, download
+  each from the target and compare.
+
+**Uploading a NEW picture straight into a job's gallery** (the web app's gallery uploader):
+`POST /api/misc/upload`, multipart, fields `attachment_type=ATTACHMENT`, `module=JOB`,
+`module_uid=<job_uid>`, file field `attachment`. Without `module` / `module_uid` the same request
+only stores a loose file (what a note or proposal then points at) and nothing reaches the gallery.
+Done for **#803 Chadi Irani** on 2026-11-19 (the user asked): 4 WhatsApp pictures of the cracked
+wall flashing above the tile, named `Chadi-Irani-803-2026-11-19-01..04.jpg`; gallery 10 → 14, the
+10 earlier items kept, all 4 downloaded back with matching SHA-256. Script dispatch
+`/opt/ops/zuper/zbrowser/gallery803/gallery_upload.py` (dry run / `--one` / `--commit`); backup
+owen-main `zuper-backup/before-changes/2026-11-19/job803_gallery_upload/`.
+
+**Done for job #355 → #753 (2026-11-19, the user asked).** Owen uploaded 4 pictures and 1 video
+(`IMG_20261119131147/152/205/211.jpg`, `VID_20261119131330.mp4`, 2026-11-19 13:11–13:13) to
+**#355 Active Leak Repair - 4120 NE 1st Ave** (AHS - Repair & Review, Callback in Progress); they
+belong to **#753 Anita Mcgruder - 96443119 ROOF** (AHS Simple Flow, Repair Day), same customer.
+- Copied with the request above: one picture first, then the other four. #753's gallery went from
+  7 (Antonio's, 2026-11-06) to 12; #355 still has its 5. All 5 downloaded from #753 match the
+  originals' SHA-256.
+- Backup of the 5 files + both jobs before the change: owen-main
+  `/opt/santiagoproperties/zuper-backup/before-changes/2026-11-19/job355_media_for_753/`.
+- Script: dispatch `/opt/ops/zuper/zbrowser/move753/gallery_copy.py` (dry run by default;
+  `--one`; `--commit`; refuses an empty selection; log `gallery_copy.log`).
+- Left on #753 from the first two attempts, before the gallery request was found:
+  `IMG_20261119131147.jpg` also on a note ("Pictures copied from job #355…",
+  `64db4c58-34bd-4f4d-9e00-03e3f8c9a0fb`) and in the job's Attachments section
+  (`6ab3d3ab-0a68-4eae-98b0-81b3dbfa4d2a`). Same picture; removing either is the owner's call.
 
 ---
 
@@ -559,7 +724,7 @@ Before you move or update a Zuper job, check what was last said to the customer.
 | Transcript | **Yes**: the full text of each recorded call | **No**: Zuper never exposes one (only the recording) |
 | Summary | no | **Yes**: a summary, a "next action", a confidence score and a sentiment |
 | Recording | yes | yes (`recording_url`) |
-| Texts | yes, in the CRM inbox | not read by the CRM (unchecked whether the API allows it) |
+| Texts | yes, in the CRM inbox | read by the CRM since 2026-10-19 (`/message/conversations`, `/messages`) |
 | Where it lands in the CRM | Conversations (`conversation_events` / `number_thread_events`) | `dispatch_calls`, read every ~150 s by the Dispatch reader |
 
 ### Easiest: ask the Dispatch assistant
@@ -594,7 +759,9 @@ that the Zuper customer record does not have is not shown.
   - `GET /calls/{call_uid}/details` returns `call_recordings[].call_summary` =
     `{summary, next_action, confidence, sentiment, status}` plus `recording_url`.
     There is no transcript field.
-  - In the CRM these are the ONLY two Connect requests `client.connect_read` will make. Dial,
+  - Since 2026-10-19 the CRM also reads the text inbox: `POST /message/conversations`,
+    `GET /message/conversation/{uid}` and `POST /messages`. These five (`client.CONNECT_READS`)
+    are the ONLY Connect requests `client.connect_read` will make. Dial,
     hang up, `/message/send` and everything else are refused before a connection exists.
     **Never call any other Connect endpoint by hand. It can ring or text a customer.**
 - Read what the CRM stored, on production (read-only):
@@ -631,9 +798,9 @@ that the Zuper customer record does not have is not shown.
 - The CRM mirrors Zuper one way (section 4.4). `feature/zuper-new-pipelines` (the 6 regional
   boards, "AHS - Repair & Review", `CATEGORIES` AHS → "AHS - Inspection", `mirror.ALIASES`
   "Inspecting" → "Inspection", `mirror.MERGES` "On My Way" → "Inspection") is **merged to `main`
-  and deployed** — production ran `b332d53` on 2026-09-28 and runs `966c0b7` on 2026-10-12. The
+  and deployed** — production ran `b332d53` on 2026-09-28 and runs `54a0ffa` on 2026-11-25. The
   code is deployed, but **its `--phase boards` was never committed** (section 4.4), so the CRM
-  still has the old AHS pipeline.
+  still has the old AHS pipeline (re-checked 2026-11-25), and AHS Simple Flow is not mirrored.
 - After a board or stage change in Zuper: in the api container
   `python -m app.zuper.mirror --phase boards --phase backfill` **dry run**, show the owner, then
   `--commit` with **boards and backfill together** (so no card sits on a wrong stage).
@@ -645,14 +812,26 @@ that the Zuper customer record does not have is not shown.
 
 ## 10. Open items
 
+- [ ] **`zuper_tasks` and `zuper_proposals` are stopped by their old gate copy since 2026-10-31**
+      (4.1, 4.2; fix in `ZUPER-AUTOMATIONS.md` section 4 — owner's OK first). Decide first whether
+      the 4 numbered tasks are still wanted now that Simple Flow has its own task list, and that
+      ~25 days of drafts will get a PDF at once.
+- [ ] **The CRM's AHS-email note is empty in Zuper** (4.4): `zapi.create_note` tries the flat body
+      first. Send the documented wrapped body `{"note": {...}}` first.
+- [ ] **Speed to lead misses AHS Simple Flow**: `dispatch/speed.py` `LEAD_BOARDS` lists AHS -
+      Inspection, Retail and the regional boards only, so the AHS leads made since 2026-11-06 are
+      not in the report.
+- [ ] **"Special Cases"** (3.1): what goes there, whether its jobs should stay on routes, and
+      whether Dispatch should flag a job that sits in it.
+- [ ] Mirror AHS Simple Flow into the CRM, or decide it stays read directly.
 - [x] ~~Deploy the CRM branch (section 9)~~ — deployed (`b332d53` on 2026-09-28; see section 9 for today's).
 - [ ] **Run `mirror --phase boards --phase backfill`** (dry run first, show the owner): the CRM
       still has the old "Dream Team Roofing AHS" pipeline and no AHS - Repair & Review or regional
       pipelines (section 4.4, checked 2026-10-12).
 - [ ] Webhooks: none registered for the CRM; fix `webhook.EVENTS` to the real dotted names before
       trying again. Two template webhooks post to webhook.site (section 3.8) — owner's call.
-- [ ] The owen-main containers' `zsafety.py` is older than dispatch's (different file on
-      2026-10-12; see `ZUPER-AUTOMATIONS.md` section 4).
+- [ ] The owen-main containers' `zsafety.py` is older than dispatch's — this is what stopped them
+      (first item).
 - [x] ~~Routes: whose job when two people are assigned; warn about a job with no technician~~ —
       the person assigned last gets it, and both cases are logged as WARN (2026-10-01).
 - [ ] Routes: on 2026-10-12 the log warns about open jobs in a visit column with no appointment
@@ -666,7 +845,6 @@ that the Zuper customer record does not have is not shown.
       boards' inspection questions to job fields first. Give the regional boards the KPI
       questions (Scheduled, Cancelled) before they get jobs, or their jobs are missing from the KPI
       report.
-- [ ] Leak repair has no columns. If the team means to use it, it needs a `NEW` column at least.
 - [ ] Invoice payment terms (still Zuper's sample text); proposal email wording.
 - [ ] Contract image page 1 (old phone/email) and page 14 "INITIALS" line — needs a new contract PDF.
 - [ ] Optionally add a job field for "Intake complete?" or make it optional (so intake can be
@@ -675,9 +853,11 @@ that the Zuper customer record does not have is not shown.
 
 ---
 
-## 11. Backups (dispatch `/root/backups/`)
+## 11. Backups (owen-main `/opt/santiagoproperties/zuper-backup/`)
 
-Key ones from 2026-09-24/25: `ahs_jobs_full_before_split_20260925.json` (all 333 AHS jobs, full),
+Every Zuper backup moved here from dispatch on 2026-11-06 (`ZUPER-BACKUPS.md`): the full copy of
+2026-10-27 in `full/`, and every "before" snapshot in `before-changes/<YYYY-MM-DD>/` under its
+original name. Key ones from 2026-09-24/25 (now in `before-changes/2026-09-24/` and `…-25/`): `ahs_jobs_full_before_split_20260925.json` (all 333 AHS jobs, full),
 `ahs_statuses_*`, `ahs_checklists_20260925.json`, `ahs_inspection_checklist_before_move_20260925.json`,
 `job_custom_fields_before_insp_20260925.json`, `job_field_groups_20260925.json`,
 `job_categories_before_reorder_20260925.json`, `zuper_company_config_before_*`,

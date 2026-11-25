@@ -208,7 +208,7 @@ def read_jobs(db: Session, now: datetime) -> dict:
     known = set().union(*c.FIRST_CONTACT.values(), c.BOOK, c.CLOSED, c.WAITING_ON_AHS,
                         c.FOLLOW_UP, c.OLD_VISIT_NAMES,
                         c.AFTER_INSPECTION_STAGES, c.AFTER_REPAIR_STAGES,
-                        c.INSPECTION_STAGES_RETAIL)
+                        c.INSPECTION_STAGES_RETAIL, c.SIMPLE_FLOW_STAGES)
     for row in client.iter_all(client.path("jobs")):
         uid = row.get("job_uid")
         if not isinstance(uid, str) or not uid:

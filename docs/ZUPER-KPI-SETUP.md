@@ -14,7 +14,15 @@
 > field for each question (same label), and every question copies its answer there and shows
 > the field's value pre-filled. A wrong answer is corrected in the field on the job page; the
 > report reads the field first, else the checklist answer. Backup:
-> dispatch `/root/backups/zuper_kpi_link_before_20260930.json`.
+> dispatch `/root/backups/zuper_kpi_link_before_20260930.json`. (Both backups are now on owen-main in
+> `/opt/santiagoproperties/zuper-backup/before-changes/2026-09-30/`.)
+
+> **AHS Simple Flow (checked 2026-11-25) has none of these questions.** The AHS board in use since
+> 2026-11-06 asks no `AHS authorized ($)`, `Customer chose`, `Customer paid ($)` or `Cancel reason`
+> (and has no Cancelled column). It has a one-line "Option chosen" in Proposal Creation and an
+> "Outcome" question in Job Completed (2026-11-09). Simple Flow jobs carry the KPI answers only from
+> the old board they came from, so the nightly report sees little of the work since November. Adding
+> them to Simple Flow is a settings change — owner's OK first.
 
 These steps only **add** questions to Zuper. They change no job, move no job and touch no photo.
 A question pops up when someone moves a job **into** that column from now on; jobs already past

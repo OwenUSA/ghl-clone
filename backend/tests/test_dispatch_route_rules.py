@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.dispatch import config as c
-from app.dispatch import crew, readiness, scheduling
+from app.dispatch import crew, reader, readiness, scheduling
 from app.main import app
 from app.models import (
     Contact,
@@ -97,6 +97,25 @@ def proposed(out):
 
 # ---- which jobs ---------------------------------------------------------------------------
 
+def test_every_simple_flow_column_is_a_known_stage_and_a_new_one_is_listed(db, monkeypatch):
+    """The page's header lists the stages Dispatch does not know. Simple Flow's own columns
+    ("Special Cases" since 2026-11-25) are not on it; a column the team adds later still is."""
+    def row(n, status):
+        return {"job_uid": "r%d" % n, "work_order_number": n, "updated_at": "x",
+                "job_category": {"category_name": SF},
+                "current_job_status": {"status_name": status, "status_type": "OTHER"}}
+    rows = [row(i, s) for i, s in enumerate(c.SIMPLE_FLOW_STAGES)] + [row(99, "Brand New")]
+
+    def no_details(*a, **k):
+        raise reader.client.ZuperError("unavailable")
+    monkeypatch.setattr(reader.client, "iter_all", lambda *a, **k: iter(rows))
+    monkeypatch.setattr(reader.client, "request", no_details)
+    assert c.SF_SPECIAL in c.SIMPLE_FLOW_STAGES
+    counts = reader.read_jobs(db, NOW)
+    assert counts["listed"] == len(c.SIMPLE_FLOW_STAGES) + 1
+    assert counts["unknown_stages"] == ["%s|Brand New" % SF]
+
+
 def test_simple_flow_and_retail_columns_say_what_the_next_visit_is(db):
     db.add_all([
         job(701, c.SF_NEW),                                               # inspection to book
@@ -107,6 +126,7 @@ def test_simple_flow_and_retail_columns_say_what_the_next_visit_is(db):
         job(706, c.SF_HANDOFF),                                           # repair, no date
         job(707, c.SF_REPAIR_DAY, start=ny(11, 17, 9), photos=True),      # repaired: out
         job(708, c.SF_QUALITY),                                           # out
+        job(715, c.SF_SPECIAL),                                           # parked: out
         job(709, "New Lead", board=RETAIL),                               # inspection
         job(710, "Proposal Made", board=RETAIL),                          # repair
         job(711, "Scheduled", board=RETAIL),                              # no quote: inspection

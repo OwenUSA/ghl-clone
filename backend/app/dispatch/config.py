@@ -19,13 +19,16 @@ RETAIL_BOARD = "Retail"
 # boards are legacy; the owner, 2026-11-19: "we are only using for now the AHS simple flow and
 # the retail pipelines"). Its stages mean something only to the week planner
 # (scheduling.SIMPLE_FLOW_NEED): its first column also holds BOOKED inspections, so it is in
-# no BOOK / NEEDS_DATE group here.
+# no BOOK / NEEDS_DATE group here. Naming a stage here is what keeps it off the page's
+# "stages it does not know" list (reader.py).
+# 2026-11-25: "Special Cases" (ON_HOLD, no checklist) added after Repair Day at the user's
+# request. Its use is not defined yet, so the planner books nothing for a job in it.
 SIMPLE_FLOW_BOARD = "AHS Simple Flow"
 SF_NEW, SF_INSPECTION_DAY = "Got a job from AHS", "Day of Inspection"
 SF_PROPOSAL, SF_HANDOFF, SF_REPAIR_DAY = "Proposal Creation", "Handoff Meeting", "Repair Day"
-SF_QUALITY, SF_DONE = "Quality Call", "Job Completed"
+SF_SPECIAL, SF_QUALITY, SF_DONE = "Special Cases", "Quality Call", "Job Completed"
 SIMPLE_FLOW_STAGES = (SF_NEW, SF_INSPECTION_DAY, SF_PROPOSAL, SF_HANDOFF, SF_REPAIR_DAY,
-                      SF_QUALITY, SF_DONE)
+                      SF_SPECIAL, SF_QUALITY, SF_DONE)
 BOARDS = (INSPECTION_BOARD, REPAIR_BOARD, RETAIL_BOARD, SIMPLE_FLOW_BOARD)
 # Boards the team uses that are pipelines nonetheless (copies of Retail). Read, never flagged
 # as "off a pipeline".

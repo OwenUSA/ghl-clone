@@ -12,13 +12,15 @@ $SSH dispatch 'bash -s' <<'REMOTE'
 echo "-- cron entries that touch Zuper"
 grep -H -v "^#" /etc/cron.d/* 2>/dev/null | grep -iE "zuper|zbrowser|zsup" || echo "   (none)"
 echo "-- safety gate (last run by the routes wrapper)"
-sed 's/^/   /' /tmp/zuper-routes.gate 2>/dev/null || echo "   no gate output yet"
+sed 's/^/   /' /opt/ops/zuper/state/zuper-routes.gate 2>/dev/null || echo "   no gate output yet"
 echo "-- routes: last run"
-ls -l --time-style=+%F_%T /tmp/zuper-routes.out 2>/dev/null | awk '{print "   output written " $6 " (server time)"}'
-head -c 300 /tmp/zuper-routes.out | grep -E "^[0-9]{4}-" | head -1 | sed 's/^/   /'
+ls -l --time-style=+%F_%T /opt/ops/zuper/state/zuper-routes.out 2>/dev/null | awk '{print "   output written " $6 " (server time)"}'
+head -c 300 /opt/ops/zuper/state/zuper-routes.out | grep -E "^[0-9]{4}-" | head -1 | sed 's/^/   /'
+echo "-- safety gate file (owen-main's two container copies must match it)"
+sha1sum /opt/ops/zuper/zsafety.py | awk '{print "   " $1 "  dispatch /opt/ops/zuper/zsafety.py"}'
 echo "-- routes: problems in the last 500 log lines"
-tail -500 /home/qa/zbrowser/routes_sync.log | grep -cE "Traceback|SAFETY GATE FAILED" | sed 's/^/   tracebacks + gate failures: /'
-tail -500 /home/qa/zbrowser/routes_sync.log | grep -cE "WARN" | sed 's/^/   WARN lines: /'
+tail -500 /opt/ops/zuper/zbrowser/routes_sync.log | grep -cE "Traceback|SAFETY GATE FAILED" | sed 's/^/   tracebacks + gate failures: /'
+tail -500 /opt/ops/zuper/zbrowser/routes_sync.log | grep -cE "WARN" | sed 's/^/   WARN lines: /'
 REMOTE
 
 echo "=================== owen-main ==================="
@@ -26,6 +28,15 @@ $SSH owen-main 'bash -s' <<'REMOTE'
 cd /opt/santiagoproperties || exit 1
 echo "-- containers"
 docker ps -a --format '   {{.Names}}\t{{.Status}}' | grep -E "zuper_|ghl_clone_(api|worker)"
+echo "-- safety gate copies inside the containers (must match dispatch's, above)"
+sha1sum zuper-tasks/app/zsafety.py zuper-proposals/app/zsafety.py | sed 's/^/   /'
+for f in zuper-tasks/data/tasks_sync.log zuper-proposals/data/compare_sync.log; do
+  if tail -40 "$f" | grep -q "SAFETY GATE FAILED - no"; then
+    echo "   $f: LATEST RUNS REFUSED BY THE GATE (nothing written)"
+  else
+    echo "   $f: latest runs not refused"
+  fi
+done
 echo "-- zuper_tasks: last applied change"
 grep -E "^20[0-9-]+T|^APPLIED" zuper-tasks/data/tasks_sync.log | grep -B1 "^APPLIED" | tail -2 | sed 's/^/   /'
 echo "   log last written: $(date -r zuper-tasks/data/tasks_sync.log '+%F %T %Z')  (only changes and errors are logged)"

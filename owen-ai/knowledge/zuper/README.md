@@ -18,7 +18,7 @@ Quick task map:
 - Draft a proposal → operations §7.1 rules, api-reference §8, safety-rules §3 (DRAFT only, never send).
 - Configure something → safety-rules §3–4 (owner OK, backup, rehearse on AHS - TEST).
 
-Source documents (repo): `docs/ZUPER-OPERATIONS.md`, `ZUPER-AUTOMATIONS.md`,
+Source documents (repo, brought up to date 2026-11-25): `docs/ZUPER-OPERATIONS.md`, `ZUPER-AUTOMATIONS.md`, `ZUPER-BACKUPS.md`,
 `ZUPER-CUSTOMER-TEXT-WORKFLOWS.md`, `ZUPER-KPI-SETUP.md`, `ZUPER-NEXT-UI-MAP.md`,
 `ZUPER-SPEED-TO-LEAD.md`, branch `docs/zuper-2026-10-12-evening` (`ZUPER-PROPOSALS-AND-UPSELLS.md`),
 `backend/app/zuper/client.py`, `DECISIONS.md`. Official docs: https://developers.zuper.co (index
