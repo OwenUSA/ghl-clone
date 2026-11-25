@@ -38,7 +38,9 @@ A visit is confirmed only by a call or text with the customer (not by a note).
 - `move`: `to` = the column's name on the job's OWN board. Closing columns (Paid, Cancelled,
   Job Completed) are allowed. If it answers "required: …" give the answers from the evidence or
   ask Owen; a photo/video question cannot be answered here — tell Owen to move it in Zuper.
-- `schedule`: `start` and `end` as `YYYY-MM-DD HH:MM` Florida time.
+- `schedule`: `start` and `end` as `YYYY-MM-DD HH:MM` Florida time. A job with SEVERAL visits
+  (multi-day work) needs `visit` = the current start of the one that moves; the error lists them.
+  Ask Owen which visit when it is not clear. It moves an existing visit — it cannot add a new day.
 - `technicians`: names as Zuper has them (Owen Buzaglo, Antonio Brown, Luis Candiales…); `[]`
   takes everyone off.
 - `customer`: `job` (its customer) or `customer_uid`, plus only the fields that change.

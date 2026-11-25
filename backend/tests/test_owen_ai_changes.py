@@ -168,6 +168,15 @@ class FakeZ:
             return self.ok({})
         if req.method == "PUT" and path == "/jobs/job-812/update":
             row = body["job"][0]
+            appts = (self.job.get("job_appointments") or {}).get("appointments") or []
+            if row["type"] == "SCHEDULE" and len(appts) > 1:
+                hit = [a for a in appts if a["appointment_uid"] == row.get("appointment_uid")]
+                if not hit:
+                    return httpx.Response(400, json={"type": "error", "message": (
+                        "appointment_uid is required when job has multiple appointments")})
+                hit[0]["scheduled_start_time"] = row["scheduled_start_time"].replace(" ", "T") + "Z"
+                hit[0]["scheduled_end_time"] = row["scheduled_end_time"].replace(" ", "T") + "Z"
+                return self.ok({})
             if row["type"] == "SCHEDULE":
                 self.job["scheduled_start_time"] = row["scheduled_start_time"].replace(" ", "T") \
                     + "Z"
@@ -465,6 +474,59 @@ def test_a_schedule_is_sent_in_utc(db, people):
         "type": "SCHEDULE"}]})]
 
 
+TWO_VISITS = [{"appointment_uid": "ap-1", "scheduled_start_time": "2030-11-12T16:00:00.000Z",
+               "scheduled_end_time": "2030-11-12T18:00:00.000Z", "appointment_status": "NEW"},
+              {"appointment_uid": "ap-2", "scheduled_start_time": "2030-11-23T13:00:00.000Z",
+               "scheduled_end_time": "2030-11-23T15:00:00.000Z", "appointment_status": "NEW"}]
+MOVE_2ND = {"kind": "schedule", "job": "812", "start": "2030-11-25 09:00",
+            "end": "2030-11-25 11:00", "evidence": "customer asked for Monday"}
+
+
+def test_a_job_with_several_visits_moves_only_the_one_named(db, people):
+    z = install()
+    z.job["job_appointments"] = {"appointments": copy.deepcopy(TWO_VISITS), "last_sequence_no": 2}
+    z.job["scheduled_start_time"] = "2030-11-12T16:00:00.000Z"      # the job spans both visits
+    z.job["scheduled_end_time"] = "2030-11-23T15:00:00.000Z"
+    th = chat(db, people)
+    out = propose(db, th, says(db, th, "move it"), MOVE_2ND)
+    assert out.startswith("ERROR") and "has 2 visits" in out and "2030-11-23 08:00" in out, out
+    out = propose(db, th, says(db, th, "the second one"), {**MOVE_2ND, "visit": "2030-11-23 08:00"})
+    assert "Visit 2 of 2: Sat Nov 23, 8:00 AM to 10:00 AM → Mon Nov 25, 9:00 AM to 11:00 AM" in out
+    res = apply(th, says(db, th, "do it"), last_set(db).id, "do it")
+    assert "DONE" in res and "booked Mon Nov 25" in res, res
+    assert z.bodies() == [("PUT", "/jobs/job-812/update", {"job": [{
+        "scheduled_start_time": "2030-11-25 14:00:00", "scheduled_end_time": "2030-11-25 16:00:00",
+        "type": "SCHEDULE", "appointment_uid": "ap-2"}]})]
+    first = z.job["job_appointments"]["appointments"][0]
+    assert first["scheduled_start_time"] == "2030-11-12T16:00:00.000Z"   # the other visit kept
+
+
+def test_a_visit_that_is_not_on_the_job_is_refused(db, people):
+    z = install()
+    z.job["job_appointments"] = {"appointments": copy.deepcopy(TWO_VISITS)}
+    th = chat(db, people)
+    out = propose(db, th, says(db, th, "go"), {**MOVE_2ND, "visit": "2030-11-24 08:00"})
+    assert out.startswith("ERROR") and "no visit starting 2030-11-24 08:00" in out
+    assert db.query(OwenAiChangeSet).count() == 0 and z.writes() == []
+
+
+def test_a_span_over_days_names_the_end_day():
+    start = datetime(2030, 11, 12, 16, 0, tzinfo=UTC)
+    same_day = changes._when(start, datetime(2030, 11, 12, 18, 0, tzinfo=UTC))
+    assert same_day == "Tue Nov 12, 11:00 AM to 1:00 PM"
+    two_days = changes._when(start, datetime(2030, 11, 23, 15, 0, tzinfo=UTC))
+    assert two_days == "Tue Nov 12, 11:00 AM to Sat Nov 23, 10:00 AM"
+
+
+def test_a_list_past_its_24_hours_reads_expired_on_the_page(db, people):
+    install()
+    th, _, row = proposed(db, people, MOVE_DONE)
+    row.created_at = datetime.now(UTC) - timedelta(hours=30)
+    db.commit()
+    shown = call("GET", "/threads/%d" % th.id, "owner", people).json()["changes"][0]
+    assert shown["status"] == "expired" and last_set(db).status == "pending"
+
+
 def test_technicians_assign_unassign_and_the_technician_field(db, people):
     z = install()
     z.job["assigned_to"] = [{"user": z.user("u-luis"), "team": {"team_uid": "t-office"}}]
@@ -521,6 +583,15 @@ def test_the_job_address_keeps_to_the_job(db, people):
         "street": "9 Oak St", "city": "Sarasota", "state": "FL", "zip_code": "34236",
         "country": "US"}}})]
     assert "DONE" in out
+
+
+def test_the_records_own_country_is_kept(db, people):
+    z = install()
+    z.job["customer_address"]["country"] = "USA"
+    th, _, row = proposed(db, people, {"kind": "job_address", "job": "812", "address": {
+        "street": "9 Oak St", "city": "Sarasota", "zip": "34236"}, "evidence": "call Nov 20"})
+    apply(th, says(db, th, "do it"), row.id, "do it")
+    assert z.bodies()[0][2]["job"]["customer_address"]["country"] == "USA"
 
 
 def test_a_note_is_private_and_says_owen_ai(db, people):
@@ -651,6 +722,20 @@ def test_inside_a_move_scope_anything_else_is_refused_before_a_connection(db, pe
             pytest.raises(ZuperError) as exc:
         client.request(method, path, body=body)
     assert exc.value.kind == "refused" and z.requests == []
+
+
+def test_a_visit_scope_sends_only_that_visits_uid(db, people):
+    z = install()
+    row = {"scheduled_start_time": "2030-11-25 14:00:00", "scheduled_end_time": "2030-11-25 "
+           "16:00:00", "type": "SCHEDULE"}
+    with client.owen_ai_change("schedule", "job-812", appointment_uid="ap-2"):
+        for bad in (row, {**row, "appointment_uid": "ap-1"}):
+            with pytest.raises(ZuperError):
+                client.request("PUT", "/jobs/job-812/update", body={"job": [bad]})
+    with client.owen_ai_change("schedule", "job-812"), pytest.raises(ZuperError):
+        client.request("PUT", "/jobs/job-812/update", body={"job": [{**row,
+                                                                    "appointment_uid": "ap-2"}]})
+    assert z.requests == []
 
 
 def test_the_scope_with_the_gate_off_allows_nothing(db, people, monkeypatch):

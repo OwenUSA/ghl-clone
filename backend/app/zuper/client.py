@@ -189,14 +189,17 @@ CHANGE_STATUS_KEYS = frozenset({"job_uid", "status_uid", "status_name", "remarks
 @contextlib.contextmanager
 def owen_ai_change(kind: str, job_uid: str | None = None, *, customer_uid: str | None = None,
                    status_uid: str | None = None, label: str | None = None,
-                   assign: tuple = (), unassign: tuple = (), uploads: int = 0):
+                   assign: tuple = (), unassign: tuple = (), uploads: int = 0,
+                   appointment_uid: str | None = None):
     """ONE change Owen told Owen AI to make in Zuper, in the chat (2026-11-21, the owner's lift;
     app/owen_ai/changes.py and nothing else opens it). Each kind has its own requests, for THIS
     job / customer only, each at most once unless said:
 
       move         PUT  /jobs/{job}/status       to `status_uid` only (changes.py keeps it on the
                                                  job's own board), with the column's answers
-      schedule     PUT  /jobs/{job}/update       exactly [{scheduled_start/end_time, SCHEDULE}]
+      schedule     PUT  /jobs/{job}/update       exactly [{scheduled_start/end_time, SCHEDULE}],
+                                                 + `appointment_uid` (and only that one) when given:
+                                                 one visit of a job with several (2026-11-23)
       technicians  POST /jobs/assign             ASSIGN one user of `assign` per request
                    PUT  /jobs/{job}/update       UNASSIGN one user of `unassign` per request
                    PATCH /custom_fields          the job's one field named `label` (Technician)
@@ -215,7 +218,8 @@ def owen_ai_change(kind: str, job_uid: str | None = None, *, customer_uid: str |
         raise ZuperError("refused", "not an Owen AI change kind: %s" % kind)
     state = {"kind": kind, "job": str(job_uid or ""), "customer": str(customer_uid or ""),
              "status_uid": status_uid, "label": label, "assign": set(assign),
-             "unassign": set(unassign), "uploads": uploads, "done": []}
+             "unassign": set(unassign), "uploads": uploads, "appointment": appointment_uid,
+             "done": []}
     token = _OWEN_AI_CHANGE.set(state)
     try:
         yield state
@@ -285,9 +289,12 @@ def _owen_ai_change_ok(method: str, path: str, body: Any, params: Any, files: An
         if method != "PUT" or path != "/jobs/%s/update" % job or done:
             return "one PUT /jobs/{this job}/update"
         rows = body.get("job") if isinstance(body, dict) and set(body) == {"job"} else None
+        keys = {"scheduled_start_time", "scheduled_end_time", "type"}
+        if st["appointment"]:
+            keys.add("appointment_uid")
         if not (isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
-                and set(rows[0]) == {"scheduled_start_time", "scheduled_end_time", "type"}
-                and rows[0]["type"] == "SCHEDULE"
+                and set(rows[0]) == keys and rows[0]["type"] == "SCHEDULE"
+                and rows[0].get("appointment_uid") == st["appointment"]
                 and all(isinstance(rows[0][k], str) for k in ("scheduled_start_time",
                                                               "scheduled_end_time"))):
             return "only the visit's start and end"
