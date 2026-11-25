@@ -1,4 +1,4 @@
-# Zuper live account — Dream Team Roofing (state on 2026-11-02)
+# Zuper live account — Dream Team Roofing (state on 2026-11-02, updated 2026-11-25)
 
 Read-only reconnaissance of the production Zuper account, done 2026-11-02 between 18:00 and 18:45 UTC.
 Every request was a GET. Nothing was created, changed, sent or triggered. The raw JSON is on
@@ -6,6 +6,10 @@ Every request was a GET. Nothing was created, changed, sent or triggered. The ra
 which reads the key from `/opt/santiagoproperties/ghl-clone/.env.prod` and never prints it).
 For endpoint semantics and confidence markers, see `api-reference.md`. **This file records what the account
 actually contains.**
+
+**Re-read 2026-11-25 (GET only):** the board list, AHS Simple Flow's columns and jobs, the proposal
+templates' triggers, the active workflows, appointments, company config and the test records. Lines
+marked *(2026-11-25)* were changed then; the rest is still the 2026-11-02 reconnaissance.
 
 Privacy: real customers appear here only by job number (`#757`) or proposal number (`DTR-58`).
 Only the test customer's details are written out.
@@ -60,10 +64,15 @@ Shared structure:
   **DTR Packages** product (template lines reference the product by its Mongo `_id` in `product`).
 - Option discount is `{type: FIXED, discount_applicability: TRANSACTION}` with no value. Financing is off. There are no add-ons,
   no option groups, no formulas or pricing rules, no option images.
-- `cpq_config.trigger` on all 4 is **AHS - Inspection / Proposal Made** (`f07e3c01…` / `7cac884d-7206-498a-946d-4fe982cf0017`).
-  Moving a job on AHS - Inspection into "Proposal Made" can therefore make Zuper auto-generate a
-  proposal from these templates. Owen tested this on 2026-11-02 (test proposals DTR-140…143, `cpq_status.proposal_generation_type: "MERGE"`).
-  **AHS Simple Flow has no trigger.** Its "Proposal Creation" stage is not wired to any template.
+- `cpq_config.trigger` *(2026-11-25)*: Flat, Tile and Custom on **AHS - Inspection / Proposal Made**
+  (`f07e3c01…` / `7cac884d-7206-498a-946d-4fe982cf0017`); **Roof Replacement on AHS Simple Flow /
+  Proposal Creation** (`2fbc07ec…` / `cea9574b-8939-427c-8849-1a5898681e3e`, added by the team by
+  2026-11-07). Moving a job into one of those columns can make Zuper auto-generate a proposal from the
+  template — **a move into Simple Flow's Proposal Creation, including one made by `apply_zuper_changes`,
+  can create a Roof Replacement proposal**. Owen tested the trigger on 2026-11-02 (test proposals
+  DTR-140…143, `cpq_status.proposal_generation_type: "MERGE"`).
+- A 5th DTR template, **"DTR - Tile Leak Repair - Short Proposal (Good / Better / Best)"**
+  (`0e5d788e-656e-40f5-a4af-cb03ffc92fc0`, Tile's options on a shorter layout, 2026-11-09), has no trigger.
 - Prices and descriptions come from the product. A new proposal **copies the product's HTML description**
   (`<p><strong>Scope of Work</strong></p><ul><li>…</li></ul><p>Workmanship Warranty…</p><p>Payment terms…</p>`).
 
@@ -191,7 +200,8 @@ container on owen-main: a side-by-side options page with no signature page) and 
 ### Sending (for reference only; never do it without the owner)
 `POST /estimate/{uid}/send?send_proposal_layout=true` with `template_uid` + `email`… (a customer-facing send) and
 `PUT /estimate/{uid}/status {"estimate_status":"AWAIT_RESPONSE"}`. Without `email` the same POST returns the PDF bytes.
-The repo's `client.py` DENYLIST blocks all writes to `/estimate`, so an agent that creates proposals needs its own explicit scope.
+The repo's `client.py` DENYLIST blocks all writes to `/estimate` for everyone else; Owen AI's drafts go through its own
+scope, `client.owen_ai_proposal_write()` (2026-11-09).
 
 ### Creating a proposal — request body (NOT executed)
 
@@ -265,11 +275,12 @@ The response is `{type, message, data: {estimate_uid}}`. Re-read it with `GET /e
 ## 3. "AHS Simple Flow" — the new pipeline
 
 Job category **AHS Simple Flow** `2fbc07ec-94e0-43ca-98d5-c902f12b59e5`, color `#E11D48`, created by Owen
-**2026-10-31 17:52 UTC** (last edited 2026-11-01). It is 3rd in display order. Repo docs do not mention it yet.
+**2026-10-31 17:52 UTC** (last edited 2026-11-01). It is 3rd in display order. Since 2026-11-19 it and Retail are
+the only boards the team uses (owner). Repo docs: `docs/ZUPER-OPERATIONS.md` 3.1 *(2026-11-25)*.
 Statuses: `GET /jobs/status/2fbc07ec-94e0-43ca-98d5-c902f12b59e5` (the response is `data.job_statuses[]`, each with
 `checklist[]`). Jobs: `GET /jobs?count=100&page=1&filter.category=2fbc07ec-…`.
 
-**7 stages, in order, with jobs per stage on 2026-11-02 (58 jobs total):**
+**8 stages since 2026-11-25, in order, with jobs per stage on 2026-11-02 (58 jobs total):**
 
 | # | Stage | status_uid | Type | Jobs | Checklist (pop-up, none required) |
 |---|---|---|---|---|---|
@@ -278,10 +289,16 @@ Statuses: `GET /jobs/status/2fbc07ec-94e0-43ca-98d5-c902f12b59e5` (the response 
 | 3 | **Proposal Creation** | `cea9574b-8939-427c-8849-1a5898681e3e` | ESTIMATING | 5 | 6: price meeting (AHS-covered / non-covered / upgrade), **Good/Better/Best built with terms, prices, warranties, scope**, agreement sent, option chosen, document signed, **50% deposit paid** |
 | 4 | Handoff Meeting | `4492c949-deac-41d2-8366-f00a9f3d2420` | SCHEDULED | 11 | 7: photos/scope/estimate match, materials on hand, Antonio briefed, crew/date/time, homeowner told window "from GHL", change orders approved by Owen first, same-day dry-in plan |
 | 5 | Repair Day | `ea189583-9cca-4c10-9ab6-7a4e8e7a4c05` | STARTED | 9 | 15: scope confirmed, before/during/after photos, notes read, tools/materials on truck, **customer sign-off (SIGNATURE)**, walkthrough, tile quality checks (flat, interlocked, no lifted corners, no exposed nails, cracked tiles replaced, never open more than closed same day) |
-| 6 | Quality Call | `a4906cd6-4571-4a84-b8b7-a709c0143aa4` | FOLLOW_UP | 2 | 8: repair good / still leaking / working / happy; if happy send Google review link; Antonio asks on site; if not happy no review push; note issue/owner/date |
-| 7 | Job Completed | `d2caa95b-0f1d-4c1b-86ce-d16507bc6801` | COMPLETED | 14 | 8: invoice matches scope, AHS invoice separate from customer invoice, expenses, job costing within 48 h, tech commission, payment / AHS payment tracked, warranties sent, 6-month reactivation tag |
+| 6 | **Special Cases** *(new 2026-11-25)* | `34d495ce-14ab-42ad-a163-7697cd104afd` | ON_HOLD | — | none. Added at the user's request; what goes there is not defined yet — ask Owen before moving a job in or out, and report what you see rather than judging a job in it as late |
+| 7 | Quality Call | `a4906cd6-4571-4a84-b8b7-a709c0143aa4` | FOLLOW_UP | 2 | 8: repair good / still leaking / working / happy; if happy send Google review link; Antonio asks on site; if not happy no review push; note issue/owner/date |
+| 8 | Job Completed | `d2caa95b-0f1d-4c1b-86ce-d16507bc6801` | COMPLETED | 14 | 8 (+ "Outcome", 2026-11-09): invoice matches scope, AHS invoice separate from customer invoice, expenses, job costing within 48 h, tech commission, payment / AHS payment tracked, warranties sent, 6-month reactivation tag |
 
-Almost all checklist items are `SINGLE_LINE` text used as a checkbox SOP. None are linked to job fields, and none are required.
+Almost all checklist items are `SINGLE_LINE` text used as a checkbox SOP, none required. The intake questions of
+"Got a job from AHS" are linked to job fields since 2026-11-09; Proposal Creation has 7 (6 on 2026-11-02).
+
+**Jobs per stage on 2026-11-25 (129 jobs):** Job Completed 68, Got a job from AHS 14, Handoff Meeting 14, Repair Day 12,
+Proposal Creation 7, Quality Call 6, Day of Inspection 4, Special Cases 0, and 4 still showing "Estimate Declined" from
+their old board.
 
 **How it differs from the older AHS boards:**
 - It replaces **two boards**, AHS - Inspection (18 columns) and AHS - Repair & Review (16), with **one 7-stage board**
@@ -291,17 +308,23 @@ Almost all checklist items are `SINGLE_LINE` text used as a checkbox SOP. None a
   is a checklist line inside "Day of Inspection" ("Submit claim… in Frontdoor").
 - **No KPI checklist questions** (Customer chose, Customer paid, AHS authorized ($), Cancel reason). Note that `kpi_report.py` reads those.
   Simple Flow jobs carry them only from their old board's history (5–8 jobs).
-- No CPQ trigger: proposal templates fire only on AHS - Inspection / Proposal Made.
-- The customer-text workflows (welcome, reminders, column texts) are bound to the old AHS boards and their column names,
-  so presumably they do not fire for Simple Flow. Not verified.
-- Dispatch, routes (`routes_sync.py` boards list) and the CRM mirror do not know this board yet.
+- One CPQ trigger *(2026-11-25)*: Roof Replacement fires on **Proposal Creation** (section 1).
+- The customer-text workflows (welcome, reminders, column texts) were bound to the old AHS boards — and **all of them
+  are off since 2026-10-26**.
+- The team's own job workflows ARE wired to it *(2026-11-25)*: "Add Appointments for Inspection and Production" runs
+  on a move into Got a job from AHS or Handoff Meeting, and "RG3-T55 - Upon Job schedule / Upon job user assignment,
+  update job status" can change a job's column when it is scheduled or assigned. So a column can change with nobody
+  moving it; activity lines from these carry `request_source.type = "WORKFLOW_BUILDER"`.
+- Known to the routes job (since 2026-11-06) and to Dispatch and its planner (since 2026-11-19; all 8 columns since
+  2026-11-25). **Not mirrored** into the CRM's pipelines.
 
 **Migration in progress:** the board is 2 days old but holds jobs created as far back as September
 (by creation month: Sep 24 jobs, Oct 29, Nov 5). The open AHS jobs were moved here from the old boards.
 Current counts on the old boards: AHS - Inspection 30 (only 3 open: #756 Submit To AHS, #701 test, #413 Not
 Answering; the rest are Cancelled 18 / Estimate Declined 9). AHS - Repair & Review 308 (in the first 100:
 Paid 80, Awaiting AHS Payment 10, Callback* 8). Retail 101. AHS - TEST 0.
-Also, AHS-email-created jobs (CRM `ahs_create`) still land on **AHS - Inspection** unless the code changes.
+AHS-email-created jobs (CRM `ahs_create`) land on **AHS Simple Flow / Got a job from AHS** since 2026-11-06, and
+carry the board's 21-task list since 2026-11-25 *(2026-11-25)*.
 
 Simple Flow job line items seen: `AHS-LEAK-REPAIR` (23), `AHS-TILE-01` (10), `DTR-CUSTOM-GOOD` (7), `AHS-TRIP` (4),
 `DTR-CUSTOM-BETTER` (3), `DTR-TILE-BEST` (2). Assignees: Owen 26, Antonio 18, Luis 13.
@@ -314,10 +337,10 @@ Technician (23), CompanyCam Project (15).
 
 - Customer **Santiago Villahermosa (TEST)**, `customer_uid 2dbd7187-a6e8-4452-8600-c3d029599d75`,
   email santiagovillahermosa@gmail.com, address "TEST - 100 Test St, Bradenton FL 34205".
-  **Mobile is now `+19549147244`.** The docs say +15618788090, so someone changed it. Confirm with the user that it is theirs
-  before anything can text it.
+  **Mobile is `+19549147244`** (still so on 2026-11-25). It was +15618788090 until about 2026-11-02. Confirm with the user
+  that it is theirs before anything can text it.
 - **Only one live job:** **#701** `6abd527f-31a6-43e9-bb0a-6fe557dac596` "TEST - AHS TEST pre-fill check",
-  board **AHS - Inspection**, status **Proposal Made** (`7cac884d-…`), no assignee, property
+  board **AHS - Inspection**, status **Proposal Made** (`7cac884d-…`, still so on 2026-11-25), no assignee, property
   `c95aec5d-f44a-46b8-bfeb-30fd4d455d37`, job lines `DTR-TILE-BEST` $2,000 + `DTR-FLAT-GOOD` $1,500 (job_total 3,500),
   scheduled 2026-10-28. Notes: none.
   (The other test job #734 "Owen Test" belongs to a different customer.)
@@ -380,9 +403,11 @@ KPI / commission logic keys on these codes (`kpi_report.py`: `AHS-LEAK-REPAIR`, 
 - `GET /jobs/{job_uid}/note` (verified) returns `{data: [ {note_uid, note_type "TEXT", created_by{…}, created_by_type,
   is_private, visible_to_customer, attachments[], user_mentions, is_v2_note, created_at} ]}`.
 - **Open issue:** on the 3 real jobs sampled (#757, #739), the note records came back **without a `note` text field**,
-  although the docs say `note` holds HTML. It might be how these notes were made (v1 vs v2), or a response trim. Check before
-  relying on notes as context.
-- Create (write): `POST /jobs/{uid}/note {"note":{"note":"<text>","is_private":true,"notify_users":false}}` (used by the CRM).
+  although the docs say `note` holds HTML. It might be how these notes were made (v1 vs v2), or a response trim. One known
+  cause: the CRM's AHS-email note is created with the FLAT body first (`zapi.create_note`), which Zuper accepts and stores
+  EMPTY (found 2026-11-09). Check whether a note with no text is that one before relying on notes as context.
+- Create (write): `POST /jobs/{uid}/note {"note":{"note":"<text>","is_private":true,"notify_users":false}}` — the
+  documented, wrapped body, which Owen AI's own notes send. (The CRM's AHS-email path tries the flat body first — above.)
 - A job's photos: `GET /attachments/folders?filter.module=JOB&filter.module_uid=<job_uid>` (albums), and photos on notes.
 
 ### Zuper Connect (texts and calls), host `https://us-east-1-connect.zuperpro.com/api/telephony`
@@ -412,6 +437,11 @@ Read endpoints the CRM uses (POST-shaped reads, verified 2026-10-19 by the repo,
 Owen Buzaglo `74cd936c-9386-469b-addc-d05d3d1a06a0` (Admin, the API key's user) · Luis Candiales
 `4369d420-89d1-40e4-96aa-9091d96fb94b` (Dispatcher, writes the proposals) · Antonio Brown (technician).
 
+### Appointments *(2026-11-25)*
+The appointments module is **in use**: `GET /appointments?count=&page=` answers with 539 records (the 2026-11-02 note in
+`api-reference.md` said 403). The team's "Add Appointments for Inspection and Production" workflow and the web app's
+visit screen make them (e.g. "#860-1 - Inspection"); a job's `scheduled_start_time` still holds the visit.
+
 ### Job filter params that work
 `GET /jobs?count=100&page=N&filter.category=<category_uid>` and `filter.customer=<customer_uid>` (both verified).
 
@@ -419,7 +449,7 @@ Owen Buzaglo `74cd936c-9386-469b-addc-d05d3d1a06a0` (Admin, the API key's user) 
 
 ## 7. Open questions / blockers
 
-1. **Simple Flow has no CPQ trigger and no KPI questions.** Should proposals for Simple Flow jobs be drafted at
+1. **Simple Flow has no KPI questions** (and one CPQ trigger, Roof Replacement on Proposal Creation, since ~2026-11-07). Should proposals for Simple Flow jobs be drafted at
    "Proposal Creation" by the agent (POST /estimate), and should the KPI fields still be filled?
 2. **Which template for which job?** In practice Luis uses *Tile Leak Repair* for almost everything (100 of 128), including flat
    and shingle jobs, and rewrites the GOOD/BETTER text. Confirm whether the agent should pick by roof type
@@ -427,6 +457,7 @@ Owen Buzaglo `74cd936c-9386-469b-addc-d05d3d1a06a0` (Admin, the API key's user) 
 3. Pricing source: the "Retail Value / Special AHS Member Price" numbers are set by hand per job. There is no price book
    or formula. The agent needs a pricing rule or must leave prices for a person.
 4. Note text missing from `GET /jobs/{uid}/note` on the sampled jobs (section 6).
-5. The test customer's mobile changed to +19549147244. Confirm it is the user's.
-6. The repo's Zuper client denylists every write to `/estimate`. Creating proposals needs a new, narrow, explicit scope.
+5. The test customer's mobile is +19549147244 (2026-11-25). Confirm it is the user's.
+6. ~~Creating proposals needs a new, narrow, explicit scope~~ — done: `owen_ai_proposal_write()` (2026-11-09).
+8. **"Special Cases"** (new 2026-11-25): what it is for. Until Owen says, never move a job into it on your own suggestion.
 7. The CPQ "Repair items needed" lookup on the Flat template is being built today. It may change the template structure again.

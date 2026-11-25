@@ -47,7 +47,8 @@ gallery picture is modified.
    switches (`zuper_connect.system_notification_enabled`, `jobs.enable_customer_feedback`,
    `invoice.send_customer_receipt`, `*.notify_customer*`, `*.secondary_customers.notify`). All
    automated customer messaging was **stopped 2026-10-26** on the user's word. Activating any
-   workflow not in `zsafety.py` `APPROVED_WORKFLOWS` also halts routes/tasks/proposal PDFs.
+   workflow not on `zsafety.py`'s lists (`APPROVED_WORKFLOWS`, `TEAM_WORKFLOWS`) also halts the
+   routes job. (Six team job workflows are active and allowed since 2026-11-06; they send nothing.)
 3. **Never delete** a job, customer, note, photo/attachment, album, proposal, invoice, payment,
    commission, task, status/column, category, custom field, checklist question, product, user, route
    or webhook. Jobs carry photos. **Gallery photos: never modify, move, re-tag or delete — no exception.**
@@ -67,7 +68,9 @@ gallery picture is modified.
    - `POST /settings/custom_fields` (wiped 68 fields 2026-09-17) — never.
    - `POST /jobs/status/{cat}` (bulk import) — never.
    - `PUT /company/config`, `PUT /access_role/{uid}`, `PUT /jobs/status/{cat}` take FULL records.
-7. **Never touch what the background jobs own:** the 4 numbered tasks on AHS jobs (`zuper_tasks`),
+7. **Never touch what the background jobs own:** the 4 numbered tasks on old-board AHS jobs
+   (`zuper_tasks`; it has written nothing since 2026-10-31, but the tasks are still its), the board
+   task list on AHS Simple Flow jobs (the team's),
    routes named "<Technician> - <Day>" (`zuper-routes`), `Proposal-DTR-N.pdf` attachments on drafts
    (`zuper_proposals`), the Technician dropdown semantics. Never run a second routes job.
 8. **Never print, log or store the API key**, and never send it anywhere but `*.zuperpro.com`.
@@ -100,7 +103,7 @@ Prefer, in order: (a) give the person written steps to do it in Zuper's UI; (b) 
 | Add a private note to a job | `POST /jobs/{uid}/note?notify_users=false` body `{"note":{"note","is_private":true,"notify_users":false}}` | private, nobody notified; prefix e.g. "Owen AI:"; read back; never edit/delete notes |
 | Set/correct one job field | `PATCH /custom_fields` with only that label + its `group_uid` | exact label; GET first, compare all fields after |
 | Reschedule a visit | `PUT /jobs/{uid}/update` type SCHEDULE | only after the customer confirmed by call/text; would fire reminder workflows if active; routes follow automatically |
-| Move a column on the job's own board | `PUT /jobs/{uid}/status {"status_uid","remarks"}` | only if the target has NO checklist and is not closing; once |
+| Move a column on the job's own board | `PUT /jobs/{uid}/status {"status_uid","remarks"}` | **Only through `apply_zuper_changes` on Owen's chat OK** (§0, §1.4), which answers the column's questions. Outside it: only if the target has NO checklist and is not closing; once. A move into AHS Simple Flow / Proposal Creation can make Zuper generate a Roof Replacement proposal (its CPQ trigger) — say so first |
 | Draft a proposal | `POST /estimate` from the job, DTR template, stays DRAFT | never send, never set status; DTR codes only; prices from the catalog/owner, never invented |
 | Add a service task | `POST /service_tasks` without `assigned_to` | `auto_add_task_assignee=true` would add an assignee to the JOB |
 | Settings additions (checklist question, job field, album…) | append-only endpoints | backup first, rehearse on AHS - TEST, job+photo snapshot before/after |
@@ -112,7 +115,7 @@ Prefer, in order: (a) give the person written steps to do it in Zuper's UI; (b) 
 1. Re-read the live state (the job, its fields/lines/status) right before writing; confirm it matches
    what the owner approved (job #, board, current column). If it changed, stop and ask again.
 2. **Safety gate:** confirm no customer-facing workflow / notification rule / messaging switch is
-   active (`zsafety.py` on dispatch does this; exit 0 = safe), and that the System Notification
+   active (`/opt/ops/zuper/zsafety.py` on dispatch does this; exit 0 = safe), and that the System Notification
    Number is unchanged. If unsure, do not write.
 3. Back up the record (full GET JSON) before writing.
 4. Send exactly ONE request, the narrowest shape. No bulk endpoints. No `update_all_jobs`.
@@ -139,7 +142,11 @@ Prefer, in order: (a) give the person written steps to do it in Zuper's UI; (b) 
 ## 6. Interpreting data safely
 
 - Workflow/system texts appear as outgoing messages from "Owen"/"Zuper" — not a person.
-- Activity lines with source `API_KEY` are scripts, not Owen.
+- Activity lines with source `API_KEY` are scripts, not Owen. Source `WORKFLOW_BUILDER` is one of the
+  team's active workflows (2026-11-25): **a job's column can change when it is scheduled or assigned
+  with nobody moving it** ("RG3-T55 - Upon Job schedule / Upon job user assignment, update job status").
+- A job in AHS Simple Flow's **Special Cases** (new 2026-11-25, purpose not defined yet) was parked by
+  a person: report it, do not judge it late, do not propose moving it in or out unless Owen asks.
 - Column names move (renames); look up columns by uid/type, with a name list + fallback, never one literal.
 - Prices "quoted" = proposal option line totals (`is_accepted` = chosen); a job's money truth = its
   line items; invoices may differ (known mismatches) — report, never "fix".

@@ -57,7 +57,7 @@ stage being moved on time; a stage lagging the facts is only `watch` (SF-HYG-01)
 
 ---
 
-## 1. The lifecycle (7 stages)
+## 1. The lifecycle (7 stages, plus "Special Cases" since 2026-11-25)
 
 Board `AHS Simple Flow` `2fbc07ec-94e0-43ca-98d5-c902f12b59e5`. People: **Office** = Luis
 Candiales (office manager, Zuper login "Luis") with Marienne (CSR; texts/calls under Luis's Zuper
@@ -115,6 +115,15 @@ inspects; approves change orders and prices.
 | Checklist (15) | 1 Scope confirmed with customer · 2 Photos taken before work starts (MULTI_IMAGE) · 3 Job notes read · 4 Tools on truck · 5 Materials on truck · 6 Customer sign-off obtained (SIGNATURE) · 7 Walkthrough with customer done · 8 Photos after work (MULTI_IMAGE) · 9 Photos during work (MULTI_IMAGE) · 10 Work complete per scope · 11 Never more roof opened than closed same day · 12 Any tile cracked while working replaced · 13 All tiles flat and interlocked · 14 No lifted corners · 15 No exposed nail heads |
 | Exit | Work complete → Quality Call. Callbacks (REVISIT jobs) also run through here |
 | Absorbed | On the Way to Repair, Repair In Process, Repair Complete, Callback in Progress |
+
+### Stage 5a — Special Cases · `34d495ce-14ab-42ad-a163-7697cd104afd` · ON_HOLD (new 2026-11-25)
+| | |
+|---|---|
+| Purpose | **Not defined yet.** Added at the user's request after Repair Day, before Quality Call |
+| Owner | — |
+| Checklist | none |
+| Exit | — |
+| Audit | A job here was parked by a person: report that it is there (and since when), never judge it late by another stage's rule, and never suggest moving a job into it or out of it without Owen saying so. Dispatch's planner books nothing for it; the routes job still routes it if it has a date. No stale rule until Owen defines the column (§6 question 14) |
 
 ### Stage 6 — Quality Call · `a4906cd6-4571-4a84-b8b7-a709c0143aa4` · FOLLOW_UP
 | | |
@@ -269,6 +278,8 @@ severity when it fails. "talked" / "attempt" / "confirmed" are defined in §4.
 | SF-STALE-08 | Job Completed with money/AHS open | 30 days | watch |
 | SF-STALE-09 | Any stage, no conversation and no Zuper change | 7 calendar days (CRM `STALE_DAYS`) | watch (CRM never makes quiet urgent) |
 
+Special Cases (stage 5a) has no stale rule; SF-STALE-09 still applies to it as `watch`.
+
 ### 3.10 Conversations (any stage)
 
 | ID | Failure | When | Detect | Sev | Fix |
@@ -376,5 +387,6 @@ only when the old status meant the same step (e.g. Proposal Made → Proposal Cr
 9. **Stage meaning:** the team keeps booked inspections in *Got a job from AHS* and booked repairs in *Handoff Meeting*/*Repair Day*; Day of Inspection is unused. Should stage lag be flagged at all (SF-HYG-01 is `watch`)?
 10. **Closing:** where do cancelled/declined jobs go (no column)? And is *Job Completed* "paid", or can money still be open there?
 11. **Checklists:** should the team answer them (then make key items required: intake 14, Day of Inspection 15, Proposal 7, Repair Day 6, Quality 2/4)? Today none is answered, so most process steps are only provable from chats.
-12. **New work orders** still land on AHS - Inspection — switch `ahs_create` to Simple Flow / "Got a job from AHS"?
+12. ~~**New work orders** still land on AHS - Inspection~~ — done 2026-11-06: they land on Simple Flow / "Got a job from AHS", with the board's task list since 2026-11-25.
 13. **Visit times at 06:30 ET** after the DST change (several 11:30Z visits) — real or a 1-hour shift?
+14. **Special Cases** (new 2026-11-25): which jobs go there, who works them, and when one should be flagged?

@@ -4,6 +4,8 @@ Built 2026-11-02 from the repo (`backend/app/zuper/*`, `dispatch/*`, `autoreply/
 `DECISIONS.md`), the project's Claude memory notes (live-tested facts, 2026-09-17 → 2026-10-27), and
 the official docs at developers.zuper.co (OpenAPI pages, fetched 2026-11-02). **No live call was
 made to write this.** The live account's current state is in `live-account.md` (separate file).
+**Updated 2026-11-25** where marked *(2026-11-25)*: appointments, board task lists, the note body, the
+write scopes, the team's active workflows.
 
 ## Markers
 
@@ -43,8 +45,10 @@ Everything not GET is a write and needs the owner's explicit, per-change OK (`sa
 `request()` order, before any connection: (1) **DENYLIST** (regex on path, any method, see §14),
 (2) **ALLOWLIST** (exact method+path), (3) sync switch/key, (4) dry-run scope refuses non-GET,
 narrow write scopes (`ahs_create`, `dispatch_write`, `proposal_lines`, `autoreply_write`,
-`followup_write`, `payments_write`, `reviews_write`, `dropped_call_write`) each allow only their
-own 1–4 writes under their own server gate, (5) `ZUPER_PULL_ONLY` backstop refuses every other
+`followup_write`, `followups_write`, `payments_write`, `reviews_write`, `dropped_call_write`, and
+Owen AI's own *(2026-11-25)*: `owen_ai_proposal_write`, `owen_ai_lead_create`, `owen_ai_change`,
+`owen_ai_proposal_pictures`, `owen_ai_report_attach`; `owen_ai_read` for its reads) each allow only
+their own few writes under their own server gate, (5) `ZUPER_PULL_ONLY` backstop refuses every other
 non-GET, (6) pacing/back-off. Host must be https under `zuperpro.com`. Connect reads go only
 through `connect_read` (5 patterns, §11). Owen AI should copy this pattern: deny-first, allow-list,
 read-back after every write, never retry a write with an unclear outcome.
@@ -58,7 +62,7 @@ read-back after every write, never retry a write with an unclear outcome.
 | `GET /jobs` | list jobs | `page,count,sort,sort_by`; filters `filter.keyword`, `filter.category`, `filter.job_status`, `filter.updated_at_from/_to`, `filter.created_at_from/_to`, `filter.from_date/to_date` (schedule), `filter.work_order_number`, `filter.customer`, `filter.assigned_to`, `filter.is_deleted`, `filter.parent_job`, `filter.job_type`, `filter.status_in_history`, `filter.delayed_job`, `filter.is_invoiced` … | `data[]` rows: `job_uid`, `work_order_number` (= the **job #**), `job_title`, `job_category{category_uid,category_name}`, `current_job_status{status_uid,status_name,status_type}`, `job_status[]` (moves; list rows lack `done_by`), `customer{customer_uid,customer_first_name,customer_last_name,customer_company_name,customer_contact_no{mobile,…}}`, `customer_address{street,city,state,zip_code,geo_cordinates[lat,lng]}`, `scheduled_start_time/_end_time`, `assigned_to[{user{…},assigned_at}]`, `created_at`, `updated_at`, `is_deleted`, `job_total` | V (list + `filter.keyword`); other filters D. `filter.updated_at_from` with a future moment must return 0 — the sweep checks this |
 | `POST /jobs/filter` | rule-engine list (web app) | see §0 filter lists; `fields_to_select`, `cursor_pagination` | same rows | D / V(web JS) |
 | `GET /jobs/{job_uid}` | whole job | — | adds `custom_fields[{label,value,group_name,group_uid,type,hide_to_fe,hide_field,read_only,_id}]`, `products[]` (line items: `product_id` code, `product_uid`, `product_name`, `quantity`, `price`, `total`, `tax`…), `job_status[]` with `status_history_uid`, `created_at`, `done_by`, `time_on_status` (minutes), `checklist[{question,answer,type}]` (photo answers = URL lists), `job_type` NEW/REVISIT, `parent_job`, `child_jobs` | V. Job record `attachments`/`assets`/`cover_image` are always empty (photos live on notes) |
-| `POST /jobs` | create job | `{"job":{job_title, job_category:<uid>, customer_uid:<uid>, due_date, job_priority, customer_address{street,city,state,zip_code,country}, custom_fields[], assigned_to[{user_uid}], [parent_job, job_type]}}` | uid often NOT where expected — find by title+category | **V with gotchas (2026-09-28):** write key is **`customer_uid`**, NOT `customer` (→ "Either customer or organization data is required"); **`due_date` mandatory** ("End / Due Date is Mandatory"); `due_date` alone = unscheduled job (`is_scheduled:false`). No status named → lands in the board's `NEW`-type column; a board with no NEW column strands the job in no column. Docs show a nested `customer{}` object → **docs wrong for this account** |
+| `POST /jobs` | create job | `{"job":{job_title, job_category:<uid>, customer_uid:<uid>, due_date, job_priority, customer_address{street,city,state,zip_code,country}, custom_fields[], assigned_to[{user_uid}], [parent_job, job_type]}}` | uid often NOT where expected — find by title+category | **V with gotchas (2026-09-28):** write key is **`customer_uid`**, NOT `customer` (→ "Either customer or organization data is required"); **`due_date` mandatory** ("End / Due Date is Mandatory"); `due_date` alone = unscheduled job (`is_scheduled:false`). No status named → lands in the board's `NEW`-type column; a board with no NEW column strands the job in no column. Docs show a nested `customer{}` object → **docs wrong for this account**. *(2026-11-25)* A job made by API gets **no board task list** unless the body carries `job.service_task {is_enabled, execution_type, service_tasks:[{sequence_no, service_task_master, title, description, estimated_duration}]}` — read the board's list from `GET /jobs/category/{category_uid}/service_tasks` (what the New Job screen sends; the CRM's AHS-email jobs do this since 2026-11-25) |
 | `PUT /jobs` | update job | `{"job":{"job_uid", …only what changes…}}`; query `update_all_jobs`, `clear_schedule`, `remove_parent_job` (D) | `{type,message}` | **V, dangerous:** `custom_fields` sent here **REPLACES the whole field list** (2026-10-06: 1 sent, 33 → 1); `products` sent here **REPLACES all line items** — always GET, merge, send full list; `job_total` is stored, not recomputed — send it explicitly if it must change; **scheduled times are silently IGNORED** (200, no change). Move board: `{"job":{job_uid, job_category:<uid>}}` keeps history/fields/photos/tasks, then set status. Revisit: `{job_uid, job_type:"REVISIT", parent_job:<uid>}` (REVISIT without parent → refused). Job address `{job_uid, customer_address{street,city,state,zip_code,country}}` = **V 2026-11-21** (#701): Zuper re-geocodes the pin itself (back to the exact old pin when the old street returns); send the record's own `country` ("USA") or it changes |
 | `PATCH /custom_fields` | update custom fields — **MERGE** | `{"module_name":"JOB","module_uid":<job_uid>,"custom_fields":[{label, value, group_uid, [group_name, hide_to_fe, hide_field, read_only]}]}` | `{type:"SUCCESS", message:"Updated N custom fields…"}` | **V 2026-10-27** (cleared 36 fields on test job #701) + D. Only sent fields change; matched by `label`+`group_uid`; `""` clears; `null` rejected; unknown labels are still SAVED (ungrouped) — spell labels exactly. **Preferred over PUT /jobs for fields.** Docs: also CUSTOMER, ESTIMATE, INVOICE, PROPERTY, PRODUCT… |
 | `PUT /jobs/{uid}/update` | schedule / unassign (web JS, undocumented) | reschedule `{"job":[{"scheduled_start_time":"YYYY-MM-DD HH:mm:ss","scheduled_end_time":"…","type":"SCHEDULE"}]}`; unassign `{"job":[{"user_uid","team_uid","type":"UNASSIGN"}]}` (`team_uid` required; also unassigns that user's tasks on the job) | 200 | **V**. A reschedule fires Zuper's "Schedule Job" workflow trigger (customer reminders when those workflows are active) |
@@ -124,7 +128,7 @@ seen** — money questions are short text (digits only).
 | Method & path | Purpose | Body / params | Response | Mk / gotchas |
 |---|---|---|---|---|
 | `GET /jobs/{uid}/note` | job notes | `count=100`, `sort`, `sort_by` | rows `note_uid`, `note` (**HTML**), `note_type` TEXT/IMAGE/VIDEO/AUDIO/DOCUMENT, `attachments[{attachment (URL), attachment_uid, mime_type, attachment_visibility}]`, `is_private`, `created_by`, `created_at`, `is_deleted` | **V. A job's photos ARE its IMAGE/VIDEO notes' attachments.** Strip HTML (`dispatch/reader.note_text`) |
-| `POST /jobs/{uid}/note` | add note | repo (V): `{"note":{"note":<text>,"is_private":true,"notify_users":false}}`. Docs: `notify_users` is a **query** param; body `note{note_type,note,attachment(s),user_mentions}` | `{data:{note_uid}}` | **V** (autoreply/dispatch/AHS paths). Always `is_private:true`; send `?notify_users=false` too (doc vs code disagree on where it goes). Read back by text |
+| `POST /jobs/{uid}/note` | add note | wrapped: `{"note":{"note":<text>,"is_private":true,"notify_users":false}}` (= the docs; Owen AI sends this). Docs: `notify_users` is a **query** param; body `note{note_type,note,attachment(s),user_mentions}` | `{data:{note_uid}}` | **V, wrapped only.** *(2026-11-25)* The FLAT body (`{"note":<text>,…}` at the top level) answers 200 and stores an **EMPTY** note — and the CRM's `zapi.create_note` (AHS-email note, digest) still tries flat first, so those notes are empty in Zuper. Always `is_private:true`; send `?notify_users=false` too. Read back by text |
 | `PUT /jobs/{uid}/note/{note_uid}/update` | edit note | `?notify_users` | — | D. **Repo's `update_note` uses `PUT /jobs/{uid}/note/{note_uid}` which docs say is "Change Note Privacy" (needs `?is_private=`) — repo path likely wrong** |
 | `DELETE /jobs/{uid}/note/{note_uid}` | delete | — | — | allow-listed in repo; **forbidden** for Owen AI (photo notes) |
 | `GET /notes?filter.job=&filter.customer=` | notes account-wide | — | — | D (web app: `/notes?filter.job`) |
@@ -147,7 +151,7 @@ seen** — money questions are short text (digits only).
 | `PUT /service_tasks/{uid}/assign` | — | D |
 | `DELETE /service_tasks/{uid}` | — | V (forbidden without OK) |
 
-The `zuper_tasks` container owns the 4 tasks on every live AHS job (`operations.md` §6) — never edit or delete those; a task whose status a person changed is left alone by it.
+The `zuper_tasks` container owns the 4 numbered tasks on live jobs of the two OLD AHS boards (`operations.md` §6) — never edit or delete those; a task whose status a person changed is left alone by it. *(2026-11-25)* It has written nothing since 2026-10-31 (its safety-gate copy refuses the team's workflows). **AHS Simple Flow jobs carry the board's own task list** instead (21 tasks, `GET /jobs/category/{uid}/service_tasks`), added at creation by Zuper's New Job screen or by the CRM's AHS-email create; `GET /service_tasks` returns 10 per page unless `count=100`.
 
 ---
 
@@ -188,8 +192,8 @@ The `zuper_tasks` container owns the 4 tasks on every live AHS job (`operations.
 
 | Method & path | Mk / notes |
 |---|---|
-| `GET /appointments?filter.job_uid=` | **X: 403 — the appointments module is off on this account.** Visits are the JOB's `scheduled_start_time/_end_time` |
-| `POST/PUT/DELETE /appointments…` | D, unusable here |
+| `GET /appointments?count=&page=` | *(2026-11-25)* **V — the module is in use: 539 appointments.** (It answered 403 earlier; the note "module off" is outdated.) Made by the web app's visit screen ("#860-1 - Inspection") and the team's "Add Appointments for Inspection and Production" workflow. The job's `scheduled_start_time/_end_time` still holds the visit, and a reschedule through `PUT /jobs/{uid}/update` is still how the CRM moves it |
+| `POST/PUT/DELETE /appointments…` | D — writes, never without the owner's OK |
 | `GET /jobs/schedule?from_date,to_date,view`; `POST /jobs/dispatch_board/filter`; `POST /jobs/employee/schedule/filter` | V(web JS) reads |
 | `GET /routes?from_date,to_date`; `POST /routes`; `PUT /routes/{uid}`; `POST /routes/{uid}/assign\|unassign {users:[{user_uid,team_uid}]}` | V. Departure must be in the future (`400 Departure in past`); PUT ignores users. **Routes are owned by the `zuper-routes` cron — never touch a route named "<Tech> - <Day>"** |
 | `GET /assisted_scheduling`, `PUT /jobs/schedule/overlap` | D |
@@ -305,7 +309,7 @@ Team chat ("Messaging & Chats" in docs) is Stream (`/stream/message/send`) — *
 
 | Method & path | Mk / gotchas |
 |---|---|
-| `GET /workflows?filter.is_active=…`, `GET /workflows/{uid}` | V. The REST `/api/workflow` (docs) lists only 2 legacy ones — use the workflow host |
+| `GET /workflows?filter.is_active=…`, `GET /workflows/{uid}` | V. The REST `/api/workflow` (docs) lists only 2 legacy ones — use the workflow host. *(2026-11-25)* Six are active, all the team's job workflows (appointments, invoice, quote lines, a job's column on schedule / assignment); every customer-text workflow is off since 2026-10-26. A workflow's trigger filter is in its `live_nodes[]` `zuper` node `form_fields` → `trigger_rules` (status uids) |
 | `PUT /workflows/{uid}?publish_to_live=true {"workflow":{name,description,nodes,connections,meta_data,is_active}}` | V; republishing makes new node uids |
 | `PUT /workflows/{uid}/activate` / `/deactivate` | V. **!! Activating = automatic customer messaging + breaks `zsafety.py` (stops routes/tasks/proposals) unless allow-listed** |
 | `POST /gatekeeper/workflow/{uid}/test {"node_uid":<last node>}` | **!! A test run SENDS FOR REAL** (uses DRAFT; trigger needs `is_pinned`+`pinned_data`) |
@@ -344,7 +348,7 @@ Repo ALLOWLIST (what the CRM may call at all): GET user/user-all/customers/categ
 7. Category create body: DECISIONS (09-17, flat accepted) vs memory (09-23, `{"category":{…}}` worked, flat refused). Use the wrapper; flag.
 8. Note: docs `notify_users` is a query param; repo sends it in the body (works, but notification suppression via body is unproven). Note edit: docs `PUT …/note/{n}/update`; repo uses `PUT …/note/{n}` (= docs "change privacy").
 9. Recover: docs `POST /jobs/recover`, `POST /recover`; repo `POST /jobs/{uid}/recover`, `/customers/{uid}/recover` — both untested.
-10. Appointments module documented but **403** on this account.
+10. Appointments: **403** on 2026-11-02, **in use** on 2026-11-25 (539 records) — re-check before relying on either.
 11. Custom-field definitions query: repo `?module=`; web app `?module_name=`.
 12. Lead sources: repo `/settings/lead_sources`; live `/request/source`.
 13. Connect conversations: docs require `filters.status` OPEN/CLOSED and put `limit/page` in filters for messages; live `status:""` and top-level `limit/page` work.
