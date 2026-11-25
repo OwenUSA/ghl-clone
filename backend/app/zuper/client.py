@@ -764,6 +764,9 @@ PATHS = {
     "customer_create": "/customers_new",
     "customer_recover": "/customers/{uid}/recover",
     "categories": "/jobs/category",
+    # A board's own task list (verified live 2026-11-25, GET only): {data: {service_execution_type,
+    # service_tasks: [{_id, service_task: {service_task_master_uid, service_task_title, ...}}]}}.
+    "category_service_tasks": "/jobs/category/{category_uid}/service_tasks",
     "statuses": "/jobs/status/{category_uid}",
     "status_create": "/jobs/status_new/{category_uid}",
     "status_update": "/jobs/status/{category_uid}/{status_uid}",
@@ -829,6 +832,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("POST", _rx(PATHS["customer_create"])), ("PUT", _rx(PATHS["customer"])),
     ("DELETE", _rx(PATHS["customer"])), ("POST", _rx(PATHS["customer_recover"])),
     ("GET", _rx(PATHS["categories"])), ("POST", _rx(PATHS["categories"])),
+    ("GET", _rx(PATHS["category_service_tasks"])),
     ("GET", _rx(PATHS["statuses"])), ("POST", _rx(PATHS["status_create"])),
     ("GET", _rx(PATHS["status_create"])), ("POST", _rx(PATHS["status_create_plain"])),
     ("PUT", _rx(PATHS["status_update"])),

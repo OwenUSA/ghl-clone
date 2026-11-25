@@ -748,8 +748,11 @@ email"` + its `ahs_job_id`, and still on the pipeline `CATEGORIES` maps to **AHS
 status is ever named, and the visit and tasks are not sent. Any other card still answers with
 the pull-only sentence. **Since 2026-11-06 the job is created on "AHS Simple Flow"**
 (`ZUPER_AHS_EMAIL_BOARD`, found by name; missing = nothing created), so it lands in that board's
-NEW column "Got a job from AHS"; each field carries its Zuper group. The CRM's AHS pipeline still
-mirrors AHS - Inspection. See the 2026-09-28 and 2026-11-06 amendments in `DECISIONS.md`;
+NEW column "Got a job from AHS"; each field carries its Zuper group. **Since 2026-11-25**, with
+`ZUPER_AHS_EMAIL_TASKS=true`, the BOARD's own task list (not the CRM's tasks) rides inside the
+same `POST /jobs` — Zuper adds none to an API-created job by itself; refused = the job is made
+again without them. The CRM's AHS pipeline still mirrors AHS - Inspection. See the 2026-09-28,
+2026-11-06 and 2026-11-25 amendments in `DECISIONS.md`;
 `tests/test_ahs_email_creates_job.py` pins it.
 
 **Six regional boards (2026-09-24)** — Miami / Sarasota repair, roof replacement and gutters —

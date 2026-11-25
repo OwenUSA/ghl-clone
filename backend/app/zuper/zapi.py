@@ -99,6 +99,12 @@ def categories() -> list[dict]:
     return rows_of(request("GET", path("categories")))
 
 
+def category_service_tasks(category_uid: str) -> dict:
+    """A board's own task list, as Zuper answers it (`mapping.board_service_task` reads it)."""
+    data = data_of(request("GET", path("category_service_tasks", category_uid=category_uid)))
+    return data if isinstance(data, dict) else {}
+
+
 # Which body shape Zuper accepted for a create whose shape is UNVERIFIED, by kind — shown by
 # the setup report so the first live run tells which one is right.
 ACCEPTED_SHAPES: dict[str, str] = {}

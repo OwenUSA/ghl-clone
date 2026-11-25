@@ -508,7 +508,11 @@ def _ahs_email_job(body: dict) -> dict:
     their Zuper definition, as a job made in Zuper's own screen does; sent with only a label
     and a value they showed under no group. A field Zuper has no single definition for (AHS
     Job ID has none) goes as before, and so does every field when the definitions cannot be
-    read — the job matters more than its grouping. Reads only: both lookups are GETs.
+    read — the job matters more than its grouping. Reads only: every lookup is a GET.
+
+    With `config.ahs_email_board_tasks()` (2026-11-25) the board's own task list goes too, as
+    the create's `service_task` — what Zuper's New Job screen sends; the API adds none by itself.
+    An unreadable or empty list creates the job without tasks, as before.
     """
     board = config.ahs_email_board()
     uid = next((zapi.category_uid(c) for c in zapi.categories()
@@ -523,7 +527,42 @@ def _ahs_email_job(body: dict) -> dict:
         log.warning("AHS email job: field definitions unreadable (%s); fields go ungrouped", exc)
         defs = []
     out["custom_fields"] = mapping.grouped_fields(body.get("custom_fields") or [], defs)
+    if config.ahs_email_board_tasks():
+        try:
+            tasks = mapping.board_service_task(zapi.category_service_tasks(uid))
+        except ZuperError as exc:
+            log.warning("AHS email job: %s's task list unreadable (%s); created without tasks",
+                        board, exc)
+            tasks = None
+        if tasks:
+            out["service_task"] = tasks
     return out
+
+
+def _create_ahs_email_job(o: Opportunity, body: dict) -> str:
+    """`zapi.create_job` for the emailed AHS job: should Zuper refuse a create that carries the
+    board's tasks, the job is created again WITHOUT them — a work order reaching Zuper matters
+    more than its task list. Only when Zuper answered (a 4xx, or a 5xx it sent back), and only
+    after Zuper is shown to hold no job for this card; a timeout or a 429 raises as before, and
+    the queued send retries from the search."""
+    try:
+        uid = zapi.create_job(body)
+    except ZuperError as exc:
+        answered = exc.kind == "rejected" or (exc.kind == "unavailable" and exc.status)
+        if "service_task" not in body or not answered:
+            raise
+        found = next((mapping.uid(j, "job_uid") for j in zapi.find_jobs_by_crm_id(o.id)
+                      if mapping.uid(j, "job_uid")), None)
+        if found:
+            return found
+        log.warning("AHS email job (card %s): Zuper refused it with the board's %d tasks (%s); "
+                    "creating it without them", o.id,
+                    len(body["service_task"].get("service_tasks") or []), client_sentence(exc))
+        return zapi.create_job({k: v for k, v in body.items() if k != "service_task"})
+    if "service_task" in body:
+        log.info("AHS email job (card %s): created with the board's %d tasks", o.id,
+                 len(body["service_task"].get("service_tasks") or []))
+    return uid
 
 
 def write_zuper(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping, merged: dict,
@@ -745,8 +784,9 @@ def create_in_zuper(ctx: Ctx, kind: str, obj: Any, m: ZuperMapping | None) -> st
         if config.pull_only() and may_create_in_zuper(db, obj):
             # The one-way mirror's AHS-email create (2026-11-06): its own board, grouped fields.
             # A two-way sync keeps the pipeline's board, whose statuses it then moves.
-            body = _ahs_email_job(body)
-        uid = zapi.create_job(body)
+            uid = _create_ahs_email_job(obj, _ahs_email_job(body))
+        else:
+            uid = zapi.create_job(body)
     elif kind == "appointment":
         uid = zapi.create_appointment(mapping.appointment_payload(view, parent_uid))
     elif kind == "note":

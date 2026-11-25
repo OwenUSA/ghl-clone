@@ -368,3 +368,125 @@ def test_the_job_create_carries_a_due_date_and_books_no_visit(armed, fake, monke
     body = next(w for w in fake.writes() if w.path == "/jobs").body["job"]
     assert body.get("due_date"), body
     assert "scheduled_start_time" not in body and "scheduled_end_time" not in body, body
+
+
+# ------------------------------------------------------------------ the board's own tasks
+
+def _board_task(title: str, master: str, **extra) -> dict:
+    """One entry of a board's task list, in the shape the live API answers (2026-11-25)."""
+    return {"_id": "id-" + master, "service_task": {
+        "service_task_master_uid": master, "service_task_title": title,
+        "service_task_description": "Owner: the office - " + title,
+        "estimated_duration": {"days": 0, "hours": 0, "minutes": 0}, "inspection_form": None,
+        "priority": "NONE", "task_type": "TASK", "assigned_to": [], "is_active": True,
+        "is_deleted": False, **extra}}
+
+
+SIMPLE_FLOW_TASKS = {"service_execution_type": "PARALLEL", "service_tasks": [
+    _board_task("Welcoming Call done", "m-1"),
+    _board_task("Retired step", "m-2", is_deleted=True),
+    _board_task("Inspection booked", "m-3", assigned_to=[{"user": {"user_uid": "u-tech"}}]),
+    _board_task("Paused step", "m-4", is_active=False),
+    _board_task("Accounting complete + job closed", "m-5"),
+]}
+
+
+def with_board_tasks(monkeypatch, fake, simple_flow, *, on: bool = True) -> None:
+    one_way(monkeypatch)
+    monkeypatch.setenv("ZUPER_AHS_EMAIL_TASKS", "true" if on else "false")
+    fake.board_tasks[simple_flow] = SIMPLE_FLOW_TASKS
+
+
+def posted_jobs(fake) -> list[dict]:
+    return [w.body["job"] for w in fake.calls("POST", r"^/jobs$")]
+
+
+def test_the_job_is_created_with_its_boards_own_tasks(armed, fake, monkeypatch, simple_flow):
+    """Zuper attaches a board's tasks only when the create carries them (its New Job screen does;
+    the API adds none), so every emailed job landed with none (#819 to #880, 2026-11-25). The
+    board's live list goes inside the same POST, in order; deleted and inactive ones do not."""
+    with_board_tasks(monkeypatch, fake, simple_flow)
+    deliver(armed, fake)
+    job = zuper_job(fake)
+    titles = [t["service_task_title"] for t in fake.tasks.get(job["job_uid"], [])]
+    assert titles == ["Welcoming Call done", "Inspection booked",
+                      "Accounting complete + job closed"], titles
+    block = posted_jobs(fake)[0]["service_task"]
+    assert block["is_enabled"] is True and block["execution_type"] == "PARALLEL"
+    assert [r["sequence_no"] for r in block["service_tasks"]] == [1, 2, 3]
+    assert [r["service_task_master"] for r in block["service_tasks"]] == ["m-1", "m-3", "m-5"]
+    assert block["service_tasks"][0]["service_task_description"].startswith("Owner:")
+
+
+def test_the_tasks_add_no_request_and_never_an_assignee(armed, fake, monkeypatch, simple_flow):
+    """Still the three creates, nothing else written. A task's assignee would be added to the JOB
+    (`jobs.auto_add_task_assignee`), so none is ever sent, even when the board names one."""
+    with_board_tasks(monkeypatch, fake, simple_flow)
+    deliver(armed, fake)
+    seen = [(w.method, w.path) for w in fake.writes()]
+    assert {m for m, _ in seen} == {"POST"}, seen
+    assert all(p in ("/customers_new", "/jobs") or p.endswith("/note") for _, p in seen), seen
+    assert fake.calls("POST", r"service_tasks") == []
+    rows = posted_jobs(fake)[0]["service_task"]["service_tasks"]
+    assert all("assigned_to" not in r for r in rows), rows
+    assert "assigned_to" not in str(rows)
+
+
+def test_with_the_switch_off_no_task_goes_and_the_list_is_not_read(armed, fake, monkeypatch,
+                                                                    simple_flow):
+    with_board_tasks(monkeypatch, fake, simple_flow, on=False)
+    deliver(armed, fake)
+    assert "service_task" not in posted_jobs(fake)[0]
+    assert fake.calls("GET", r"/jobs/category/[^/]+/service_tasks") == []
+    assert fake.tasks.get(zuper_job(fake)["job_uid"]) is None
+
+
+@pytest.mark.parametrize("status", [400, 500])
+def test_a_create_refused_with_the_tasks_is_made_again_without_them(armed, fake, monkeypatch,
+                                                                   simple_flow, status):
+    """The body is UNVERIFIED live until the first real job: should Zuper refuse it, the work
+    order must still reach Zuper — once, without the tasks — and the card is linked to it."""
+    with_board_tasks(monkeypatch, fake, simple_flow)
+    fake.refuse_job_tasks = status
+    result = deliver(armed, fake)
+    job = zuper_job(fake)                               # exactly one job
+    assert board_of(fake, job) == SIMPLE_FLOW
+    sent = posted_jobs(fake)
+    assert len(sent) == 2 and "service_task" in sent[0] and "service_task" not in sent[1]
+    assert fake.tasks.get(job["job_uid"]) is None
+    with SessionLocal() as s:
+        m = mapping.mapping_for(s, "opportunity", card_of(result))
+        assert (m.state, m.zuper_uid) == ("linked", job["job_uid"])
+
+
+def test_a_refusal_without_tasks_is_not_retried(armed, fake, monkeypatch, simple_flow):
+    """The fallback is only for the tasks: an empty board list sends no block, and a create
+    Zuper refuses for another reason fails exactly as it did before."""
+    one_way(monkeypatch)
+    monkeypatch.setenv("ZUPER_AHS_EMAIL_TASKS", "true")
+    fake.board_tasks[simple_flow] = {"service_execution_type": "PARALLEL", "service_tasks": []}
+    fake.refuse_job_tasks = 400
+    deliver(armed, fake)
+    assert len(posted_jobs(fake)) == 1 and "service_task" not in posted_jobs(fake)[0]
+    zuper_job(fake)
+
+
+def test_an_unreadable_task_list_still_creates_the_job(armed, fake, monkeypatch, simple_flow):
+    with_board_tasks(monkeypatch, fake, simple_flow)
+    fake.fail_next["GET /jobs/category/[^/]+/service_tasks"] = 10
+    deliver(armed, fake)
+    job = zuper_job(fake)
+    assert board_of(fake, job) == SIMPLE_FLOW
+    assert "service_task" not in posted_jobs(fake)[0]
+
+
+def test_the_block_is_built_from_the_live_shape():
+    assert mapping.board_service_task(None) is None
+    assert mapping.board_service_task({"service_tasks": [_board_task(" ", "m-9")]}) is None
+    block = mapping.board_service_task({"service_execution_type": "series",
+                                        "service_tasks": [_board_task("Submit to AHS", "m-8")]})
+    assert block == {"is_enabled": True, "execution_type": "SERIES", "service_tasks": [{
+        "sequence_no": 1, "service_task_title": "Submit to AHS",
+        "service_task_description": "Owner: the office - Submit to AHS",
+        "service_task_master": "m-8",
+        "estimated_duration": {"days": 0, "hours": 0, "minutes": 0}}]}

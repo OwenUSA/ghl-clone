@@ -565,6 +565,41 @@ def job_payload(view: dict, *, category_uid: str | None, customer_uid: str | Non
     return body
 
 
+def board_service_task(association: dict | None) -> dict | None:
+    """A job create's `service_task` block from a board's own task list (2026-11-25), or None
+    when the board has no task that can go.
+
+    The list as GET /jobs/category/{uid}/service_tasks answers it (live): entries of
+    `{_id, service_task: {service_task_master_uid, service_task_title, ...}}`, in their order.
+    The block is the shape Zuper's create-job reference documents (UNVERIFIED live until the
+    first real job). Deleted or inactive entries and untitled ones are left out. Never an
+    assignee, even if the board names one: a task's assignee is added to the JOB
+    (`jobs.auto_add_task_assignee`), and the emailed job is assigned by the office.
+    """
+    rows: list[dict[str, Any]] = []
+    for entry in (association or {}).get("service_tasks") or []:
+        task = entry.get("service_task") if isinstance(entry, dict) else None
+        if not isinstance(task, dict) or task.get("is_deleted") or task.get("is_active") is False:
+            continue
+        title = text(task.get("service_task_title"))
+        if not title:
+            continue
+        row: dict[str, Any] = {"sequence_no": len(rows) + 1, "service_task_title": title,
+                               "service_task_description":
+                                   task.get("service_task_description") or ""}
+        if task.get("service_task_master_uid"):
+            row["service_task_master"] = task["service_task_master_uid"]
+        if isinstance(task.get("estimated_duration"), dict):
+            row["estimated_duration"] = task["estimated_duration"]
+        rows.append(row)
+    if not rows:
+        return None
+    execution = str((association or {}).get("service_execution_type") or "").upper()
+    return {"is_enabled": True,
+            "execution_type": execution if execution in ("SERIES", "PARALLEL") else "PARALLEL",
+            "service_tasks": rows}
+
+
 # ------------------------------------------------------------------------ appointments
 
 def appointment_view(a: Appointment) -> dict:
