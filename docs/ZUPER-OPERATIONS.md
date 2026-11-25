@@ -181,6 +181,37 @@ longer in the list on 2026-11-25.
   planner books nothing for them, and the routes job still routes one that has a date. No active
   workflow fires on a move into it. Backups: owen-main
   `zuper-backup/before-changes/2026-11-25/ahs_simple_flow_*special_cases*`.
+  **A job may enter a Simple Flow column only from that column's parent** (`has_parent` +
+  `parent_status` on each column, set when the board was built). The parents, re-read 2026-11-25:
+
+  | Column | A job may come from |
+  |---|---|
+  | Got a job from AHS | any column (no parent) |
+  | Day of Inspection | Got a job from AHS, Special Cases |
+  | Proposal Creation | Day of Inspection, Special Cases |
+  | Handoff Meeting | Proposal Creation, Special Cases |
+  | Repair Day | Handoff Meeting, Special Cases |
+  | Special Cases | any column (no parent) |
+  | Quality Call | Repair Day, Special Cases |
+  | Job Completed | Quality Call, Special Cases |
+
+  So a job moves forward one column at a time, can always go back to the first column or into
+  Special Cases, and can go from Special Cases to any column. To go back one column otherwise, use
+  the job's **Roll back status** in Zuper (it undoes the last move). Moves that skip columns
+  appear in the history only up to 2026-11-04 (the migration and the first week), so the chain was
+  probably set about then — not verified.
+  **Trap (2026-11-25): a column added by API gets `has_parent: false` and `parent_status: []`, and no
+  other column lists it as a parent** — jobs can go into it from anywhere but cannot leave it except
+  by Roll back status. That happened to Special Cases on the day it was made (Luis rolled #799 back
+  to get it out). Fixed the same day at 22:00 UTC on the user's word ("from special cases it can go
+  anywhere"): its uid was added to the `parent_status` of the six columns that have a parent
+  ("Got a job from AHS" has none, so it was left alone — giving it a parent would close it). Script
+  dispatch `/opt/ops/zuper/zbrowser/sf_special_parents.py` (dry run by default, `--apply`,
+  `--only "<column>"`): it changes only `parent_status`, re-reads the board after each write and
+  stops if any other field of any column or the column order changed; all 130 jobs were unchanged.
+  Backups: owen-main `zuper-backup/before-changes/2026-11-25/ahs_simple_flow_statuses_*special_parents*`.
+  **When you add a column to a board like this, decide where its jobs may go next and add it to
+  those columns' parents in the same change.**
 - **AHS - Inspection** (17): Work Order Received `NEW` → Not Answering -Keep Call! `LEAD` →
   Welcome Call! `LEAD` → Scheduled `ESTIMATING` → Inspection: Day-Before Cal `ESTIMATING` →
   Inspection: Same-Day Confi `ESTIMATING` → Antonio On the Way `ON_MY_WAY` → Inspection In Progress
@@ -630,8 +661,9 @@ Details"). Always send `label, value, group_name, group_uid, type`.
 | Rename category | `PUT /jobs/category {"category":{"category_uid","category_name"}}` |
 | Reorder categories (web JS) | `PUT /jobs/category/reorder {"categories":[{"category_uid","display_order"}]}` |
 | Statuses of a category | `GET /jobs/status/{cat}` |
-| Create status | `POST /jobs/status_new/{cat} {"job_status":{status_name,status_type,status_color}}` |
-| Edit status (web JS) | `PUT /jobs/status/{cat} {"job_status":<FULL record incl. status_uid>}` — **never** `POST /jobs/status/{cat}` (bulk import) |
+| Create status | `POST /jobs/status_new/{cat} {"job_status":{status_name,status_type,status_color}}` — answers with no uid (re-list). The new column has **no parent and is no one's parent**: on a board whose columns have parents (Simple Flow), add it to the next columns' `parent_status` too (3.1) |
+| Edit status (web JS) | `PUT /jobs/status/{cat} {"job_status":<FULL record incl. status_uid>}` — the record exactly as `GET /jobs/status/{cat}` returns it (checklist and `_id` included) with one field changed, then re-read every column (`set_types.py`, `sf_special_parents.py`). **Never** `POST /jobs/status/{cat}` (bulk import) |
+| Which column a job may come from | `has_parent: true` + `parent_status: [status uids]` on the TARGET column; `has_parent: false` = from any column (3.1) |
 | Delete status (web JS) | `DELETE /jobs/status/{cat}/{status}` — jobs keep it in their history |
 | Reorder statuses (web JS) | `PUT /jobs/status/{cat}/rearrange {"job_status":[uids]}` |
 | Move job to another board | `PUT /jobs {"job":{"job_uid","job_category":uid}}` then set the status |
@@ -822,7 +854,8 @@ that the Zuper customer record does not have is not shown.
       Inspection, Retail and the regional boards only, so the AHS leads made since 2026-11-06 are
       not in the report.
 - [ ] **"Special Cases"** (3.1): what goes there, whether its jobs should stay on routes, and
-      whether Dispatch should flag a job that sits in it.
+      whether Dispatch should flag a job that sits in it. (Its jobs could not leave it until
+      2026-11-25 22:00 UTC — fixed, 3.1.)
 - [ ] Mirror AHS Simple Flow into the CRM, or decide it stays read directly.
 - [x] ~~Deploy the CRM branch (section 9)~~ — deployed (`b332d53` on 2026-09-28; see section 9 for today's).
 - [ ] **Run `mirror --phase boards --phase backfill`** (dry run first, show the owner): the CRM

@@ -296,6 +296,17 @@ Statuses: `GET /jobs/status/2fbc07ec-94e0-43ca-98d5-c902f12b59e5` (the response 
 Almost all checklist items are `SINGLE_LINE` text used as a checkbox SOP, none required. The intake questions of
 "Got a job from AHS" are linked to job fields since 2026-11-09; Proposal Creation has 7 (6 on 2026-11-02).
 
+**Which column a job may come from** *(2026-11-25)*: each column accepts a job only from its
+`parent_status` (with `has_parent: true`). Got a job from AHS and Special Cases have no parent
+(open from any column). Every other column's parents are the column before it **and Special Cases**
+(Day of Inspection ← Got a job from AHS; Proposal Creation ← Day of Inspection; Handoff Meeting ←
+Proposal Creation; Repair Day ← Handoff Meeting; Quality Call ← Repair Day; Job Completed ← Quality
+Call). So a job moves forward one column at a time, can always go to the first column or into
+Special Cases, and can go from Special Cases anywhere; otherwise a person uses **Roll back status**
+(undoes the last move). Special Cases was added as a parent on 2026-11-25 22:00 UTC — before that,
+its jobs could not leave it. Whether the API (`PUT /jobs/{uid}/status`) enforces the same rule is
+not verified.
+
 **Jobs per stage on 2026-11-25 (129 jobs):** Job Completed 68, Got a job from AHS 14, Handoff Meeting 14, Repair Day 12,
 Proposal Creation 7, Quality Call 6, Day of Inspection 4, Special Cases 0, and 4 still showing "Estimate Declined" from
 their old board.
