@@ -262,8 +262,23 @@ FORBIDDEN = (
                 r"(?:(?!\btiles?\b|\bshingles?\b)[^.:;]){0,30}\bunderlayment\b"
                 r"|\bnew\b[^.:;]{0,15}\bunderlayment\b|\bunderlayment\s+(?:replacement|replaced)\b",
                 re.IGNORECASE),
-     ("GOOD",), ("replaces the underlayment - GOOD only PATCHES it at the leak (a membrane "
-                 "patch); BETTER replaces it")),
+     ("GOOD",), ("replaces the underlayment - GOOD only PATCHES it at the leak; BETTER "
+                 "replaces it")),
+    # owner, 2026-11-26: "the technicians find their way to patch it" - say THAT we patch the
+    # underlayment at the leak, never with what (no product, brand or membrane) or how it is laid
+    (re.compile(r"\bTU[\s-]*Plus\b", re.IGNORECASE), OPTION_NAMES,
+     "names a product brand - never name one; the technicians choose the material"),
+    (re.compile(r"(?:\bmembrane(?!\s*sealant)|\bself[\s-]*adhe\w*|\bpeel[\s-]*(?:and|&|n)?[\s-]*stick)"
+                r"(?:(?!sealant)[^.:;]){0,30}\bpatch\b"
+                r"|\bpatch\w*\b[^.:;]{0,60}\b(?:with|using)\b(?:(?!sealant)[^.:;]){0,25}"
+                r"(?:\bmembrane(?!\s*sealant)|\bself[\s-]*adhe\w*|\bpeel[\s-]*(?:and|&|n)?[\s-]*stick)",
+                re.IGNORECASE),
+     OPTION_NAMES, ("says what the underlayment is patched WITH - write only that we patch the "
+                    "underlayment at the leak; the technicians choose how")),
+    (re.compile(r"\bpatch\w*\b[^.:;]{0,140}\blapped\b|\blapped\b[^.:;]{0,60}\bpatch\w*\b",
+                re.IGNORECASE),
+     ("GOOD",), ("says how the patch is laid (\"lapped ...\") - write only that we patch the "
+                 "underlayment at the leak; the technicians choose how")),
 )
 
 
