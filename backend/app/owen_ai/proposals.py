@@ -274,7 +274,7 @@ FORBIDDEN = (
     (re.compile(r"\bTU[\s-]*Plus\b", re.IGNORECASE), OPTION_NAMES,
      "names a product brand - never name one; the technicians choose the material"),
     (re.compile(r"(?:\bmembrane(?!\s*sealant)|\bself[\s-]*adhe\w*|\bpeel[\s-]*(?:and|&|n)?[\s-]*stick)"
-                r"(?:(?!sealant)[^.:;]){0,30}\bpatch\b"
+                r"(?:(?!sealant)[^.:;]){0,30}\bpatch(?:es)?\b"
                 r"|\bpatch\w*\b[^.:;]{0,60}\b(?:with|using)\b(?:(?!sealant)[^.:;]){0,25}"
                 r"(?:\bmembrane(?!\s*sealant)|\bself[\s-]*adhe\w*|\bpeel[\s-]*(?:and|&|n)?[\s-]*stick)",
                 re.IGNORECASE),
