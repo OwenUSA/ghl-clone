@@ -649,6 +649,10 @@ def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name,
 def test_saying_that_we_patch_and_seal_is_still_fine():
     """The rewrite of DTR-247 (owner, 2026-11-26) passes; so do the bull membrane SEALANT and
     BETTER's self-adhered underlayment - only the GOOD patch's material / brand / laying is out."""
+    vent = ("<p>4. Two-Vent Replacement: Remove and replace the lead pipe flashing and the "
+            "gooseneck vent at the leak.</p><p>Inspect and reseal the wall flashing.</p>")
+    assert proposals.wording_problems([{"name": "GOOD", "scope_html": vent},     # DTR-250
+                                       {"name": "BEST", "scope_html": "<p>x</p>"}]) == []
     assert proposals.wording_problems([
         {"name": "GOOD", "scope_html": (
             "<p>3. Underlayment Patch at the Leak: Patch the failed underlayment at the leak so "
