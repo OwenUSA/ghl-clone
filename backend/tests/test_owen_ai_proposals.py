@@ -623,6 +623,8 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
      "patched WITH"),
     ("GOOD", "Seal all edges and laps of the membrane patch with elastomeric sealant.",
      "patched WITH"),
+    ("GOOD", "Covers the leak repairs, underlayment membrane patches and tile reinstallation.",
+     "patched WITH"),                                                 # DTR-228's warranty line
     ("GOOD", ("Patch the failed underlayment at the leak, lapped shingle-style into the "
               "surrounding underlayment so water sheds over it."), "how the patch is laid"),
     # owner, 2026-11-26 (DTR-247..253)
