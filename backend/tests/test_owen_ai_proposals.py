@@ -613,6 +613,15 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
     ("BETTER", "Double sealing of every seam.", "single sealing"),
     ("BETTER", "Replace damaged plywood decking.", "plywood"),
     ("GOOD", "Underlayment Replacement: remove the old underlayment, install new.", "PATCHES"),
+    # DTR-247 / 251 (2026-11-26): the patch's material, brand and laying are the technicians' call
+    ("GOOD", "Patch the leak with a TU Plus self-adhered membrane patch.", "brand"),
+    ("BETTER", "Install premium self-adhered underlayment (TU Plus or equal).", "brand"),
+    ("GOOD", "Patch the underlayment with a self-adhered waterproof membrane patch.",
+     "patched WITH"),
+    ("GOOD", "Seal all edges and laps of the membrane patch with elastomeric sealant.",
+     "patched WITH"),
+    ("GOOD", ("Patch the failed underlayment at the leak, lapped shingle-style into the "
+              "surrounding underlayment so water sheds over it."), "how the patch is laid"),
 ])
 def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name, text, word):
     """Each one was a correction Owen made by hand on sent proposals (2026-11-16..24)."""
@@ -624,6 +633,21 @@ def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name,
     out = proposals.tool_propose(spec(options=opts))
     assert out.startswith("ERROR") and name in out and word in out
     assert db.query(OwenAiProposalDraft).count() == 0 and z.writes() == []
+
+
+def test_saying_that_we_patch_and_seal_is_still_fine():
+    """The rewrite of DTR-247 (owner, 2026-11-26) passes; so do the bull membrane SEALANT and
+    BETTER's self-adhered underlayment - only the GOOD patch's material / brand / laying is out."""
+    assert proposals.wording_problems([
+        {"name": "GOOD", "scope_html": (
+            "<p>3. Underlayment Patch at the Leak: Patch the failed underlayment at the leak so "
+            "water sheds over it, not under it.</p><p>4. Perimeter Sealing: Seal the edges of "
+            "the patch with bull membrane sealant around the patch.</p>")},
+        {"name": "BETTER", "scope_html": "<p>Install high-performance self-adhered peel and stick "
+                                         "underlayment, securely lapped into the surrounding roof."
+                                         "</p>"},
+        {"name": "BEST", "scope_html": "<p>Install two full layers of self-adhered underlayment."
+                                       "</p>"}]) == []
 
 
 def test_a_sentence_saying_what_is_not_included_is_not_a_promise():
