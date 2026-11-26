@@ -633,7 +633,8 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
     ("BETTER", "Re-align, interlock and mechanically reinstall the customer's original tiles.",
      "Reinstall the customer's own tiles"),
     ("GOOD", "Lift the roof tiles over the leak area, about 13 ft x 6 ft.", "the leak area"),
-    ("BETTER", "Everything in Good across a 2x footprint.", "the expanded area"),
+    ("GOOD", "Locate the leak about one foot off the window wall.", "the leak area"),
+    ("BETTER", "Everything in Good across a 2x footprint.", "an extended area"),
     ("BEST", "Install two full layers of self-adhered underlayment.", "silicone coating"),
     ("BEST", "Double Underlayment Protection System.", "silicone coating"),
 ])
@@ -647,6 +648,18 @@ def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name,
     out = proposals.tool_propose(spec(options=opts))
     assert out.startswith("ERROR") and name in out and word in out
     assert db.query(OwenAiProposalDraft).count() == 0 and z.writes() == []
+
+
+def test_sizes_only_when_owen_asks_for_them():
+    """Owner, 2026-11-26: "not put the ft dimensions unless I say to do so"."""
+    opts = [{"name": "GOOD", "scope_html": "<p>Open about 6 ft of the valley at the leak.</p>"},
+            {"name": "BEST", "scope_html": "<p>Open the whole 12 ft valley.</p>"}]
+    assert len(proposals.wording_problems(opts)) == 2
+    assert proposals.wording_problems(opts, sizes=True) == []
+    with pytest.raises(proposals.SpecError) as e:
+        proposals.validate({"job": "701", "title": "t", "sizes": "yes", "options": [
+            {"name": "GOOD", "title": "t", "price": 500, "scope_html": "<p>Patch it.</p>"}]})
+    assert "sizes must be true or false" in e.value.problems
 
 
 def test_saying_that_we_patch_and_seal_is_still_fine():

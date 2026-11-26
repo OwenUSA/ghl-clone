@@ -204,7 +204,7 @@ def description(scope_html: str, warranty: str, price: float, deposit: float,
 
 # ------------------------------------------------------------------------------ the spec
 
-TOP_KEYS = {"job", "template", "title", "options", "allow_second", "note", "replace"}
+TOP_KEYS = {"job", "template", "title", "options", "allow_second", "note", "replace", "sizes"}
 _REPLACE = re.compile(r"\s*(?:DTR-?)?(\d{1,8})\s*", re.IGNORECASE)
 OPTION_KEYS = {"name", "title", "price", "deposit", "recommended", "warranty", "scope_html",
                "payment_terms"}
@@ -285,8 +285,8 @@ FORBIDDEN = (
      ("GOOD",), ("says how the patch is laid (\"lapped ...\") - write only that we patch the "
                  "underlayment at the leak; the technicians choose how")),
     # owner, 2026-11-26 (DTR-247..253): no L-flashing reset in GOOD; the reinstall step stays
-    # simple; no sizes ("about 13 ft x 6 ft") - GOOD "the leak area", BETTER "the expanded area",
-    # BEST "the extended area"; and never a double underlayment - BETTER and BEST replace it
+    # simple; no sizes ("about 13 ft x 6 ft") - GOOD "the leak area", BETTER "an extended area",
+    # BEST "a larger extended area"; and never a double underlayment - BETTER and BEST replace it
     # (a vent's own pipe / lead / stack / boot flashing is GOOD's repair at a vent - DTR-250)
     (re.compile(r"\b(?:re-?set\w*|re-?fasten\w*|re-?secur\w*|replac\w*|install\w*|new)\b"
                 r"(?:(?!\b(?:pipe|lead|vent|stack|boot|penetration|plumbing)s?\b)[^.:;]){0,40}"
@@ -300,10 +300,14 @@ FORBIDDEN = (
                 r"|\bmechanically\s+(?:re-?install|secur)\w*", re.IGNORECASE),
      OPTION_NAMES, ("says how the tiles / shingles go back - write only \"Reinstall the "
                     "customer's own tiles (or shingles) over the repaired area\"")),
+    # (owner, 2026-11-26: "not put the ft dimensions unless I say to do so" - the spec's `sizes`)
     (re.compile(r"\b\d+(?:\.\d+)?\s*-?\s*(?:ft|feet|foot)\b|\b\d+(?:\.\d+)?\s*'\s*"
-                r"(?:x|by)\s*\d+|\b2x\b|\bdouble[- ]wide\b", re.IGNORECASE),
-     OPTION_NAMES, ("gives a size - keep it generic: GOOD \"the leak area\", BETTER \"the "
-                    "expanded area\", BEST \"the extended area\"")),
+                r"(?:x|by)\s*\d+|\b2x\b|\bdouble[- ]wide\b|\b(?:one|two|three|four|five|six|seven"
+                r"|eight|nine|ten|eleven|twelve|fifteen|twenty|few|several)\s+(?:ft|feet|foot)\b",
+                re.IGNORECASE),
+     OPTION_NAMES, ("gives a size - keep it generic: GOOD \"the leak area\", BETTER \"an "
+                    "extended area\", BEST \"a larger extended area than the Better option\" "
+                    "(sizes only when Owen asks: sizes: true)")),
     (re.compile(r"\bdouble\b(?!\s*seal)[^.:;]{0,25}\bunderlayment\b"
                 r"|\b(?:two|2|second|dual|multiple)\b[^.:;]{0,15}\blayers?\b(?:(?!seal)[^.:;]){0,40}"
                 r"\bunderlayment\b|\bunderlayment\b[^.:;]{0,20}\b(?:two|double|dual)\s+layers?\b"
@@ -330,10 +334,10 @@ def promised(scope_html: str) -> str:
                     if x.strip() and not _EXCLUDED.search(x))
 
 
-def wording_problems(options: list[dict]) -> list[str]:
+def wording_problems(options: list[dict], sizes: bool = False) -> list[str]:
     """The owner's wording rules broken by these options. A ONE-option proposal may replace
     plywood - then it is the job itself (#848: "replace up to 3 sheets"), not a step up the
-    Good / Better / Best ladder."""
+    Good / Better / Best ladder. `sizes`: Owen asked for the feet in this proposal."""
     out = []
     single = len(options) == 1
     for o in options:
@@ -341,6 +345,8 @@ def wording_problems(options: list[dict]) -> list[str]:
         for rx, names, why in FORBIDDEN:
             if single and ("plywood" in why or "PATCHES" in why or "(BETTER / BEST)" in why):
                 continue          # a one-option job: its scope is the job itself
+            if sizes and why.startswith("gives a size"):
+                continue          # Owen asked for the sizes in this proposal
             m = rx.search(text) if o.get("name") in names else None
             if m:
                 out.append("%s %s (\"%s\") - rewrite it" % (
@@ -368,6 +374,9 @@ def validate(spec: Any) -> dict:
     allow_second = spec.get("allow_second", False)
     if not isinstance(allow_second, bool):
         problems.append("allow_second must be true or false")
+    sizes = spec.get("sizes", False)
+    if not isinstance(sizes, bool):
+        problems.append("sizes must be true or false")
     note = _text(spec, "note", "spec", problems, 1000, required=False)
     replace = spec.get("replace")
     if replace is not None:
@@ -423,7 +432,7 @@ def validate(spec: Any) -> dict:
                         "scope_html": description(scope, warranty, price, dep, terms)})
     if sum(1 for o in options if o["is_recommended"]) > 1:
         problems.append("only one option can be recommended")
-    problems += wording_problems(options)
+    problems += wording_problems(options, sizes=sizes is True)
     if problems:
         raise SpecError(problems)
     options.sort(key=lambda o: OPTION_NAMES.index(o["name"]))
@@ -734,6 +743,8 @@ def input_schema() -> dict:
                                                    "<street>'"},
         "options": {"type": "array", "items": option, "minItems": 1, "maxItems": 3},
         "allow_second": {"type": "boolean"},
+        "sizes": {"type": "boolean", "description": "true ONLY when Owen asked for the sizes "
+                                                    "(feet) in this proposal"},
         "replace": {"type": "string", "description": "to CHANGE an existing DRAFT proposal "
                                                      "instead of making a new one: its number, "
                                                      "e.g. 'DTR-195'"},
@@ -753,7 +764,10 @@ DESCRIPTION = (
     "convention: a price-block bullet, then the scope bullets; allowed tags <p> <b> <i> <ul> "
     "<li> <br>, everything else is escaped; warranty and payment terms are added if missing), "
     "payment_terms?}; allow_second? (only if Owen wants a second proposal on the same "
-    "template); replace? (to CHANGE an existing DRAFT proposal, e.g. 'DTR-195': on Approve its "
+    "template); sizes? (true ONLY when Owen asked for the feet in this proposal - otherwise no "
+    "size is allowed: GOOD 'the leak area', BETTER 'an extended area', BEST 'a larger "
+    "extended area than the Better option'); "
+    "replace? (to CHANGE an existing DRAFT proposal, e.g. 'DTR-195': on Approve its "
     "options are replaced in place - never a second proposal; refused if it was sent or decided, "
     "or edited in Zuper after you read it); note? (one line for Owen). Do NOT type product codes, "
     "customer or address: the "
