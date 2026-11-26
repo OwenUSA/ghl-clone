@@ -42,8 +42,8 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
 5. **Scopes per tier** (guide §2, §5.2). **First decide the leak type** - valley, flashing (into a valley or not),
    or regular - and follow guide §2.1a's ladder for it (owner, 2026-11-18: e.g. half the valley -> whole valley ->
    whole valley + extended area). For a regular leak: GOOD = targeted fix of each leak area. BETTER = everything in GOOD plus the
-   expanded area and self-adhered underlayment, plus the BETTER findings — **never plywood replacement in BETTER**
-   (owner, 2026-11-16). BEST = everything in BETTER plus **an extended area larger than BETTER's** (say so), **plywood replacement "if
+   extended area and self-adhered underlayment, plus the BETTER findings — **never plywood replacement in BETTER**
+   (owner, 2026-11-16). BEST = everything in BETTER plus **a larger extended area than BETTER's** (say so), **plywood replacement "if
    needed"** (not every roof needs it), the underlayment replaced with a silicone coating on its edges, **premium
    sealing** and tune-up - never double / two-layer / multi-layer sealing (owner, 2026-11-26; replaces DTR-210). Use
    5-8 steps in Luis's canonical wording. Warranty **1 / 3 / 6 months** for GOOD / BETTER / BEST (owner,
@@ -51,8 +51,8 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    option** - never "new (matching) shingles" or "supplying matching tiles"; broken pieces are an add-on. Never
    "fresh commercial-grade waterproof underlayment". **GOOD only PATCHES the underlayment at the leak; BETTER
    and BEST replace it, BEST adding a silicone coating on its edges - never a double underlayment** (owner,
-   2026-11-24 / 11-26). **No flashing reset in GOOD; no sizes (GOOD "the leak area", BETTER "the expanded area",
-   BEST "the extended area"); the reinstall step is just "Reinstall the customer's own tiles (or shingles) over the
+   2026-11-24 / 11-26). **No flashing reset in GOOD; no sizes unless Owen asks - then `sizes: true` (GOOD "the leak area", BETTER
+   "an extended area", BEST "a larger extended area than the Better option"); the reinstall step is just "Reinstall the customer's own tiles (or shingles) over the
    repaired area"** (owner, 2026-11-26). **Never say what the patch is made of or how it is laid, and
    never name a brand** (no "TU Plus", no "self-adhered membrane patch", no "lapped shingle-style" - the technicians
    choose how; owner, 2026-11-26). **The tool refuses a draft that breaks these

@@ -113,14 +113,16 @@ in `scope_html`, built in this order:
 ```
 
 Use plain HTML only: no markdown `**`, no LaTeX, no "sq" or "squares". **Never write a size** (no feet, no "about 13 ft x 6 ft", no "2x" / "double-wide" - owner,
-2026-11-26): GOOD says "the leak area", BETTER "the expanded area", BEST "the extended area". Lengths are only for
+2026-11-26: "not put the ft dimensions unless I say to do so"): GOOD says "the leak area", BETTER "an extended
+area", BEST "a larger extended area than the Better option". Owen asked for the feet in THIS proposal? Then pass
+`sizes: true`, the only time a size is allowed. Lengths are only for
 choosing the tier and go in `notes_for_owen`.
 
 ### 2.1 What each tier is, and what it adds
 
 | | GOOD | BETTER = everything in GOOD, plus | BEST = everything in BETTER, plus |
 |---|---|---|---|
-| Area | the targeted leak area (one per numbered area) | **expanded area** around the leak (the full valley run, the full wall line) | **the extended area**, always LARGER than BETTER's expanded area - say so ("an extended area, larger than the Better option's") - or the full roof section (owner, 2026-11-26) |
+| Area | the targeted leak area (one per numbered area) | **an extended area** around the leak (the full valley run, the full wall line) | **a larger extended area than the Better option** - always more than BETTER's, and the text says so - or the full roof section (owner, 2026-11-26) |
 | Underlayment | **PATCH** the underlayment at the leak - never replace it in GOOD (owner, 2026-11-24), and never say with what or how (owner, 2026-11-26) | **high-performance, high-temperature self-adhered** (peel & stick) | **replace** the underlayment over the extended area + **a silicone coating on the edges of the underlayment** - never a double / two-layer underlayment (owner, 2026-11-26) |
 | Deck | inspect the deck ("Underlayment & deck inspection") | inspect the deck again over the wider area; **NO plywood replacement in BETTER** (owner, 2026-11-16) - bad wood goes in the not-included note or an optional add-on | plywood decking replacement (allowance: "up to 1 sheet 4x8 CDX" or "as found"; the whole extended area when needed) |
 | Seals and flashing | flashing and penetration **reseal** in the repair zone; the wall or transition joint if it is the leak - **never a flashing reset / refasten / replacement in GOOD** (BETTER / BEST, owner 2026-11-26) | **sealing** of seams, flashing, transition | **premium sealing** of seams, flashing, transition; all penetrations, vents and boots resealed; **roof maintenance / tune-up**. **Never double / two-layer / multi-layer sealing in any option** (owner, 2026-11-26: "we don't do that anymore, just keep it premium sealing") |
@@ -153,8 +155,8 @@ one or drop one. Two stain spots inside one marked area are ONE leak area (#836:
 - Broken or cracked pieces are an **optional add-on** with a price (about $75 per tile, DTR-123), never part of an
   option's scope - and never promise a colour match.
 - Underlayment: **GOOD only PATCHES it** at the leak - never "Underlayment
-  Replacement" or "new underlayment" in GOOD. **BETTER replaces it** over the expanded area (self-adhered); BEST
-  replaces it over the extended area and adds a silicone coating on its edges - **never a double / two-layer
+  Replacement" or "new underlayment" in GOOD. **BETTER replaces it** over the extended area (self-adhered); BEST
+  replaces it over the larger extended area and adds a silicone coating on its edges - **never a double / two-layer
   underlayment** (owner, 2026-11-26). Never "fresh commercial-grade waterproof underlayment" in any option, and **nothing in GOOD or
   BETTER says "commercial" or "commercial-grade"** (sealant, membrane, anything - owner, 2026-11-24).
 - **Never say what the patch is made of or how it is laid** (owner, 2026-11-26: "the technicians find their way
@@ -167,13 +169,14 @@ one or drop one. Two stain spots inside one marked area are ONE leak area (#836:
     (an "L-Flashing Reset & Reseal" step) is BETTER / BEST. A one-option proposal for a flashing job may do it.
   - **The reinstall step is simple:** "Reinstall the customer's own tiles (or shingles) over the repaired area." Never
     how they go back ("nailed and sealed into the existing courses").
-  - **No sizes:** GOOD "the leak area", BETTER "the expanded area", BEST "the extended area".
+  - **No sizes unless Owen asks** (then `sizes: true`): GOOD "the leak area", BETTER "an extended area", BEST "a
+    larger extended area than the Better option". Spelled-out feet ("one foot", "a few feet") count too.
   - **Never a double underlayment** in any option. BETTER and BEST REPLACE the underlayment; BEST adds "a silicone
     coating on the edges of the underlayment".
   - **Never double / two-layer / multi-layer sealing** in any option: BEST says "premium sealing", GOOD and BETTER
     "sealing". This replaces the 2026-11-18 rule "BETTER single, BEST double" (DTR-210).
-  - **BEST's area is always larger than BETTER's**, and the text says so: "an extended area, larger than the
-    Better option's".
+  - **BEST's area is always larger than BETTER's**, and the text says so: "a larger extended area than the
+    Better option".
 
 **Owen's rules from the team call (2026-11-17):**
 - **Every option's not-included note says we do NOT repair or paint ceilings or drywall inside the home.**
@@ -200,7 +203,7 @@ leak is - each option repairs more of the same system:
 | In the valley, or very close to it | **half the valley** (e.g. 6 ft of a 12 ft valley) around the leak | **the whole valley** (e.g. 12 ft): new valley metal + underlayment the full run | **the whole valley + an extended area** on both sides of it |
 | At a flashing that runs into a valley | **at the flashing**: open it, patch the underlayment at the leak, reseal it (no reset or replacement in GOOD) | the flashing reset / replaced **+ half the valley** | **the whole valley** + the flashing (new flashing system) |
 | At a flashing, no valley involved | patch and reseal at the flashing over the leak area | the whole flashing line reset (the full wall run) | new flashing system + extended area (stucco cut and re-done when the flashing is in the wall) |
-| A regular leak | targeted repair of the leak area | **the expanded area** around it | **the extended area** or the full section |
+| A regular leak | targeted repair of the leak area | **an extended area** around it | **a larger extended area** or the full section |
 
 - Measure the valley on the photos or take it from the notes to choose the tier, but **write no length in the
   proposal** (owner, 2026-11-26): "half the valley", "the full valley". Lengths go in `notes_for_owen`; never invent
@@ -221,19 +224,19 @@ leak is - each option repairs more of the same system:
 6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and execute a final quality inspection."
 
 **BETTER** (DTR-129 / 131):
-1. **Expanded Sector Inspection & Teardown**: "Everything in the Good Option, over the expanded area around <the spot> to capture hidden water migration."
+1. **Extended Area Inspection & Teardown**: "Everything in the Good Option, over an extended area around <the spot> to capture hidden water migration."
 2. **Plywood Decking Inspection & Replacement**: "Evaluate structural wood decking upon material removal. Remove rotted or water-damaged deck sections and install new code-compliant exterior-grade CDX plywood decking (up to 1 sheet 4x8) across the expanded repair footprint."
-3. **Better Underlayment Upgrade**: "Install premium high-performance, high-temperature self-adhered waterproof underlayment across the expanded area, securely lapped into surrounding roof sections."
+3. **Better Underlayment Upgrade**: "Install premium high-performance, high-temperature self-adhered waterproof underlayment across the extended area, securely lapped into surrounding roof sections."
 4. **<Transition / Valley / Wall> Flashing & Sealing**: "Apply heavy-duty elastomeric waterproofing sealant over all metal seams, wall flashings and perimeter tile overlaps." (One sealing; never double / multi-layer in any option - owner, 2026-11-26.)
-5. **Tile Reinstallation**: "Reinstall the customer's own tiles over the expanded area." (broken pieces: add-on).
+5. **Tile Reinstallation**: "Reinstall the customer's own tiles over the extended area." (broken pieces: add-on).
 6. **Site Cleanup & Final Inspection**: "Perform full job site cleanup and conduct a final quality inspection."
 
 **BEST** (DTR-129 / 131 / 135):
-1. **Extended Area Teardown & Substrate Access**: "Everything in the Better Option, over an extended area larger than the Better option's, around <the zone> and the surrounding roof sections to stop hidden water migration." BEST's area is always larger than BETTER's (owner, 2026-11-26).
-2. **Plywood Decking Replacement (If Needed)**: "Remove any damaged, warped, or rotted wood decking found across the extended area and install code-compliant exterior-grade CDX plywood decking if needed." Always "if needed": not every roof has bad wood (owner, 2026-11-18, DTR-210).
-3. **Underlayment Replacement & Edge Coating**: "Replace the underlayment across the extended area with high-performance, high-temperature self-adhered underlayment, and apply a silicone coating along the edges of the underlayment." Never a double / two-layer underlayment (owner, 2026-11-26).
+1. **Extended Area Teardown & Substrate Access**: "Everything in the Better Option, over a larger extended area than the Better option, around <the zone> and the surrounding roof sections to stop hidden water migration." BEST's area is always larger than BETTER's (owner, 2026-11-26).
+2. **Plywood Decking Replacement (If Needed)**: "Remove any damaged, warped, or rotted wood decking found across the larger extended area and install code-compliant exterior-grade CDX plywood decking if needed." Always "if needed": not every roof has bad wood (owner, 2026-11-18, DTR-210).
+3. **Underlayment Replacement & Edge Coating**: "Replace the underlayment across the larger extended area with high-performance, high-temperature self-adhered underlayment, and apply a silicone coating along the edges of the underlayment." Never a double / two-layer underlayment (owner, 2026-11-26).
 4. **Premium Sealing & Overall Roof Maintenance**: "Apply premium elastomeric waterproofing sealant over all transition seams, flashing joints, and overlaps while resealing adjacent roof penetrations, vents, and boots in the work zone." Never "double sealing", "two layers" or "multi-layer" (owner, 2026-11-26).
-5. **Tile Reinstallation**: "Reinstall the customer's own tiles over the extended area." (broken pieces: add-on)
+5. **Tile Reinstallation**: "Reinstall the customer's own tiles over the larger extended area." (broken pieces: add-on)
 6. **Site Cleanup & Final Inspection**: "Execute meticulous job site cleanup and a final quality inspection." (Luis's old wording also had a grounds magnetic sweep - removed, owner 2026-11-17. Luis's old wording promised a photo-documented sign-off - removed, owner 2026-11-16.)
 
 **Material variants:**
@@ -253,8 +256,8 @@ leak is - each option repairs more of the same system:
 
 `option_description` patterns (most frequent):
 - GOOD "Targeted <Location> <Material> Leak Repair Package", for example "Targeted Entrance Leak & Valley Flashing Repair Package".
-- BETTER "Expanded Area & Better Underlayment Repair Package" (+ "& Garage Valley Repair"). Never "Plywood" in a BETTER title (owner, 2026-11-16).
-- BEST "Underlayment Replacement, Edge Coating & Extended Area Package (Full Coverage)" - plywood stays a step "(If Needed)", not a promise in the title.
+- BETTER "Extended Area & Better Underlayment Repair Package" (+ "& Garage Valley Repair"). Never "Plywood" in a BETTER title (owner, 2026-11-16).
+- BEST "Underlayment Replacement, Edge Coating & Larger Extended Area Package (Full Coverage)" - plywood stays a step "(If Needed)", not a promise in the title.
 
 Option names are exactly `GOOD`, `BETTER`, `BEST`. Exactly one option is `is_recommended`. It is BEST by convention
 (42 of 42 three-tier proposals). Make BETTER the recommended one instead when the photos make BETTER the minimum

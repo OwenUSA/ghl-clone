@@ -53,9 +53,9 @@ whole valley + an extended area. Leak at a flashing that runs into a valley: GOO
 
 ## BEST: what it adds
 
-- An **expanded area** around every leak: a wider area opened, to cut off water that travels
+- A **larger extended area** around every leak (more than BETTER's): a wider area opened, to cut off water that travels
   sideways under the tiles. The coverage photo must SHOW the bigger area; that is the point of BEST.
-- The underlayment replaced over the extended area with a silicone coating on its edges (never two layers -
+- The underlayment replaced over the larger extended area with a silicone coating on its edges (never two layers -
   owner, 2026-11-26), and a full flashing overhaul.
 - Two days; the longest warranty.
 
