@@ -275,8 +275,9 @@ def test_a_searched_record_opens_the_same_panel_a_clicked_row_opens():
         assert len(effect) == 2, "%s has no effect keyed on focus" % page
         body = effect[0].rsplit("useEffect(", 1)[1]
         # Conversations selects by ROW KEY since 2026-09-13 ("c<id>"), because
-        # number-only threads share the list with ids from another table.
-        assert re.search(r"%s\((`c\$\{)?focus\.id(\}`)?\)" % state, body), page
+        # number-only threads share the list with ids from another table; a focus
+        # that names its row key (a number thread, "n<id>") uses it first.
+        assert re.search(r"%s\((focus\.key \?\? )?(`c\$\{)?focus\.id(\}`)?\)" % state, body), page
 
 
 def test_the_internal_comment_filter_is_disabled_for_a_tech_not_removed():
