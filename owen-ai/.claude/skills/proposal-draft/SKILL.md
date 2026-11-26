@@ -43,8 +43,9 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    or regular - and follow guide §2.1a's ladder for it (owner, 2026-11-18: e.g. half the valley -> whole valley ->
    whole valley + extended area). For a regular leak: GOOD = targeted fix of each leak area. BETTER = everything in GOOD plus the
    expanded area and self-adhered underlayment, plus the BETTER findings — **never plywood replacement in BETTER**
-   (owner, 2026-11-16). BEST = everything in BETTER plus the 2x area, **plywood replacement "if needed"** (not every roof needs it), double
-   underlayment, **double sealing** and tune-up (BETTER has single sealing; owner 2026-11-18, DTR-210). Use
+   (owner, 2026-11-16). BEST = everything in BETTER plus **an extended area larger than BETTER's** (say so), **plywood replacement "if
+   needed"** (not every roof needs it), the underlayment replaced with a silicone coating on its edges, **premium
+   sealing** and tune-up - never double / two-layer / multi-layer sealing (owner, 2026-11-26; replaces DTR-210). Use
    5-8 steps in Luis's canonical wording. Warranty **1 / 3 / 6 months** for GOOD / BETTER / BEST (owner,
    2026-11-13) and the payment terms in each option. **Never promise photos and never mention a magnetic sweep.** **We reuse the customer's own shingles / tiles in every
    option** - never "new (matching) shingles" or "supplying matching tiles"; broken pieces are an add-on. Never

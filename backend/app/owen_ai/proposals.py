@@ -252,8 +252,13 @@ FORBIDDEN = (
      "mentions a magnetic sweep - we do not do it"),
     (re.compile(r"\bphoto|\bpicture|before[- ]and[- ]after", re.IGNORECASE), OPTION_NAMES,
      "promises photos - we do not provide them"),
-    (re.compile(r"\bdouble[- ]+seal", re.IGNORECASE), ("BETTER",),
-     "has double sealing - BETTER gets single sealing, BEST double"),
+    # owner, 2026-11-26 (replaces "BETTER single sealing, BEST double", 2026-11-18): "we don't do
+    # that anymore, just keep it premium sealing"
+    (re.compile(r"\bdouble\b(?!-?check)[^.:;]{0,20}\bseal|\b(?:two|2|dual|second|double)\s+"
+                r"(?:layers?|coats?)\b[^.:;]{0,40}\b(?:seal\w*|elastomeric|bull|waterproofing)"
+                r"|\bmulti[- ]?layer\b", re.IGNORECASE),
+     OPTION_NAMES, ("has double / two-layer / multi-layer sealing - we don't do it anymore; write "
+                    "\"premium sealing\" in BEST, \"sealing\" in GOOD and BETTER")),
     (re.compile(r"(?:replac\w*|install\w*|new)\b[^.:;]{0,40}\bplywood|\bplywood\b[^.:;]{0,25}"
                 r"\breplac", re.IGNORECASE),
      ("GOOD", "BETTER"), "replaces plywood - plywood is only in BEST (\"if needed\") or an add-on"),

@@ -45,7 +45,8 @@ BETTER_SCOPE = ("<ul><li>Everything in GOOD.</li>"
                 "<li>Install peel &amp; stick waterproof underlayment over the whole area.</li>"
                 "<li>Clean up the work area.</li></ul>")
 BEST_SCOPE = ("<ul><li>Everything in BETTER.</li>"
-              "<li>Two layers of peel &amp; stick underlayment across the repair area.</li>"
+              "<li>Replace the underlayment across the repair area and coat its edges with "
+              "silicone.</li>"
               "<li>Rebuild the cracked mortar at the end of the hip cap.</li>"
               "<li>Re-seal the ridge vent.</li></ul>")
 OPTIONS = [
