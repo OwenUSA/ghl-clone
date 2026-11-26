@@ -282,9 +282,12 @@ FORBIDDEN = (
     # owner, 2026-11-26 (DTR-247..253): no L-flashing reset in GOOD; the reinstall step stays
     # simple; no sizes ("about 13 ft x 6 ft") - GOOD "the leak area", BETTER "the expanded area",
     # BEST "the extended area"; and never a double underlayment - BETTER and BEST replace it
+    # (a vent's own pipe / lead / stack / boot flashing is GOOD's repair at a vent - DTR-250)
     (re.compile(r"\b(?:re-?set\w*|re-?fasten\w*|re-?secur\w*|replac\w*|install\w*|new)\b"
-                r"[^.:;]{0,40}\bflashings?\b|\bflashings?\b[^.:;]{0,15}\b(?:re-?set|re-?fasten\w*"
-                r"|replacement)\b", re.IGNORECASE),
+                r"(?:(?!\b(?:pipe|lead|vent|stack|boot|penetration|plumbing)s?\b)[^.:;]){0,40}"
+                r"(?<!pipe )(?<!lead )(?<!vent )(?<!stack )(?<!boot )\bflashings?\b"
+                r"|(?<!pipe )(?<!lead )(?<!vent )(?<!stack )(?<!boot )\bflashings?\b[^.:;]{0,15}"
+                r"\b(?:re-?set|re-?fasten\w*|replacement)\b", re.IGNORECASE),
      ("GOOD",), ("resets / refastens / replaces flashing - not in GOOD (BETTER / BEST); GOOD only "
                  "patches and reseals at the leak")),
     (re.compile(r"\b(?:re-?install|re-?integrat|re-?lay|re-?align)\w*\b[^.:;]{0,100}\b(?:nail\w*"
