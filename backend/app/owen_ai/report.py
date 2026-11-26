@@ -796,6 +796,18 @@ def _inspection_move(rec: dict) -> dict | None:
     return None
 
 
+def inspector_of(rec: dict, move: dict | None) -> str | None:
+    """Who inspected: the job's assigned technician. The office often moves the card itself -
+    #853 read "Luis Candiales" for Antonio's inspection (2026-11-26) - so the one who moved it
+    counts only when he is assigned too, or when nobody is."""
+    assigned = [person(a.get("user")) for a in rec.get("assigned_to") or [] if isinstance(a, dict)]
+    assigned = [x for x in assigned if x]
+    mover = person(move.get("done_by")) if move else None
+    if mover and (mover in assigned or not assigned):
+        return mover
+    return assigned[0] if assigned else None
+
+
 def fetch_facts(job_uid: str, proposal: str | None = None) -> Facts:
     """Read-only: GET /jobs/{uid}, GET /estimate?filter.job=, GET /estimate/{uid}."""
     r = Reader()
@@ -834,8 +846,7 @@ def fetch_facts(job_uid: str, proposal: str | None = None) -> Facts:
     when = when or parse_time(rec.get("scheduled_start_time"))
     f.date = when.astimezone(TZ) if when and when.tzinfo else (
         when.replace(tzinfo=UTC).astimezone(TZ) if when else None)
-    f.inspector = (person(move.get("done_by")) if move else None) or \
-        config.report_setting("INSPECTOR_DEFAULT")
+    f.inspector = inspector_of(rec, move) or config.report_setting("INSPECTOR_DEFAULT")
     f.phone = config.report_setting("PHONE")
     f.license = config.report_setting("LICENSE")
     f.city = config.report_setting("CITY")
@@ -1289,7 +1300,7 @@ def page4(s: Spec, f: Facts) -> str:
 {lis}</ol></div>
 <div class="legal">{ahs_txt}<b>About this report.</b> This was a visual inspection of the areas we could safely reach {on}. {walls} Some leaks only happen in certain
 weather. This report describes what we found that day; it is not a promise that the roof will never leak. Anything new we find
-during the repair will be shown to you with photos before extra work is done.<br>
+during the repair will be explained to you before any extra work is done.<br>
 <b>About the pictures.</b> {PICTURES_DISCLAIMER}</div>
 """
 
@@ -1508,7 +1519,7 @@ def price_rows(s: Spec, f: Facts) -> list[tuple[str, str, str]]:
                  "Done by a licensed, insured roofing contractor%s, with a trained crew." % (
                      " (license %s)" % f.license if f.license else ""), ""))
     rows.append(("Cleanup and disposal",
-                 "Old materials are hauled away and the yard is swept for nails.", ""))
+                 "Old materials are hauled away and the job site is cleaned up.", ""))
     miles = miles_from_downtown_miami(f.geo)
     if miles is not None and miles >= 5:
         rows.append(("About %d miles from downtown Miami" % miles,

@@ -76,3 +76,23 @@ def test_retail_leaves_the_ahs_section_out_even_on_the_ahs_board():
     page = report.price_page_html(ahs_spec, f)
     assert "Why AHS doesn&#39;t pay" not in page and "What goes into your price" in page
     assert "retail" in report.Spec.model_fields
+
+
+def test_the_inspector_is_the_assigned_technician_not_the_office_that_moved_the_card():
+    luis, antonio = {"first_name": "Luis", "last_name": "Candiales"}, \
+        {"first_name": "Antonio", "last_name": "Brown"}
+    move = {"status_name": "Inspection In Progress", "done_by": luis}
+    rec = {"assigned_to": [{"user": antonio, "team": {}}]}
+    assert report.inspector_of(rec, move) == "Antonio Brown"                       # #853
+    assert report.inspector_of({"assigned_to": [{"user": luis}]}, move) == "Luis Candiales"
+    assert report.inspector_of({"assigned_to": []}, move) == "Luis Candiales"      # nobody assigned
+    assert report.inspector_of(rec, None) == "Antonio Brown"
+    assert report.inspector_of({}, None) is None
+
+
+def test_no_nail_sweep_and_no_photo_promise_in_the_fixed_wording():
+    rows = report.price_rows(spec(), facts())
+    cleanup = next(w for t, w, _ in rows if t == "Cleanup and disposal")
+    assert not any(x in cleanup.lower() for x in ("swept", "sweep", "nail", "magnet"))
+    legal = report.page4(SimpleNamespace(until_fixed=None, not_done=None), facts())
+    assert "About this report" in legal and "photo" not in legal.split("About the pictures")[0]
