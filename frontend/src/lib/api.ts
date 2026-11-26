@@ -136,17 +136,17 @@ export type Page<T> = {
   pages: number
 }
 
-async function get<T>(path: string, retry = true): Promise<T> {
+async function get<T>(path: string, retry = true, text = false): Promise<T> {
   const r = await fetch(BASE + path, { credentials: 'include' })
   if (r.status === 401) {
     // The access token lasts 15 minutes; renew it once and retry rather than
     // bouncing the user to the login screen mid-session.
-    if (retry && (await refresh())) return get<T>(path, false)
+    if (retry && (await refresh())) return get<T>(path, false, text)
     window.dispatchEvent(new Event('ghl:unauthorized'))
     throw new Unauthorized('not signed in')
   }
   if (!r.ok) throw await failed(r)
-  return r.json() as Promise<T>
+  return (text ? r.text() : r.json()) as Promise<T>
 }
 
 export function listContacts(params: {
@@ -2981,10 +2981,8 @@ export const owenAiAttachReport = (id: number, body: { proposal?: string; versio
 export const owenAiReportFileUrl = (id: number, rel: string) =>
   `${BASE}/api/owen-ai/inspection-reports/${id}/files/${rel}`
 /** A saved version's page, as text, for the preview frame (same-origin, the owner's cookie). */
-export async function owenAiReportHtml(url: string): Promise<string> {
-  const r = await fetch(BASE + url, { credentials: 'include' })
-  if (!r.ok) throw await failed(r)
-  return r.text()
+export function owenAiReportHtml(url: string): Promise<string> {
+  return get<string>(url, true, true)
 }
 
 // ---- follow-ups (2026-11-11, app/cadences) ---------------------------------------------------

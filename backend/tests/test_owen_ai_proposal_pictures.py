@@ -34,16 +34,16 @@ from tests.zuper_support import zuper_env  # noqa: F401  (fixture)
 
 GOOD_SCOPE = ("<p><b>Scope of Work</b></p><ul><li>Price: $650 (regular $900)</li>"
               "<li>Remove the roof tiles around the plumbing vent pipe above the bathroom.</li>"
-              "<li>Remove the worn, water-stained underlayment around the base of the pipe.</li>"
+              "<li>Patch the worn, water-stained underlayment around the base of the pipe.</li>"
               "<li>Install a new pipe flashing (lead or flexible boot) and seal it to the "
               "pipe.</li>"
-              "<li>Clean up the work area and send before-and-after photos.</li></ul>")
+              "<li>Clean up the work area.</li></ul>")
 BETTER_SCOPE = ("<ul><li>Everything in GOOD.</li>"
                 "<li>Open the roof from the vent down to the roof edge above the bathroom "
                 "wall.</li>"
-                "<li>Replace stained or soft plywood at the roof edge - only if damaged.</li>"
+                "<li>Inspect the wood deck at the roof edge for soft spots.</li>"
                 "<li>Install peel &amp; stick waterproof underlayment over the whole area.</li>"
-                "<li>Clean up the work area and send before-and-after photos.</li></ul>")
+                "<li>Clean up the work area.</li></ul>")
 BEST_SCOPE = ("<ul><li>Everything in BETTER.</li>"
               "<li>Two layers of peel &amp; stick underlayment across the repair area.</li>"
               "<li>Rebuild the cracked mortar at the end of the hip cap.</li>"
@@ -424,11 +424,11 @@ def test_the_plan_comes_from_the_scope_only_new_steps_per_tier():
                "scope_html": o["scope_html"]} for o in OPTIONS]
     good, better, best = pictures.plan(_row(stored))
     assert [s["caption"] for s in good["steps"]] == [
-        "Remove roof tiles", "Remove worn water-stained underlayment",
+        "Remove roof tiles", "Patch worn water-stained underlayment",
         "Install new pipe flashing", "Clean up work area"]
     # BETTER: only what GOOD lacks (the repeated clean-up bullet is not a new step).
     assert [s["caption"] for s in better["steps"]] == [
-        "Open roof from vent", "Replace stained or soft plywood",
+        "Open roof from vent", "Inspect wood deck",
         "Install peel & stick waterproof underlayment"]
     assert better["first"] == {"label": "1-4", "caption": "Everything in GOOD"}
     assert best["first"] == {"label": "1-7", "caption": "Everything in GOOD + BETTER"}
