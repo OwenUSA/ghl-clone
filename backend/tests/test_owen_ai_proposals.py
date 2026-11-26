@@ -610,7 +610,10 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
     ("BEST", "Reinstall tiles, supplying matching replacement tiles for broken pieces.", "REUSE"),
     ("GOOD", "Clean up and run a magnetic sweep.", "magnetic"),
     ("GOOD", "You receive before-and-after photos.", "photos"),
-    ("BETTER", "Double sealing of every seam.", "single sealing"),
+    ("BETTER", "Double sealing of every seam.", "premium sealing"),
+    ("BEST", "Premium Double Sealing: apply multi-layer elastomeric compound.", "premium sealing"),
+    ("BEST", "Apply two layers of elastomeric (bull) waterproofing on the seams.",
+     "premium sealing"),
     ("BETTER", "Replace damaged plywood decking.", "plywood"),
     ("GOOD", "Underlayment Replacement: remove the old underlayment, install new.", "PATCHES"),
     # DTR-247 / 251 (2026-11-26): the patch's material, brand and laying are the technicians' call
@@ -664,7 +667,7 @@ def test_saying_that_we_patch_and_seal_is_still_fine():
         {"name": "BEST", "scope_html": (
             "<p>Replace the underlayment across the extended area and apply a silicone coating "
             "along the edges of the underlayment.</p><p>Reinstall the customer's own tiles over "
-            "the extended area.</p><p>Apply double sealing over the seams of the underlayment."
+            "the extended area.</p><p>Apply premium sealing over the seams of the underlayment."
             "</p>")}]) == []
 
 
