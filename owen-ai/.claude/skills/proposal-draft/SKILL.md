@@ -49,11 +49,15 @@ Diagnosis help: `knowledge/roof-leak-playbook.md`.
    2026-11-13) and the payment terms in each option. **Never promise photos and never mention a magnetic sweep.** **We reuse the customer's own shingles / tiles in every
    option** - never "new (matching) shingles" or "supplying matching tiles"; broken pieces are an add-on. Never
    "fresh commercial-grade waterproof underlayment". **GOOD only PATCHES the underlayment at the leak; BETTER
-   replaces it; BEST two layers** (owner, 2026-11-24). **Never say what the patch is made of or how it is laid, and
+   and BEST replace it, BEST adding a silicone coating on its edges - never a double underlayment** (owner,
+   2026-11-24 / 11-26). **No flashing reset in GOOD; no sizes (GOOD "the leak area", BETTER "the expanded area",
+   BEST "the extended area"); the reinstall step is just "Reinstall the customer's own tiles (or shingles) over the
+   repaired area"** (owner, 2026-11-26). **Never say what the patch is made of or how it is laid, and
    never name a brand** (no "TU Plus", no "self-adhered membrane patch", no "lapped shingle-style" - the technicians
    choose how; owner, 2026-11-26). **The tool refuses a draft that breaks these
    wording rules** (new/matching shingles or tiles, fresh/commercial underlayment, magnetic sweep, photos, double
-   sealing in BETTER, plywood in GOOD/BETTER, the patch's material / brand / laying) and lists each one - rewrite those sentences and call it again. Team-call rules (guide §2.1, 2026-11-17): the
+   sealing in BETTER, plywood in GOOD/BETTER, the patch's material / brand / laying, flashing reset in GOOD, sizes, double underlayment,
+   how the tiles go back) and lists each one - rewrite those sentences and call it again. Team-call rules (guide §2.1, 2026-11-17): the
    not-included note says we do not repair ceilings / drywall; Antonio's extra findings become optional add-ons;
    never claim we inspected the flashing; non-round prices ($2,975, not $3,000).
    Every finding goes either into a tier or into `notes_for_owen` as "seen, not priced".

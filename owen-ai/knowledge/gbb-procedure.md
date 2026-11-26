@@ -37,7 +37,7 @@ The picture has room for 6 steps: merge 3 + 4 ("Inspect & Remove Old Underlaymen
 cleanup + walk-through in the last one ("Tiles Back & Walk-Through").
 
 **Valley and flashing leaks (owner, 2026-11-18):** the three options grow along the same system, by where the
-leak is. Leak at / near a valley: GOOD half the valley (e.g. 6 ft), BETTER the whole valley (e.g. 12 ft), BEST the
+leak is. Leak at / near a valley: GOOD half the valley (e.g. 6 ft - to choose; the proposal never gives a size), BETTER the whole valley (e.g. 12 ft), BEST the
 whole valley + an extended area. Leak at a flashing that runs into a valley: GOOD the flashing, BETTER the flashing
 + half the valley, BEST the whole valley. Full table: `proposal-drafting-guide.md` §2.1a.
 
@@ -55,7 +55,8 @@ whole valley + an extended area. Leak at a flashing that runs into a valley: GOO
 
 - An **expanded area** around every leak: a wider area opened, to cut off water that travels
   sideways under the tiles. The coverage photo must SHOW the bigger area; that is the point of BEST.
-- Two layers of Peel & Stick, and a full flashing overhaul.
+- The underlayment replaced over the extended area with a silicone coating on its edges (never two layers -
+  owner, 2026-11-26), and a full flashing overhaul.
 - Two days; the longest warranty.
 
 ## Coverage areas on the real photos

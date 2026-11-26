@@ -279,6 +279,29 @@ FORBIDDEN = (
                 re.IGNORECASE),
      ("GOOD",), ("says how the patch is laid (\"lapped ...\") - write only that we patch the "
                  "underlayment at the leak; the technicians choose how")),
+    # owner, 2026-11-26 (DTR-247..253): no L-flashing reset in GOOD; the reinstall step stays
+    # simple; no sizes ("about 13 ft x 6 ft") - GOOD "the leak area", BETTER "the expanded area",
+    # BEST "the extended area"; and never a double underlayment - BETTER and BEST replace it
+    (re.compile(r"\b(?:re-?set\w*|re-?fasten\w*|re-?secur\w*|replac\w*|install\w*|new)\b"
+                r"[^.:;]{0,40}\bflashings?\b|\bflashings?\b[^.:;]{0,15}\b(?:re-?set|re-?fasten\w*"
+                r"|replacement)\b", re.IGNORECASE),
+     ("GOOD",), ("resets / refastens / replaces flashing - not in GOOD (BETTER / BEST); GOOD only "
+                 "patches and reseals at the leak")),
+    (re.compile(r"\b(?:re-?install|re-?integrat|re-?lay|re-?align)\w*\b[^.:;]{0,100}\b(?:nail\w*"
+                r"|courses|mechanically|interlock\w*|secured)\b|\bnailed\s+and\s+sealed\b"
+                r"|\bmechanically\s+(?:re-?install|secur)\w*", re.IGNORECASE),
+     OPTION_NAMES, ("says how the tiles / shingles go back - write only \"Reinstall the "
+                    "customer's own tiles (or shingles) over the repaired area\"")),
+    (re.compile(r"\b\d+(?:\.\d+)?\s*-?\s*(?:ft|feet|foot)\b|\b\d+(?:\.\d+)?\s*'\s*"
+                r"(?:x|by)\s*\d+|\b2x\b|\bdouble[- ]wide\b", re.IGNORECASE),
+     OPTION_NAMES, ("gives a size - keep it generic: GOOD \"the leak area\", BETTER \"the "
+                    "expanded area\", BEST \"the extended area\"")),
+    (re.compile(r"\bdouble\b(?!\s*seal)[^.:;]{0,25}\bunderlayment\b"
+                r"|\b(?:two|2|second|dual|multiple)\b[^.:;]{0,15}\blayers?\b(?:(?!seal)[^.:;]){0,40}"
+                r"\bunderlayment\b|\bunderlayment\b[^.:;]{0,20}\b(?:two|double|dual)\s+layers?\b"
+                r"|\bmulti[- ]?layer\b(?:(?!seal)[^.:;]){0,20}\bunderlayment\b", re.IGNORECASE),
+     OPTION_NAMES, ("puts in a double / two-layer underlayment - we never do it; BETTER and BEST "
+                    "REPLACE the underlayment, and BEST adds a silicone coating on its edges")),
 )
 
 
@@ -308,7 +331,7 @@ def wording_problems(options: list[dict]) -> list[str]:
     for o in options:
         text = promised(o.get("scope_html") or "") + " " + str(o.get("option_description") or "")
         for rx, names, why in FORBIDDEN:
-            if single and ("plywood" in why or "PATCHES" in why):
+            if single and ("plywood" in why or "PATCHES" in why or "(BETTER / BEST)" in why):
                 continue          # a one-option job: its scope is the job itself
             m = rx.search(text) if o.get("name") in names else None
             if m:
@@ -736,7 +759,7 @@ SPECS = (("propose_proposal_draft", DESCRIPTION, input_schema(), tool_propose),)
 
 def line_name(o: dict) -> str:
     """What the customer reads on the line (2026-11-18): the option and its own title, e.g.
-    "BEST - Full-Coverage Repair with Double Underlayment". The template's product names are
+    "BEST - Full-Coverage Repair with Underlayment Replacement". The template's product names are
     placeholders ("GOOD - Custom Package (write scope and price on site)") or name a roof the
     job may not have ("BEST - Maximum Protection Tile Leak Repair" on a cedar shake roof, DTR-195);
     the product code and uid still say which product it is."""

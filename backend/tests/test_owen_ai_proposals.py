@@ -622,6 +622,17 @@ def test_the_customer_reads_the_options_own_title_not_the_template_placeholder(d
      "patched WITH"),
     ("GOOD", ("Patch the failed underlayment at the leak, lapped shingle-style into the "
               "surrounding underlayment so water sheds over it."), "how the patch is laid"),
+    # owner, 2026-11-26 (DTR-247..253)
+    ("GOOD", "L-Flashing Reset & Reseal: Reset and fasten the L-flashing over the leak area.",
+     "not in GOOD"),
+    ("GOOD", ("Reinstall the customer's own dimensional shingles, nailed and sealed into the "
+              "existing courses."), "Reinstall the customer's own tiles"),
+    ("BETTER", "Re-align, interlock and mechanically reinstall the customer's original tiles.",
+     "Reinstall the customer's own tiles"),
+    ("GOOD", "Lift the roof tiles over the leak area, about 13 ft x 6 ft.", "the leak area"),
+    ("BETTER", "Everything in Good across a 2x footprint.", "the expanded area"),
+    ("BEST", "Install two full layers of self-adhered underlayment.", "silicone coating"),
+    ("BEST", "Double Underlayment Protection System.", "silicone coating"),
 ])
 def test_owners_wording_rules_refuse_the_draft_with_the_reason(db, people, name, text, word):
     """Each one was a correction Owen made by hand on sent proposals (2026-11-16..24)."""
@@ -646,8 +657,11 @@ def test_saying_that_we_patch_and_seal_is_still_fine():
         {"name": "BETTER", "scope_html": "<p>Install high-performance self-adhered peel and stick "
                                          "underlayment, securely lapped into the surrounding roof."
                                          "</p>"},
-        {"name": "BEST", "scope_html": "<p>Install two full layers of self-adhered underlayment."
-                                       "</p>"}]) == []
+        {"name": "BEST", "scope_html": (
+            "<p>Replace the underlayment across the extended area and apply a silicone coating "
+            "along the edges of the underlayment.</p><p>Reinstall the customer's own tiles over "
+            "the extended area.</p><p>Apply double sealing over the seams of the underlayment."
+            "</p>")}]) == []
 
 
 def test_a_sentence_saying_what_is_not_included_is_not_a_promise():
